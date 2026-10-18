@@ -8,7 +8,88 @@ import {
   archiveSession,
   computeRevisions,
   readArchivedSession,
+  listArchivedSessions,
 } from "./chatgpt-session-archive.mjs";
+import { withArchiveWriteLock } from "./chatgpt-session-archive-lock.mjs";
+
+test("only one archival writer can run; crashing an owner does not permanently block capture", async (t) => {
+  const directory = Fs.mkdtempSync(Path.join(Os.tmpdir(), "t3-chatgpt-archive-lock-"));
+  t.after(() => Fs.rmSync(directory, { recursive: true, force: true }));
+  let release;
+  const wait = new Promise((resolve) => {
+    release = resolve;
+  });
+  const first = withArchiveWriteLock(directory, () => wait);
+  await assert.rejects(
+    withArchiveWriteLock(directory, async () => {
+      throw new Error("never run");
+    }),
+    /already active/,
+  );
+  release();
+  await first;
+  assert.equal(Fs.existsSync(Path.join(directory, ".writer.lock")), false);
+
+  const stale = Path.join(directory, ".writer.lock");
+  Fs.writeFileSync(stale, JSON.stringify({ pid: 99999999, id: "dead-owner" }));
+  const past = new Date(Date.now() - 60_000);
+  Fs.utimesSync(stale, past, past);
+  const result = await withArchiveWriteLock(directory, async () => "recovered");
+  assert.equal(result, "recovered");
+  assert.equal(Fs.existsSync(stale), false);
+});
+
+test("corrupt archival locks are not deleted or overwritten", async (t) => {
+  const directory = Fs.mkdtempSync(Path.join(Os.tmpdir(), "t3-chatgpt-archive-lock-"));
+  t.after(() => Fs.rmSync(directory, { recursive: true, force: true }));
+  const lock = Path.join(directory, ".writer.lock");
+  Fs.writeFileSync(lock, "{bad");
+  await assert.rejects(
+    withArchiveWriteLock(directory, async () => {}),
+    /corrupt/,
+  );
+  assert.equal(Fs.readFileSync(lock, "utf8"), "{bad");
+});
+
+test("journal is authoritative after a crashed index update and a corrupt index", async (t) => {
+  const directory = Fs.mkdtempSync(Path.join(Os.tmpdir(), "t3-chatgpt-archive-replay-"));
+  t.after(() => Fs.rmSync(directory, { recursive: true, force: true }));
+  const url = "https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const messages = [{ role: "assistant", turn: 0, turnKey: "turn-0", text: "saved" }];
+  const session = { id: "crash-recovery", title: "test" };
+  const exchange = async () => ({ session: { url, messages } });
+  assert.equal((await archiveSession(session, { directory, exchange })).captured, 1);
+  const journal = Path.join(
+    directory,
+    Fs.readdirSync(directory).find((file) => file.endsWith(".jsonl")),
+  );
+  const index = Path.join(
+    directory,
+    Fs.readdirSync(directory).find((file) => file.endsWith(".index.json")),
+  );
+  Fs.writeFileSync(index, "{truncated");
+  assert.equal((await archiveSession(session, { directory, exchange })).captured, 0);
+  assert.equal(JSON.parse(Fs.readFileSync(index, "utf8")).version, 2);
+  const revision = {
+    version: 1,
+    sessionId: session.id,
+    conversationUrl: url,
+    role: "assistant",
+    turn: 0,
+    turnKey: "turn-0",
+    index: 0,
+    text: "saved and final",
+    observedAt: new Date().toISOString(),
+  };
+  // Simulate process termination after durable append but before cache update.
+  Fs.appendFileSync(journal, JSON.stringify(revision) + "\n");
+  messages[0].text = "saved and final";
+  assert.equal((await archiveSession(session, { directory, exchange })).captured, 0);
+  const reconstructed = readArchivedSession(session.id, { directory });
+  assert.equal(reconstructed.revisions, 2);
+  assert.equal(reconstructed.messages[0].text, "saved and final");
+  assert.equal(JSON.parse(Fs.readFileSync(index, "utf8")).journalBytes, Fs.statSync(journal).size);
+});
 
 test("writes revisions only when visible messages change", async (t) => {
   const root = Fs.mkdtempSync(Path.join(Os.tmpdir(), "t3-chatgpt-archive-test-"));
@@ -51,6 +132,15 @@ test("writes revisions only when visible messages change", async (t) => {
     "Finished",
   );
   assert.equal(readArchivedSession("not-present", { directory: root }).messages.length, 0);
+  assert.deepEqual(
+    listArchivedSessions(root).map(({ sessionId, title, project }) => ({
+      sessionId,
+      title,
+      project,
+    })),
+    [{ sessionId: "session-1", title: "Example", project: "Example" }],
+  );
+  assert.deepEqual(listArchivedSessions(Path.join(root, "absent")), []);
 });
 
 test("stable DOM turn keys survive virtualized position changes", () => {
