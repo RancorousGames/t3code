@@ -5,6 +5,7 @@ import {
   DesktopOpenRigSendInputSchema,
   type DesktopOpenRigAgent,
   type DesktopOpenRigSession,
+  type DesktopOpenRigSessionTarget,
   type DesktopOpenRigBindInput,
   type DesktopOpenRigSendInput,
 } from "@t3tools/contracts";
@@ -51,6 +52,13 @@ export function decodeOpenRigAgents(payload: unknown): DesktopOpenRigAgent[] {
       status: typeof agent.status === "string" ? agent.status : "unknown",
       role: typeof agent.role === "string" ? agent.role : null,
       task: typeof task === "string" ? task : null,
+      bound: record(agent.binding) !== null,
+      bindingKind:
+        typeof record(record(agent.binding)?.target)?.kind === "string"
+          ? (record(record(agent.binding)?.target)!.kind as string)
+          : record(agent.binding)
+            ? "legacy-browser"
+            : null,
       sessionId:
         typeof record(agent.binding)?.sessionId === "string"
           ? (record(agent.binding)!.sessionId as string)
@@ -65,7 +73,7 @@ export function decodeOpenRigAgents(payload: unknown): DesktopOpenRigAgent[] {
 
 async function bridgeRequest(
   path: string,
-  options: { method: "GET" | "POST" | "DELETE"; payload?: Record<string, string> },
+  options: { method: "GET" | "POST" | "DELETE"; payload?: Record<string, unknown> },
   fetchImpl: typeof fetch,
 ): Promise<Response> {
   const response = await fetchImpl(`${OPENRIG_BASE_URL}${path}`, {
@@ -109,25 +117,53 @@ export async function sendOpenRigMessage(
   );
 }
 
+function decodeSessionTarget(value: unknown): DesktopOpenRigSessionTarget {
+  const target = record(value);
+  if (!target) throw new Error("Missing OpenRig conversation target.");
+  if (
+    target.kind === "t3-thread" &&
+    typeof target.environmentId === "string" &&
+    typeof target.threadId === "string"
+  ) {
+    return { kind: "t3-thread", environmentId: target.environmentId, threadId: target.threadId };
+  }
+  if (target.kind === "chatgpt-conversation" && typeof target.conversationId === "string") {
+    return {
+      kind: "chatgpt-conversation",
+      conversationId: target.conversationId,
+      ...(typeof target.preferredBrowserSessionId === "string"
+        ? { preferredBrowserSessionId: target.preferredBrowserSessionId }
+        : {}),
+    };
+  }
+  if (target.kind === "legacy-browser" && typeof target.sessionId === "string")
+    return { kind: "legacy-browser", sessionId: target.sessionId };
+  throw new Error("Unsupported OpenRig conversation target.");
+}
+
 export function decodeOpenRigSessions(payload: unknown): DesktopOpenRigSession[] {
-  const sessions = record(payload)?.sessions;
-  if (!Array.isArray(sessions) || sessions.length > 1_000) {
-    throw new Error("Invalid OpenRig/T3 session list.");
+  const sessions = record(payload)?.conversations;
+  if (!Array.isArray(sessions) || sessions.length > 6_000) {
+    throw new Error("Invalid OpenRig/T3 conversation list.");
   }
   return sessions.map((entry: unknown) => {
     const session = record(entry);
-    if (!session) throw new Error("Invalid T3 browser session.");
+    if (!session) throw new Error("Invalid OpenRig conversation.");
+    const target = decodeSessionTarget(session.target);
     return {
       id: requiredString(session.id),
-      title: typeof session.title === "string" ? session.title : "Untitled session",
+      title: typeof session.title === "string" ? session.title : "Untitled conversation",
       project: typeof session.project === "string" ? session.project : null,
       status: typeof session.status === "string" ? session.status : "unknown",
+      kind: target.kind,
+      target,
+      provider: typeof session.provider === "string" ? session.provider : null,
     };
   });
 }
 
 export async function fetchOpenRigSessions(fetchImpl: typeof fetch = fetch) {
-  const response = await bridgeRequest("/sessions", { method: "GET" }, fetchImpl);
+  const response = await bridgeRequest("/conversations", { method: "GET" }, fetchImpl);
   return decodeOpenRigSessions((await response.json()) as unknown);
 }
 
@@ -135,8 +171,20 @@ export async function bindOpenRigSeat(
   input: DesktopOpenRigBindInput,
   fetchImpl: typeof fetch = fetch,
 ) {
-  if (!input.id.trim() || !input.sessionId.trim())
-    throw new Error("Seat ID and session ID required.");
+  if (!input.id.trim() || (input.sessionId === undefined) === (input.target === undefined))
+    throw new Error("Seat ID and exactly one conversation target required.");
+  const target = input.target;
+  if (target) {
+    // Only the target from OpenRig's typed picker may cross this fixed proxy.
+    const normalized = decodeSessionTarget(target);
+    await bridgeRequest(
+      `/agents/${encodeURIComponent(input.id)}/binding`,
+      { method: "POST", payload: { target: normalized } },
+      fetchImpl,
+    );
+    return;
+  }
+  if (!input.sessionId?.trim()) throw new Error("Browser session ID required.");
   await bridgeRequest(
     `/agents/${encodeURIComponent(input.id)}/bind`,
     { method: "POST", payload: { sessionId: input.sessionId } },

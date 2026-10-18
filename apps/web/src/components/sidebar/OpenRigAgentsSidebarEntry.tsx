@@ -25,29 +25,30 @@ function OpenRigAgentRow({
   const [linking, setLinking] = useState(false);
 
   useEffect(() => {
-    if (!composing || agent.sessionId) return;
+    if (!composing || agent.bound) return;
     let current = true;
     const load = async () => {
       try {
         const available = await window.desktopBridge?.listOpenRigSessions?.();
         if (current) setSessions(available ?? []);
       } catch {
-        if (current) setFeedback("Unable to list T3 browser sessions.");
+        if (current) setFeedback("Unable to list OpenRig conversations.");
       }
     };
     void load();
     return () => {
       current = false;
     };
-  }, [composing, agent.sessionId]);
+  }, [composing, agent.bound]);
 
   async function linkSession() {
     const bind = window.desktopBridge?.bindOpenRigAgent;
-    if (!bind || !chosenSession || linking) return;
+    const chosen = sessions.find((session) => session.id === chosenSession);
+    if (!bind || !chosen || linking) return;
     setLinking(true);
     setFeedback("");
     try {
-      await bind({ id: agent.id, sessionId: chosenSession });
+      await bind({ id: agent.id, target: chosen.target });
       await onChanged();
       setFeedback("Session linked.");
     } catch {
@@ -74,7 +75,7 @@ function OpenRigAgentRow({
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending || !draft.trim() || !agent.sessionId) return;
+    if (sending || !draft.trim() || !agent.bound) return;
     setSending(true);
     setFeedback("");
     try {
@@ -122,10 +123,10 @@ function OpenRigAgentRow({
       </button>
       {composing && (
         <div className="space-y-1.5 px-2 pb-2">
-          {agent.sessionId ? (
+          {agent.bound ? (
             <div className="flex items-center justify-between gap-2 text-2xs text-sidebar-muted-foreground">
               <span className="min-w-0 truncate" title={agent.sessionTitle ?? undefined}>
-                {agent.sessionTitle ?? "Linked T3 session"}
+                {agent.sessionTitle ?? "Linked conversation"}
               </span>
               <Button
                 size="sm"
@@ -145,9 +146,15 @@ function OpenRigAgentRow({
                 disabled={linking}
                 onChange={(event) => setChosenSession(event.currentTarget.value)}
               >
-                <option value="">Choose ChatGPT session</option>
+                <option value="">Choose T3 or ChatGPT conversation</option>
                 {sessions.map((session) => (
                   <option key={session.id} value={session.id}>
+                    {session.kind === "t3-thread"
+                      ? "T3"
+                      : session.kind === "chatgpt-conversation"
+                        ? "ChatGPT"
+                        : "Browser"}
+                    {" · "}
                     {session.title}
                     {session.project ? ` · ${session.project}` : ""}
                   </option>
@@ -163,7 +170,7 @@ function OpenRigAgentRow({
               </Button>
             </div>
           )}
-          {agent.sessionId && (
+          {agent.bound && (
             <form className="space-y-1.5" onSubmit={(event) => void sendMessage(event)}>
               <Textarea
                 size="sm"
@@ -194,7 +201,7 @@ function OpenRigAgentRow({
               </div>
             </form>
           )}
-          {!agent.sessionId && (
+          {!agent.bound && (
             <span role="status" className="text-2xs text-sidebar-muted-foreground">
               {feedback}
             </span>
@@ -205,7 +212,7 @@ function OpenRigAgentRow({
   );
 }
 
-/** Optional desktop-only integration. ChatGPT sessions and regular T3 threads are untouched. */
+/** Optional desktop-only integration. Native T3 providers and ChatGPT webviews stay owned by T3. */
 export function OpenRigAgentsSidebarEntry() {
   const [agents, setAgents] = useState<readonly DesktopOpenRigAgent[]>([]);
   const [connection, setConnection] = useState<"checking" | "online" | "offline">("checking");

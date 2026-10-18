@@ -24,15 +24,34 @@ const agent = {
   status: "working",
   role: "worker",
   task: "Phase 1 integration",
+  bound: true,
+  bindingKind: "legacy-browser",
   sessionId: "session-a",
   sessionTitle: "Builder ChatGPT",
 };
 const list = vi.fn<() => Promise<DesktopOpenRigAgent[]>>();
 const send = vi.fn(async (_input: { id: string; message: string }) => {});
 const listSessions = vi.fn(async () => [
-  { id: "session-2", title: "Existing worker", project: "Wartribes", status: "idle" },
+  {
+    id: "browser:session-2",
+    title: "Existing worker",
+    project: "Wartribes",
+    status: "idle",
+    kind: "legacy-browser",
+    target: { kind: "legacy-browser", sessionId: "session-2" },
+    provider: null,
+  },
+  {
+    id: "t3:local:thread-2",
+    title: "Native Codex",
+    project: "Wartribes",
+    status: "idle",
+    kind: "t3-thread",
+    target: { kind: "t3-thread", environmentId: "local", threadId: "thread-2" },
+    provider: "codex",
+  },
 ]);
-const bind = vi.fn(async (_input: { id: string; sessionId: string }) => {});
+const bind = vi.fn(async (_input: { id: string; target: unknown }) => {});
 const unbind = vi.fn(async (_id: string) => {});
 
 let renderer: ReactTestRenderer | undefined;
@@ -65,7 +84,13 @@ afterEach(() => {
 
 describe("OpenRig sidebar", () => {
   it("can adopt an existing ChatGPT session into an unbound Rig seat", async () => {
-    const unbound = { ...agent, sessionId: null, sessionTitle: null };
+    const unbound = {
+      ...agent,
+      bound: false,
+      bindingKind: null,
+      sessionId: null,
+      sessionTitle: null,
+    };
     list.mockResolvedValueOnce([unbound]).mockResolvedValue([agent]);
     await act(async () => {
       renderer = create(<OpenRigAgentsSidebarEntry />);
@@ -73,24 +98,62 @@ describe("OpenRig sidebar", () => {
     await act(async () => {
       renderer!.root.findByProps({ "aria-label": "Message OpenRig agent Builder" }).props.onClick();
     });
-    expect(JSON.stringify(renderer!.toJSON())).toContain("Choose ChatGPT session");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Choose T3 or ChatGPT conversation");
     await act(async () => {
       renderer!.root.findByProps({ "aria-label": "T3 session for Builder" }).props.onChange({
-        currentTarget: { value: "session-2" },
+        currentTarget: { value: "browser:session-2" },
       });
     });
     await act(async () => {
       const link = renderer!.root.findAllByType("button").find((b) => b.props.children === "Link");
       link?.props.onClick();
     });
-    expect(bind).toHaveBeenCalledExactlyOnceWith({ id: "opaque/123", sessionId: "session-2" });
+    expect(bind).toHaveBeenCalledExactlyOnceWith({
+      id: "opaque/123",
+      target: { kind: "legacy-browser", sessionId: "session-2" },
+    });
     expect(JSON.stringify(renderer!.toJSON())).toContain("Builder ChatGPT");
+  });
+
+  it("offers native T3 threads alongside ChatGPT conversations and binds by typed reference", async () => {
+    const unbound = {
+      ...agent,
+      bound: false,
+      bindingKind: null,
+      sessionId: null,
+      sessionTitle: null,
+    };
+    list.mockResolvedValue([unbound]);
+    await act(async () => {
+      renderer = create(<OpenRigAgentsSidebarEntry />);
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Message OpenRig agent Builder" }).props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Native Codex");
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "T3 session for Builder" }).props.onChange({
+        currentTarget: { value: "t3:local:thread-2" },
+      });
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.props.children === "Link")
+        ?.props.onClick();
+    });
+    expect(bind).toHaveBeenCalledExactlyOnceWith({
+      id: "opaque/123",
+      target: { kind: "t3-thread", environmentId: "local", threadId: "thread-2" },
+    });
   });
 
   it("can detach a session without deleting it from T3", async () => {
     list
       .mockResolvedValueOnce([agent])
-      .mockResolvedValue([{ ...agent, sessionId: null, sessionTitle: null }]);
+      .mockResolvedValue([
+        { ...agent, bound: false, bindingKind: null, sessionId: null, sessionTitle: null },
+      ]);
     await act(async () => {
       renderer = create(<OpenRigAgentsSidebarEntry />);
     });
@@ -104,7 +167,7 @@ describe("OpenRig sidebar", () => {
       detach?.props.onClick();
     });
     expect(unbind).toHaveBeenCalledExactlyOnceWith("opaque/123");
-    expect(JSON.stringify(renderer!.toJSON())).toContain("Choose ChatGPT session");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Choose T3 or ChatGPT conversation");
   });
   it("shows agent metadata and sends a direct message to its opaque ID", async () => {
     list.mockResolvedValue([agent]);
