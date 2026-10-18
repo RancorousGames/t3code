@@ -1122,22 +1122,48 @@ export const DesktopOpenRigAgentSchema = Schema.Struct({
   status: Schema.String,
   role: Schema.NullOr(Schema.String),
   task: Schema.NullOr(Schema.String),
+  /** Explicitly bound: a native thread or conversation need not have a browser tab ID. */
+  bound: Schema.Boolean,
+  bindingKind: Schema.NullOr(Schema.String),
   sessionId: Schema.NullOr(Schema.String),
   sessionTitle: Schema.NullOr(Schema.String),
 });
 export type DesktopOpenRigAgent = typeof DesktopOpenRigAgentSchema.Type;
+
+/** OpenRig's durable conversation references; browser IDs are only legacy attachments. */
+export const DesktopOpenRigSessionTargetSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("t3-thread"),
+    environmentId: Schema.String,
+    threadId: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("chatgpt-conversation"),
+    conversationId: Schema.String,
+    preferredBrowserSessionId: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("legacy-browser"),
+    sessionId: Schema.String,
+  }),
+]);
+export type DesktopOpenRigSessionTarget = typeof DesktopOpenRigSessionTargetSchema.Type;
 
 export const DesktopOpenRigSessionSchema = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   project: Schema.NullOr(Schema.String),
   status: Schema.String,
+  kind: Schema.String,
+  target: DesktopOpenRigSessionTargetSchema,
+  provider: Schema.NullOr(Schema.String),
 });
 export type DesktopOpenRigSession = typeof DesktopOpenRigSessionSchema.Type;
 
 export const DesktopOpenRigBindInputSchema = Schema.Struct({
   id: Schema.String,
-  sessionId: Schema.String,
+  sessionId: Schema.optional(Schema.String),
+  target: Schema.optional(DesktopOpenRigSessionTargetSchema),
 });
 export type DesktopOpenRigBindInput = typeof DesktopOpenRigBindInputSchema.Type;
 

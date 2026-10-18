@@ -31,6 +31,8 @@ describe("local OpenRig desktop proxy", () => {
         status: "working",
         role: "worker",
         task: "T3 sidebar",
+        bound: false,
+        bindingKind: null,
         sessionId: null,
         sessionTitle: null,
       },
@@ -42,6 +44,8 @@ describe("local OpenRig desktop proxy", () => {
         status: "idle",
         role: null,
         task: null,
+        bound: false,
+        bindingKind: null,
         sessionId: null,
         sessionTitle: null,
       },
@@ -65,23 +69,75 @@ describe("local OpenRig desktop proxy", () => {
   it("lists existing T3 sessions and links/unlinks them to OpenRig seats", async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
-        sessions: [
-          { id: "browser-1", title: "Wartribes", project: "Wartribes", status: "done_or_idle" },
+        conversations: [
+          {
+            id: "browser:browser-1",
+            title: "Wartribes",
+            project: "Wartribes",
+            status: "done_or_idle",
+            kind: "legacy-browser",
+            target: { kind: "legacy-browser", sessionId: "browser-1" },
+          },
+          {
+            id: "t3:local:thread-a",
+            title: "Global Manager",
+            project: "Tools",
+            status: "idle",
+            kind: "t3-thread",
+            target: { kind: "t3-thread", environmentId: "local", threadId: "thread-a" },
+          },
         ],
       }),
     ) as typeof fetch;
-    expect(decodeOpenRigSessions({ sessions: [] })).toEqual([]);
+    expect(decodeOpenRigSessions({ conversations: [] })).toEqual([]);
     expect(await fetchOpenRigSessions(fetcher)).toEqual([
-      { id: "browser-1", title: "Wartribes", project: "Wartribes", status: "done_or_idle" },
+      {
+        id: "browser:browser-1",
+        title: "Wartribes",
+        project: "Wartribes",
+        status: "done_or_idle",
+        kind: "legacy-browser",
+        provider: null,
+        target: { kind: "legacy-browser", sessionId: "browser-1" },
+      },
+      {
+        id: "t3:local:thread-a",
+        title: "Global Manager",
+        project: "Tools",
+        status: "idle",
+        kind: "t3-thread",
+        provider: null,
+        target: { kind: "t3-thread", environmentId: "local", threadId: "thread-a" },
+      },
     ]);
     expect(fetcher).toHaveBeenCalledWith(
-      "http://127.0.0.1:7433/api/integrations/t3/sessions",
+      "http://127.0.0.1:7433/api/integrations/t3/conversations",
       expect.objectContaining({ method: "GET" }),
     );
     await bindOpenRigSeat({ id: "seat/1", sessionId: "browser-1" }, fetcher);
     expect(fetcher).toHaveBeenCalledWith(
       "http://127.0.0.1:7433/api/integrations/t3/agents/seat%2F1/bind",
       expect.objectContaining({ method: "POST", body: '{"sessionId":"browser-1"}' }),
+    );
+    await bindOpenRigSeat(
+      {
+        id: "seat/1",
+        target: {
+          kind: "t3-thread",
+          environmentId: "local",
+          threadId: "thread-a",
+        },
+      },
+      fetcher,
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:7433/api/integrations/t3/agents/seat%2F1/binding",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          target: { kind: "t3-thread", environmentId: "local", threadId: "thread-a" },
+        }),
+      }),
     );
     await unbindOpenRigSeat("seat/1", fetcher);
     expect(fetcher).toHaveBeenCalledWith(
