@@ -25,6 +25,16 @@ export const DesktopAppActivationRequest = Schema.Union([
   }),
   Schema.Struct({
     ...DesktopAppActivationBase,
+    type: Schema.Literal("t3.threads"),
+    action: Schema.Literals(["list", "read", "send"]),
+    environmentId: Schema.optional(TrimmedNonEmptyString),
+    threadId: Schema.optional(ThreadId),
+    count: Schema.optional(Schema.Number),
+    message: Schema.optional(Schema.String),
+    clientRequestId: Schema.optional(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    ...DesktopAppActivationBase,
     type: Schema.Literal("chatgpt.spawn"),
     title: TrimmedNonEmptyString,
     prompt: Schema.String.check(Schema.isNonEmpty()),

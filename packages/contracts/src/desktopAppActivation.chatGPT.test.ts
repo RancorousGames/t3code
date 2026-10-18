@@ -65,6 +65,42 @@ describe("ChatGPT local desktop bridge protocol", () => {
     }
   });
 
+  it("recognizes local native thread list/read/send with scoped environment identity", () => {
+    const threadId = "f39d2467-d783-4578-8ba9-ccac017b1871";
+    const clientRequestId = "6ad41909-57c8-43ed-a20f-742a43cd06a6";
+    expect(valid({ ...common, type: "t3.threads", action: "list" })).toBe(true);
+    expect(
+      valid({
+        ...common,
+        type: "t3.threads",
+        action: "read",
+        environmentId: "t3-local",
+        threadId,
+        count: 4,
+      }),
+    ).toBe(true);
+    expect(
+      valid({
+        ...common,
+        type: "t3.threads",
+        action: "send",
+        environmentId: "t3-local",
+        threadId,
+        message: "Progress?",
+        clientRequestId,
+      }),
+    ).toBe(true);
+    expect(
+      valid({
+        ...common,
+        type: "t3.threads",
+        action: "read",
+        threadId: "",
+        count: 1,
+      }),
+    ).toBe(false);
+  });
+
   it("accepts completion declarations but not an unbounded renderer wait request", () => {
     expect(
       valid({

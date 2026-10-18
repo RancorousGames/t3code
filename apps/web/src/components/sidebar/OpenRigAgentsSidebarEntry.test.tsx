@@ -148,6 +148,33 @@ describe("OpenRig sidebar", () => {
     });
   });
 
+  it("filters large mixed native and ChatGPT conversation lists by title", async () => {
+    list.mockResolvedValue([
+      {
+        ...agent,
+        bound: false,
+        bindingKind: null,
+        sessionId: null,
+        sessionTitle: null,
+      },
+    ]);
+    await act(async () => {
+      renderer = create(<OpenRigAgentsSidebarEntry />);
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Message OpenRig agent Builder" }).props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Existing worker");
+    await act(async () => {
+      renderer!.root
+        .findByProps({ "aria-label": "Filter conversations for Builder" })
+        .props.onChange({ currentTarget: { value: "native codex" } });
+    });
+    const options = renderer!.root.findAllByType("option").map((node) => node.props.children);
+    expect(JSON.stringify(options)).toContain("Native Codex");
+    expect(JSON.stringify(options)).not.toContain("Existing worker");
+  });
+
   it("can detach a session without deleting it from T3", async () => {
     list
       .mockResolvedValueOnce([agent])
