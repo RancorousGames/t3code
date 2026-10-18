@@ -1,3 +1,4 @@
+import type { DesktopOpenRigAgent } from "@t3tools/contracts";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -17,9 +18,22 @@ vi.mock("../ui/textarea", () => ({
 
 import { OpenRigAgentsSidebarEntry } from "./OpenRigAgentsSidebarEntry";
 
-const agent = { id: "opaque/123", name: "Builder", status: "working", task: "Phase 1 integration" };
-const list = vi.fn<() => Promise<(typeof agent)[]>>();
+const agent = {
+  id: "opaque/123",
+  name: "Builder",
+  status: "working",
+  role: "worker",
+  task: "Phase 1 integration",
+  sessionId: "session-a",
+  sessionTitle: "Builder ChatGPT",
+};
+const list = vi.fn<() => Promise<DesktopOpenRigAgent[]>>();
 const send = vi.fn(async (_input: { id: string; message: string }) => {});
+const listSessions = vi.fn(async () => [
+  { id: "session-2", title: "Existing worker", project: "Wartribes", status: "idle" },
+]);
+const bind = vi.fn(async (_input: { id: string; sessionId: string }) => {});
+const unbind = vi.fn(async (_id: string) => {});
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -27,8 +41,17 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   list.mockReset();
   send.mockReset();
+  listSessions.mockClear();
+  bind.mockClear();
+  unbind.mockClear();
   vi.stubGlobal("window", {
-    desktopBridge: { listOpenRigAgents: list, sendOpenRigAgentMessage: send },
+    desktopBridge: {
+      listOpenRigAgents: list,
+      listOpenRigSessions: listSessions,
+      bindOpenRigAgent: bind,
+      unbindOpenRigAgent: unbind,
+      sendOpenRigAgentMessage: send,
+    },
     setInterval: globalThis.setInterval,
     clearInterval: globalThis.clearInterval,
   });
@@ -41,6 +64,48 @@ afterEach(() => {
 });
 
 describe("OpenRig sidebar", () => {
+  it("can adopt an existing ChatGPT session into an unbound Rig seat", async () => {
+    const unbound = { ...agent, sessionId: null, sessionTitle: null };
+    list.mockResolvedValueOnce([unbound]).mockResolvedValue([agent]);
+    await act(async () => {
+      renderer = create(<OpenRigAgentsSidebarEntry />);
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Message OpenRig agent Builder" }).props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Choose ChatGPT session");
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "T3 session for Builder" }).props.onChange({
+        currentTarget: { value: "session-2" },
+      });
+    });
+    await act(async () => {
+      const link = renderer!.root.findAllByType("button").find((b) => b.props.children === "Link");
+      link?.props.onClick();
+    });
+    expect(bind).toHaveBeenCalledExactlyOnceWith({ id: "opaque/123", sessionId: "session-2" });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Builder ChatGPT");
+  });
+
+  it("can detach a session without deleting it from T3", async () => {
+    list
+      .mockResolvedValueOnce([agent])
+      .mockResolvedValue([{ ...agent, sessionId: null, sessionTitle: null }]);
+    await act(async () => {
+      renderer = create(<OpenRigAgentsSidebarEntry />);
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Message OpenRig agent Builder" }).props.onClick();
+    });
+    await act(async () => {
+      const detach = renderer!.root
+        .findAllByType("button")
+        .find((b) => b.props.children === "Detach");
+      detach?.props.onClick();
+    });
+    expect(unbind).toHaveBeenCalledExactlyOnceWith("opaque/123");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Choose ChatGPT session");
+  });
   it("shows agent metadata and sends a direct message to its opaque ID", async () => {
     list.mockResolvedValue([agent]);
     await act(async () => {
