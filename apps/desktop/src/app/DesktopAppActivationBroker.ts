@@ -33,12 +33,18 @@ function failure(
 export class DesktopAppActivationBroker {
   readonly #pending = new Map<string, PendingActivation>();
   readonly #requestTimeoutMs: number;
+  readonly #chatGPTRequestTimeoutMs: number;
   readonly #activate: () => void;
   #renderer: RendererSender | null = null;
   #closed = false;
 
-  constructor(input: { readonly requestTimeoutMs: number; readonly activate: () => void }) {
+  constructor(input: {
+    readonly requestTimeoutMs: number;
+    readonly chatGPTRequestTimeoutMs?: number;
+    readonly activate: () => void;
+  }) {
     this.#requestTimeoutMs = input.requestTimeoutMs;
+    this.#chatGPTRequestTimeoutMs = input.chatGPTRequestTimeoutMs ?? input.requestTimeoutMs;
     this.#activate = input.activate;
   }
 
@@ -55,15 +61,20 @@ export class DesktopAppActivationBroker {
     }
 
     const response = new Promise<DesktopAppActivationResponse>((resolve) => {
-      const timeout = setTimeout(() => {
-        this.#settle(
-          failure(
-            request.requestId,
-            "request-timeout",
-            "The desktop app did not finish opening the project in time.",
-          ),
-        );
-      }, this.#requestTimeoutMs);
+      const timeout = setTimeout(
+        () => {
+          this.#settle(
+            failure(
+              request.requestId,
+              "request-timeout",
+              "The desktop app did not complete the request in time.",
+            ),
+          );
+        },
+        request.type === "chatgpt.spawn" || request.type === "chatgpt.sessions"
+          ? this.#chatGPTRequestTimeoutMs
+          : this.#requestTimeoutMs,
+      );
       this.#pending.set(request.requestId, {
         request,
         resolve,
@@ -72,7 +83,10 @@ export class DesktopAppActivationBroker {
       });
     });
 
-    this.#activate();
+    // Agent-spawn requests must not steal focus from the user's current T3
+    // thread (or a different application). The already-running renderer can
+    // create and drive ChatGPT's browser tab without activating the window.
+    if (request.type !== "chatgpt.spawn" && request.type !== "chatgpt.sessions") this.#activate();
     this.#flush();
     return response;
   }

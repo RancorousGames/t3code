@@ -76,6 +76,24 @@ describe("isPreviewRefreshShortcut", () => {
   });
 });
 
+describe("F5 preview refresh", () => {
+  it("refreshes on plain F5 and leaves modified keys alone", () => {
+    const input = {
+      type: "keyDown",
+      key: "F5",
+      meta: false,
+      control: false,
+      shift: false,
+      alt: false,
+    } as Electron.Input;
+    expect(PreviewManager.isPreviewRefreshShortcut(input)).toBe(true);
+    for (const modifier of ["meta", "control", "shift", "alt"] as const) {
+      expect(PreviewManager.isPreviewRefreshShortcut({ ...input, [modifier]: true })).toBe(false);
+    }
+    expect(PreviewManager.isPreviewRefreshShortcut({ ...input, type: "keyUp" })).toBe(false);
+  });
+});
+
 describe("isPreviewEditingShortcut", () => {
   const input = (platform: NodeJS.Platform, key: string, overrides: Partial<Electron.Input> = {}) =>
     ({
@@ -632,6 +650,188 @@ describe("PreviewManager", () => {
         ]);
       }),
     ),
+  );
+
+  effectIt.effect(
+    "routes Cmd+W from the selected ChatGPT guest to the desktop close-session action",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const preview = makeFaviconWebContents();
+          fromId.mockReturnValue(preview.webContents);
+          const send = vi.fn();
+          const host = {
+            getURL: () => "t3code-dev://app/#/browser/selected",
+            isDestroyed: () => false,
+            send,
+          };
+          Object.assign(preview.webContents, { hostWebContents: host });
+          yield* manager.setMainWindow({
+            isDestroyed: () => false,
+            once: vi.fn(),
+            webContents: host,
+          } as never);
+
+          const tabId = '["local-environment","t3-browser-session:selected","epoch","tab_1"]';
+          yield* manager.createTab(tabId);
+          yield* manager.registerWebview(tabId, 42);
+          const beforeInput = preview.listeners.get("before-input-event")!;
+          const preventDefault = vi.fn();
+          const event = { preventDefault };
+          const input = {
+            type: "keyDown",
+            key: "w",
+            meta: true,
+            control: false,
+            alt: false,
+            shift: false,
+            isAutoRepeat: false,
+          };
+          beforeInput(event as never, input as never);
+          expect(preventDefault).toHaveBeenCalledOnce();
+          expect(send).toHaveBeenCalledWith("desktop:menu-action", "close-chatgpt-session");
+
+          beforeInput(event as never, { ...input, isAutoRepeat: true } as never);
+          expect(send).toHaveBeenCalledOnce();
+
+          // A preview tab for a different thread must not close the selected tab.
+          const unrelated = makeFaviconWebContents({ id: 43 });
+          Object.assign(unrelated.webContents, { hostWebContents: host });
+          fromId.mockReturnValue(unrelated.webContents);
+          const unrelatedId = '["local","normal-thread","epoch","tab_2"]';
+          yield* manager.createTab(unrelatedId);
+          yield* manager.registerWebview(unrelatedId, 43);
+          const unrelatedPreventDefault = vi.fn();
+          unrelated.listeners.get("before-input-event")!(
+            { preventDefault: unrelatedPreventDefault } as never,
+            input as never,
+          );
+          expect(unrelatedPreventDefault).not.toHaveBeenCalled();
+          expect(send).toHaveBeenCalledOnce();
+        }),
+      ),
+  );
+
+  effectIt.effect.each(["darwin", "win32"] as const)(
+    "opens the selected ChatGPT guest find bar on %s without stealing other previews",
+    (platform) =>
+      withManager(
+        (manager) =>
+          Effect.gen(function* () {
+            const preview = makeFaviconWebContents();
+            const send = vi.fn();
+            const host = {
+              getURL: () => "t3code-dev://app/#/browser/selected",
+              isDestroyed: () => false,
+              send,
+            };
+            Object.assign(preview.webContents, { hostWebContents: host });
+            fromId.mockReturnValue(preview.webContents);
+            getFocusedWebContents.mockReturnValue(preview.webContents as never);
+            yield* manager.setMainWindow({
+              isDestroyed: () => false,
+              once: vi.fn(),
+              webContents: host,
+            } as never);
+            const tabId = '["local","t3-browser-session:selected","epoch","tab_1"]';
+            yield* manager.createTab(tabId);
+            yield* manager.registerWebview(tabId, 42);
+            const beforeInput = preview.listeners.get("before-input-event")!;
+            const input = {
+              type: "keyDown",
+              key: "f",
+              code: "KeyF",
+              meta: platform === "darwin",
+              control: platform !== "darwin",
+              shift: false,
+              alt: false,
+              isAutoRepeat: false,
+            };
+            const preventDefault = vi.fn();
+            beforeInput({ preventDefault } as never, input as never);
+            expect(preventDefault).toHaveBeenCalledOnce();
+            expect(send).toHaveBeenCalledExactlyOnceWith("desktop:menu-action", "chatgpt.find");
+
+            beforeInput({ preventDefault } as never, { ...input, isAutoRepeat: true } as never);
+            expect(preventDefault).toHaveBeenCalledTimes(2);
+            expect(send).toHaveBeenCalledOnce();
+
+            preventDefault.mockClear();
+            beforeInput({ preventDefault } as never, { ...input, shift: true } as never);
+            expect(preventDefault).not.toHaveBeenCalled();
+
+            // Electron may report the host as focused even while guest keys
+            // are delivered; the selected guest still owns this input.
+            getFocusedWebContents.mockReturnValue(null);
+            beforeInput({ preventDefault } as never, input as never);
+            expect(preventDefault).toHaveBeenCalledOnce();
+            expect(send).toHaveBeenCalledTimes(2);
+
+            getFocusedWebContents.mockReturnValue(preview.webContents as never);
+            const other = makeFaviconWebContents({ id: 43 });
+            Object.assign(other.webContents, { hostWebContents: host });
+            fromId.mockReturnValue(other.webContents);
+            const otherId = '["local","normal-thread","epoch","tab_2"]';
+            yield* manager.createTab(otherId);
+            yield* manager.registerWebview(otherId, 43);
+            const ignored = vi.fn();
+            other.listeners.get("before-input-event")!(
+              { preventDefault: ignored } as never,
+              input as never,
+            );
+            expect(ignored).not.toHaveBeenCalled();
+            expect(send).toHaveBeenCalledTimes(2);
+          }),
+        platform,
+      ),
+  );
+
+  effectIt.effect(
+    "forwards a configured Ctrl+T new-thread command from the selected ChatGPT guest even when Electron reports host focus",
+    () =>
+      withManager(
+        (manager) =>
+          Effect.gen(function* () {
+            const preview = makeFaviconWebContents();
+            const send = vi.fn();
+            const host = {
+              getURL: () => "t3code-dev://app/#/browser/selected",
+              isDestroyed: () => false,
+              send,
+            };
+            Object.assign(preview.webContents, { hostWebContents: host });
+            fromId.mockReturnValue(preview.webContents);
+            getFocusedWebContents.mockReturnValue(null);
+            yield* manager.setMainWindow({
+              isDestroyed: () => false,
+              once: vi.fn(),
+              webContents: host,
+            } as never);
+            const tabId = '["local","t3-browser-session:selected","epoch","tab_1"]';
+            yield* manager.createTab(tabId);
+            yield* manager.registerWebview(tabId, 42);
+            yield* manager.setForwardedShortcuts([
+              { command: "chat.new", shortcut: parseKeybindingShortcut("mod+t")! },
+            ]);
+            const preventDefault = vi.fn();
+            preview.listeners.get("before-input-event")!(
+              { preventDefault } as never,
+              {
+                type: "keyDown",
+                key: "t",
+                code: "KeyT",
+                meta: false,
+                control: true,
+                alt: false,
+                shift: false,
+                isAutoRepeat: false,
+              } as never,
+            );
+            expect(preventDefault).toHaveBeenCalledOnce();
+            expect(send).toHaveBeenCalledExactlyOnceWith("desktop:menu-action", "chat.new");
+          }),
+        "win32",
+      ),
   );
 
   effectIt.effect("keeps preview shortcuts out of the host window", () =>

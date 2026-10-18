@@ -95,6 +95,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import { isElectron } from "../env";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -130,6 +131,8 @@ import { useScratchProject } from "../hooks/useScratchProject";
 import { useNewProject } from "../hooks/useNewProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
+import { ChatGPTSessionIcon } from "./sidebar/ChatGPTSessionIcon";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -387,6 +390,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { createSession: createBrowserSession } = useChatGPTBrowserSessions(primaryEnvironmentId);
   const { theme, themeHalves, resolvedTheme, appearanceMode, setAppearanceMode } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
   const routeTarget = useParams({
@@ -404,6 +409,18 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       ? selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview"
       : false,
   );
+
+  useEffect(() => {
+    const unsubscribe = window.desktopBridge?.onMenuAction((action) => {
+      if (action !== "chatgpt.newSession" || !isElectron || !primaryEnvironmentId) return;
+      setOpen(false);
+      void navigate({
+        to: "/browser/$browserSessionId",
+        params: { browserSessionId: createBrowserSession() },
+      });
+    });
+    return () => unsubscribe?.();
+  }, [createBrowserSession, navigate, primaryEnvironmentId, setOpen]);
 
   useEffect(() => {
     if (!state.open || state.mode === "command") return;
@@ -429,8 +446,21 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           previewFocus: isPreviewFocused(),
           previewOpen,
           modelPickerOpen: composerHandleRef.current?.isModelPickerOpen() ?? false,
+          isDesktop: isElectron,
+          isWeb: !isElectron,
         },
       });
+      if (command === "chatgpt.newSession" && isElectron && primaryEnvironmentId) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        setOpen(false);
+        void navigate({
+          to: "/browser/$browserSessionId",
+          params: { browserSessionId: createBrowserSession() },
+        });
+        return;
+      }
       if (command === "appearance.cycle") {
         event.preventDefault();
         event.stopPropagation();
@@ -484,8 +514,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     appearanceMode,
+    createBrowserSession,
     keybindings,
     navigate,
+    primaryEnvironmentId,
     previewOpen,
     resolvedTheme,
     setAppearanceMode,
@@ -643,6 +675,7 @@ function OpenCommandPaletteDialog(props: {
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { createSession: createBrowserSession } = useChatGPTBrowserSessions(primaryEnvironmentId);
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -2217,6 +2250,23 @@ function OpenCommandPaletteDialog(props: {
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+      },
+    });
+  }
+
+  if (isElectron) {
+    actionItems.push({
+      kind: "action",
+      value: "action:chatgpt-browser",
+      searchTerms: ["chatgpt", "browser", "web", "openai"],
+      title: "New ChatGPT session",
+      icon: <ChatGPTSessionIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "chatgpt.newSession",
+      run: async () => {
+        await navigate({
+          to: "/browser/$browserSessionId",
+          params: { browserSessionId: createBrowserSession() },
+        });
       },
     });
   }

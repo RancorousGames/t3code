@@ -70,6 +70,32 @@ function ChatRouteGlobalShortcuts() {
       : false,
   );
   useEffect(() => {
+    const runNewThreadCommand = (command: string) => {
+      if (command === "chat.newLocal") {
+        void startNewThreadFromContext({
+          activeDraftThread,
+          activeThread: activeThread ?? undefined,
+          defaultProjectRef,
+          handleNewThread,
+        });
+      } else if (command === "chat.newWithoutProject") {
+        const environmentId = scratchEnvironmentId(
+          activeThread?.environmentId ?? activeDraftThread?.environmentId ?? primaryEnvironmentId,
+        );
+        if (environmentId !== null) void startScratchThread(environmentId);
+      } else if (command === "chat.new") {
+        if (!legacySidebarEnabled && projectGroupCount > 1) {
+          openCommandPalette({ open: "new-thread-in" });
+        } else {
+          void startNewThreadFromContext({
+            activeDraftThread,
+            activeThread: activeThread ?? undefined,
+            defaultProjectRef,
+            handleNewThread,
+          });
+        }
+      }
+    };
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const command = resolveShortcutCommand(event, keybindings, {
@@ -102,45 +128,14 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (command === "chat.newLocal") {
+      if (
+        command === "chat.newLocal" ||
+        command === "chat.newWithoutProject" ||
+        command === "chat.new"
+      ) {
         event.preventDefault();
         event.stopPropagation();
-        void startNewThreadFromContext({
-          activeDraftThread,
-          activeThread: activeThread ?? undefined,
-          defaultProjectRef,
-          handleNewThread,
-        });
-        return;
-      }
-
-      if (command === "chat.newWithoutProject") {
-        const environmentId = scratchEnvironmentId(
-          activeThread?.environmentId ?? activeDraftThread?.environmentId ?? primaryEnvironmentId,
-        );
-        if (environmentId === null) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void startScratchThread(environmentId);
-        return;
-      }
-
-      if (command === "chat.new") {
-        event.preventDefault();
-        event.stopPropagation();
-        // The default sidebar routes creation through the command palette
-        // whenever there is a real choice to make; the legacy sidebar (and
-        // single-project setups) keep the immediate contextual create.
-        if (!legacySidebarEnabled && projectGroupCount > 1) {
-          openCommandPalette({ open: "new-thread-in" });
-          return;
-        }
-        void startNewThreadFromContext({
-          activeDraftThread,
-          activeThread: activeThread ?? undefined,
-          defaultProjectRef,
-          handleNewThread,
-        });
+        runNewThreadCommand(command);
         return;
       }
 
@@ -190,8 +185,20 @@ function ChatRouteGlobalShortcuts() {
     };
 
     window.addEventListener("keydown", onWindowKeyDown);
+    // A focused Electron <webview> does not dispatch keydown on the host window.
+    const unsubscribe = window.desktopBridge?.onMenuAction((command) => {
+      if (isCommandPaletteOpen()) return;
+      if (
+        command === "chat.new" ||
+        command === "chat.newLocal" ||
+        command === "chat.newWithoutProject"
+      ) {
+        runNewThreadCommand(command);
+      }
+    });
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown);
+      unsubscribe?.();
     };
   }, [
     activeDraftThread,

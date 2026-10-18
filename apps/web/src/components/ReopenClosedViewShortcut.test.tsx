@@ -309,6 +309,9 @@ describe("root reopen shortcut", () => {
   );
 
   it("forwards the chord to a focused desktop browser only while history exists", async () => {
+    // On Windows the default Ctrl+Shift+T is owned by chatgpt.newSession;
+    // on macOS Cmd+Shift+T remains available for reopening closed views.
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
     const forwardedCommands = () =>
       (state.setShortcuts.mock.lastCall as unknown as [Array<{ command: string }>])[0].map(
         ({ command }) => command,
@@ -325,11 +328,34 @@ describe("root reopen shortcut", () => {
     expect(forwardedCommands()).not.toContain("view.reopenClosed");
   });
 
-  it("always forwards the layout toggles out of a focused desktop browser", async () => {
+  it("forwards layout and new-session shortcuts from a focused desktop browser", async () => {
     await render();
-    expect(state.setShortcuts).toHaveBeenLastCalledWith([
-      expect.objectContaining({ command: "sidebar.toggle" }),
-      expect.objectContaining({ command: "rightPanel.toggle" }),
-    ]);
+    const shortcuts = (
+      state.setShortcuts.mock.lastCall as unknown as [
+        Array<{ command: string; shortcut: { key: string } }>,
+      ]
+    )[0];
+    expect(shortcuts.map(({ command }) => command)).toEqual(
+      expect.arrayContaining([
+        "sidebar.toggle",
+        "rightPanel.toggle",
+        "chatgpt.newSession",
+        "chat.new",
+        "chat.newLocal",
+        "chat.newWithoutProject",
+      ]),
+    );
+    expect(shortcuts).toContainEqual(
+      expect.objectContaining({
+        command: "chatgpt.newSession",
+        shortcut: expect.objectContaining({ key: "t" }),
+      }),
+    );
+    expect(shortcuts).toContainEqual(
+      expect.objectContaining({
+        command: "chat.new",
+        shortcut: expect.objectContaining({ key: "n" }),
+      }),
+    );
   });
 });

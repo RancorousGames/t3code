@@ -37,6 +37,7 @@ export interface SidebarThreadHeaderProps {
   newThreadDisabled: boolean;
   newThreadShortcutLabel: string | null | undefined;
   newThreadInProjectShortcutLabel: string | null | undefined;
+  chatGPTSessionAction?: ReactNode;
   /** Shift+click only matters once there is more than one project to pick. */
   showNewThreadInProjectHint: boolean;
   searchInputRef: RefObject<HTMLInputElement | null>;
@@ -58,6 +59,7 @@ export function SidebarThreadHeader({
   newThreadDisabled,
   newThreadShortcutLabel,
   newThreadInProjectShortcutLabel,
+  chatGPTSessionAction,
   showNewThreadInProjectHint,
   searchInputRef,
   searchQuery,
@@ -152,6 +154,7 @@ export function SidebarThreadHeader({
         >
           <SquarePenIcon />
         </SidebarHeaderIconButton>
+        {chatGPTSessionAction}
       </div>
     </div>
   );

@@ -45,7 +45,7 @@ function failure(
 }
 
 function desktopPlatformToEnvironmentOs(
-  platform: DesktopAppActivationRequest["platform"],
+  platform: Extract<DesktopAppActivationRequest, { type: "open-workspace" }>["platform"],
 ): ExecutionEnvironmentPlatformOs {
   return platform === "win32" ? "windows" : platform;
 }
@@ -58,6 +58,9 @@ export async function handleDesktopAppActivationRequest(
   request: DesktopAppActivationRequest,
   dependencies: DesktopAppActivationDependencies,
 ): Promise<DesktopAppActivationResponse> {
+  if (request.type !== "open-workspace") {
+    return failure(request.requestId, "invalid-request", "Not a workspace activation request.");
+  }
   const target = dependencies.getTarget();
   if (target === null) {
     return failure(

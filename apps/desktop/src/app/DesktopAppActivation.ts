@@ -32,6 +32,7 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
+const CHATGPT_REQUEST_TIMEOUT_MS = 90_000;
 const isDesktopAppActivationRequest = Schema.is(DesktopAppActivationRequest);
 
 export class DesktopAppActivationStartError extends Schema.TaggedError<DesktopAppActivationStartError>()(
@@ -329,6 +330,7 @@ export const make = Effect.gen(function* () {
 
   const broker = new DesktopAppActivationBroker({
     requestTimeoutMs: REQUEST_TIMEOUT_MS,
+    chatGPTRequestTimeoutMs: CHATGPT_REQUEST_TIMEOUT_MS,
     activate: () => {
       void runPromise(
         desktopWindow.activate.pipe(

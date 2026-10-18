@@ -6,6 +6,8 @@ import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
+import { isSourceCheckoutRun } from "../sourceCheckout.ts";
+
 export interface ElectronAppMetadata {
   readonly appVersion: string;
   readonly appPath: string;
@@ -120,7 +122,7 @@ export const make = ElectronApp.of({
     return {
       appVersion,
       appPath,
-      isPackaged: Electron.app.isPackaged,
+      isPackaged: Electron.app.isPackaged && !isSourceCheckoutRun(),
       resourcesPath: process.resourcesPath,
       runningUnderArm64Translation: Electron.app.runningUnderARM64Translation === true,
     };
@@ -131,7 +133,7 @@ export const make = ElectronApp.of({
   // the tag is normalized here rather than in the renderer that consumes it.
   systemLocale: Effect.sync(() => Electron.app.getSystemLocale().replace(/_/g, "-")),
   whenReady: Effect.gen(function* () {
-    const isPackaged = Electron.app.isPackaged;
+    const isPackaged = Electron.app.isPackaged && !isSourceCheckoutRun();
     yield* Effect.tryPromise({
       try: () => Electron.app.whenReady(),
       catch: (cause) => new ElectronAppWhenReadyError({ isPackaged, cause }),

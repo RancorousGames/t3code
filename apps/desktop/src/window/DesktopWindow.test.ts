@@ -700,6 +700,101 @@ describe("DesktopWindow", () => {
       }),
   );
 
+  it.effect("intercepts Cmd+W for the selected ChatGPT session before native window close", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const beforeInput = fakeWindow.webContentsListeners.get("before-input-event");
+        if (!beforeInput)
+          return yield* Effect.die("before-input-event listener was not registered");
+
+        vi.mocked(fakeWindow.window.webContents.getURL).mockReturnValue(
+          "t3code-dev://app/#/browser/browser-session-1",
+        );
+        const preventDefault = vi.fn();
+        const event = { preventDefault };
+        const input = {
+          type: "keyDown",
+          key: "w",
+          meta: true,
+          control: false,
+          alt: false,
+          shift: false,
+          isAutoRepeat: false,
+        };
+        beforeInput(event, input);
+        assert.equal(preventDefault.mock.calls.length, 1);
+        assert.deepEqual(fakeWindow.send.mock.calls, [
+          [MENU_ACTION_CHANNEL, "close-chatgpt-session"],
+        ]);
+
+        // Key-repeat must not close a second session.
+        beforeInput(event, { ...input, isAutoRepeat: true });
+        assert.deepEqual(fakeWindow.send.mock.calls, [
+          [MENU_ACTION_CHANNEL, "close-chatgpt-session"],
+        ]);
+
+        // An ordinary thread must keep its existing native shortcut behavior.
+        vi.mocked(fakeWindow.window.webContents.getURL).mockReturnValue(
+          "t3code-dev://app/#/threads/any",
+        );
+        preventDefault.mockClear();
+        beforeInput(event, input);
+        assert.equal(preventDefault.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("opens the embedded ChatGPT find bar from host Cmd+F input", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const beforeInput = fakeWindow.webContentsListeners.get("before-input-event");
+        if (!beforeInput)
+          return yield* Effect.die("before-input-event listener was not registered");
+
+        vi.mocked(fakeWindow.window.webContents.getURL).mockReturnValue(
+          "t3code-dev://app/#/browser/browser-session-1",
+        );
+        const preventDefault = vi.fn();
+        const input = {
+          type: "keyDown",
+          key: "f",
+          meta: true,
+          control: false,
+          alt: false,
+          shift: false,
+          isAutoRepeat: false,
+        };
+        beforeInput({ preventDefault }, input);
+        assert.equal(preventDefault.mock.calls.length, 1);
+        assert.deepEqual(fakeWindow.send.mock.calls, [[MENU_ACTION_CHANNEL, "chatgpt.find"]]);
+
+        beforeInput({ preventDefault }, { ...input, isAutoRepeat: true });
+        assert.equal(fakeWindow.send.mock.calls.length, 1);
+
+        vi.mocked(fakeWindow.window.webContents.getURL).mockReturnValue(
+          "t3code-dev://app/#/settings",
+        );
+        preventDefault.mockClear();
+        beforeInput({ preventDefault }, input);
+        assert.equal(preventDefault.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("blocks only repeated Cmd+W input before it reaches the native window menu", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();

@@ -113,6 +113,86 @@ describe("DesktopAppActivationBroker", () => {
     broker.close();
   });
 
+  it("spawns ChatGPT in the already-running renderer without activating or focusing T3", async () => {
+    const activate = vi.fn();
+    const send = vi.fn();
+    const broker = new DesktopAppActivationBroker({ requestTimeoutMs: 1_000, activate });
+    broker.registerRenderer(send);
+    const spawn: DesktopAppActivationRequest = {
+      version: 1,
+      requestId: "background-agent",
+      type: "chatgpt.spawn",
+      title: "Background agent",
+      prompt: "Work while I continue using T3",
+    };
+
+    const response = broker.request(spawn);
+    expect(activate).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(spawn);
+
+    broker.complete({
+      version: 1,
+      requestId: spawn.requestId,
+      ok: true,
+      sessionId: "new-background-session",
+      messageSent: true,
+    });
+    await expect(response).resolves.toMatchObject({
+      ok: true,
+      sessionId: "new-background-session",
+      messageSent: true,
+    });
+
+    // Other desktop commands continue using the existing foreground behavior.
+    const workspaceResponse = broker.request(request);
+    expect(activate).toHaveBeenCalledOnce();
+    broker.complete({
+      version: 1,
+      requestId: request.requestId,
+      ok: true,
+      projectId: ProjectId.make("project-1"),
+      threadId: ThreadId.make("thread-1"),
+    });
+    await workspaceResponse;
+    broker.close();
+  });
+
+  it("allows a longer window for ChatGPT browser startup without changing workspace timeouts", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new DesktopAppActivationBroker({
+        requestTimeoutMs: 1_000,
+        chatGPTRequestTimeoutMs: 5_000,
+        activate: vi.fn(),
+      });
+      const request = {
+        version: 1 as const,
+        requestId: "chatgpt-spawn-test",
+        type: "chatgpt.spawn" as const,
+        title: "Reviewer",
+        prompt: "Review the spec",
+      };
+      const response = broker.request(request);
+      await vi.advanceTimersByTimeAsync(2_000);
+      broker.complete({
+        version: 1,
+        requestId: request.requestId,
+        ok: true,
+        sessionId: "browser-session-1",
+        messageSent: true,
+      });
+      await expect(response).resolves.toMatchObject({
+        ok: true,
+        sessionId: "browser-session-1",
+        messageSent: true,
+      });
+      broker.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("times out a request without polling", async () => {
     vi.useFakeTimers();
     try {

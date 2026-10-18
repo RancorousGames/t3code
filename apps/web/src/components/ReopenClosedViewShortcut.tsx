@@ -200,7 +200,14 @@ export function ReopenClosedViewShortcut() {
     const commands = [
       ...(hasHistory ? (["view.reopenClosed"] as const) : []),
       ...PREVIEW_FORWARDED_LAYOUT_COMMANDS,
-    ];
+      // Guest focus belongs to a separate renderer: keep new-session hotkeys usable.
+      "chatgpt.newSession",
+      "chat.new",
+      "chat.newLocal",
+      "chat.newWithoutProject",
+    ] as const;
+    // Do not clear on each dependency change: an asynchronous IPC cleanup can
+    // complete after the new registration and silently erase every shortcut.
     void preview
       .setForwardedShortcuts(
         commands.flatMap((command) =>
@@ -211,10 +218,14 @@ export function ReopenClosedViewShortcut() {
         ),
       )
       .catch(() => undefined);
-    return () => {
-      void preview.setForwardedShortcuts?.([]).catch(() => undefined);
-    };
   }, [hasHistory, keybindings, terminalOpen]);
+
+  useEffect(() => {
+    const preview = window.desktopBridge?.preview;
+    return () => {
+      void preview?.setForwardedShortcuts?.([]).catch(() => undefined);
+    };
+  }, []);
 
   return null;
 }

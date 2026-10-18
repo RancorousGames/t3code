@@ -98,6 +98,7 @@ interface Props {
   tabId?: string | null;
   configuredUrls?: ReadonlyArray<string> | undefined;
   visible: boolean;
+  standalone?: boolean;
   onSendAnnotation?: (
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
@@ -147,6 +148,7 @@ export function PreviewView({
   tabId: requestedTabId,
   configuredUrls,
   visible,
+  standalone = false,
   onSendAnnotation,
 }: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
@@ -369,6 +371,19 @@ export function PreviewView({
     },
     [adjustServerTab, serverZoomFactor],
   );
+
+  useEffect(() => {
+    if (!standalone || !visible) return;
+    const refreshOnF5 = (event: KeyboardEvent) => {
+      if (event.key !== "F5" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+        return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      handleRefresh();
+    };
+    window.addEventListener("keydown", refreshOnF5, true);
+    return () => window.removeEventListener("keydown", refreshOnF5, true);
+  }, [handleRefresh, standalone, visible]);
 
   const handleZoomIn = useCallback(() => {
     if (serverOwnsRendering) stepServerZoom(1);
@@ -985,13 +1000,13 @@ export function PreviewView({
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}
         onPictureInPicture={
-          tabId && (isServerTab || previewBridge) ? handlePictureInPicture : undefined
+          !standalone && tabId && (isServerTab || previewBridge) ? handlePictureInPicture : undefined
         }
         pictureInPicture={miniPlayerTabId === tabId}
         pictureInPictureDisabled={
           isUnreachable || (!isServerTab && !desktopOverlay?.hasWebContents)
         }
-        onPickElement={previewBridge && tabId && !isServerTab ? handlePickElement : undefined}
+        onPickElement={!standalone && previewBridge && tabId && !isServerTab ? handlePickElement : undefined}
         pickActive={pickActive}
         // Disable when there's no tab (nothing to pick on) OR the page
         // failed to load (a React overlay covers the webview, so the

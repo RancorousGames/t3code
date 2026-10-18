@@ -34,6 +34,11 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
+import {
+  activeChatGPTBrowserSessionId,
+  CLOSE_CHATGPT_SESSION_MENU_ACTION,
+  isChatGPTCloseShortcut,
+} from "./ChatGPTCloseShortcut.ts";
 
 const TITLEBAR_HEIGHT = 40;
 // Matches --workspace-topbar-height in apps/web/src/index.css. Native macOS
@@ -684,6 +689,34 @@ export const make = Effect.gen(function* () {
       },
     });
     window.webContents.on("before-input-event", (event, input) => {
+      // When focus is retained by the host, open the same find UI as a guest
+      // Ctrl/Cmd+F rather than allowing a native menu or browser find to win.
+      const findModifier = environment.platform === "darwin" ? input.meta : input.control;
+      if (
+        input.type === "keyDown" &&
+        findModifier &&
+        !(environment.platform === "darwin" ? input.control : input.meta) &&
+        !input.alt &&
+        !input.shift &&
+        input.key.toLowerCase() === "f" &&
+        activeChatGPTBrowserSessionId(window.webContents.getURL()) !== null
+      ) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) window.webContents.send(MENU_ACTION_CHANNEL, "chatgpt.find");
+        return;
+      }
+      // Ctrl/Cmd+W closes the selected ChatGPT session, not the Electron app.
+      // Catch the shortcut before Electron's native Window menu accelerator.
+      if (
+        isChatGPTCloseShortcut(input, environment.platform) &&
+        activeChatGPTBrowserSessionId(window.webContents.getURL()) !== null
+      ) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) {
+          window.webContents.send(MENU_ACTION_CHANNEL, CLOSE_CHATGPT_SESSION_MENU_ACTION);
+        }
+        return;
+      }
       quitShortcutHandler(event, input);
       if (input.type !== "keyDown" || !input.isAutoRepeat) return;
       const modifier = environment.platform === "darwin" ? input.meta : input.control;
