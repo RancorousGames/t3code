@@ -36,6 +36,9 @@ export const SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:set-local-environm
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const OPENRIG_LIST_AGENTS_CHANNEL = "desktop:openrig-list-agents";
+export const OPENRIG_LIST_SESSIONS_CHANNEL = "desktop:openrig-list-sessions";
+export const OPENRIG_BIND_AGENT_CHANNEL = "desktop:openrig-bind-agent";
+export const OPENRIG_UNBIND_AGENT_CHANNEL = "desktop:openrig-unbind-agent";
 export const OPENRIG_SEND_AGENT_MESSAGE_CHANNEL = "desktop:openrig-send-agent-message";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
 export const SET_CLIENT_SETTINGS_CHANNEL = "desktop:set-client-settings";

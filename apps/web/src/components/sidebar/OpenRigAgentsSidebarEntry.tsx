@@ -1,4 +1,4 @@
-import type { DesktopOpenRigAgent } from "@t3tools/contracts";
+import type { DesktopOpenRigAgent, DesktopOpenRigSession } from "@t3tools/contracts";
 import { ChevronDownIcon, ChevronUpIcon, RefreshCwIcon, SendIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
@@ -9,15 +9,72 @@ import { Textarea } from "../ui/textarea";
 
 const REFRESH_INTERVAL_MS = 20_000;
 
-function OpenRigAgentRow({ agent }: { agent: DesktopOpenRigAgent }) {
+function OpenRigAgentRow({
+  agent,
+  onChanged,
+}: {
+  agent: DesktopOpenRigAgent;
+  onChanged: () => Promise<void>;
+}) {
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [sessions, setSessions] = useState<readonly DesktopOpenRigSession[]>([]);
+  const [chosenSession, setChosenSession] = useState("");
+  const [linking, setLinking] = useState(false);
+
+  useEffect(() => {
+    if (!composing || agent.sessionId) return;
+    let current = true;
+    const load = async () => {
+      try {
+        const available = await window.desktopBridge?.listOpenRigSessions?.();
+        if (current) setSessions(available ?? []);
+      } catch {
+        if (current) setFeedback("Unable to list T3 browser sessions.");
+      }
+    };
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [composing, agent.sessionId]);
+
+  async function linkSession() {
+    const bind = window.desktopBridge?.bindOpenRigAgent;
+    if (!bind || !chosenSession || linking) return;
+    setLinking(true);
+    setFeedback("");
+    try {
+      await bind({ id: agent.id, sessionId: chosenSession });
+      await onChanged();
+      setFeedback("Session linked.");
+    } catch {
+      setFeedback("Could not link this session; check that it is not already assigned.");
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  async function detachSession() {
+    const unbind = window.desktopBridge?.unbindOpenRigAgent;
+    if (!unbind || linking) return;
+    setLinking(true);
+    try {
+      await unbind(agent.id);
+      await onChanged();
+      setFeedback("Session detached.");
+    } catch {
+      setFeedback("Could not detach this session.");
+    } finally {
+      setLinking(false);
+    }
+  }
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending || !draft.trim()) return;
+    if (sending || !draft.trim() || !agent.sessionId) return;
     setSending(true);
     setFeedback("");
     try {
@@ -64,35 +121,85 @@ function OpenRigAgentRow({ agent }: { agent: DesktopOpenRigAgent }) {
         </span>
       </button>
       {composing && (
-        <form className="space-y-1.5 px-2 pb-2" onSubmit={(event) => void sendMessage(event)}>
-          <Textarea
-            size="sm"
-            rows={2}
-            aria-label={`Message to ${agent.name}`}
-            placeholder={`Message ${agent.name}…`}
-            value={draft}
-            maxLength={8_000}
-            disabled={sending}
-            onChange={(event) => {
-              setDraft(event.currentTarget.value);
-              setFeedback("");
-            }}
-          />
-          <div className="flex items-center justify-between gap-2">
-            <span role="status" className="min-w-0 text-2xs text-sidebar-muted-foreground">
+        <div className="space-y-1.5 px-2 pb-2">
+          {agent.sessionId ? (
+            <div className="flex items-center justify-between gap-2 text-2xs text-sidebar-muted-foreground">
+              <span className="min-w-0 truncate" title={agent.sessionTitle ?? undefined}>
+                {agent.sessionTitle ?? "Linked T3 session"}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost-muted"
+                disabled={linking}
+                onClick={() => void detachSession()}
+              >
+                Detach
+              </Button>
+            </div>
+          ) : (
+            <div className="flex gap-1">
+              <select
+                aria-label={`T3 session for ${agent.name}`}
+                className="min-w-0 flex-1 rounded-md border border-sidebar-border bg-transparent text-xs"
+                value={chosenSession}
+                disabled={linking}
+                onChange={(event) => setChosenSession(event.currentTarget.value)}
+              >
+                <option value="">Choose ChatGPT session</option>
+                {sessions.map((session) => (
+                  <option key={session.id} value={session.id}>
+                    {session.title}
+                    {session.project ? ` · ${session.project}` : ""}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                variant="ghost-muted"
+                disabled={!chosenSession || linking}
+                onClick={() => void linkSession()}
+              >
+                Link
+              </Button>
+            </div>
+          )}
+          {agent.sessionId && (
+            <form className="space-y-1.5" onSubmit={(event) => void sendMessage(event)}>
+              <Textarea
+                size="sm"
+                rows={2}
+                aria-label={`Message to ${agent.name}`}
+                placeholder={`Message ${agent.name}…`}
+                value={draft}
+                maxLength={8_000}
+                disabled={sending}
+                onChange={(event) => {
+                  setDraft(event.currentTarget.value);
+                  setFeedback("");
+                }}
+              />
+              <div className="flex items-center justify-between gap-2">
+                <span role="status" className="min-w-0 text-2xs text-sidebar-muted-foreground">
+                  {feedback}
+                </span>
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="ghost-muted"
+                  disabled={sending || !draft.trim()}
+                >
+                  <SendIcon aria-hidden />
+                  {sending ? "Sending…" : "Send"}
+                </Button>
+              </div>
+            </form>
+          )}
+          {!agent.sessionId && (
+            <span role="status" className="text-2xs text-sidebar-muted-foreground">
               {feedback}
             </span>
-            <Button
-              type="submit"
-              size="sm"
-              variant="ghost-muted"
-              disabled={sending || !draft.trim()}
-            >
-              <SendIcon aria-hidden />
-              {sending ? "Sending…" : "Send"}
-            </Button>
-          </div>
-        </form>
+          )}
+        </div>
       )}
     </SidebarMenuItem>
   );
@@ -174,7 +281,10 @@ export function OpenRigAgentsSidebarEntry() {
             </span>
           </SidebarMenuItem>
         )}
-        {!collapsed && agents.map((agent) => <OpenRigAgentRow key={agent.id} agent={agent} />)}
+        {!collapsed &&
+          agents.map((agent) => (
+            <OpenRigAgentRow key={agent.id} agent={agent} onChanged={refresh} />
+          ))}
       </SidebarMenu>
     </div>
   );

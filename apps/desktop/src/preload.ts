@@ -119,6 +119,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
   listOpenRigAgents: () => ipcRenderer.invoke(IpcChannels.OPENRIG_LIST_AGENTS_CHANNEL),
+  listOpenRigSessions: () => ipcRenderer.invoke(IpcChannels.OPENRIG_LIST_SESSIONS_CHANNEL),
+  bindOpenRigAgent: (input) => ipcRenderer.invoke(IpcChannels.OPENRIG_BIND_AGENT_CHANNEL, input),
+  unbindOpenRigAgent: (id) => ipcRenderer.invoke(IpcChannels.OPENRIG_UNBIND_AGENT_CHANNEL, id),
   sendOpenRigAgentMessage: (input) =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_SEND_AGENT_MESSAGE_CHANNEL, input),
   requestSnapShotPermissions: (includeAccessibility) =>

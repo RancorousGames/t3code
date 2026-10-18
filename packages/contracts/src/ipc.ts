@@ -1122,8 +1122,24 @@ export const DesktopOpenRigAgentSchema = Schema.Struct({
   status: Schema.String,
   role: Schema.NullOr(Schema.String),
   task: Schema.NullOr(Schema.String),
+  sessionId: Schema.NullOr(Schema.String),
+  sessionTitle: Schema.NullOr(Schema.String),
 });
 export type DesktopOpenRigAgent = typeof DesktopOpenRigAgentSchema.Type;
+
+export const DesktopOpenRigSessionSchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  project: Schema.NullOr(Schema.String),
+  status: Schema.String,
+});
+export type DesktopOpenRigSession = typeof DesktopOpenRigSessionSchema.Type;
+
+export const DesktopOpenRigBindInputSchema = Schema.Struct({
+  id: Schema.String,
+  sessionId: Schema.String,
+});
+export type DesktopOpenRigBindInput = typeof DesktopOpenRigBindInputSchema.Type;
 
 export const DesktopOpenRigSendInputSchema = Schema.Struct({
   id: Schema.String,
@@ -1158,6 +1174,9 @@ export interface DesktopBridge {
   setClientSettings: (settings: ClientSettings) => Promise<void>;
   /** Only available in desktop builds with the local OpenRig integration. */
   listOpenRigAgents?: () => Promise<readonly DesktopOpenRigAgent[]>;
+  listOpenRigSessions?: () => Promise<readonly DesktopOpenRigSession[]>;
+  bindOpenRigAgent?: (input: DesktopOpenRigBindInput) => Promise<void>;
+  unbindOpenRigAgent?: (id: string) => Promise<void>;
   sendOpenRigAgentMessage?: (input: DesktopOpenRigSendInput) => Promise<void>;
   getConnectionCatalog?: () => Promise<string | null>;
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;

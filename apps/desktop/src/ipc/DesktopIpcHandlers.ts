@@ -105,6 +105,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(OpenRigIpc.listOpenRigAgents);
+  yield* ipc.handle(OpenRigIpc.listOpenRigSessions);
+  yield* ipc.handle(OpenRigIpc.bindOpenRigAgent);
+  yield* ipc.handle(OpenRigIpc.unbindOpenRigAgent);
   yield* ipc.handle(OpenRigIpc.sendOpenRigAgentMessage);
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getSnapShotState);

@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { decodeOpenRigAgents, fetchOpenRigAgents, sendOpenRigMessage } from "./openRig.ts";
+import {
+  bindOpenRigSeat,
+  decodeOpenRigAgents,
+  decodeOpenRigSessions,
+  fetchOpenRigAgents,
+  fetchOpenRigSessions,
+  sendOpenRigMessage,
+  unbindOpenRigSeat,
+} from "./openRig.ts";
 
 describe("local OpenRig desktop proxy", () => {
   it("accepts bridge agent lists and keeps task/status metadata", () => {
@@ -23,10 +31,20 @@ describe("local OpenRig desktop proxy", () => {
         status: "working",
         role: "worker",
         task: "T3 sidebar",
+        sessionId: null,
+        sessionTitle: null,
       },
     ]);
     expect(decodeOpenRigAgents([{ id: "x", name: "Idle", status: "idle" }])).toEqual([
-      { id: "x", name: "Idle", status: "idle", role: null, task: null },
+      {
+        id: "x",
+        name: "Idle",
+        status: "idle",
+        role: null,
+        task: null,
+        sessionId: null,
+        sessionTitle: null,
+      },
     ]);
     expect(() => decodeOpenRigAgents({ sessions: [] })).toThrow("Invalid OpenRig agents response");
   });
@@ -41,6 +59,34 @@ describe("local OpenRig desktop proxy", () => {
     expect(fetcher).toHaveBeenCalledWith(
       "http://127.0.0.1:7433/api/integrations/t3/agents",
       expect.objectContaining({ method: "GET", redirect: "error", cache: "no-store" }),
+    );
+  });
+
+  it("lists existing T3 sessions and links/unlinks them to OpenRig seats", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        sessions: [
+          { id: "browser-1", title: "Wartribes", project: "Wartribes", status: "done_or_idle" },
+        ],
+      }),
+    ) as typeof fetch;
+    expect(decodeOpenRigSessions({ sessions: [] })).toEqual([]);
+    expect(await fetchOpenRigSessions(fetcher)).toEqual([
+      { id: "browser-1", title: "Wartribes", project: "Wartribes", status: "done_or_idle" },
+    ]);
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:7433/api/integrations/t3/sessions",
+      expect.objectContaining({ method: "GET" }),
+    );
+    await bindOpenRigSeat({ id: "seat/1", sessionId: "browser-1" }, fetcher);
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:7433/api/integrations/t3/agents/seat%2F1/bind",
+      expect.objectContaining({ method: "POST", body: '{"sessionId":"browser-1"}' }),
+    );
+    await unbindOpenRigSeat("seat/1", fetcher);
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:7433/api/integrations/t3/agents/seat%2F1/bind",
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 

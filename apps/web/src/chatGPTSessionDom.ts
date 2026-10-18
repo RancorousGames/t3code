@@ -2,6 +2,8 @@ export interface PageMessage {
   role: "user" | "assistant";
   text: string;
   turn: number;
+  /** Stable ChatGPT DOM turn key when present; avoids collisions under virtualization. */
+  turnKey?: string;
 }
 export interface PageInspection {
   activity: "working" | "idle" | "unknown";
@@ -81,22 +83,31 @@ export function inspectChatGPTPage(input: {
   // Evaluating the load-failure probe is delegated to T3's existing detector.
   const stuck = false;
   // ChatGPT changes its message wrappers periodically. Prefer explicit roles,
-  // then fall back to conversation-turn wrappers when role attributes disappear.
+  // then fall back to conversation-turn wrappers or the modern content-search
+  // message units. The latter have stable :user/:assistant suffixes and sit
+  // under [data-turn-key] without any data-message-author-role/testid wrappers.
   const roleNodes = [
     ...document.querySelectorAll(
       '[data-message-author-role="user"],[data-message-author-role="assistant"]',
     ),
   ];
   const turnNodes = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')];
-  const nodes = roleNodes.length ? roleNodes : turnNodes;
+  const contentUnits = [
+    ...document.querySelectorAll(
+      '[data-content-search-unit-key$=":user"],[data-content-search-unit-key$=":assistant"]',
+    ),
+  ];
+  const nodes = roleNodes.length ? roleNodes : turnNodes.length ? turnNodes : contentUnits;
   // Count roles first. For a status scan, never extract the whole conversation:
   // a tab with thousands of messages would otherwise flood the Electron bridge.
   const indexed: { node: Element; role: "user" | "assistant"; turn: number }[] = [];
   let turn = -1;
   for (const node of nodes) {
+    const unitKey = node.getAttribute("data-content-search-unit-key");
     const explicitRole =
       node.getAttribute("data-message-author-role") ??
-      node.querySelector("[data-message-author-role]")?.getAttribute("data-message-author-role");
+      node.querySelector("[data-message-author-role]")?.getAttribute("data-message-author-role") ??
+      (unitKey?.endsWith(":user") ? "user" : unitKey?.endsWith(":assistant") ? "assistant" : null);
     const role =
       explicitRole === "user" || explicitRole === "assistant"
         ? explicitRole
@@ -111,8 +122,14 @@ export function inspectChatGPTPage(input: {
   }
   const totalTurns = turn + 1;
   const last = indexed.at(-1);
-  const getText = (node: Element) =>
-    (node as HTMLElement).innerText?.trim() || node.textContent?.trim() || "";
+  const getText = (node: Element) => {
+    // The modern wrapper may include toolbar controls. Prefer the actual
+    // assistant Markdown element when available, keeping generated text clean.
+    const content = node.getAttribute("data-content-search-unit-key")?.endsWith(":assistant")
+      ? (node.querySelector('[data-markdown-text-style="assistant-message"]') ?? node)
+      : node;
+    return (content as HTMLElement).innerText?.trim() || content.textContent?.trim() || "";
+  };
   const from = input.from === "start" ? 0 : Math.max(0, totalTurns - input.count);
   const to = input.from === "start" ? input.count : totalTurns;
   return {
@@ -125,13 +142,21 @@ export function inspectChatGPTPage(input: {
     messages: input.includeMessages
       ? indexed
           .filter((m) => m.turn >= from && m.turn < to)
-          .map((m) => ({ role: m.role, turn: m.turn, text: getText(m.node).slice(0, 6000) }))
+          .map((m) => {
+            const turnKey = m.node.closest("[data-turn-key]")?.getAttribute("data-turn-key");
+            return {
+              role: m.role,
+              turn: m.turn,
+              ...(turnKey ? { turnKey } : {}),
+              text: getText(m.node).slice(0, 6000),
+            };
+          })
       : [],
     url,
     diagnostics: input.includeMessages
       ? {
           roleElements: document.querySelectorAll("[data-message-author-role]").length,
-          turnElements: document.querySelectorAll('[data-testid^="conversation-turn-"]').length,
+          turnElements: turnNodes.length || contentUnits.length,
           textLength: document.body?.textContent?.length ?? 0,
           title: document.title,
         }
