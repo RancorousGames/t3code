@@ -72,11 +72,12 @@ async function readGuest(
   from: "start" | "end",
   count: number,
   includeMessages: boolean,
+  maxMessageChars = 6000,
 ): Promise<PageInspection | null> {
   const { webview } = guestFor(environmentId, sessionId);
   if (!webview) return null;
   const expression = `(() => {
-    const result = (${inspectChatGPTPage.toString()})(${JSON.stringify({ from, count, includeMessages })});
+    const result = (${inspectChatGPTPage.toString()})(${JSON.stringify({ from, count, includeMessages, maxMessageChars })});
     return { ...result, stuck: (${hasChatGPTLoadFailure.toString()})(),
       uiActivity: ${CHATGPT_ACTIVITY_EXPRESSION} };
   })()`;
@@ -100,6 +101,7 @@ export async function inspectBrowserSession(
   from: "start" | "end" = "end",
   count = 3,
   includeMessages = false,
+  maxMessageChars = 6000,
 ) {
   const { runtimeId, nav, loading } = guestFor(environmentId, entry.id);
   const result = {
@@ -148,7 +150,14 @@ export async function inspectBrowserSession(
     return result;
   }
   try {
-    const page = await readGuest(environmentId, entry.id, from, count, includeMessages);
+    const page = await readGuest(
+      environmentId,
+      entry.id,
+      from,
+      count,
+      includeMessages,
+      maxMessageChars,
+    );
     if (!page) {
       result.statusReason = "Embedded ChatGPT webview is not mounted.";
       return result;
@@ -233,6 +242,7 @@ export async function runChatGPTSessionControl(input: {
   sessionId?: string | undefined;
   from?: "start" | "end" | undefined;
   count?: number | undefined;
+  maxMessageChars?: number | undefined;
   message?: string | undefined;
   force?: boolean | undefined;
 }): Promise<unknown> {
@@ -262,7 +272,17 @@ export async function runChatGPTSessionControl(input: {
   if (!entry) throw new Error("Unknown ChatGPT session id.");
   if (entry.hidden) throw new Error("Session is hidden; restore it before controlling it.");
   if (action === "read") {
-    const session = await inspectBrowserSession(environmentId, entry, from, count, true);
+    const maxMessageChars = Number.isFinite(input.maxMessageChars)
+      ? Math.max(1, Math.min(24_000, Math.floor(input.maxMessageChars!)))
+      : 6000;
+    const session = await inspectBrowserSession(
+      environmentId,
+      entry,
+      from,
+      count,
+      true,
+      maxMessageChars,
+    );
     return { session, selection: { from, count } };
   }
   if (action === "reload") {

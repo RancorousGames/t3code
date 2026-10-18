@@ -2,8 +2,8 @@
 /**
  * Incrementally archive rendered ChatGPT messages through T3 desktop's
  * named-pipe controller. Read-only; no private ChatGPT API or cookies.
- * Append-only revision log; DOM virtualization and 6000-character read
- * truncation mean that this is best-effort, not a complete transcript guarantee.
+ * Append-only revision log; DOM virtualization and bounded message reads
+ * mean that this is best-effort, not a complete transcript guarantee.
  */
 import * as Crypto from "node:crypto";
 import * as Fs from "node:fs";
@@ -19,7 +19,7 @@ export const DEFAULT_ARCHIVE_DIR = Path.resolve(
 );
 const MAX_SESSIONS_PER_SCAN = 100;
 const MAX_MESSAGES_PER_READ = 20;
-const MAX_MESSAGE_TEXT = 6_000;
+const MAX_MESSAGE_TEXT = 24_000;
 
 const hash = (value) => Crypto.createHash("sha256").update(value).digest("hex");
 
@@ -108,14 +108,20 @@ export function computeRevisions(previous, input) {
 export async function archiveSession(session, options = {}) {
   const directory = options.directory ?? DEFAULT_ARCHIVE_DIR;
   const exchange = options.exchange ?? controlSessions;
-  if (!session || typeof session.id !== "string" || session.hidden === true) return { captured: 0 };
-  const data = await exchange({
+  if (!session || typeof session.id !== "string" || session.hidden === true)
+    return { captured: 0, readable: false };
+  const response = await exchange({
     action: "read",
     sessionId: session.id,
     from: "end",
     count: MAX_MESSAGES_PER_READ,
+    maxMessageChars: MAX_MESSAGE_TEXT,
   });
-  if (!Array.isArray(data?.messages) || !data.url) return { captured: 0 };
+  // T3 wraps reads in {session, selection}; a flat page response is not its API.
+  const data = response?.session;
+  if (!data || !Array.isArray(data.messages) || typeof data.url !== "string")
+    throw new Error("Unexpected T3 read response: expected {session:{url,messages}}");
+  if (!data.messages.length) return { captured: 0, readable: false };
   Fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const basename = safeSessionFile(session.id);
   const indexFile = Path.join(directory, basename + ".index.json");
@@ -125,7 +131,7 @@ export async function archiveSession(session, options = {}) {
     sessionId: session.id,
     observedAt: new Date().toISOString(),
   });
-  if (!records.length) return { captured: 0 };
+  if (!records.length) return { captured: 0, readable: true };
   const metadata = {
     version: 1,
     event: "session-metadata",
@@ -147,7 +153,7 @@ export async function archiveSession(session, options = {}) {
     Fs.closeSync(descriptor);
   }
   saveIndex(indexFile, hashes);
-  return { captured: records.length };
+  return { captured: records.length, readable: true };
 }
 
 /** Reconstruct the latest observed version of each message from immutable journal events. */
@@ -215,17 +221,19 @@ export async function archiveOnce(options = {}) {
     .sort((a, b) => (a.status === "working" ? -1 : 0) - (b.status === "working" ? -1 : 0))
     .slice(0, MAX_SESSIONS_PER_SCAN);
   let captured = 0;
+  let readable = 0;
   let failures = 0;
   for (const session of sessions) {
     try {
       const receipt = await archiveSession(session, { directory, exchange });
       captured += receipt.captured;
+      if (receipt.readable) readable++;
     } catch (error) {
       failures++;
       reportError(session.id, error);
     }
   }
-  return { sessions: sessions.length, captured, failures };
+  return { sessions: sessions.length, readable, captured, failures };
 }
 
 async function main() {
@@ -259,6 +267,8 @@ async function main() {
           new Date().toISOString() +
           " sessions=" +
           result.sessions +
+          " readable=" +
+          result.readable +
           " revisions=" +
           result.captured +
           " errors=" +

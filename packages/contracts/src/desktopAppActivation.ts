@@ -34,6 +34,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     which: Schema.optional(Schema.Literals(["visible", "recent", "working", "blocked", "all"])),
     sessionId: Schema.optional(Schema.String),
     count: Schema.optional(Schema.Number),
+    maxMessageChars: Schema.optional(Schema.Number),
     from: Schema.optional(Schema.Literals(["start", "end"])),
     message: Schema.optional(Schema.String),
     force: Schema.optional(Schema.Boolean),

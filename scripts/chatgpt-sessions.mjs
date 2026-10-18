@@ -34,6 +34,7 @@ export async function controlSessions(
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.from ? { from: input.from } : {}),
     ...(input.count !== undefined ? { count: input.count } : {}),
+    ...(input.maxMessageChars !== undefined ? { maxMessageChars: input.maxMessageChars } : {}),
     ...(input.message !== undefined ? { message: input.message } : {}),
     ...(input.force !== undefined ? { force: input.force } : {}),
   };

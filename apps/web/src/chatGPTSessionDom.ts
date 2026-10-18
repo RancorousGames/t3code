@@ -25,6 +25,7 @@ export function inspectChatGPTPage(input: {
   from: "start" | "end";
   count: number;
   includeMessages: boolean;
+  maxMessageChars?: number;
 }) {
   const url = location.href;
   if (!["chatgpt.com", "chat.openai.com", "www.chatgpt.com"].includes(location.hostname))
@@ -132,6 +133,7 @@ export function inspectChatGPTPage(input: {
   };
   const from = input.from === "start" ? 0 : Math.max(0, totalTurns - input.count);
   const to = input.from === "start" ? input.count : totalTurns;
+  const maxMessageChars = Math.max(1, Math.min(24_000, Math.floor(input.maxMessageChars ?? 6000)));
   return {
     activity,
     stuck,
@@ -148,7 +150,7 @@ export function inspectChatGPTPage(input: {
               role: m.role,
               turn: m.turn,
               ...(turnKey ? { turnKey } : {}),
-              text: getText(m.node).slice(0, 6000),
+              text: getText(m.node).slice(0, maxMessageChars),
             };
           })
       : [],

@@ -45,6 +45,12 @@ Use the list/read operations for status summaries. Never assume `done_or_idle` m
 
 Direct CLI: `node scripts/chatgpt-sessions.mjs` accepts one JSON request on standard input and prints JSON, using the local named pipe. The CLI and MCP tool require the custom T3 Code desktop app running; they do not launch new app instances. Tests: `node --test scripts/chatgpt-sessions.test.mjs`.
 
+## Local conversation archive (prototype)
+
+`node scripts/chatgpt-session-archive.mjs --watch` polls mounted, nonhidden ChatGPT sessions through the above read-only desktop pipe every 30 seconds and appends changed message revisions to `.t3/userdata/chatgpt-browser-archive/<hashed-session-id>.jsonl`, with a deduplication index alongside each journal. `--once` performs one scan; `--read-session ID` reconstructs the latest observed messages as JSON. Data stays on the machine and outside Git; the watcher must be started separately, it is not an auto-start desktop service. Changes to the guest-side reader require rebuilding/restarting the T3 desktop that owns the browser sessions, without disrupting active sessions until a safe restart is scheduled.
+
+The archive deliberately preserves revisions, including partial assistant output, but is **not a guaranteed transcript**: it only sees currently mounted/DOM-rendered messages, and each archived message is bounded to 24,000 characters (ordinary `read` calls retain their 6,000-character default). A `readable=0` scan means no browser content was accessible, not a successful archive. Never infer task completion or full history from an unreadable session. Tests: `node --experimental-strip-types --test scripts/chatgpt-session-archive.test.mjs scripts/chatgpt-session-dom.test.mjs`.
+
 ## ChatGPT browser sidebar state and grouping
 
 - Project matching uses the locally generated workspace filename-vocabulary asset plus user-verified labels. The browser sidebar persists a chosen project to each session's localStorage record. Loading/failed pages do not erase it. A manual project drop is authoritative and detaches the dragged session from any prior parent. `Other` is a permanent fallback/drop target.

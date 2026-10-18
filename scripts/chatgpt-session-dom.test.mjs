@@ -56,6 +56,27 @@ test("modern data-content-search-unit-key wrappers allow ordered message extract
   });
 });
 
+test("archive reads up to 24000 characters without inflating default message responses", () => {
+  inDom('<div data-message-author-role="assistant"><p>' + "x".repeat(30_000) + "</p></div>", () => {
+    const ordinary = inspectChatGPTPage({ from: "end", count: 1, includeMessages: true });
+    const archive = inspectChatGPTPage({
+      from: "end",
+      count: 1,
+      includeMessages: true,
+      maxMessageChars: 24_000,
+    });
+    assert.equal(ordinary.messages[0].text.length, 6000);
+    assert.equal(archive.messages[0].text.length, 24_000);
+    const absurd = inspectChatGPTPage({
+      from: "end",
+      count: 1,
+      includeMessages: true,
+      maxMessageChars: 1e8,
+    });
+    assert.equal(absurd.messages[0].text.length, 24_000);
+  });
+});
+
 test("legacy selector remains preferred when both formats exist", () => {
   inDom(
     '<div data-content-search-unit-key="fallback-turn-0:0:user">' +

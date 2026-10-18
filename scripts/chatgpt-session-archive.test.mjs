@@ -23,7 +23,8 @@ test("writes revisions only when visible messages change", async (t) => {
   const client = async (input) => {
     assert.equal(input.action, "read");
     assert.equal(input.count, 20);
-    return response;
+    assert.equal(input.maxMessageChars, 24_000);
+    return { session: response, selection: { from: "end", count: 20 } };
   };
   const session = { id: "session-1", title: "Example", project: "Example" };
   assert.equal((await archiveSession(session, { directory: root, exchange: client })).captured, 2);
@@ -106,6 +107,29 @@ test("never archives unavailable URLs, unmounted messages, or hidden sessions", 
   assert.equal(Fs.readdirSync(root).length, 0);
 });
 
+test("unreadable mounted sessions are reported, not silently called archived", async (t) => {
+  const root = Fs.mkdtempSync(Path.join(Os.tmpdir(), "t3-chatgpt-archive-test-"));
+  t.after(() => Fs.rmSync(root, { recursive: true, force: true }));
+  const exchange = async ({ action }) =>
+    action === "list"
+      ? { sessions: [{ id: "unreadable", title: "worker" }] }
+      : {
+          session: {
+            url: "https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            messages: [],
+            status: "unavailable",
+          },
+          selection: { count: 20, from: "end" },
+        };
+  assert.deepEqual(await archiveOnce({ directory: root, exchange }), {
+    sessions: 1,
+    readable: 0,
+    captured: 0,
+    failures: 0,
+  });
+  assert.equal(Fs.readdirSync(root).length, 0);
+});
+
 test("scans all nonhidden browser sessions without sending messages", async (t) => {
   const root = Fs.mkdtempSync(Path.join(Os.tmpdir(), "t3-chatgpt-archive-test-"));
   t.after(() => Fs.rmSync(root, { recursive: true, force: true }));
@@ -120,15 +144,19 @@ test("scans all nonhidden browser sessions without sending messages", async (t) 
         ],
       };
     return {
-      url: "https://chatgpt.com/c/11111111-1111-1111-1111-111111111111",
-      messages: [{ role: "assistant", turn: 0, text: "A message" }],
+      session: {
+        url: "https://chatgpt.com/c/11111111-1111-1111-1111-111111111111",
+        messages: [{ role: "assistant", turn: 0, text: "A message" }],
+      },
+      selection: { from: "end", count: 20 },
     };
   };
   const result = await archiveOnce({ directory: root, exchange });
-  assert.deepEqual(result, { sessions: 1, captured: 1, failures: 0 });
+  assert.deepEqual(result, { sessions: 1, readable: 1, captured: 1, failures: 0 });
   assert.deepEqual(
     calls.map((call) => call.action),
     ["list", "read"],
   );
   assert.equal(calls[1].sessionId, "active");
+  assert.equal(calls[1].maxMessageChars, 24_000);
 });
