@@ -4,6 +4,10 @@ import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION = 1 as const;
 
+const ChatGPTConversationId = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/),
+);
+
 export const DesktopAppActivationPlatform = Schema.Literals(["darwin", "linux", "win32"]);
 export type DesktopAppActivationPlatform = typeof DesktopAppActivationPlatform.Type;
 
@@ -30,13 +34,15 @@ export const DesktopAppActivationRequest = Schema.Union([
   Schema.Struct({
     ...DesktopAppActivationBase,
     type: Schema.Literal("chatgpt.sessions"),
-    action: Schema.Literals(["list", "read", "send", "reload"]),
+    action: Schema.Literals(["list", "read", "send", "reload", "complete"]),
     which: Schema.optional(Schema.Literals(["visible", "recent", "working", "blocked", "all"])),
     sessionId: Schema.optional(Schema.String),
     count: Schema.optional(Schema.Number),
     maxMessageChars: Schema.optional(Schema.Number),
     from: Schema.optional(Schema.Literals(["start", "end"])),
     message: Schema.optional(Schema.String),
+    senderSessionId: Schema.optional(TrimmedNonEmptyString),
+    expectedConversationId: Schema.optional(ChatGPTConversationId),
     force: Schema.optional(Schema.Boolean),
   }),
 ]);
@@ -78,6 +84,7 @@ export const DesktopAppActivationChatGPTSuccess = Schema.Struct({
   ok: Schema.Literal(true),
   sessionId: TrimmedNonEmptyString,
   messageSent: Schema.Literal(true),
+  parentSessionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 
 export const DesktopAppActivationChatGPTSessionsSuccess = Schema.Struct({

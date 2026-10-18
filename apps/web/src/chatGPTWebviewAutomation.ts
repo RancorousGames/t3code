@@ -5,6 +5,8 @@
  * renderer still owns its attached <webview> and can safely drive that guest
  * using the public Electron webview API without new privileged IPC endpoints.
  */
+import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
+
 type ChatGPTWebview = HTMLElementTagNameMap["webview"] & {
   getURL?: () => string;
   isLoading?: () => boolean;
@@ -35,6 +37,25 @@ async function executeWithoutStealingHostFocus(webview: ChatGPTWebview, expressi
     ) {
       previouslyFocused.focus({ preventScroll: true });
     }
+  }
+}
+
+function guestConversationGuardExpression(expectedConversationId: string | undefined): string {
+  if (expectedConversationId === undefined) return "";
+  // Runs INSIDE the guest JS turn that edits/clicks, never against a stale
+  // navigation snapshot. Reject changes even during the send-button wait.
+  return `const actualConversationId = (${chatGPTConversationIdFromUrl.toString()})(location.href);
+    if (actualConversationId !== ${JSON.stringify(expectedConversationId)})
+      return { guardMismatch: true, actualConversationId };`;
+}
+
+function assertGuestGuard(
+  result: { guardMismatch?: boolean; actualConversationId?: string | null } | null,
+) {
+  if (result?.guardMismatch) {
+    throw new Error(
+      `ChatGPT conversation guard mismatch immediately before interaction: observed ${result.actualConversationId ?? "no ChatGPT conversation"}; refusing send.`,
+    );
   }
 }
 
@@ -93,11 +114,19 @@ export const chatGPTWebviewAutomation = {
       selector,
       text,
       clear,
-    }: { selector: string; text: string; clear?: boolean; timeoutMs?: number },
+      expectedConversationId,
+    }: {
+      selector: string;
+      text: string;
+      clear?: boolean;
+      timeoutMs?: number;
+      expectedConversationId?: string | undefined;
+    },
   ): Promise<void> {
     // execCommand fires trusted contenteditable input events in Electron,
     // unlike assigning textContent directly (which bypasses ChatGPT/React).
     const expression = `(() => {
+      ${guestConversationGuardExpression(expectedConversationId)}
       const el = document.querySelector(${JSON.stringify(selector)});
       if (!(el instanceof HTMLElement))
         return { ok: false, reason: "PreviewAutomationTargetNotFoundError" };
@@ -131,13 +160,19 @@ export const chatGPTWebviewAutomation = {
     const result = (await executeWithoutStealingHostFocus(findWebview(runtimeId), expression)) as {
       ok?: boolean;
       reason?: string;
+      guardMismatch?: boolean;
+      actualConversationId?: string | null;
     } | null;
+    assertGuestGuard(result);
     if (result?.ok !== true) {
       throw new Error(result?.reason ?? "ChatGPT composer was not editable.");
     }
   },
 
-  async press(runtimeId: string, { key }: { key: string }): Promise<void> {
+  async press(
+    runtimeId: string,
+    { key, expectedConversationId }: { key: string; expectedConversationId?: string | undefined },
+  ): Promise<void> {
     const webview = findWebview(runtimeId);
     if (key === "Enter") {
       // React enables/replaces the Send control after it processes the editor
@@ -148,6 +183,7 @@ export const chatGPTWebviewAutomation = {
         const state = (await executeWithoutStealingHostFocus(
           webview,
           `(() => {
+          ${guestConversationGuardExpression(expectedConversationId)}
           const editor = [
             '#prompt-textarea', '[data-testid="prompt-textarea"]',
             '[data-testid="composer-input"]', '[contenteditable="true"][role="textbox"]',
@@ -193,7 +229,12 @@ export const chatGPTWebviewAutomation = {
               }))
           };
         })()`,
-        )) as { clicked?: boolean } | null;
+        )) as {
+          clicked?: boolean;
+          guardMismatch?: boolean;
+          actualConversationId?: string | null;
+        } | null;
+        assertGuestGuard(state);
         if (state?.clicked) return;
         lastState = state;
         await new Promise<void>((resolve) => setTimeout(resolve, 150));

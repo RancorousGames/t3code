@@ -112,6 +112,18 @@ export function sendAppControlRequest(address, request, timeoutMs = 100_000) {
   });
 }
 
+export function createChatGPTSpawnRequest(options, requestId = NodeCrypto.randomUUID()) {
+  return {
+    version: 1,
+    requestId,
+    type: "chatgpt.spawn",
+    title: options.title.trim(),
+    prompt: options.message,
+    ...(options.parentSessionId.trim() ? { parentSessionId: options.parentSessionId.trim() } : {}),
+    ...(options.project.trim() ? { project: options.project.trim() } : {}),
+  };
+}
+
 export async function main(args = process.argv.slice(2)) {
   const options = parseArguments(args);
   if (options === null) {
@@ -120,15 +132,7 @@ export async function main(args = process.argv.slice(2)) {
     );
     return;
   }
-  const request = {
-    version: 1,
-    requestId: NodeCrypto.randomUUID(),
-    type: "chatgpt.spawn",
-    title: options.title.trim(),
-    prompt: options.message,
-    ...(options.parentSessionId.trim() ? { parentSessionId: options.parentSessionId.trim() } : {}),
-    ...(options.project.trim() ? { project: options.project.trim() } : {}),
-  };
+  const request = createChatGPTSpawnRequest(options);
   const address = controlAddress(options.home);
   if (Buffer.byteLength(JSON.stringify(request), "utf8") + 1 > 64 * 1024) {
     throw new Error("Message exceeds the desktop control socket's 64 KiB request limit.");
@@ -153,7 +157,7 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error("T3 Code did not confirm that ChatGPT received the initial message.");
   }
   process.stdout.write(
-    `Created ChatGPT session "${request.title}" (${response.sessionId}); message sent.\n`,
+    `Created ChatGPT session "${request.title}" (${response.sessionId}); message sent; parent=${response.parentSessionId ?? "none (no explicit caller identity)"}.\n`,
   );
 }
 

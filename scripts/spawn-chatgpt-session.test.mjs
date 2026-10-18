@@ -2,7 +2,11 @@ import * as NodeAssert from "node:assert/strict";
 import * as NodeNet from "node:net";
 import * as NodeTest from "node:test";
 
-import { parseArguments, sendAppControlRequest } from "./spawn-chatgpt-session.mjs";
+import {
+  parseArguments,
+  createChatGPTSpawnRequest,
+  sendAppControlRequest,
+} from "./spawn-chatgpt-session.mjs";
 
 NodeTest.test("script validates title and message without connecting", () => {
   NodeAssert.deepEqual(
@@ -27,6 +31,37 @@ NodeTest.test("script validates title and message without connecting", () => {
   NodeAssert.equal(parseArguments(["--help"]), null);
   NodeAssert.throws(() => parseArguments(["--title", "Work A"]), /message/);
   NodeAssert.throws(() => parseArguments(["--message", "Anything"]), /title/);
+});
+
+NodeTest.test("the OMCP/CLI spawn request carries explicit parent UUID only when supplied", () => {
+  const explicit = createChatGPTSpawnRequest(
+    parseArguments([
+      "--title",
+      "Child",
+      "--message",
+      "Implement a change",
+      "--parent-session-id",
+      "5d38e296-561d-4e91-91f0-320c7617edce",
+      "--project",
+      "t3code",
+    ]),
+    "request-1",
+  );
+  NodeAssert.deepEqual(explicit, {
+    version: 1,
+    requestId: "request-1",
+    type: "chatgpt.spawn",
+    title: "Child",
+    prompt: "Implement a change",
+    parentSessionId: "5d38e296-561d-4e91-91f0-320c7617edce",
+    project: "t3code",
+  });
+  const without = createChatGPTSpawnRequest(
+    parseArguments(["--title", "Child", "--message", "Implement a change", "--project", "t3code"]),
+    "request-2",
+  );
+  NodeAssert.equal(without.parentSessionId, undefined);
+  NodeAssert.equal(without.project, "t3code");
 });
 
 NodeTest.test(
