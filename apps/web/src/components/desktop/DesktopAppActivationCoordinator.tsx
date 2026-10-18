@@ -63,6 +63,7 @@ export function DesktopAppActivationCoordinator() {
             sessionId: request.sessionId,
             from: request.from,
             count: request.count,
+            maxMessageChars: request.maxMessageChars,
             message: request.message,
             force: request.force,
           });

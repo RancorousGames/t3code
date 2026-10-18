@@ -34,6 +34,16 @@ test("read forwards session selection and first/last count", async () => {
   assert.equal(calls.at(-1).request.count, 1);
 });
 
+test("read forwards explicit bounded archive text length without changing ordinary reads", async () => {
+  await controlSessions(
+    { action: "read", sessionId: "id-123", count: 20, maxMessageChars: 24_000 },
+    options,
+  );
+  assert.equal(calls.at(-1).request.maxMessageChars, 24_000);
+  await controlSessions({ action: "read", sessionId: "id-123" }, options);
+  assert.equal(calls.at(-1).request.maxMessageChars, undefined);
+});
+
 test("send forwards a message without writing it to command-line arguments", async () => {
   await controlSessions(
     { action: "send", sessionId: "id-123", message: "Continue implementing." },
