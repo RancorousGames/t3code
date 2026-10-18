@@ -81,6 +81,7 @@ import {
   type ReactNode,
 } from "react";
 import { type AnyRouter, useRouter } from "@tanstack/react-router";
+import { OpenRigAgentsSidebarEntry } from "./sidebar/OpenRigAgentsSidebarEntry";
 
 import {
   isAtomCommandInterrupted,
@@ -3211,6 +3212,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       >
         <SidebarGroup className="flex-1" role="presentation">
           <ChatGPTBrowserSidebarEntry showCreateAction={false} />
+          <OpenRigAgentsSidebarEntry />
+          <OpenRigAgentsSidebarEntry />
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider

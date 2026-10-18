@@ -1022,6 +1022,22 @@ export type DesktopMediaRead = typeof DesktopMediaReadSchema.Type;
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+/** Normalized snapshot from the optional local OpenRig bridge. */
+export const DesktopOpenRigAgentSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  status: Schema.String,
+  role: Schema.NullOr(Schema.String),
+  task: Schema.NullOr(Schema.String),
+});
+export type DesktopOpenRigAgent = typeof DesktopOpenRigAgentSchema.Type;
+
+export const DesktopOpenRigSendInputSchema = Schema.Struct({
+  id: Schema.String,
+  message: Schema.String,
+});
+export type DesktopOpenRigSendInput = typeof DesktopOpenRigSendInputSchema.Type;
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled: () => boolean;
@@ -1049,6 +1065,9 @@ export interface DesktopBridge {
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
+  /** Only available in desktop builds with the local OpenRig integration. */
+  listOpenRigAgents?: () => Promise<readonly DesktopOpenRigAgent[]>;
+  sendOpenRigAgentMessage?: (input: DesktopOpenRigSendInput) => Promise<void>;
   getConnectionCatalog: () => Promise<string | null>;
   setConnectionCatalog: (catalog: string) => Promise<boolean>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
