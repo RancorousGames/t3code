@@ -10,6 +10,7 @@ import * as Fs from "node:fs";
 import * as Path from "node:path";
 import * as URL from "node:url";
 import { controlSessions } from "./chatgpt-sessions.mjs";
+import { withArchiveWriteLock } from "./chatgpt-session-archive-lock.mjs";
 
 // Match the custom desktop bridge home used by scripts/chatgpt-sessions.mjs.
 // Do not read/write the older ~/.t3/userdata tree when this checkout owns sessions.
@@ -29,27 +30,86 @@ function safeSessionFile(sessionId) {
   return hash(sessionId).slice(0, 32);
 }
 
-function loadIndex(file) {
+function journalBytes(file) {
   try {
-    const value = JSON.parse(Fs.readFileSync(file, "utf8"));
+    return Fs.statSync(file).size;
+  } catch (error) {
+    if (error?.code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
+function recordKey(record) {
+  if (
+    typeof record?.conversationUrl !== "string" ||
+    !["user", "assistant"].includes(record.role) ||
+    typeof record.text !== "string" ||
+    !Number.isSafeInteger(record.turn) ||
+    record.turn < 0 ||
+    !Number.isSafeInteger(record.index) ||
+    record.index < 0
+  )
+    return null;
+  return (
+    record.conversationUrl +
+    "|" +
+    (typeof record.turnKey === "string" ? record.turnKey : record.turn) +
+    "|" +
+    record.role +
+    "|" +
+    record.index
+  );
+}
+
+// Indexes are disposable caches. Reconstruct from the durable journal after
+// an interrupted append/index update, rather than skipping saved messages.
+function loadIndex(indexFile, journal) {
+  const bytes = journalBytes(journal);
+  try {
+    const value = JSON.parse(Fs.readFileSync(indexFile, "utf8"));
     if (
-      value &&
-      value.version === 1 &&
+      value?.version === 2 &&
+      value.journalBytes === bytes &&
       value.hashes &&
       typeof value.hashes === "object" &&
       !Array.isArray(value.hashes)
-    )
-      return value.hashes;
+    ) {
+      return { hashes: value.hashes, recovered: false };
+    }
   } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+    if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
   }
-  return {};
+  const hashes = {};
+  if (bytes) {
+    const lines = Fs.readFileSync(journal, "utf8").split("\n");
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (record?.version !== 1) continue;
+      const key = recordKey(record);
+      if (key) hashes[key] = hash(record.text);
+    }
+  }
+  return { hashes, recovered: true };
 }
 
-function saveIndex(file, hashes) {
+function saveIndex(file, hashes, journal) {
   const temp = file + "." + process.pid + ".tmp";
   try {
-    Fs.writeFileSync(temp, JSON.stringify({ version: 1, hashes }), { flag: "wx", mode: 0o600 });
+    Fs.writeFileSync(
+      temp,
+      JSON.stringify({
+        version: 2,
+        hashes,
+        journalBytes: journalBytes(journal),
+      }),
+      { flag: "wx", mode: 0o600 },
+    );
     Fs.renameSync(temp, file);
   } finally {
     if (Fs.existsSync(temp)) Fs.unlinkSync(temp);
@@ -125,13 +185,17 @@ export async function archiveSession(session, options = {}) {
   Fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const basename = safeSessionFile(session.id);
   const indexFile = Path.join(directory, basename + ".index.json");
-  const previous = loadIndex(indexFile);
+  const journal = Path.join(directory, basename + ".jsonl");
+  const { hashes: previous, recovered } = loadIndex(indexFile, journal);
   const { hashes, records } = computeRevisions(previous, {
     ...data,
     sessionId: session.id,
     observedAt: new Date().toISOString(),
   });
-  if (!records.length) return { captured: 0, readable: true };
+  if (!records.length) {
+    if (recovered) saveIndex(indexFile, hashes, journal);
+    return { captured: 0, readable: true };
+  }
   const metadata = {
     version: 1,
     event: "session-metadata",
@@ -141,7 +205,6 @@ export async function archiveSession(session, options = {}) {
     parentSessionId: session.parentSessionId ?? null,
     observedAt: new Date().toISOString(),
   };
-  const journal = Path.join(directory, basename + ".jsonl");
   const descriptor = Fs.openSync(journal, "a", 0o600);
   try {
     Fs.writeSync(
@@ -152,7 +215,7 @@ export async function archiveSession(session, options = {}) {
   } finally {
     Fs.closeSync(descriptor);
   }
-  saveIndex(indexFile, hashes);
+  saveIndex(indexFile, hashes, journal);
   return { captured: records.length, readable: true };
 }
 
@@ -210,7 +273,7 @@ export function readArchivedSession(sessionId, options = {}) {
   return { sessionId, metadata, messages, revisions: versions };
 }
 
-export async function archiveOnce(options = {}) {
+async function archiveOnceUnlocked(options = {}) {
   const directory = options.directory ?? DEFAULT_ARCHIVE_DIR;
   const exchange = options.exchange ?? controlSessions;
   const reportError = options.onError ?? (() => {});
@@ -236,21 +299,73 @@ export async function archiveOnce(options = {}) {
   return { sessions: sessions.length, readable, captured, failures };
 }
 
+export async function archiveOnce(options = {}) {
+  const directory = options.directory ?? DEFAULT_ARCHIVE_DIR;
+  return withArchiveWriteLock(directory, () => archiveOnceUnlocked(options));
+}
+
+/** Inventory stored conversations without requiring T3 or a live browser. */
+export function listArchivedSessions(directory = DEFAULT_ARCHIVE_DIR) {
+  if (!Fs.existsSync(directory)) return [];
+  const sessions = [];
+  for (const filename of Fs.readdirSync(directory).filter((name) => name.endsWith(".jsonl"))) {
+    const file = Path.join(directory, filename);
+    // The first line is always metadata from the first successful journal append.
+    const fd = Fs.openSync(file, "r");
+    let firstLine = "";
+    try {
+      const buffer = Buffer.alloc(16_384);
+      const bytes = Fs.readSync(fd, buffer, 0, buffer.length, 0);
+      firstLine = buffer.toString("utf8", 0, bytes).split("\n", 1)[0] ?? "";
+    } finally {
+      Fs.closeSync(fd);
+    }
+    let metadata;
+    try {
+      metadata = JSON.parse(firstLine);
+    } catch {
+      continue;
+    }
+    if (
+      !metadata ||
+      metadata.version !== 1 ||
+      metadata.event !== "session-metadata" ||
+      typeof metadata.sessionId !== "string"
+    )
+      continue;
+    const stat = Fs.statSync(file);
+    sessions.push({
+      sessionId: metadata.sessionId,
+      title: metadata.title ?? null,
+      project: metadata.project ?? null,
+      parentSessionId: metadata.parentSessionId ?? null,
+      lastArchivedAt: stat.mtime.toISOString(),
+      bytes: stat.size,
+    });
+  }
+  return sessions.sort((a, b) => b.lastArchivedAt.localeCompare(a.lastArchivedAt));
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const once = args.includes("--once");
   const watch = args.includes("--watch");
   const readIndex = args.indexOf("--read-session");
+  const listArchives = args.includes("--list-archives");
   const dirIndex = args.indexOf("--dir");
   if (
-    (once === watch && readIndex === -1) ||
-    (readIndex !== -1 && (once || watch || !args[readIndex + 1])) ||
+    [once, watch, readIndex !== -1, listArchives].filter(Boolean).length !== 1 ||
+    (readIndex !== -1 && !args[readIndex + 1]) ||
     (dirIndex >= 0 && !args[dirIndex + 1])
   )
     throw new Error(
-      "Usage: node scripts/chatgpt-session-archive.mjs --once|--watch|--read-session SESSION_ID [--dir PATH]",
+      "Usage: node scripts/chatgpt-session-archive.mjs --once|--watch|--read-session SESSION_ID|--list-archives [--dir PATH]",
     );
   const directory = dirIndex >= 0 ? Path.resolve(args[dirIndex + 1]) : DEFAULT_ARCHIVE_DIR;
+  if (listArchives) {
+    console.log(JSON.stringify(listArchivedSessions(directory), null, 2));
+    return;
+  }
   if (readIndex !== -1) {
     console.log(JSON.stringify(readArchivedSession(args[readIndex + 1], { directory }), null, 2));
     return;
