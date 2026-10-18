@@ -108,6 +108,7 @@ import {
   ChatGPTBrowserNewSessionAction,
   ChatGPTBrowserSidebarEntry,
 } from "./sidebar/ChatGPTBrowserSidebarEntry";
+import { OpenRigAgentsSidebarEntry } from "./sidebar/OpenRigAgentsSidebarEntry";
 
 import { useRightPanelStore } from "../rightPanelStore";
 import {
@@ -5253,6 +5254,7 @@ export default function Sidebar() {
       >
         <SidebarGroup className="flex-1" role="presentation">
           <ChatGPTBrowserSidebarEntry showCreateAction={false} />
+          <OpenRigAgentsSidebarEntry />
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider

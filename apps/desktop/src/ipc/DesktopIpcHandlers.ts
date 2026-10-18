@@ -69,6 +69,7 @@ import {
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
 import * as PreviewIpc from "./methods/preview.ts";
+import * as OpenRigIpc from "./methods/openRig.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
 import {
@@ -103,6 +104,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
+  yield* ipc.handle(OpenRigIpc.listOpenRigAgents);
+  yield* ipc.handle(OpenRigIpc.sendOpenRigAgentMessage);
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getSnapShotState);
   yield* ipc.handle(setupSnapShot);
