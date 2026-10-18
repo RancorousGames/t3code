@@ -10,9 +10,10 @@ export async function controlSessions(
   input,
   { home = NodePath.resolve(import.meta.dirname, "../.t3"), exchange = sendAppControlRequest } = {},
 ) {
-  const allowed = ["list", "read", "send", "reload"];
+  const allowed = ["list", "read", "send", "reload", "complete", "wait"];
+  if (input?.action === "wait") return waitForChatGPTSessions(input, { home, exchange });
   if (!input || !allowed.includes(input.action))
-    throw new Error("action must be list, read, send or reload.");
+    throw new Error("action must be list, read, send, reload, complete or wait.");
   if (
     input.which !== undefined &&
     (input.action !== "list" ||
@@ -22,9 +23,26 @@ export async function controlSessions(
       "which applies only to list and must be visible, recent, working, blocked or all.",
     );
   if (input.action !== "list" && !(typeof input.sessionId === "string" && input.sessionId.trim()))
-    throw new Error("sessionId is required for read, send and reload.");
+    throw new Error("sessionId is required for read, send, reload and complete.");
   if (input.action === "send" && !(typeof input.message === "string" && input.message.trim()))
     throw new Error("Nonempty message required for send.");
+  if (
+    input.senderSessionId !== undefined &&
+    (input.action !== "send" ||
+      typeof input.senderSessionId !== "string" ||
+      !input.senderSessionId.trim())
+  )
+    throw new Error("senderSessionId is a nonempty source ID used only with send.");
+  if (
+    input.expectedConversationId !== undefined &&
+    (!["read", "send"].includes(input.action) ||
+      typeof input.expectedConversationId !== "string" ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.expectedConversationId))
+  ) {
+    throw new Error(
+      "expectedConversationId is a canonical lowercase /c/<uuid> ID for read or send.",
+    );
+  }
   const request = {
     version: 1,
     requestId: NodeCrypto.randomUUID(),
@@ -36,10 +54,41 @@ export async function controlSessions(
     ...(input.count !== undefined ? { count: input.count } : {}),
     ...(input.maxMessageChars !== undefined ? { maxMessageChars: input.maxMessageChars } : {}),
     ...(input.message !== undefined ? { message: input.message } : {}),
+    ...(input.senderSessionId !== undefined ? { senderSessionId: input.senderSessionId } : {}),
+    ...(input.expectedConversationId !== undefined
+      ? { expectedConversationId: input.expectedConversationId }
+      : {}),
     ...(input.force !== undefined ? { force: input.force } : {}),
   };
   if (Buffer.byteLength(JSON.stringify(request), "utf8") + 1 > 64 * 1024)
     throw new Error("Request exceeds the 64 KiB desktop limit.");
+  // Old desktop versions may silently discard unfamiliar optional fields.
+  // Probe a guarded READ before any guarded SEND; absent verification proves
+  // the runtime cannot enforce the guard, so never submit a prompt to it.
+  if (input.action === "send" && input.expectedConversationId !== undefined) {
+    const probe = await exchange(
+      controlAddress(home),
+      {
+        version: 1,
+        requestId: NodeCrypto.randomUUID(),
+        type: "chatgpt.sessions",
+        action: "read",
+        sessionId: input.sessionId,
+        count: 1,
+        expectedConversationId: input.expectedConversationId,
+      },
+      95_000,
+    );
+    if (
+      !probe.ok ||
+      probe.data?.conversationGuardValidated !== true ||
+      probe.data?.verifiedConversationId !== input.expectedConversationId
+    ) {
+      throw new Error(
+        "T3 desktop has not confirmed guarded reads; refusing send. Rebuild/restart T3.",
+      );
+    }
+  }
   const response = await exchange(controlAddress(home), request, 95_000);
   if (!response.ok)
     throw new Error(`T3 Code rejected ${input.action}: ${response.code}: ${response.message}`);
@@ -47,7 +96,98 @@ export async function controlSessions(
     throw new Error(
       "T3 Code did not return session data. Rebuild and restart the updated desktop app.",
     );
+  if (
+    input.expectedConversationId !== undefined &&
+    (response.data?.conversationGuardValidated !== true ||
+      response.data?.verifiedConversationId !== input.expectedConversationId)
+  ) {
+    throw new Error("Desktop response did not confirm expectedConversationId was enforced.");
+  }
   return response.data;
+}
+
+/**
+ * Wait locally rather than inside the desktop's serialized renderer dispatcher.
+ * Each poll uses an independent, short named-pipe request so other sessions can
+ * finish and send messages while the caller is waiting. Completion requires a
+ * caller-declared marker, not an "idle" DOM heuristic.
+ */
+export async function waitForChatGPTSessions(
+  input,
+  {
+    home = NodePath.resolve(import.meta.dirname, "../.t3"),
+    exchange = sendAppControlRequest,
+    now = Date.now,
+    delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  } = {},
+) {
+  const ids = input.sessionIds ?? (input.sessionId ? [input.sessionId] : []);
+  if (
+    !Array.isArray(ids) ||
+    ids.length < 1 ||
+    ids.length > 20 ||
+    ids.some((id) => typeof id !== "string" || !id.trim()) ||
+    new Set(ids).size !== ids.length
+  ) {
+    throw new Error("wait requires 1..20 distinct nonempty sessionIds (or one sessionId).");
+  }
+  if (input.mode !== undefined && !["any", "all"].includes(input.mode)) {
+    throw new Error("wait mode must be any or all.");
+  }
+  const mode = input.mode ?? "all";
+  const timeoutMs = input.timeoutMs ?? 30 * 60_000;
+  const pollMs = input.pollMs ?? 3_000;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 24 * 60 * 60_000)
+    throw new Error("wait timeoutMs must be 0..86400000.");
+  if (!Number.isInteger(pollMs) || pollMs < 1000 || pollMs > 60_000)
+    throw new Error("wait pollMs must be 1000..60000.");
+
+  const startedAt = now();
+  const deadline = startedAt + timeoutMs;
+  let last = [];
+  while (true) {
+    // Snapshot all requested sessions. Do not call the desktop with an
+    // indefinite wait: a blocked renderer would prevent other agents' work.
+    const inspected = await Promise.all(
+      ids.map(async (id) => {
+        const result = await controlSessions(
+          { action: "read", sessionId: id, count: 1 },
+          { home, exchange },
+        );
+        return result.session;
+      }),
+    );
+    last = inspected.map((session, index) => ({
+      sessionId: ids[index],
+      completion: session?.completion ?? null,
+      status: session?.status ?? "unavailable",
+    }));
+    const completed = last.filter((entry) => entry.completion !== null);
+    if (mode === "any" ? completed.length > 0 : completed.length === ids.length) {
+      return {
+        mode,
+        completed: true,
+        matched: completed.map((entry) => entry.sessionId),
+        pending: last.filter((entry) => !entry.completion).map((entry) => entry.sessionId),
+        sessions: last,
+        elapsedMs: now() - startedAt,
+        basis: "caller_declared",
+      };
+    }
+    if (now() >= deadline) {
+      return {
+        mode,
+        completed: false,
+        timedOut: true,
+        matched: completed.map((entry) => entry.sessionId),
+        pending: last.filter((entry) => !entry.completion).map((entry) => entry.sessionId),
+        sessions: last,
+        elapsedMs: now() - startedAt,
+        basis: "caller_declared",
+      };
+    }
+    await delay(Math.min(pollMs, Math.max(0, deadline - now())));
+  }
 }
 
 export async function main() {

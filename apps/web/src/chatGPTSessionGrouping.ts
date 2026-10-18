@@ -1,4 +1,5 @@
 import type { BrowserSession } from "./chatGPTBrowserSessions";
+import { chatGPTParentIndex } from "./chatGPTSessionLineage";
 import learned from "./chatGPTGroupingTraining.generated.json";
 
 export interface ChatGPTGroupingProject {
@@ -52,16 +53,23 @@ const labeledExamples = learned.training as ReadonlyArray<{
 export function applyConfirmedChatGPTSessionMetadata(
   sessions: readonly BrowserSession[],
 ): BrowserSession[] {
+  const ids = new Set(sessions.map((session) => session.id));
   return sessions.map((session) => {
     const confirmed = corrections[session.id];
     if (!confirmed) return session;
-    const parentSessionId = session.parentSessionId ?? confirmed.parentSessionId;
+    const parentSessionId =
+      session.parentSessionId === undefined &&
+      confirmed.parentSessionId &&
+      ids.has(confirmed.parentSessionId) &&
+      confirmed.parentSessionId !== session.id
+        ? confirmed.parentSessionId
+        : session.parentSessionId;
     const project = session.project ?? confirmed.project;
     return parentSessionId === session.parentSessionId && project === session.project
       ? session
       : {
           ...session,
-          ...(parentSessionId ? { parentSessionId } : {}),
+          ...(parentSessionId !== undefined ? { parentSessionId } : {}),
           ...(project ? { project } : {}),
         };
   });
@@ -190,6 +198,7 @@ export function groupChatGPTSessions(
   const enriched = applyConfirmedChatGPTSessionMetadata(sessions);
   const nameGroups = discoverNameGroups(enriched, projects);
   const byId = new Map(enriched.map((session) => [session.id, session]));
+  const parentById = chatGPTParentIndex(enriched);
   const assignments = new Map<string, Assignment | null>();
   const visiting = new Set<string>();
 
@@ -213,12 +222,12 @@ export function groupChatGPTSessions(
     if (assignments.has(session.id)) return assignments.get(session.id) ?? null;
     if (visiting.has(session.id)) return null;
     visiting.add(session.id);
-    const parent = session.parentSessionId && byId.get(session.parentSessionId);
-    const parentAssignment = parent && parent.id !== session.id ? resolve(parent) : null;
+    const parent = byId.get(parentById.get(session.id) ?? "");
+    const parentAssignment = parent ? resolve(parent) : null;
     const own = assignOwn(session);
     // A child follows its real parent, even if it was independently assigned
     // another project during spawn. A hierarchy cannot span two project rows.
-    const assignment = parent && parent.id !== session.id ? parentAssignment : own;
+    const assignment = parent ? parentAssignment : own;
     visiting.delete(session.id);
     assignments.set(session.id, assignment ?? null);
     return assignment ?? null;
@@ -249,15 +258,11 @@ export function groupChatGPTSessions(
     const ids = new Set(members.map((session) => session.id));
     const children = new Map<string, BrowserSession[]>();
     for (const session of members) {
-      if (
-        !session.parentSessionId ||
-        session.parentSessionId === session.id ||
-        !ids.has(session.parentSessionId)
-      )
-        continue;
-      const entries = children.get(session.parentSessionId) ?? [];
+      const parent = parentById.get(session.id);
+      if (!parent || !ids.has(parent)) continue;
+      const entries = children.get(parent) ?? [];
       entries.push(session);
-      children.set(session.parentSessionId, entries);
+      children.set(parent, entries);
     }
     const rows: ChatGPTSidebarSession[] = [];
     const seen = new Set<string>();
@@ -268,12 +273,8 @@ export function groupChatGPTSessions(
       for (const child of children.get(session.id) ?? []) walk(child, depth + 1);
     };
     for (const session of members) {
-      if (
-        !session.parentSessionId ||
-        session.parentSessionId === session.id ||
-        !ids.has(session.parentSessionId)
-      )
-        walk(session, 0);
+      const parent = parentById.get(session.id);
+      if (!parent || !ids.has(parent)) walk(session, 0);
     }
     members.forEach((session) => walk(session, 0)); // Cycles/orphans remain visible.
     return rows;
@@ -323,17 +324,16 @@ export function layoutChatGPTSessions(
   // previous flat "active" queue always erased indentation.
   const enriched = applyConfirmedChatGPTSessionMetadata(sessions);
   const byId = new Map(enriched.map((session) => [session.id, session]));
+  const parentById = chatGPTParentIndex(enriched);
   const children = new Map<string, BrowserSession[]>();
   const rootFor = (session: BrowserSession): string => {
     let node = session;
     const seen = new Set([node.id]);
-    while (
-      node.parentSessionId &&
-      byId.has(node.parentSessionId) &&
-      !seen.has(node.parentSessionId)
-    ) {
-      seen.add(node.parentSessionId);
-      node = byId.get(node.parentSessionId)!;
+    let parent = parentById.get(node.id);
+    while (parent && !seen.has(parent)) {
+      seen.add(parent);
+      node = byId.get(parent)!;
+      parent = parentById.get(node.id);
     }
     return node.id;
   };
@@ -342,14 +342,11 @@ export function layoutChatGPTSessions(
     const rootId = rootFor(session);
     if (!rootBuckets.has(rootId)) rootBuckets.set(rootId, []);
     rootBuckets.get(rootId)!.push(session);
-    if (
-      session.parentSessionId &&
-      byId.has(session.parentSessionId) &&
-      session.parentSessionId !== session.id
-    ) {
-      const list = children.get(session.parentSessionId) ?? [];
+    const parent = parentById.get(session.id);
+    if (parent) {
+      const list = children.get(parent) ?? [];
       list.push(session);
-      children.set(session.parentSessionId, list);
+      children.set(parent, list);
     }
   }
   const buckets = [...rootBuckets]

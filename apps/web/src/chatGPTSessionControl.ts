@@ -17,8 +17,14 @@ import {
   type ChatGPTActivityAge,
 } from "./components/sidebar/chatGPTActivity";
 import { inspectChatGPTPage, type PageInspection, type PageMessage } from "./chatGPTSessionDom";
+import { chatGPTSentTurnObserved, prepareChatGPTSessionMessage } from "./chatGPTSessionMessaging";
+import {
+  chatGPTConversationIdFromUrl,
+  requireExpectedChatGPTConversation,
+} from "./chatGPTConversationIdentity";
+import { validChatGPTCompletion } from "./chatGPTSessionCompletion";
 
-export type ChatGPTSessionAction = "list" | "read" | "send" | "reload";
+export type ChatGPTSessionAction = "list" | "read" | "send" | "reload" | "complete";
 export type ChatGPTSessionWhich = "visible" | "recent" | "working" | "blocked" | "all";
 export function matchesSessionWhich(
   which: ChatGPTSessionWhich,
@@ -111,6 +117,8 @@ export async function inspectBrowserSession(
     parentSessionId: entry.parentSessionId ?? null,
     project: entry.project ?? null,
     url: nav?._tag === "Success" ? nav.url : (null as string | null),
+    conversationId: chatGPTConversationIdFromUrl(nav?._tag === "Success" ? nav.url : null),
+    observedGuestUrl: null as string | null,
     status: "unavailable" as ChatGPTSessionStatus,
     statusReason: "" as string,
     statusObservedAt: new Date().toISOString(),
@@ -123,6 +131,7 @@ export async function inspectBrowserSession(
     messages: [] as PageMessage[],
     lastWorkingAt: 0,
     diagnostics: undefined as PageInspection["diagnostics"],
+    completion: null as BrowserSession["completion"] | null,
   };
   try {
     result.lastWorkingAt =
@@ -163,6 +172,14 @@ export async function inspectBrowserSession(
       return result;
     }
     result.url = page.url;
+    result.observedGuestUrl = page.url;
+    result.conversationId = chatGPTConversationIdFromUrl(page.url);
+    result.completion = validChatGPTCompletion(
+      entry.completion,
+      page.url,
+      page.totalTurns,
+      page.activity === "idle" && !page.stuck && !page.connectionInterrupted,
+    );
     result.activity = page.activity;
     result.lastRole = page.lastRole;
     result.lastText = page.lastText;
@@ -208,7 +225,7 @@ export async function inspectBrowserSession(
       result.statusReason =
         "ChatGPT composer not available; sign-in or transient navigation possible.";
     } else if (!page.totalTurns) {
-      if (/\/c\/[^/]+/.test(page.url)) {
+      if (result.conversationId) {
         result.status = "unavailable";
         result.statusReason =
           "Existing conversation URL, but no messages in the rendered DOM; cannot infer completion.";
@@ -244,11 +261,16 @@ export async function runChatGPTSessionControl(input: {
   count?: number | undefined;
   maxMessageChars?: number | undefined;
   message?: string | undefined;
+  senderSessionId?: string | undefined;
+  expectedConversationId?: string | undefined;
   force?: boolean | undefined;
 }): Promise<unknown> {
   const { environmentId, sessions, action } = input;
   const count = Math.max(1, Math.min(20, Math.floor(input.count ?? 3)));
   const from = input.from ?? "end";
+  if (input.expectedConversationId !== undefined && action !== "read" && action !== "send") {
+    throw new Error("expectedConversationId is supported only for read and send.");
+  }
   if (action === "list") {
     const which = input.which ?? "visible";
     // Hidden tabs are not mounted. Skip them for every filtered view and
@@ -267,7 +289,8 @@ export async function runChatGPTSessionControl(input: {
     );
     return { which, sessions: result, total: result.length };
   }
-  if (!input.sessionId) throw new Error("sessionId is required for read, send, and reload.");
+  if (!input.sessionId)
+    throw new Error("sessionId is required for read, send, reload and complete.");
   const entry = sessions.find((session) => session.id === input.sessionId);
   if (!entry) throw new Error("Unknown ChatGPT session id.");
   if (entry.hidden) throw new Error("Session is hidden; restore it before controlling it.");
@@ -283,7 +306,40 @@ export async function runChatGPTSessionControl(input: {
       true,
       maxMessageChars,
     );
+    if (input.expectedConversationId !== undefined) {
+      const verifiedConversationId = requireExpectedChatGPTConversation(
+        input.expectedConversationId,
+        session.observedGuestUrl,
+      );
+      return {
+        session,
+        selection: { from, count },
+        conversationGuardValidated: true,
+        verifiedConversationId,
+      };
+    }
     return { session, selection: { from, count } };
+  }
+  if (action === "complete") {
+    const observed = await inspectBrowserSession(environmentId, entry);
+    if (
+      !observed.conversationId ||
+      !["working", "done_or_idle", "waiting_for_input"].includes(observed.status)
+    ) {
+      throw new Error("Cannot declare completion without a readable ChatGPT conversation.");
+    }
+    // This signal means the caller says the task is complete; it is not an
+    // LLM-derived inference and the local socket cannot authenticate the caller.
+    return {
+      sessionId: entry.id,
+      completion: {
+        declaredAt: new Date().toISOString(),
+        observedTurns: observed.totalTurns,
+        observedUrl: observed.url,
+      },
+      acknowledged: true,
+      basis: "caller_declared" as const,
+    };
   }
   if (action === "reload") {
     const before = await inspectBrowserSession(environmentId, entry);
@@ -304,9 +360,17 @@ export async function runChatGPTSessionControl(input: {
     return { sessionId: entry.id, reloaded: true, previousStatus: before.status };
   }
   if (action === "send") {
-    const message = input.message?.trim();
-    if (!message) throw new Error("Non-empty message required.");
+    const prepared = prepareChatGPTSessionMessage(
+      sessions,
+      entry.id,
+      input.message ?? "",
+      input.senderSessionId,
+    );
+    const message = prepared.text;
     const before = await inspectBrowserSession(environmentId, entry, "end", 1, true);
+    if (input.expectedConversationId !== undefined) {
+      requireExpectedChatGPTConversation(input.expectedConversationId, before.observedGuestUrl);
+    }
     if (
       before.status === "working" ||
       before.status === "stuck" ||
@@ -333,19 +397,39 @@ export async function runChatGPTSessionControl(input: {
       selector: COMPOSER_SELECTOR,
       text: message,
       clear: true,
+      expectedConversationId: input.expectedConversationId,
     });
     // Once Send is clicked, do not retry: duplicate prompts can be costly.
-    await chatGPTWebviewAutomation.press(runtimeId, { key: "Enter" });
+    await chatGPTWebviewAutomation.press(runtimeId, {
+      key: "Enter",
+      expectedConversationId: input.expectedConversationId,
+    });
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       try {
         const after = await readGuest(environmentId, entry.id, "end", 1, true);
-        const userMessages = after?.messages.filter((m) => m.role === "user") ?? [];
         if (
-          userMessages.some((m) => m.text.trim() === message) &&
-          (after?.totalTurns ?? 0) > before.totalTurns
+          chatGPTSentTurnObserved(
+            message,
+            after?.messages ?? [],
+            before.totalTurns,
+            after?.totalTurns ?? 0,
+          )
         )
-          return { sessionId: entry.id, messageSent: true };
+          return {
+            sessionId: entry.id,
+            recipientSessionId: entry.id,
+            senderSessionId: prepared.sender?.id ?? null,
+            messageSent: true,
+            delivery: "user_turn_observed" as const,
+            ...(input.expectedConversationId
+              ? {
+                  conversationGuardValidated: true as const,
+                  verifiedConversationId: input.expectedConversationId,
+                }
+              : {}),
+            observedAt: new Date().toISOString(),
+          };
       } catch {
         /* navigation */
       }

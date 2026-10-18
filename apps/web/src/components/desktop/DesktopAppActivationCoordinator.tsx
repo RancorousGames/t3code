@@ -3,12 +3,15 @@ import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "
 
 import { sendInitialChatGPTPrompt } from "../../chatGPTBrowserAutomation";
 import { runChatGPTSessionControl } from "../../chatGPTSessionControl";
+import { resolveExplicitChatGPTParent } from "../../chatGPTSessionLineage";
 import {
   applyConfirmedChatGPTSessionMetadata,
   matchRegisteredProject,
 } from "../../chatGPTSessionGrouping";
-import { readRecentClickedParent } from "../sidebar/chatGPTConversationRecovery";
-import { useChatGPTBrowserSessions } from "../../chatGPTBrowserSessions";
+import {
+  readChatGPTBrowserSessions,
+  useChatGPTBrowserSessions,
+} from "../../chatGPTBrowserSessions";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
@@ -24,7 +27,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 
 export function DesktopAppActivationCoordinator() {
   const primaryEnvironment = usePrimaryEnvironment();
-  const { createSession, sessions } = useChatGPTBrowserSessions(
+  const { createSession, setSessionCompletion } = useChatGPTBrowserSessions(
     primaryEnvironment?.environmentId ?? null,
   );
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
@@ -57,7 +60,7 @@ export function DesktopAppActivationCoordinator() {
         try {
           const data = await runChatGPTSessionControl({
             environmentId,
-            sessions,
+            sessions: readChatGPTBrowserSessions(environmentId),
             action: request.action,
             which: request.which,
             sessionId: request.sessionId,
@@ -65,8 +68,26 @@ export function DesktopAppActivationCoordinator() {
             count: request.count,
             maxMessageChars: request.maxMessageChars,
             message: request.message,
+            senderSessionId: request.senderSessionId,
+            expectedConversationId: request.expectedConversationId,
             force: request.force,
           });
+          if (request.action === "complete") {
+            const confirmation = data as {
+              sessionId: string;
+              completion: { declaredAt: string; observedTurns: number; observedUrl: string };
+            };
+            setSessionCompletion(confirmation.sessionId, confirmation.completion);
+            const saved = readChatGPTBrowserSessions(environmentId).find(
+              (session) => session.id === confirmation.sessionId,
+            )?.completion;
+            if (saved?.declaredAt !== confirmation.completion.declaredAt) {
+              throw new Error("Completion declaration was not persisted.");
+            }
+          } else if (request.action === "send") {
+            const confirmation = data as { sessionId: string; messageSent: boolean };
+            if (confirmation.messageSent) setSessionCompletion(confirmation.sessionId, undefined);
+          }
           return { version: 1, requestId: request.requestId, ok: true, data };
         } catch (error) {
           return {
@@ -89,76 +110,23 @@ export function DesktopAppActivationCoordinator() {
             message: "Connect an environment before opening ChatGPT sessions.",
           };
         }
-        const parent = request.parentSessionId
-          ? sessions.find((session) => session.id === request.parentSessionId)
-          : null;
-        if (request.parentSessionId && !parent) {
+        // A generic OMCP/CLI request carries no verifiable caller identity.
+        // Explicit T3 IDs alone establish ancestry. In particular, the
+        // selected tab or most recent working session is NOT the caller.
+        const sessions = readChatGPTBrowserSessions(environmentId);
+        let parent;
+        try {
+          parent = resolveExplicitChatGPTParent(sessions, request.parentSessionId);
+        } catch (error) {
           return {
             version: 1,
             requestId: request.requestId,
             ok: false,
             code: "invalid-request",
-            message: "Unknown parent ChatGPT session ID.",
+            message: error instanceof Error ? error.message : String(error),
           };
         }
-        // The local MCP socket has no authenticated identity for a ChatGPT guest.
-        // A single actively-generating guest is a useful, narrow fallback; if
-        // there are multiple candidates, do not invent a parent relationship.
-        let parentSessionId = parent?.id;
-        if (!parentSessionId) {
-          const now = Date.now();
-          const recentCandidates = sessions.filter((session) => {
-            if (session.hidden) return false;
-            try {
-              const heartbeat = Number(
-                JSON.parse(
-                  localStorage.getItem(
-                    `t3code:chatgpt-browser:last-working:${environmentId}:${session.id}`,
-                  ) ?? "0",
-                ),
-              );
-              return heartbeat > 0 && now - heartbeat < 90_000;
-            } catch {
-              return false;
-            }
-          });
-          if (recentCandidates.length) {
-            const inspected = await Promise.all(
-              recentCandidates.map(async (session) => {
-                try {
-                  const result = await runChatGPTSessionControl({
-                    environmentId,
-                    sessions,
-                    action: "read",
-                    sessionId: session.id,
-                    count: 1,
-                  });
-                  return result as { session?: { status?: string } };
-                } catch {
-                  return null;
-                }
-              }),
-            );
-            const active = recentCandidates.filter(
-              (_, index) => inspected[index]?.session?.status === "working",
-            );
-            if (active.length === 1) parentSessionId = active[0]?.id;
-          }
-        }
-        // A current browser route or a very recently selected ChatGPT session
-        // provides a controlled fallback for spawners that omit the parent ID.
-        // Never infer ancestry merely because titles sound related.
-        if (!parentSessionId) {
-          const routeMatch = window.location.pathname.match(/\/browser\/([^/?#]+)/);
-          const routeId = routeMatch?.[1];
-          const eligible = sessions
-            .filter((session) => !session.hidden)
-            .map((session) => session.id);
-          if (routeId && eligible.includes(routeId)) parentSessionId = routeId;
-          else
-            parentSessionId =
-              readRecentClickedParent(environmentId, eligible, Date.now()) ?? undefined;
-        }
+        const parentSessionId = parent?.id;
         const registered = readProjects().filter(
           (project) => project.environmentId === environmentId,
         );
@@ -201,6 +169,7 @@ export function DesktopAppActivationCoordinator() {
             ok: true,
             sessionId,
             messageSent: true,
+            parentSessionId: parentSessionId ?? null,
           };
         } catch (error) {
           // Keep the named session and any unsent draft visible for recovery.

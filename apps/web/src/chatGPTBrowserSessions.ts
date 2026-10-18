@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { useCallback } from "react";
 
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
+import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPTBrowserPrewarm";
 import { getLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { randomUUID } from "./lib/utils";
@@ -15,12 +16,32 @@ export const BrowserSession = Schema.Struct({
   hidden: Schema.optional(Schema.Boolean),
   hiddenAt: Schema.optional(Schema.Number),
   snoozedUntil: Schema.optional(Schema.Number),
-  parentSessionId: Schema.optional(Schema.String),
+  // null explicitly detaches a child; undefined means no lineage was ever recorded.
+  parentSessionId: Schema.optional(Schema.NullOr(Schema.String)),
   project: Schema.optional(Schema.String),
+  completion: Schema.optional(
+    Schema.Struct({
+      declaredAt: Schema.String,
+      observedTurns: Schema.Number,
+      observedUrl: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 export type BrowserSession = typeof BrowserSession.Type;
 const BrowserSessions = Schema.Array(BrowserSession);
-const INITIAL_SESSIONS = [{ id: "chatgpt", title: "ChatGPT 1" }];
+export const chatGPTBrowserSessionsKey = (environmentId: EnvironmentId | null) =>
+  `t3code:chatgpt-browser:sessions:${environmentId ?? "unconnected"}`;
+
+/** Read the authoritative persisted snapshot during consecutive desktop requests. */
+export function readChatGPTBrowserSessions(
+  environmentId: EnvironmentId,
+): readonly BrowserSession[] {
+  return (
+    getLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), BrowserSessions) ??
+    INITIAL_SESSIONS
+  );
+}
+const INITIAL_SESSIONS: readonly BrowserSession[] = [{ id: "chatgpt", title: "ChatGPT 1" }];
 const DEFAULT_SESSION_TITLE = /^ChatGPT \d+$/;
 
 export function chatGPTSessionTitleFromPage(pageTitle: string | null): string | null {
@@ -38,14 +59,7 @@ export function chatGPTSessionTitleFromPage(pageTitle: string | null): string | 
 export const CHATGPT_DEFAULT_URL = "https://chatgpt.com";
 
 export function isChatGPTConversationUrl(url: string | null): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname !== "chatgpt.com" && parsed.hostname !== "chat.openai.com") return false;
-    return /(?:^|\/)c\/[a-z0-9-]+(?:\/|$)/i.test(parsed.pathname);
-  } catch {
-    return false;
-  }
+  return chatGPTConversationIdFromUrl(url) !== null;
 }
 
 export const chatGPTBrowserLastUrlKey = (environmentId: EnvironmentId, sessionId: string) =>
@@ -124,7 +138,7 @@ export function expiredHiddenSessionIds(
 
 export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   const [sessions, setSessions] = useLocalStorage(
-    `t3code:chatgpt-browser:sessions:${environmentId ?? "unconnected"}`,
+    chatGPTBrowserSessionsKey(environmentId),
     INITIAL_SESSIONS,
     BrowserSessions,
   );
@@ -189,6 +203,15 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [environmentId, sessions, setPrewarmedSessionId, setSessions],
   );
 
+  const setSessionCompletion = useCallback(
+    (id: string, completion: BrowserSession["completion"] | undefined) => {
+      setSessions((current) =>
+        current.map((session) => (session.id === id ? { ...session, completion } : session)),
+      );
+    },
+    [setSessions],
+  );
+
   const setSessionParent = useCallback(
     (id: string, parentId: string | null) => {
       setSessions((current) => {
@@ -206,7 +229,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           session.id === id
             ? {
                 ...session,
-                parentSessionId: parentId ?? undefined,
+                parentSessionId: parentId,
                 project: parentId
                   ? (byId.get(parentId)?.project ?? session.project)
                   : session.project,
@@ -223,7 +246,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       setSessions((current) =>
         current.map((session) =>
           session.id === id
-            ? { ...session, project: project ?? "Other", parentSessionId: undefined }
+            ? { ...session, project: project ?? "Other", parentSessionId: null }
             : session,
         ),
       ),
@@ -257,7 +280,10 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           const update = byId.get(session.id);
           if (!update) return session;
           const project = session.project ?? update.project;
-          const parentSessionId = session.parentSessionId ?? update.parentSessionId;
+          const parentSessionId =
+            session.parentSessionId === undefined
+              ? update.parentSessionId
+              : session.parentSessionId;
           if (project === session.project && parentSessionId === session.parentSessionId)
             return session;
           changed = true;
@@ -278,7 +304,15 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       const expired = expiredHiddenSessionIds(sessions, now);
       if (!expired.length) return [] as string[];
       const ids = new Set(expired);
-      setSessions((current) => current.filter((session) => !ids.has(session.id)));
+      setSessions((current) =>
+        current
+          .filter((session) => !ids.has(session.id))
+          .map((session) =>
+            session.parentSessionId && ids.has(session.parentSessionId)
+              ? { ...session, parentSessionId: null }
+              : session,
+          ),
+      );
       return expired;
     },
     [sessions, setSessions],
@@ -316,7 +350,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         current
           .filter((session) => session.id !== id)
           .map((session) =>
-            session.parentSessionId === id ? { ...session, parentSessionId: undefined } : session,
+            session.parentSessionId === id ? { ...session, parentSessionId: null } : session,
           ),
       ),
     [setSessions],
@@ -347,6 +381,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     setSessionProject,
     setSessionParent,
     setSessionSnooze,
+    setSessionCompletion,
     syncInferredMetadata,
     pruneExpiredHidden,
   };
