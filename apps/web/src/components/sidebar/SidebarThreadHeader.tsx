@@ -21,6 +21,7 @@ export interface SidebarThreadHeaderProps {
   newThreadDisabled: boolean;
   newThreadShortcutLabel: string | null | undefined;
   newThreadInProjectShortcutLabel: string | null | undefined;
+  chatGPTSessionAction?: ReactNode;
   showNewThreadInProjectHint: boolean;
   searchInputRef: RefObject<HTMLInputElement | null>;
   searchQuery: string;
@@ -41,6 +42,7 @@ export function SidebarThreadHeader({
   newThreadDisabled,
   newThreadShortcutLabel,
   newThreadInProjectShortcutLabel,
+  chatGPTSessionAction,
   showNewThreadInProjectHint,
   searchInputRef,
   searchQuery,
@@ -130,6 +132,7 @@ export function SidebarThreadHeader({
         >
           <SquarePenIcon />
         </SidebarHeaderIconButton>
+        {chatGPTSessionAction}
       </div>
     </div>
   );

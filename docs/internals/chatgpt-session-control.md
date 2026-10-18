@@ -1,0 +1,55 @@
+# T3 Code ChatGPT browser session control (local)
+
+The custom desktop renderer retains ownership of web ChatGPT sessions. OmniMCP-Lite v0.5.8 adds one MCP tool, **`t3_sessions`**, which uses T3's existing local-only named-pipe control channel, not ChatGPT HTTP APIs or legacy OmniHub MCP forwarding.
+
+| action   | inputs                                                           | result                                                                                                                                                                                                                                                                                                                                                                              |
+| -------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`   | `which=visible` (default), `recent`, `working`, `blocked`, `all` | Filter ChatGPT sessions by the existing sidebar colors; returns stable ID, title, URL, `uiColor`, status/reason, heartbeat, last role/summary, and rendered turn count.                                                                                                                                                                                                             |
+| `read`   | `sessionId`, optional `from=start                                | end`, `count=1..20`                                                                                                                                                                                                                                                                                                                                                                 | First or last N _rendered_ user/assistant turns. Defaults to last 3 turns. |
+| `send`   | `sessionId`, `message`                                           | Send one follow-up using the already embedded ChatGPT composer. Rejects working/stuck/stuck_connecting/unavailable sessions and existing drafts; verifies the user turn before reporting success. Never retries after a click.                                                                                                                                                      |
+| `reload` | `sessionId`, optional `force`                                    | Refreshes a session with the exact load-failure panel or the interrupted-connection banner (`stuck_connecting`), rechecking the transient banner before refreshing. `force=true` permits refresh of other non-working sessions, but **never** while positively classified as generating. No automatic refreshing of interrupted connections; they sometimes reconnect on their own. |
+
+A **turn** is a user message and its following assistant reply(s); tool responses aren't separate turns. Per-message text is currently limited to 6,000 characters, and `count` to 20. The reader accesses only messages mounted in the current guest DOM; if ChatGPT has virtualized older history, it cannot guarantee full retrieval. Hidden sessions are reported, not activated or inspected.
+
+The sidebar's 2-second activity poll inspects a mounted ChatGPT guest even when the navigation overlay says `Loading`: the guest may already show its own conversation-failure panel. Stalled JavaScript inspections time out after 4 seconds and are retried. A visible `Could not load this ChatGPT conversation` panel with Retry is red without manually refreshing the page; missing composer controls during initial hydration remain unknown until loading finishes.\n\nThe list `which` filters use the sidebar's exact color classification, which is different from task completion: `visible` includes all non-hidden sessions; `recent` selects blue sessions (now idle, but observed working within the last **15 minutes**); `working` selects green sessions with an active Stop control; `blocked` selects both orange (`interrupted`) and red (`invalid`) sessions; `all` includes hidden sessions (whose color is unknown). Hidden sessions are never inspected or restored merely to list them. `total` counts only matching entries.
+
+The session result also includes optional `parentSessionId` and `project` metadata. The ChatGPT sidebar groups using T3's registered project names and an offline-learned workspace-filename frequency model (`apps/web/src/chatGPTGroupingTraining.generated.json`), supplemented by user-confirmed labeled sessions. For nonregistered names it clusters repeated, properly cased terms, avoiding incidental lowercase words such as `using`. No growing project-specific hardcoded keyword list is required. The model can abstain on ambiguous titles. The source training snapshot, user ground truth, and offline Python evaluator live in `.t3/grouping-lab/`; `python scripts/chatgpt_grouping_lab.py --index-workspaces --export-web --annotate` regenerates the locally compiled training asset without changing the live T3 session profile. Confirmed exact parent metadata is applied for known sessions only, so a child is indented beneath its parent, but title similarity alone never invents parent links. Project headers can be collapsed, and activity sorting remains cross-project. Grouping is browser-local UI metadata, not an OpenAI/ChatGPT session relationship API.
+
+To spawn a reliably nested child, supply `parent_session_id` to the OmniMCP `spawn_chatgpt_subagent` tool or `--parent-session-id ID` to `scripts/spawn-chatgpt-session.mjs`. The caller can retrieve its session ID via `t3_sessions`. Optionally supply `project` / `--project NAME` to identify the corresponding T3 project, including by workspace path. When no parent ID is supplied, the desktop renderer tries to infer one only from a single ChatGPT session that is currently generating and was recently observed working. If multiple sessions are active or no matching activity can be verified, it leaves the child top-level rather than claiming an unsupported relationship. An explicit invalid parent ID is rejected; renaming a session preserves metadata, and closing a parent keeps its children as roots.
+
+The returned statuses are observation-based, not a provider API truth source:
+
+- `working`: visible enabled Stop generation control.
+- `waiting_for_input`: generation stopped and assistant's final visible text ends in a question mark (heuristic only).
+- `done_or_idle`: assistant last replied and generation has stopped; does _not_ prove the task is finished.
+- `pending_or_stalled`: last visible message is from user but the generation control is absent.
+- `stuck`: existing T3 recovery detector confirms exact ChatGPT load-error plus Retry button.
+- `stuck_connecting`: visible `Connection interrupted. Waiting for the complete answer` notice; ChatGPT may recover spontaneously or require a manual `reload`. This takes precedence over a stale Stop button. `statusReason` includes a UTC observation timestamp. The structured `statusObservedAt` field records the most recent inspection, while `connectionInterruptedFirstSeenAt` is the first time **this running T3 app** observed the notice, not necessarily when the connection actually dropped. It resets after a successful non-interrupted inspection.
+- `loading`, `new`, `unavailable`: no reliable answer (unmounted, hidden, authentication error, no readable messages, etc.).
+
+**Examples** (MCP arguments to `t3_sessions`):
+
+```json
+{"action":"list","which":"visible"}
+{"action":"list","which":"recent"}
+{"action":"list","which":"working"}
+{"action":"list","which":"blocked"}
+{"action":"list","which":"all"}
+{"action":"read","sessionId":"<id from list>","from":"end","count":3}
+{"action":"read","sessionId":"<id from list>","from":"start","count":1}
+{"action":"send","sessionId":"<id from list>","message":"Please report your current progress."}
+{"action":"reload","sessionId":"<id from list>"}
+```
+
+Use the list/read operations for status summaries. Never assume `done_or_idle` means complete or send the same message again just because confirmation timed out. A stuck session may remain broken even after a successful refresh if the underlying ChatGPT page cannot load.
+
+Direct CLI: `node scripts/chatgpt-sessions.mjs` accepts one JSON request on standard input and prints JSON, using the local named pipe. The CLI and MCP tool require the custom T3 Code desktop app running; they do not launch new app instances. Tests: `node --test scripts/chatgpt-sessions.test.mjs`.
+
+## ChatGPT browser sidebar state and grouping
+
+- Project matching uses the locally generated workspace filename-vocabulary asset plus user-verified labels. The browser sidebar persists a chosen project to each session's localStorage record. Loading/failed pages do not erase it. A manual project drop is authoritative and detaches the dragged session from any prior parent. `Other` is a permanent fallback/drop target.
+- In Started mode, drag the status handle onto a project header to assign a session. Drop onto a session to reorder it in that group; **Shift-drop onto a session** attaches it as a child, preventing cycles. An attached child follows its parent in both Started and activity-sorted views; use the child's right-click **Detach from parent** to undo.
+- Right-click a session or project for 1-hour, 1-day, 1-week or custom snooze. The Snoozed selector exposes snoozed sessions and their unsnooze controls. Snooze deadlines, group collapse state, project assignment and exact parent relationships persist across T3 restarts.
+- A newly hidden session records `hiddenAt`. Hidden sessions older than **72 hours** are removed on startup and on an hourly check, with best-effort preview closure and removal of saved URL/activity metadata. Legacy hidden sessions lacking a trustworthy hiding timestamp remain untouched until restored and hidden again; no fabricated timestamps are used.
+- Activity sorting places working/recent first, then inactive/unknown sessions by project, and errors at the bottom. Auto-recovery scans expanded project sessions before collapsed ones (while retaining cooldowns). Blue was adjusted slightly toward a more saturated hue.
+- OMCP spawn calls should explicitly supply `parent_session_id` whenever possible. Without it, the desktop attempts a single working-session fallback, then the currently selected ChatGPT browser route, then a selected session clicked within the last five minutes. It does _not_ infer lineage merely from similar titles; there is no guaranteed way for a generic remote MCP request to know its invoking ChatGPT conversation without passing an ID.

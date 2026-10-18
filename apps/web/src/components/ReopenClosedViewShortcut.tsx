@@ -207,7 +207,12 @@ export function ReopenClosedViewShortcut() {
     const commands = [
       ...(hasHistory ? (["view.reopenClosed"] as const) : []),
       ...PREVIEW_FORWARDED_COMMANDS,
-    ];
+      "chatgpt.newSession",
+      "chat.new",
+      "chat.newLocal",
+      "chat.newWithoutProject",
+    ] as const;
+    // Cleanup only on unmount; async cleanup during a new registration can erase it.
     void preview
       .setForwardedShortcuts(
         commands.flatMap((command) =>
@@ -218,10 +223,15 @@ export function ReopenClosedViewShortcut() {
         ),
       )
       .catch(() => undefined);
-    return () => {
-      void preview.setForwardedShortcuts([]).catch(() => undefined);
-    };
+
   }, [hasHistory, keybindings, terminalOpen]);
+
+  useEffect(() => {
+    const preview = window.desktopBridge?.preview;
+    return () => {
+      void preview?.setForwardedShortcuts?.([]).catch(() => undefined);
+    };
+  }, []);
 
   return null;
 }

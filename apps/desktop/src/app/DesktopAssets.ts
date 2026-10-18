@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { isSourceCheckoutRun } from "../sourceCheckout.ts";
 
 export interface DesktopIconPaths {
   readonly ico: Option.Option<string>;
@@ -79,7 +80,7 @@ function resolveSourceTreeIconPath(
   ext: keyof DesktopIconPaths,
 ): string | undefined {
   if (environment.isPackaged || ext === "icns") return undefined;
-  const brand = environment.isDevelopment ? "dev" : "prod";
+  const brand = environment.isDevelopment || isSourceCheckoutRun() ? "dev" : "prod";
   const fileNames = sourceTreeIconFileNames[brand];
   const fileName =
     ext === "ico"

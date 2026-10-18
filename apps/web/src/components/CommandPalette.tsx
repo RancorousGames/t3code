@@ -259,6 +259,8 @@ import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
+import { ChatGPTSessionIcon } from "./sidebar/ChatGPTSessionIcon";
 import { threadRecentUse } from "@t3tools/shared/paletteSearch";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -458,6 +460,7 @@ function OpenCommandPaletteDialog(props: {
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { createSession: createChatGPTSession } = useChatGPTBrowserSessions(primaryEnvironmentId);
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -1224,6 +1227,21 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+
+  if (window.desktopBridge && primaryEnvironmentId) {
+    actionItems.push({
+      kind: "action",
+      value: "action:new-chatgpt-session",
+      searchTerms: ["new", "chatgpt", "session", "browser"],
+      title: "New ChatGPT session",
+      icon: <ChatGPTSessionIcon />,
+      shortcutCommand: "chatgpt.newSession",
+      run: () => navigate({
+        to: "/browser/$browserSessionId",
+        params: { browserSessionId: createChatGPTSession() },
+      }),
+    });
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

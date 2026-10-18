@@ -7,6 +7,8 @@ import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
+import { isSourceCheckoutRun } from "../sourceCheckout.ts";
+
 export interface ElectronAppMetadata {
   readonly appVersion: string;
   readonly appPath: string;
@@ -132,7 +134,7 @@ export const make = ElectronApp.of({
     return {
       appVersion,
       appPath,
-      isPackaged: Electron.app.isPackaged,
+      isPackaged: Electron.app.isPackaged && !isSourceCheckoutRun(),
       resourcesPath: process.resourcesPath,
       runningUnderArm64Translation: Electron.app.runningUnderARM64Translation === true,
     };
@@ -156,7 +158,7 @@ export const make = ElectronApp.of({
     return toSystemLocaleTag(identifier, hourCycle);
   }),
   whenReady: Effect.gen(function* () {
-    const isPackaged = Electron.app.isPackaged;
+    const isPackaged = Electron.app.isPackaged && !isSourceCheckoutRun();
     yield* Effect.tryPromise({
       try: () => Electron.app.whenReady(),
       catch: (cause) => new ElectronAppWhenReadyError({ isPackaged, cause }),

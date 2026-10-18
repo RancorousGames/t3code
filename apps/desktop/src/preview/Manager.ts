@@ -59,6 +59,12 @@ import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts"
 import { MENU_ACTION_CHANNEL, PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
+import {
+  activeChatGPTBrowserSessionId,
+  CLOSE_CHATGPT_SESSION_MENU_ACTION,
+  isChatGPTCloseShortcut,
+  isChatGPTSessionPreviewTab,
+} from "../window/ChatGPTCloseShortcut.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -466,8 +472,8 @@ export const previewWindowOpenAction = (details: {
 
 const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
   input.type === "keyDown" &&
-  input.key.toLowerCase() === "r" &&
-  (input.meta || input.control) &&
+  ((input.key === "F5" && !input.meta && !input.control) ||
+    (input.key.toLowerCase() === "r" && (input.meta || input.control))) &&
   !input.shift &&
   !input.alt;
 
@@ -1445,6 +1451,39 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       });
     };
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
+      // Guest WebContents receive keyboard input instead of the host renderer
+      // while ChatGPT has focus. Prevent Electron's native Window menu from
+      // interpreting Ctrl/Cmd+W as closing the entire T3 Code window.
+      const main = currentMainWindow;
+      const selectedSessionId =
+        main && !main.isDestroyed() && typeof main.webContents.getURL === "function"
+          ? activeChatGPTBrowserSessionId(main.webContents.getURL())
+          : null;
+      const selectedChatGPTGuest =
+        selectedSessionId !== null && isChatGPTSessionPreviewTab(tabId, selectedSessionId);
+      // Electron has no native find bar for embedded guests. Let the host show
+      // one for the selected ChatGPT session, without hijacking normal previews.
+      const modifier = hostPlatform === "darwin" ? input.meta : input.control;
+      if (
+        selectedChatGPTGuest &&
+        input.type === "keyDown" &&
+        modifier &&
+        !(hostPlatform === "darwin" ? input.control : input.meta) &&
+        !input.alt &&
+        !input.shift &&
+        input.key.toLowerCase() === "f"
+      ) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) main?.webContents.send(MENU_ACTION_CHANNEL, "chatgpt.find");
+        return;
+      }
+      if (selectedChatGPTGuest && isChatGPTCloseShortcut(input, hostPlatform)) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) {
+          main?.webContents.send(MENU_ACTION_CHANNEL, CLOSE_CHATGPT_SESSION_MENU_ACTION);
+        }
+        return;
+      }
       syncMenuShortcuts(wc, input);
       const host = wc.hostWebContents;
       const forwarded =
@@ -1452,7 +1491,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         !input.isComposing &&
         host &&
         !host.isDestroyed() &&
-        holdsKeyboardFocus(wc) &&
+        (holdsKeyboardFocus(wc) || selectedChatGPTGuest) &&
         !(
           hostPlatform !== "darwin" &&
           input.control &&

@@ -7,13 +7,38 @@ export const DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION = 1 as const;
 export const DesktopAppActivationPlatform = Schema.Literals(["darwin", "linux", "win32"]);
 export type DesktopAppActivationPlatform = typeof DesktopAppActivationPlatform.Type;
 
-export const DesktopAppActivationRequest = Schema.Struct({
+const DesktopAppActivationBase = {
   version: Schema.Literal(DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION),
   requestId: TrimmedNonEmptyString,
-  type: Schema.Literal("open-workspace"),
-  workspaceRoot: TrimmedNonEmptyString,
-  platform: DesktopAppActivationPlatform,
-});
+};
+
+export const DesktopAppActivationRequest = Schema.Union([
+  Schema.Struct({
+    ...DesktopAppActivationBase,
+    type: Schema.Literal("open-workspace"),
+    workspaceRoot: TrimmedNonEmptyString,
+    platform: DesktopAppActivationPlatform,
+  }),
+  Schema.Struct({
+    ...DesktopAppActivationBase,
+    type: Schema.Literal("chatgpt.spawn"),
+    title: TrimmedNonEmptyString,
+    prompt: Schema.String.check(Schema.isNonEmpty()),
+    parentSessionId: Schema.optional(TrimmedNonEmptyString),
+    project: Schema.optional(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    ...DesktopAppActivationBase,
+    type: Schema.Literal("chatgpt.sessions"),
+    action: Schema.Literals(["list", "read", "send", "reload"]),
+    which: Schema.optional(Schema.Literals(["visible", "recent", "working", "blocked", "all"])),
+    sessionId: Schema.optional(Schema.String),
+    count: Schema.optional(Schema.Number),
+    from: Schema.optional(Schema.Literals(["start", "end"])),
+    message: Schema.optional(Schema.String),
+    force: Schema.optional(Schema.Boolean),
+  }),
+]);
 export type DesktopAppActivationRequest = typeof DesktopAppActivationRequest.Type;
 
 export const DesktopAppActivationErrorCode = Schema.Literals([
@@ -23,6 +48,7 @@ export const DesktopAppActivationErrorCode = Schema.Literals([
   "platform-mismatch",
   "project-create-failed",
   "thread-open-failed",
+  "chatgpt-send-failed",
   "request-timeout",
   "internal-error",
 ]);
@@ -46,8 +72,23 @@ export const DesktopAppActivationFailure = Schema.Struct({
 });
 export type DesktopAppActivationFailure = typeof DesktopAppActivationFailure.Type;
 
+export const DesktopAppActivationChatGPTSuccess = Schema.Struct({
+  ...DesktopAppActivationBase,
+  ok: Schema.Literal(true),
+  sessionId: TrimmedNonEmptyString,
+  messageSent: Schema.Literal(true),
+});
+
+export const DesktopAppActivationChatGPTSessionsSuccess = Schema.Struct({
+  ...DesktopAppActivationBase,
+  ok: Schema.Literal(true),
+  data: Schema.Unknown,
+});
+
 export const DesktopAppActivationResponse = Schema.Union([
   DesktopAppActivationSuccess,
+  DesktopAppActivationChatGPTSuccess,
+  DesktopAppActivationChatGPTSessionsSuccess,
   DesktopAppActivationFailure,
 ]);
 export type DesktopAppActivationResponse = typeof DesktopAppActivationResponse.Type;
