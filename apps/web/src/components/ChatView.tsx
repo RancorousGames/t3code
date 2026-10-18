@@ -288,6 +288,7 @@ import {
 } from "./chat/PanelLayoutControls";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
+import { QuotaPacingWidget } from "./usage/QuotaPacingWidget";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
@@ -320,6 +321,7 @@ import {
 } from "./chat/ContextWindowMeter.logic";
 import {
   deriveLatestContextWindowSnapshot,
+  derivePromptCacheSnapshot,
   latestProviderTurnTokenUsage,
 } from "../lib/contextWindow";
 import {
@@ -1451,6 +1453,10 @@ export default function ChatView(props: ChatViewProps) {
     (compactionRunning || (compactRequestIsActive && !compactionSettled));
   const isWorking =
     phase === "running" || isSendBusy || isCompacting || runlessWorkStartedAt !== null;
+  const activeThreadPromptCache = useMemo(
+    () => derivePromptCacheSnapshot(serverProjection?.providerTurns ?? []),
+    [serverProjection?.providerTurns],
+  );
   const activeContextWindow = deriveLatestContextWindowSnapshot(
     serverVisibleTurnItems ?? [],
     activeThreadLiveTokenUsage,
@@ -3907,6 +3913,10 @@ export default function ChatView(props: ChatViewProps) {
                     sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
                     contextWindow: activeContextWindow,
                   }}
+                />
+                <QuotaPacingWidget
+                  contextWindow={activeContextWindow}
+                  promptCache={activeThreadPromptCache}
                 />
 
                 <PullRequestThreadDialogHost

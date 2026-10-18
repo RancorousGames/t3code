@@ -12,7 +12,12 @@ import {
 } from "@t3tools/contracts";
 import { makeThreadProjectionFixture } from "../test-fixtures";
 import { shouldOfferResumeCompaction } from "../components/chat/ContextWindowMeter.logic";
-import { deriveLatestContextWindowSnapshot, latestProviderTurnTokenUsage } from "./contextWindow";
+import {
+  deriveLatestContextWindowSnapshot,
+  derivePromptCacheSnapshot,
+  formatContextWindowTokens,
+  latestProviderTurnTokenUsage,
+} from "./contextWindow";
 
 const decodeTokenUsage = Schema.decodeSync(OrchestrationV2ProviderTurnTokenUsage);
 
@@ -67,6 +72,35 @@ describe("live provider-turn usage (#8144)", () => {
     expect(
       formatContextWindowCompactionMessage("Claude Sonnet 4.6", snapshot?.autoCompactThreshold),
     ).toBe("Compacts automatically at about 150,000 tokens.");
+  });
+});
+
+describe("prompt cache estimate after upstream TTL migration", () => {
+  const turn = (threadId: string, updatedAt: string, ttlMs?: number) => ({
+    providerThreadId: threadId as never,
+    tokenUsage: {
+      usedTokens: 1,
+      updatedAt,
+      ...(ttlMs === undefined ? {} : { promptCacheTtlMs: ttlMs }),
+    },
+  });
+
+  it("retains a prior cache tier on the same provider thread and uses milliseconds", () => {
+    expect(
+      derivePromptCacheSnapshot([
+        turn("a", "2026-08-27T00:00:00.000Z", 3_600_000),
+        turn("a", "2026-08-27T00:10:00.000Z"),
+      ]),
+    ).toEqual({ expiresAt: Date.parse("2026-08-27T01:10:00.000Z"), ttlSeconds: 3600 });
+  });
+
+  it("never borrows cache lifetime across provider threads", () => {
+    expect(
+      derivePromptCacheSnapshot([
+        turn("claude", "2026-08-27T00:00:00.000Z", 300_000),
+        turn("codex", "2026-08-27T00:10:00.000Z"),
+      ]),
+    ).toBeNull();
   });
 });
 

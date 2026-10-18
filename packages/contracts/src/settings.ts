@@ -1179,6 +1179,30 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const ProviderResetWakeup = Schema.Struct({
+  enabled: Schema.Boolean,
+  projectId: ProjectId,
+  armedResetAt: Schema.optionalKey(TrimmedNonEmptyString),
+  lastTriggeredResetAt: Schema.optionalKey(TrimmedNonEmptyString),
+  /** One-off explicit test, not tied to a provider quota window. */
+  testRequestedAt: Schema.optionalKey(TrimmedNonEmptyString),
+  lastTestResult: Schema.optionalKey(
+    Schema.Struct({
+      requestedAt: TrimmedNonEmptyString,
+      status: Schema.Literals(["succeeded", "failed"]),
+      message: TrimmedNonEmptyString,
+      threadId: Schema.optionalKey(TrimmedNonEmptyString),
+    }),
+  ),
+  queued: Schema.optionalKey(
+    Schema.Struct({
+      text: TrimmedNonEmptyString,
+      model: Schema.optionalKey(TrimmedNonEmptyString),
+    }),
+  ),
+});
+export type ProviderResetWakeup = typeof ProviderResetWakeup.Type;
+
 export const ServerSettings = Schema.Struct({
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -1252,6 +1276,10 @@ export const ServerSettings = Schema.Struct({
   idleCompaction: Schema.optionalKey(IdleCompactionMode),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Opt-in reset-bound jobs, including durable due-time and dispatch deduplication. */
+  providerResetWakeups: Schema.Record(ProviderInstanceId, ProviderResetWakeup).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   snoozePresets: SnoozePresetSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_PRESETS)),
   ),
@@ -1649,6 +1677,10 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  /** Entry-level upsert; null removes one instance's wake configuration. */
+  providerResetWakeups: Schema.optionalKey(
+    Schema.Record(ProviderInstanceId, Schema.NullOr(ProviderResetWakeup)),
+  ),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozePresets: Schema.optionalKey(SnoozePresetSettings),
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),

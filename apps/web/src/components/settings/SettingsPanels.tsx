@@ -61,6 +61,7 @@ import { scopedIdleCompaction } from "./scopedSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
+import { ProviderResetWakeSettings } from "./ProviderResetWakeSettings";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { managedTelemetryOffMessage, usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import {
@@ -1628,6 +1629,10 @@ export function ThreadsSettingsPanel() {
             />
           }
         />
+        <div className="rounded-lg border border-border/60 p-3">
+          <h3 className="mb-2 text-sm font-medium">Five-hour provider reset wakeups</h3>
+          <ProviderResetWakeSettings />
+        </div>
       </SettingsSection>
 
       {hasServerTargets ? (
