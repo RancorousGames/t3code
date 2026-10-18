@@ -161,6 +161,29 @@ export function deriveLatestContextWindowSnapshot(
   return null;
 }
 
+/** Estimated prompt-cache lifetime from the latest provider request. */
+export type PromptCacheSnapshot = { readonly expiresAt: number; readonly ttlSeconds: number };
+
+/**
+ * Upstream reports prompt-cache TTL in milliseconds. Keep the most recent
+ * reported tier on the same provider thread, even if a subsequent cache read
+ * does not re-report the TTL. Never inherit another thread's cache lifetime.
+ */
+export function derivePromptCacheSnapshot(
+  turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "providerThreadId" | "tokenUsage">>,
+): PromptCacheSnapshot | null {
+  const latest = turns.findLast((turn) => turn.tokenUsage !== undefined);
+  if (!latest?.tokenUsage) return null;
+  const ttlMs = turns.findLast(
+    (turn) =>
+      turn.providerThreadId === latest.providerThreadId &&
+      turn.tokenUsage?.promptCacheTtlMs !== undefined,
+  )?.tokenUsage?.promptCacheTtlMs;
+  const lastRequestAt = Date.parse(latest.tokenUsage.updatedAt);
+  if (ttlMs === undefined || ttlMs <= 0 || !Number.isFinite(lastRequestAt)) return null;
+  return { expiresAt: lastRequestAt + ttlMs, ttlSeconds: ttlMs / 1000 };
+}
+
 export function formatContextWindowTokens(value: number | null): string {
   if (value === null || !Number.isFinite(value)) {
     return "0";

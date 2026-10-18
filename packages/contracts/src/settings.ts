@@ -1097,6 +1097,30 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const ProviderResetWakeup = Schema.Struct({
+  enabled: Schema.Boolean,
+  projectId: ProjectId,
+  armedResetAt: Schema.optionalKey(TrimmedNonEmptyString),
+  lastTriggeredResetAt: Schema.optionalKey(TrimmedNonEmptyString),
+  /** One-off explicit test, not tied to a provider quota window. */
+  testRequestedAt: Schema.optionalKey(TrimmedNonEmptyString),
+  lastTestResult: Schema.optionalKey(
+    Schema.Struct({
+      requestedAt: TrimmedNonEmptyString,
+      status: Schema.Literals(["succeeded", "failed"]),
+      message: TrimmedNonEmptyString,
+      threadId: Schema.optionalKey(TrimmedNonEmptyString),
+    }),
+  ),
+  queued: Schema.optionalKey(
+    Schema.Struct({
+      text: TrimmedNonEmptyString,
+      model: Schema.optionalKey(TrimmedNonEmptyString),
+    }),
+  ),
+});
+export type ProviderResetWakeup = typeof ProviderResetWakeup.Type;
+
 export const ServerSettings = Schema.Struct({
   // Null means no client has migrated this preference yet; an empty value is
   // authoritative so another device cannot resurrect cleared preferences.
@@ -1198,6 +1222,10 @@ export const ServerSettings = Schema.Struct({
   ),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Opt-in reset-bound jobs, including durable due-time and dispatch deduplication. */
+  providerResetWakeups: Schema.Record(ProviderInstanceId, ProviderResetWakeup).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
@@ -1574,6 +1602,10 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  /** Entry-level upsert; null removes one instance's wake configuration. */
+  providerResetWakeups: Schema.optionalKey(
+    Schema.Record(ProviderInstanceId, Schema.NullOr(ProviderResetWakeup)),
+  ),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({

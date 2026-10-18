@@ -87,6 +87,7 @@ import {
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { ProviderResetWakeSettings } from "./ProviderResetWakeSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
@@ -2376,6 +2377,11 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        <div className="rounded-lg border border-border/60 p-3">
+          <h3 className="mb-2 text-sm font-medium">Five-hour provider reset wakeups</h3>
+          <ProviderResetWakeSettings />
+        </div>
 
         <SettingsRow
           {...searchableSetting("working-shelf")}

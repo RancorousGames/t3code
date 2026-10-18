@@ -121,6 +121,28 @@ or endpoint configurations do not report subscription limits.
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
+## Start a new five-hour window automatically
+
+Under **Settings → General → Five-hour provider reset wakeups**, the main Codex and
+Claude accounts appear first and are clearly labeled **Main account**. Choose a workspace
+and enable **Wake at each 5-hour reset** for the account you want to wake.
+Secondary accounts (such as a separate Codex login) are hidden under
+**Show additional provider accounts** and are not woken unless explicitly enabled. When its reported reset
+time arrives, T3 opens a new thread and sends a tiny hello using the newest available Luna
+or Haiku model at low effort. This opt-in runs on the server and survives T3 restarts; if
+you turn on your computer after an armed reset, T3 checks for missed wakeups on startup.
+It requires a provider-reported five-hour reset time. A new account without one cannot
+be scheduled until a reset time becomes available.
+
+To run actual work instead, enter a prompt, optionally pick its model, and choose **Queue
+next reset**. This message replaces the automatic hello for that reset. Cancel it before
+it runs if you change your mind. **Send test hello now** immediately checks the provider
+without consuming the queued job. Tests and wake messages remain visible as normal threads
+for now. After sending a test, use **Open test thread** to see the new thread and
+whether the provider actually replied. If the provider reports that it is not
+signed in, T3 warns that the thread may fail to run; authenticate that specific
+account first. All wake and queued prompts use the workspace you selected.
+
 ## Connect a CLIProxyAPI hub
 
 To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the

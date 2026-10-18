@@ -402,6 +402,7 @@ export function applyServerSettingsPatch(
     sourceControlHosts: sourceControlHostsPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     usageModelAliases: usageModelAliasesPatch,
+    providerResetWakeups: providerResetWakeupsPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
     // Already translated into `projectSettingsOverrides` above; the legacy
@@ -571,6 +572,14 @@ export function applyServerSettingsPatch(
                 projectSettingsOverridesPatch,
               ),
             ).filter(([, entry]) => Object.keys(entry).length > 0),
+          ),
+        }
+      : {}),
+    ...(providerResetWakeupsPatch !== undefined
+      ? {
+          providerResetWakeups: mergeSettingsEntries(
+            current.providerResetWakeups,
+            providerResetWakeupsPatch,
           ),
         }
       : {}),
