@@ -22,6 +22,7 @@ function OpenRigAgentRow({
   const [feedback, setFeedback] = useState("");
   const [sessions, setSessions] = useState<readonly DesktopOpenRigSession[]>([]);
   const [chosenSession, setChosenSession] = useState("");
+  const [sessionFilter, setSessionFilter] = useState("");
   const [linking, setLinking] = useState(false);
 
   useEffect(() => {
@@ -40,6 +41,14 @@ function OpenRigAgentRow({
       current = false;
     };
   }, [composing, agent.bound]);
+
+  const filteredSessions = sessions.filter((session) => {
+    const query = sessionFilter.trim().toLowerCase();
+    if (!query || session.id === chosenSession) return true;
+    return [session.title, session.project, session.kind, session.provider, session.id].some(
+      (value) => value?.toLowerCase().includes(query),
+    );
+  });
 
   async function linkSession() {
     const bind = window.desktopBridge?.bindOpenRigAgent;
@@ -138,36 +147,46 @@ function OpenRigAgentRow({
               </Button>
             </div>
           ) : (
-            <div className="flex gap-1">
-              <select
-                aria-label={`T3 session for ${agent.name}`}
-                className="min-w-0 flex-1 rounded-md border border-sidebar-border bg-transparent text-xs"
-                value={chosenSession}
-                disabled={linking}
-                onChange={(event) => setChosenSession(event.currentTarget.value)}
-              >
-                <option value="">Choose T3 or ChatGPT conversation</option>
-                {sessions.map((session) => (
-                  <option key={session.id} value={session.id}>
-                    {session.kind === "t3-thread"
-                      ? "T3"
-                      : session.kind === "chatgpt-conversation"
-                        ? "ChatGPT"
-                        : "Browser"}
-                    {" · "}
-                    {session.title}
-                    {session.project ? ` · ${session.project}` : ""}
-                  </option>
-                ))}
-              </select>
-              <Button
-                size="sm"
-                variant="ghost-muted"
-                disabled={!chosenSession || linking}
-                onClick={() => void linkSession()}
-              >
-                Link
-              </Button>
+            <div className="space-y-1">
+              <input
+                aria-label={`Filter conversations for ${agent.name}`}
+                type="search"
+                className="w-full rounded-md border border-sidebar-border bg-transparent px-2 py-1 text-xs"
+                placeholder={`Search ${sessions.length} T3 and ChatGPT conversations`}
+                value={sessionFilter}
+                onChange={(event) => setSessionFilter(event.currentTarget.value)}
+              />
+              <div className="flex gap-1">
+                <select
+                  aria-label={`T3 session for ${agent.name}`}
+                  className="min-w-0 flex-1 rounded-md border border-sidebar-border bg-transparent text-xs"
+                  value={chosenSession}
+                  disabled={linking}
+                  onChange={(event) => setChosenSession(event.currentTarget.value)}
+                >
+                  <option value="">Choose T3 or ChatGPT conversation</option>
+                  {filteredSessions.map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {session.kind === "t3-thread"
+                        ? "T3"
+                        : session.kind === "chatgpt-conversation"
+                          ? "ChatGPT"
+                          : "Browser"}
+                      {" · "}
+                      {session.title}
+                      {session.project ? ` · ${session.project}` : ""}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  variant="ghost-muted"
+                  disabled={!chosenSession || linking}
+                  onClick={() => void linkSession()}
+                >
+                  Link
+                </Button>
+              </div>
             </div>
           )}
           {agent.bound && (

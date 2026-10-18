@@ -1,4 +1,5 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { MessageId } from "@t3tools/contracts";
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
 
 import { sendInitialChatGPTPrompt } from "../../chatGPTBrowserAutomation";
@@ -18,7 +19,11 @@ import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { findProjectByPath, inferProjectTitleFromPath } from "../../lib/projectPaths";
 import { newProjectId } from "../../lib/utils";
-import { readProjects, waitForProject } from "../../state/entities";
+import { useOrchestrationCommand } from "../../state/use-orchestration-command";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { orchestrationEnvironment } from "../../state/orchestration";
+import { readProjects, readThreadShells, waitForProject } from "../../state/entities";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
@@ -32,6 +37,13 @@ export function DesktopAppActivationCoordinator() {
   );
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const openThread = useNewThreadHandler();
+  const startNativeTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
+    reportFailure: false,
+  });
+  const getNativeProjection = useAtomQueryRunner(orchestrationEnvironment.v2.threadProjection, {
+    reportFailure: false,
+    refresh: true,
+  });
   const queueRef = useRef(Promise.resolve());
   const activation = window.desktopBridge?.appActivation;
   const shell = useEnvironmentQuery(
@@ -47,6 +59,141 @@ export function DesktopAppActivationCoordinator() {
 
   const processRequest = useEffectEvent(
     async (request: DesktopAppActivationRequest): Promise<DesktopAppActivationResponse> => {
+      if (request.type === "t3.threads") {
+        const environmentId = primaryEnvironment?.environmentId;
+        if (
+          !environmentId ||
+          primaryEnvironment?.connection.phase !== "connected" ||
+          (request.environmentId && request.environmentId !== environmentId)
+        ) {
+          return {
+            version: 1,
+            requestId: request.requestId,
+            ok: false,
+            code: "environment-unavailable",
+            message: "Requested native environment is not connected.",
+          };
+        }
+        const threads = readThreadShells().filter(
+          (thread) => thread.environmentId === environmentId && thread.deletedAt === null,
+        );
+        if (request.action !== "list") {
+          if (!request.threadId || !threads.some((thread) => thread.id === request.threadId)) {
+            return {
+              version: 1,
+              requestId: request.requestId,
+              ok: false,
+              code: "invalid-request",
+              message: "Unknown native thread ID.",
+            };
+          }
+          const thread = threads.find((entry) => entry.id === request.threadId)!;
+          if (request.action === "read") {
+            const projectionResult = await getNativeProjection({
+              environmentId,
+              input: { threadId: thread.id },
+            });
+            if (projectionResult._tag === "Failure") {
+              const cause = squashAtomCommandFailure(projectionResult);
+              return {
+                version: 1,
+                requestId: request.requestId,
+                ok: false,
+                code: "internal-error",
+                message: cause instanceof Error ? cause.message : "Could not read native thread.",
+              };
+            }
+            const count = Math.max(1, Math.min(20, request.count ?? 5));
+            const messages = projectionResult.value.visibleTurnItems
+              .slice(-count)
+              .map(({ position, item }) => ({
+                position,
+                item,
+              }));
+            const data = { environmentId, threadId: thread.id, messages };
+            if (JSON.stringify(data).length > 1_900_000) {
+              return {
+                version: 1,
+                requestId: request.requestId,
+                ok: false,
+                code: "invalid-request",
+                message: "Native thread read exceeds local response limit.",
+              };
+            }
+            return { version: 1, requestId: request.requestId, ok: true, data };
+          }
+          if (!request.message?.trim() || !request.clientRequestId?.trim()) {
+            return {
+              version: 1,
+              requestId: request.requestId,
+              ok: false,
+              code: "invalid-request",
+              message: "Native send requires message and clientRequestId.",
+            };
+          }
+          const messageId = MessageId.make(request.clientRequestId);
+          const sendResult = await startNativeTurn({
+            environmentId,
+            input: {
+              threadId: thread.id,
+              message: { messageId, role: "user", text: request.message, attachments: [] },
+              runtimeMode: thread.runtimeMode,
+              interactionMode: thread.interactionMode,
+              dispatchMode: "queue",
+            },
+          });
+          if (sendResult._tag === "Failure") {
+            const cause = squashAtomCommandFailure(sendResult);
+            return {
+              version: 1,
+              requestId: request.requestId,
+              ok: false,
+              code: "internal-error",
+              message: cause instanceof Error ? cause.message : "Native thread send rejected.",
+            };
+          }
+          return {
+            version: 1,
+            requestId: request.requestId,
+            ok: true,
+            data: {
+              environmentId,
+              threadId: thread.id,
+              messageId,
+              messageSent: true,
+            },
+          };
+        }
+        const projects = new Map(
+          readProjects()
+            .filter((project) => project.environmentId === environmentId)
+            .map((project) => [project.id, project.title]),
+        );
+        const entries = threads.map((thread) => ({
+          id: thread.id,
+          title: thread.title,
+          projectId: thread.projectId,
+          project: projects.get(thread.projectId) ?? null,
+          status: thread.runtime?.status ?? "idle",
+          provider: thread.providerInstanceId,
+          parentThreadId: null,
+        }));
+        if (JSON.stringify(entries).length > 1_900_000) {
+          return {
+            version: 1,
+            requestId: request.requestId,
+            ok: false,
+            code: "invalid-request",
+            message: "Thread list exceeds local pipe response limit.",
+          };
+        }
+        return {
+          version: 1,
+          requestId: request.requestId,
+          ok: true,
+          data: { environmentId, threads: entries },
+        };
+      }
       if (request.type === "chatgpt.sessions") {
         const environmentId = primaryEnvironment?.environmentId;
         if (!environmentId)
