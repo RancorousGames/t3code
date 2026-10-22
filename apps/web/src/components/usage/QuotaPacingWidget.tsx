@@ -3,6 +3,7 @@ import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { collectLimitAccounts, elapsedShare, paceOf } from "@t3tools/shared/usageLimits";
 import { GaugeIcon, RotateCcwIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import * as Schema from "effect/Schema";
 
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
@@ -148,10 +149,10 @@ export function QuotaPacingWidget({
     : viewportHasRoom;
   const open = expanded ?? hasRoom;
 
-  return (
+  const widget = (
     <aside
       aria-label="Quota pacing"
-      className={canvas ? "absolute right-3 bottom-3 z-20" : "fixed right-3 bottom-3 z-20"}
+      className={canvas ? "absolute right-3 bottom-3 z-20" : "fixed right-3 bottom-3 z-40"}
     >
       <div
         className="dropdown-glass overflow-hidden rounded-xl border border-border/60 shadow-lg"
@@ -342,4 +343,8 @@ export function QuotaPacingWidget({
       </div>
     </aside>
   );
+
+  // Desktop browser guests live outside the routed app. Match that document
+  // layer so a standalone browser cannot cover the global quota widget.
+  return canvas ? widget : createPortal(widget, document.body);
 }
