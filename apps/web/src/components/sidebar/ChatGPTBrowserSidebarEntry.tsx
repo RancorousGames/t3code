@@ -41,6 +41,8 @@ import {
 } from "../../chatGPTSessionGrouping";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
+import { resolveSnoozePresets } from "../Sidebar.snooze";
+import { useClientSettings } from "../../hooks/useSettings";
 import { removeLocalStorageItem, useLocalStorage } from "../../hooks/useLocalStorage";
 import * as Schema from "effect/Schema";
 import { readThreadPreviewState } from "../../previewStateStore";
@@ -162,6 +164,7 @@ export function ChatGPTBrowserSidebarEntry({
 }) {
   const navigate = useNavigate();
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const environmentId = usePrimaryEnvironmentId();
   const projects = useProjects();
   const {
@@ -205,6 +208,10 @@ export function ChatGPTBrowserSidebarEntry({
     sessionId?: string;
     groupKey?: string;
   } | null>(null);
+  const snoozePresets = useMemo(
+    () => (contextMenu ? resolveSnoozePresets(new Date(), timestampFormat) : []),
+    [contextMenu, timestampFormat],
+  );
   useEffect(() => {
     const timer = setInterval(() => setClockNow(Date.now()), 60_000);
     return () => clearInterval(timer);
@@ -751,7 +758,7 @@ export function ChatGPTBrowserSidebarEntry({
           className="fixed z-[200] min-w-44 rounded-md border border-border bg-popover p-1 shadow-lg"
           style={{
             left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 200)),
-            top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 210)),
+            top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 320)),
           }}
           onClick={(event) => event.stopPropagation()}
         >
@@ -781,30 +788,18 @@ export function ChatGPTBrowserSidebarEntry({
                   </button>
                 ) : (
                   <>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => setUntil(Date.now() + 60 * 60 * 1000)}
-                    >
-                      Snooze 1 hour
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => setUntil(Date.now() + 24 * 60 * 60 * 1000)}
-                    >
-                      Snooze 1 day
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => setUntil(Date.now() + 7 * 24 * 60 * 60 * 1000)}
-                    >
-                      Snooze 1 week
-                    </button>
+                    {snoozePresets.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        role="menuitem"
+                        className="flex w-full items-center justify-between gap-4 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                        onClick={() => setUntil(Date.parse(preset.snoozedUntil))}
+                      >
+                        <span>{preset.label}</span>
+                        <span className="text-xs text-muted-foreground">{preset.whenLabel}</span>
+                      </button>
+                    ))}
                     <button
                       type="button"
                       role="menuitem"
