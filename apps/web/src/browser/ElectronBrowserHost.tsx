@@ -25,10 +25,21 @@ import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
+import {
+  chatGPTGuestHydrationLimiter,
+  shouldStaggerChatGPTGuest,
+} from "./chatGPTGuestHydrationLimiter";
+import {
+  isChatGPTGuestWoken,
+  selectChatGPTGuestHibernated,
+  useChatGPTGuestHibernation,
+  wakeChatGPTGuest,
+} from "./chatGPTGuestHibernation";
 import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { openUrlInPreview } from "./openFileInPreview";
+import { useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { rendersServerTabNatively } from "./previewRuntime";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
@@ -169,7 +180,40 @@ function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebv
     AuthPreviewOperateScope,
   );
   const profileId = useTabProfileId(props.profileId);
-  return canOperatePreview ? <HostedBrowserWebview {...props} profileId={profileId} /> : null;
+  const selected = useBrowserSurfaceStore(
+    (state) => state.byTabId[props.runtimeTabId]?.visible === true,
+  );
+  const hibernated = useChatGPTGuestHibernation((state) =>
+    selectChatGPTGuestHibernated(state, props.runtimeTabId),
+  );
+  const woken = useChatGPTGuestHibernation((state) =>
+    isChatGPTGuestWoken(state, props.runtimeTabId),
+  );
+  const stagger = shouldStaggerChatGPTGuest(props.threadRef.threadId, props.initialUrl) && !woken;
+  const [guestMayAttach, setGuestMayAttach] = useState(!stagger);
+
+  useEffect(() => {
+    if (hibernated && selected) wakeChatGPTGuest(props.runtimeTabId);
+  }, [hibernated, selected, props.runtimeTabId]);
+
+  useEffect(() => {
+    if (!stagger || !canOperatePreview || hibernated) return;
+    const controller = new AbortController();
+    void chatGPTGuestHydrationLimiter
+      .request(props.runtimeTabId, controller.signal)
+      .then((allowed) => {
+        if (allowed && !controller.signal.aborted) setGuestMayAttach(true);
+      });
+    return () => controller.abort();
+  }, [stagger, canOperatePreview, hibernated, props.runtimeTabId]);
+
+  useEffect(() => {
+    if (stagger && selected) chatGPTGuestHydrationLimiter.prioritize(props.runtimeTabId);
+  }, [stagger, selected, props.runtimeTabId]);
+
+  return canOperatePreview && (guestMayAttach || !stagger) && !hibernated ? (
+    <HostedBrowserWebview {...props} profileId={profileId} />
+  ) : null;
 }
 
 // Latch after hydration: Electron fixes the partition when the guest attaches.
