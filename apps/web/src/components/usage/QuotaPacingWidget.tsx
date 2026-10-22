@@ -6,6 +6,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import * as Schema from "effect/Schema";
 
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -59,8 +60,9 @@ export function QuotaPacingWidget({
 }: {
   contextWindow?: ContextWindowSnapshot | null;
   promptCache?: PromptCacheSnapshot | null;
-}) {
+} = {}) {
   const canvas = useChatCanvas();
+  const viewportHasRoom = useMediaQuery("(min-width: 1024px) and (min-height: 480px)");
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
@@ -138,17 +140,19 @@ export function QuotaPacingWidget({
     }
   }, [history, rows, observedNow]);
 
-  if (!canvas || !rows.some((row) => row.series.some(Boolean))) return null;
-  const left = canvas.container.width - 292;
-  const frame = canvas.layout.frame;
-  const hasRoom =
-    left >= canvas.layout.chat.left + canvas.layout.chat.width + 12 &&
-    canvas.container.height >= 480 &&
-    !frame;
+  if (!rows.some((row) => row.series.some(Boolean))) return null;
+  const hasRoom = canvas
+    ? canvas.container.width - 292 >= canvas.layout.chat.left + canvas.layout.chat.width + 12 &&
+      canvas.container.height >= 480 &&
+      !canvas.layout.frame
+    : viewportHasRoom;
   const open = expanded ?? hasRoom;
 
   return (
-    <aside aria-label="Quota pacing" className="absolute right-3 bottom-3 z-20">
+    <aside
+      aria-label="Quota pacing"
+      className={canvas ? "absolute right-3 bottom-3 z-20" : "fixed right-3 bottom-3 z-20"}
+    >
       <div
         className="dropdown-glass overflow-hidden rounded-xl border border-border/60 shadow-lg"
         style={{ width: open ? 280 : undefined }}
