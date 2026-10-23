@@ -47,7 +47,8 @@ export const explanation = (error: unknown) =>
 
 /** Only local pre-POST failures have this marker; HTTP/transport failures remain indeterminate. */
 export const sendDefinitelyNotSent = (reason: string): boolean =>
-  reason.startsWith("OpenRig message not sent:") || reason === "OpenRig messaging is unavailable.";
+  /^(?:(?:Error invoking remote method '[^']+': )|(?:Error: ))*OpenRig message not sent:/u.test(reason) ||
+  reason === "OpenRig messaging is unavailable.";
 
 // OpenRig rejects launch pre-intent with 400/404 and (except duplicate operations)
 // 409. A 503, transport error or incomplete receipt is ambiguous: NEVER retry.

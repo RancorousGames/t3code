@@ -766,7 +766,7 @@ describe("OpenRig managed seat sidebar", () => {
   });
 
   it("distinguishes verified pre-POST rejection from unknown delivery and allows retry", async () => {
-    send.mockRejectedValueOnce(new Error("OpenRig message not sent: seat has no routable active managed primary."))
+    send.mockRejectedValueOnce(new Error("Error invoking remote method 'OPENRIG_SEND_AGENT_MESSAGE': Error: OpenRig message not sent: seat has no routable active managed primary."))
       .mockResolvedValueOnce(undefined);
     await mount();
     await act(async () => {
