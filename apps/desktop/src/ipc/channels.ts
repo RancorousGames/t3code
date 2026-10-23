@@ -42,19 +42,23 @@ export const OPENRIG_NATIVE_APPROVAL_REVIEW_CHANNEL = "desktop:openrig-native-ap
 export const OPENRIG_OPERATOR_INBOX_CHANNEL = "desktop:openrig-operator-inbox";
 export const OPENRIG_SPEAK_PREVIEW_CHANNEL = "desktop:openrig-speak-preview";
 export const OPENRIG_HUMAN_RESPONSE_CHANNEL = "desktop:openrig-human-response";
+export const OPENRIG_OPERATOR_REPLY_CHANNEL = "desktop:openrig-operator-reply";
+export const OPENRIG_OPERATOR_REPLY_LOOKUP_CHANNEL = "desktop:openrig-operator-reply-lookup";
 export const OPENRIG_LIST_SESSIONS_CHANNEL = "desktop:openrig-list-sessions";
 export const OPENRIG_MANAGED_SESSIONS_CHANNEL = "desktop:openrig-managed-sessions";
 export const OPENRIG_DISCOVER_SEATS_CHANNEL = "desktop:openrig-discover-seats";
 export const OPENRIG_SEAT_REPORTS_CHANNEL = "desktop:openrig-seat-reports";
 export const OPENRIG_AGENT_TASKS_CHANNEL = "desktop:openrig-agent-tasks";
 export const OPENRIG_READ_EXECUTION_PROFILE_CHANNEL = "desktop:openrig-read-execution-profile";
-export const OPENRIG_CONFIGURE_EXECUTION_PROFILE_CHANNEL = "desktop:openrig-configure-execution-profile";
+export const OPENRIG_CONFIGURE_EXECUTION_PROFILE_CHANNEL =
+  "desktop:openrig-configure-execution-profile";
 export const OPENRIG_START_MANAGED_SESSION_CHANNEL = "desktop:openrig-start-managed-session";
 export const OPENRIG_SELECT_PRIMARY_CHANNEL = "desktop:openrig-select-primary-session";
 export const OPENRIG_ADOPT_MANAGED_CHANNEL = "desktop:openrig-adopt-managed-session";
 export const OPENRIG_RECONCILE_MANAGED_CHANNEL = "desktop:openrig-reconcile-managed-session";
 export const OPENRIG_DETACH_MANAGED_CHANNEL = "desktop:openrig-detach-managed-session";
-export const OPENRIG_MANAGED_BROWSER_LIFECYCLE_CHANNEL = "desktop:openrig-managed-browser-lifecycle";
+export const OPENRIG_MANAGED_BROWSER_LIFECYCLE_CHANNEL =
+  "desktop:openrig-managed-browser-lifecycle";
 export const OPENRIG_POLICY_BROWSER_SEND_CHANNEL = "desktop:openrig-policy-browser-send";
 export const OPENRIG_BIND_AGENT_CHANNEL = "desktop:openrig-bind-agent";
 export const OPENRIG_UNBIND_AGENT_CHANNEL = "desktop:openrig-unbind-agent";
