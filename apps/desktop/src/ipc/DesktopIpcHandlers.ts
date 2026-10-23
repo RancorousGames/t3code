@@ -68,6 +68,7 @@ import {
 } from "./methods/snapShot.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import * as OpenRigIpc from "./methods/openRig.ts";
+import { savePrivateChatGPTDraftSnapshotIpc } from "./methods/chatGPTDraftSnapshot.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
 import {
@@ -103,6 +104,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
+  yield* ipc.handle(savePrivateChatGPTDraftSnapshotIpc);
   yield* ipc.handle(OpenRigIpc.listOpenRigAgents);
   yield* ipc.handle(OpenRigIpc.listPendingOpenRigNativeApprovals);
   yield* ipc.handle(OpenRigIpc.getOpenRigNativeApproval);
