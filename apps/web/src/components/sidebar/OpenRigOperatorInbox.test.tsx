@@ -12,6 +12,7 @@ vi.mock("react-dom", async (importOriginal) => ({
 import {
   OpenRigOperatorInbox,
   detectInboxArrivals,
+  inboxAttentionKind,
   inboxSpeechPreview,
 } from "./OpenRigOperatorInbox";
 
@@ -174,8 +175,11 @@ describe("OpenRig floating desktop inbox", () => {
       rendered!.root.findByProps({ "aria-label": "3 unread messages on this device" }),
     ).toBeTruthy();
     expect(
-      rendered!.root.findByProps({ "aria-label": "2 messages needing action in loaded results" }),
+      rendered!.root.findByProps({
+        "aria-label": "2 alerts or read-only decisions in loaded results",
+      }),
     ).toBeTruthy();
+    expect(output()).not.toContain("pending native answer forms in loaded results");
     expect(output()).not.toContain("Build complete");
     await click("OpenRig human inbox");
     expect(rendered!.root.findByProps({ "aria-label": "OpenRig human inbox window" })).toBeTruthy();
@@ -215,7 +219,9 @@ describe("OpenRig floating desktop inbox", () => {
     read.mockResolvedValue(sample);
     await mount();
     await click("OpenRig human inbox");
-    await click("Filter OpenRig inbox: Needs action");
+    await click("Filter OpenRig inbox: Forms");
+    expect(displayMessages()).toHaveLength(0);
+    await click("Filter OpenRig inbox: Alerts");
     expect(displayMessages()).toHaveLength(2);
     await click("Filter OpenRig inbox: All");
     await click("Mark all loaded as read");
@@ -233,6 +239,7 @@ describe("OpenRig floating desktop inbox", () => {
     expect(displayMessages()).toHaveLength(1);
     await click("Open inbox message: Approval required");
     expect(output()).toContain("no approval has been sent");
+    expect(output()).toContain("no native T3");
   });
 
   it("does not notify on first connection; shows one clickable toast for new genuine items", async () => {
@@ -332,7 +339,9 @@ describe("OpenRig floating desktop inbox", () => {
     await click("Move to local trash");
     expect(displayMessages()).toHaveLength(2);
     expect(
-      rendered!.root.findByProps({ "aria-label": "1 messages needing action in loaded results" }),
+      rendered!.root.findByProps({
+        "aria-label": "1 alerts or read-only decisions in loaded results",
+      }),
     ).toBeTruthy();
     await click("Refresh OpenRig human inbox");
     expect(displayMessages()).toHaveLength(2);
@@ -418,6 +427,110 @@ describe("OpenRig floating desktop inbox", () => {
     expect(output()).toContain("More messages exist");
     expect(output()).toContain("loaded results");
     expect(output()).not.toContain("50 unread");
+  });
+});
+
+describe("actual server action flags versus response forms", () => {
+  const recovery = {
+    id: "qitem-stuck-sweep",
+    sender: "openrig@kernel",
+    recipient: "human@kernel",
+    subject: "Stuck sweep: unclaimed-obligation",
+    body: "Recovery warning: no worker has claimed this obligation.",
+    state: "pending",
+    humanIntent: null,
+    requiresAction: true,
+    sourceType: "queue" as const,
+    createdAt: "2026-10-23T12:00:00.000Z",
+  };
+  const decision = {
+    ...recovery,
+    id: "qitem-real-decision",
+    sender: "planner@rig",
+    subject: "Select deployment plan",
+    humanIntent: "decision" as const,
+    humanForm: {
+      version: 2,
+      title: "Deployment plan",
+      questions: [
+        {
+          id: "target",
+          type: "single-select",
+          prompt: "Deploy where?",
+          options: [
+            { id: "prod", label: "Production" },
+            { id: "test", label: "Staging" },
+          ],
+        },
+        {
+          id: "flags",
+          type: "multi-select",
+          prompt: "Enable which flags?",
+          minSelected: 1,
+          maxSelected: 2,
+          options: [
+            { id: "a", label: "Alerts" },
+            { id: "b", label: "Metrics" },
+          ],
+        },
+        { id: "ratio", type: "slider", prompt: "Traffic percentage", min: 0, max: 100, step: 10 },
+      ],
+    },
+  };
+
+  it("excludes the real unclaimed-obligation warning from the form badge and explains missing questions", async () => {
+    const warnings = Array.from({ length: 5 }, (_, index) => ({
+      ...recovery,
+      id: `qitem-stuck-${index}`,
+    }));
+    read.mockResolvedValue({ ...sample, items: warnings, pendingCount: 5, count: 5 });
+    await mount();
+    expect(inboxAttentionKind(warnings[0]!, "human@kernel")).toBe("alert");
+    expect(output()).not.toContain("pending native answer forms in loaded results");
+    expect(output()).toContain("5 alerts or read-only decisions in loaded results");
+    await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: Forms");
+    expect(displayMessages()).toHaveLength(0);
+    await click("Filter OpenRig inbox: Alerts");
+    expect(displayMessages()).toHaveLength(5);
+    await act(async () => {
+      rendered!.root
+        .findAllByProps({
+          "aria-label": "Open inbox message: Stuck sweep: unclaimed-obligation",
+        })[0]!
+        .props.onClick();
+    });
+    expect(output()).toContain("supplied no answerable");
+    expect(output()).toContain("not a multiple-choice prompt");
+    expect(output()).not.toContain("Send answers");
+    expect(rendered!.root.findByProps({ "aria-label": "Reply to OpenRig message" })).toBeTruthy();
+    expect(output()).toContain("no supported ordinary human Reply endpoint yet");
+    expect(rendered!.root.findByProps({ children: "Submit reply" }).props.disabled).toBe(true);
+  });
+
+  it("counts genuine native v2 choices separately from alerts while showing writer unavailability", async () => {
+    read.mockResolvedValue({
+      ...sample,
+      items: [decision, recovery],
+      pendingCount: 2,
+      count: 2,
+      answerWriteAvailable: false,
+    } as DesktopOpenRigInbox);
+    await mount();
+    expect(inboxAttentionKind(decision, "human@kernel")).toBe("form");
+    expect(output()).toContain("1 pending native answer forms in loaded results");
+    expect(output()).toContain("1 alerts or read-only decisions in loaded results");
+    await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: Forms");
+    expect(displayMessages()).toHaveLength(1);
+    await click("Open inbox message: Select deployment plan");
+    expect(output()).toContain("Deploy where?");
+    expect(output()).toContain("Enable which flags?");
+    expect(output()).toContain("Traffic percentage");
+    expect(output()).toContain("durable answer writer is unavailable");
+    expect(rendered!.root.findByProps({ "aria-label": "Send answers" }).props.disabled).toBe(true);
+    expect(rendered!.root.findByProps({ "aria-label": "Reply to OpenRig message" })).toBeTruthy();
+    expect(rendered!.root.findByProps({ children: "Submit reply" }).props.disabled).toBe(true);
   });
 });
 

@@ -134,10 +134,28 @@ export function createChatGPTSpawnRequest(options, requestId = NodeCrypto.random
   };
 }
 
+// Parent identity must be confirmed by a T3 response or read-only stored-session
+// lookup. The request's parent ID alone is not evidence that it was attached.
+export function observedSpawnParent(request, session, observed) {
+  const parentSessionId = observed ? (session?.parentSessionId ?? null) : null;
+  const expected = request.parentSessionId;
+  return {
+    parentSessionId,
+    ...(expected ? { requestedParentSessionId: expected } : {}),
+    parentConfirmation: !expected
+      ? "not_requested"
+      : !observed
+        ? "unconfirmed"
+        : parentSessionId === expected
+          ? "confirmed"
+          : "mismatch",
+  };
+}
+
 // A lost activation response cannot be retried: the renderer may already have
 // persisted a session and clicked Send. Correlate ONLY via a read-only list.
 export async function reconcileCreatedSpawn(address, request, exchange = sendAppControlRequest) {
-  let sessionId = null;
+  let matchedSession = null;
   let lookupError = null;
   try {
     const listed = await exchange(
@@ -159,16 +177,22 @@ export async function reconcileCreatedSpawn(address, request, exchange = sendApp
           typeof session.id === "string" &&
           session.id.length > 0,
       );
-      if (matches.length === 1) sessionId = matches[0].id;
+      if (matches.length === 1) matchedSession = matches[0];
     }
   } catch (error) {
     lookupError = error instanceof Error ? error.message : String(error);
   }
+  const sessionId = matchedSession?.id ?? null;
   return {
     requestId: request.requestId,
     outcome: sessionId ? "created" : "unknown",
     created: sessionId ? true : null,
     sessionId,
+    ...observedSpawnParent(
+      request,
+      matchedSession,
+      matchedSession !== null && Object.hasOwn(matchedSession, "parentSessionId"),
+    ),
     messageSent: false,
     promptDelivery: "unknown",
     sendAttempted: null,
@@ -201,7 +225,7 @@ export function classifySpawnResponse(response, request) {
       messageSent: true,
       promptDelivery: "user_turn_observed",
       sendAttempted: true,
-      parentSessionId: response.parentSessionId ?? null,
+      ...observedSpawnParent(request, response, Object.hasOwn(response, "parentSessionId")),
     };
   }
   const data = response.data;
@@ -218,7 +242,7 @@ export function classifySpawnResponse(response, request) {
       outcome: "created",
       created: true,
       sessionId: data.sessionId,
-      parentSessionId: data.parentSessionId ?? null,
+      ...observedSpawnParent(request, data, Object.hasOwn(data, "parentSessionId")),
       messageSent: false,
       promptDelivery: data.promptDelivery,
       sendAttempted: data.sendAttempted ?? null,

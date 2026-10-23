@@ -271,6 +271,7 @@ NodeTest.test("partial created receipt is a success with ID and no delivered cla
       created: true,
       sessionId: "t3-uuid",
       parentSessionId: null,
+      parentConfirmation: "not_requested",
       messageSent: false,
       promptDelivery: "unknown",
       sendAttempted: true,
@@ -365,4 +366,72 @@ NodeTest.test("unavailable reconciliation stays unknown and never invents sessio
   NodeAssert.equal(result.sessionId, null);
   NodeAssert.equal(result.created, null);
   NodeAssert.match(result.lookupError, /renderer unavailable/);
+});
+
+NodeTest.test("explicit parent confirmation requires a downstream observation", () => {
+  const request = { requestId: "parent-request", parentSessionId: "exact-manager-id" };
+  const observed = (parentSessionId) =>
+    classifySpawnResponse(
+      { ok: true, sessionId: "child", messageSent: true, parentSessionId },
+      request,
+    );
+  NodeAssert.equal(observed("exact-manager-id").parentConfirmation, "confirmed");
+  NodeAssert.equal(observed("exact-manager-id").requestedParentSessionId, "exact-manager-id");
+  NodeAssert.equal(observed(null).parentConfirmation, "mismatch");
+  NodeAssert.equal(
+    classifySpawnResponse({ ok: true, sessionId: "child", messageSent: true }, request)
+      .parentConfirmation,
+    "unconfirmed",
+  );
+  NodeAssert.equal(
+    classifySpawnResponse(
+      {
+        ok: true,
+        data: {
+          action: "spawn",
+          created: true,
+          sessionId: "child",
+          messageSent: false,
+          promptDelivery: "not_sent",
+          parentSessionId: null,
+        },
+      },
+      request,
+    ).parentConfirmation,
+    "mismatch",
+  );
+});
+
+NodeTest.test("read-only recovery confirms or rejects stored lineage without respawn", async () => {
+  const request = { requestId: "lost-parent", parentSessionId: "manager-id" };
+  let lookups = 0;
+  const exchange = async (_address, list) => {
+    lookups++;
+    NodeAssert.equal(list.type, "chatgpt.sessions");
+    return {
+      ok: true,
+      data: {
+        sessions: [
+          { id: "child-id", spawnRequestId: "lost-parent", parentSessionId: "manager-id" },
+        ],
+      },
+    };
+  };
+  const confirmed = await reconcileCreatedSpawn("pipe", request, exchange);
+  NodeAssert.equal(lookups, 1);
+  NodeAssert.equal(confirmed.parentConfirmation, "confirmed");
+  NodeAssert.equal(confirmed.parentSessionId, "manager-id");
+  NodeAssert.equal(confirmed.requestedParentSessionId, "manager-id");
+  NodeAssert.equal(confirmed.messageSent, false);
+  const mismatched = await reconcileCreatedSpawn("pipe", request, async () => ({
+    ok: true,
+    data: { sessions: [{ id: "child-id", spawnRequestId: "lost-parent", parentSessionId: null }] },
+  }));
+  NodeAssert.equal(mismatched.parentConfirmation, "mismatch");
+  NodeAssert.equal(mismatched.parentSessionId, null);
+  const uncertain = await reconcileCreatedSpawn("pipe", request, async () => ({
+    ok: true,
+    data: { sessions: [{ id: "child-id", spawnRequestId: "lost-parent" }] },
+  }));
+  NodeAssert.equal(uncertain.parentConfirmation, "unconfirmed");
 });
