@@ -150,7 +150,7 @@ export async function reconcileCreatedSpawn(address, request, exchange = sendApp
         which: "all",
         includeHidden: true,
       },
-      95_000,
+      20_000,
     );
     if (listed.ok && Array.isArray(listed.data?.sessions)) {
       const matches = listed.data.sessions.filter(
@@ -248,7 +248,8 @@ export async function main(args = process.argv.slice(2)) {
   }
   let response;
   try {
-    response = await sendAppControlRequest(address, request);
+    // Leave time for one read-only lookup under OmniHub's 115s process deadline.
+    response = await sendAppControlRequest(address, request, 90_000);
   } catch {
     // The renderer may already have accepted this request. Never replay it.
   }
