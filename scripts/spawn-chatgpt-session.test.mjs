@@ -6,6 +6,8 @@ import {
   parseArguments,
   createChatGPTSpawnRequest,
   sendAppControlRequest,
+  classifySpawnResponse,
+  reconcileCreatedSpawn,
 } from "./spawn-chatgpt-session.mjs";
 
 NodeTest.test("script validates title and message without connecting", () => {
@@ -243,4 +245,121 @@ NodeTest.test("mismatched request ids are rejected rather than treated as succes
   } finally {
     server.close();
   }
+});
+
+NodeTest.test("partial created receipt is a success with ID and no delivered claim", () => {
+  const request = { requestId: "spawn-request" };
+  NodeAssert.deepEqual(
+    classifySpawnResponse(
+      {
+        ok: true,
+        data: {
+          action: "spawn",
+          created: true,
+          sessionId: "t3-uuid",
+          messageSent: false,
+          promptDelivery: "unknown",
+          sendAttempted: true,
+          reason: "renderer detached",
+        },
+      },
+      request,
+    ),
+    {
+      requestId: "spawn-request",
+      outcome: "created",
+      created: true,
+      sessionId: "t3-uuid",
+      parentSessionId: null,
+      messageSent: false,
+      promptDelivery: "unknown",
+      sendAttempted: true,
+      reason: "renderer detached",
+      next: "Inspect exact session with chatgpt.sessions read/list before any manual decision; do not automatically resend.",
+    },
+  );
+  NodeAssert.equal(
+    classifySpawnResponse(
+      {
+        ok: true,
+        sessionId: "t3-uuid",
+        messageSent: true,
+      },
+      request,
+    ).promptDelivery,
+    "user_turn_observed",
+  );
+  NodeAssert.equal(
+    classifySpawnResponse(
+      {
+        ok: false,
+        code: "request-timeout",
+        message: "Outcome UNKNOWN: dispatched",
+      },
+      request,
+    ),
+    null,
+  );
+  NodeAssert.equal(
+    classifySpawnResponse(
+      { ok: false, code: "chatgpt-send-failed", message: "Renderer detached after creation" },
+      request,
+    ),
+    null,
+  );
+  NodeAssert.throws(
+    () =>
+      classifySpawnResponse(
+        {
+          ok: false,
+          code: "invalid-request",
+          message: "Unknown parent",
+        },
+        request,
+      ),
+    /Unknown parent/,
+  );
+});
+
+NodeTest.test(
+  "lost renderer acknowledgement reconciles a single exact request id without respawning",
+  async () => {
+    const calls = [];
+    const exchange = async (_address, request) => {
+      calls.push(request);
+      return {
+        ok: true,
+        data: {
+          sessions: [
+            { id: "some-other-session", spawnRequestId: "different-request" },
+            { id: "durable-created-uuid", spawnRequestId: "lost-request" },
+          ],
+        },
+      };
+    };
+    const result = await reconcileCreatedSpawn(
+      "test-pipe",
+      { requestId: "lost-request" },
+      exchange,
+    );
+    NodeAssert.equal(result.created, true);
+    NodeAssert.equal(result.sessionId, "durable-created-uuid");
+    NodeAssert.equal(result.promptDelivery, "unknown");
+    NodeAssert.equal(result.messageSent, false);
+    NodeAssert.equal(calls.length, 1);
+    NodeAssert.equal(calls[0].type, "chatgpt.sessions");
+    NodeAssert.equal(calls[0].action, "list");
+    NodeAssert.equal(calls[0].which, "all");
+    NodeAssert.equal(calls[0].includeHidden, true);
+  },
+);
+
+NodeTest.test("unavailable reconciliation stays unknown and never invents session ID", async () => {
+  const result = await reconcileCreatedSpawn("no-pipe", { requestId: "lost" }, async () => {
+    throw new Error("renderer unavailable");
+  });
+  NodeAssert.equal(result.outcome, "unknown");
+  NodeAssert.equal(result.sessionId, null);
+  NodeAssert.equal(result.created, null);
+  NodeAssert.match(result.lookupError, /renderer unavailable/);
 });

@@ -24,6 +24,12 @@ export const COMPOSER_SELECTOR = [
 const COMPOSER_WAIT_MS = 3_000;
 const SEND_TIMEOUT_MS = 75_000;
 
+export interface ChatGPTInitialPromptReceipt {
+  readonly delivery: "user_turn_observed" | "unknown" | "not_sent";
+  readonly sendAttempted: boolean;
+  readonly reason?: string;
+}
+
 export interface ChatGPTPromptAutomation {
   readonly status: typeof chatGPTWebviewAutomation.status;
   readonly waitFor: typeof chatGPTWebviewAutomation.waitFor;
@@ -48,7 +54,7 @@ export async function sendInitialChatGPTPrompt(input: {
   pause?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   acquireActivity?: (runtimeId: string) => () => void;
-}): Promise<void> {
+}): Promise<ChatGPTInitialPromptReceipt> {
   const automation = input.automation ?? (previewBridge ? chatGPTWebviewAutomation : undefined);
   if (!automation) throw new Error("ChatGPT automation requires T3 Code desktop.");
   const session = (input.readSessions ?? readChatGPTBrowserSessions)(input.environmentId).find(
@@ -68,6 +74,7 @@ export async function sendInitialChatGPTPrompt(input: {
   const threadRef = chatGPTBrowserThreadRef(input.environmentId, input.sessionId);
   let lastError: unknown;
   let startedTyping = false;
+  let sendAttempted = false;
   const acquireActivity = input.acquireActivity ?? acquireBrowserSurfaceActivity;
   let activeRuntimeId: string | null = null;
   let releaseActivity: (() => void) | null = null;
@@ -164,17 +171,15 @@ export async function sendInitialChatGPTPrompt(input: {
               }
             }
             // Dispatch through ChatGPT's enabled Send control in the guest DOM.
+            sendAttempted = true;
             await automation.press(runtimeId, { key: "Enter" });
 
-            // Do not mistake an emptied composer for delivery. The new
-            // conversation URL or the rendered user message is positive evidence
-            // that ChatGPT accepted this message. Navigation may briefly destroy
-            // the guest document, so tolerate transient inspection failures.
+            // Neither a new conversation URL nor an empty composer confirms
+            // delivery. Require the exact rendered user turn before acknowledging.
             const deliveredExpression = `(() => {
             const expected = ${JSON.stringify(prompt)}.trim();
             return [...document.querySelectorAll('[data-message-author-role="user"]')]
-              .some((el) => el.textContent?.trim() === expected) ||
-              /(?:^|\\/)c\\/[^/]+/.test(window.location.pathname);
+              .some((el) => el.textContent?.trim() === expected);
           })()`;
             while (now() < deadline) {
               try {
@@ -183,20 +188,9 @@ export async function sendInitialChatGPTPrompt(input: {
                     expression: deliveredExpression,
                   })) === true
                 )
-                  return;
+                  return { delivery: "user_turn_observed", sendAttempted: true };
               } catch {
                 // The guest might be navigating to its new conversation.
-              }
-              try {
-                const after = await automation.status(runtimeId);
-                const parsed = new URL(after.url);
-                if (
-                  (parsed.hostname === "chatgpt.com" || parsed.hostname === "chat.openai.com") &&
-                  parsed.pathname.includes("/c/")
-                )
-                  return;
-              } catch {
-                // Navigation can briefly detach the webview.
               }
               await pause(150);
             }
@@ -216,6 +210,14 @@ export async function sendInitialChatGPTPrompt(input: {
       "ChatGPT session opened, but its message box was not ready or its prompt could not be sent." +
         (lastError instanceof Error ? ` Last error: ${lastError.message}` : ""),
     );
+  } catch (error) {
+    // The session is already persisted. A rejected press may still have been
+    // accepted by ChatGPT, so never retry without inspecting its exact guest.
+    return {
+      delivery: sendAttempted ? "unknown" : "not_sent",
+      sendAttempted,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   } finally {
     releaseActivity?.();
   }

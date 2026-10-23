@@ -1,11 +1,34 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { MessageId } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { MessageId, ThreadId, resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useRef } from "react";
+import { flushSync } from "react-dom";
 
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
 import { sendInitialChatGPTPrompt } from "../../chatGPTBrowserAutomation";
-import { runChatGPTSessionControl } from "../../chatGPTSessionControl";
+import { recordChatGPTSpawnCreated, readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
+import {
+  chatGPTBrowserLastUrlKey,
+  chatGPTBrowserLastWorkingKey,
+  chatGPTBrowserThreadRef,
+} from "../../chatGPTBrowserSessions";
+import {
+  setLocalStorageItem,
+  getLocalStorageItem,
+  removeLocalStorageItem,
+} from "../../hooks/useLocalStorage";
+import {
+  beginPreviewSessionClose,
+  cancelPreviewSessionClose,
+  clearThreadPreviewState,
+  readThreadPreviewState,
+} from "../../previewStateStore";
+import { previewEnvironment } from "../../state/preview";
+import { inspectBrowserSession, runChatGPTSessionControl } from "../../chatGPTSessionControl";
+import { resolveChatGPTSessionAddress } from "../../chatGPTConversationRouting";
+import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
+import { runOpenRigHumanInboxControl } from "../../openRigHumanInboxControl";
 import { applyConfirmedChatGPTSessionMetadata, matchRegisteredProject } from "../../chatGPTSessionGrouping";
 import { resolveExplicitChatGPTParent } from "../../chatGPTSessionLineage";
 import {
@@ -17,22 +40,35 @@ import {
   findProjectByPath,
   inferProjectTitleFromPath,
 } from "@t3tools/client-runtime/state/projects";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { newProjectId } from "../../lib/utils";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { orchestrationEnvironment } from "../../state/orchestration";
-import { readProjects, readThreadShells, waitForProject } from "../../state/entities";
+import {
+  readProjects,
+  readThreadShells,
+  waitForProject,
+  waitForThreadShell,
+} from "../../state/entities";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentShellHasSnapshot } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useOrchestrationCommand } from "../../state/use-orchestration-command";
+
 import { reportProjectFailure } from "../../hooks/useProjectGroupUpdate";
 
 export function DesktopAppActivationCoordinator() {
   const primaryEnvironment = usePrimaryEnvironment();
-  const { createSession, setSessionCompletion } = useChatGPTBrowserSessions(primaryEnvironment?.environmentId ?? null);
+  const {
+    createSession,
+    removeSession,
+    setSessionCompletion,
+    setSessionArchived,
+    setSessionHidden,
+  } = useChatGPTBrowserSessions(primaryEnvironment?.environmentId ?? null);
+  const closeChatGPTPreview = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const updateProject = useOrchestrationCommand(projectEnvironment.update, {
     label: "project unarchive",
@@ -71,6 +107,261 @@ export function DesktopAppActivationCoordinator() {
             ok: false,
             code: "environment-unavailable",
             message: "Requested native environment is not connected.",
+          };
+        }
+        if (request.action === "providers") {
+          const data = {
+            environmentId,
+            providers: (primaryEnvironment.serverConfig?.providers ?? []).map((provider) => ({
+              providerInstanceId: provider.instanceId,
+              driver: provider.driver,
+              enabled: provider.enabled,
+              installed: provider.installed,
+              status: provider.status,
+              available: provider.availability !== "unavailable",
+              models: provider.models.map((model) => ({
+                slug: model.slug,
+                isDefault: model.isDefault === true,
+              })),
+            })),
+          };
+          return { version: 1, requestId: request.requestId, ok: true, data };
+        }
+        if (request.action === "create") {
+          const fail = (
+            code: "invalid-request" | "thread-open-failed" | "project-create-failed",
+            message: string,
+          ) => ({
+            version: 1 as const,
+            requestId: request.requestId,
+            ok: false as const,
+            code,
+            message,
+          });
+          // No composer/draft/router access. The runtime and instance must match a ready provider.
+          const expectedDriver = {
+            codex: "codex",
+            claude: "claudeAgent",
+            opencode: "opencode",
+          }[request.runtime];
+          const provider = primaryEnvironment.serverConfig?.providers.find(
+            (candidate) => candidate.instanceId === request.providerInstanceId,
+          );
+          if (
+            !provider ||
+            provider.driver !== expectedDriver ||
+            !provider.enabled ||
+            !provider.installed ||
+            provider.status !== "ready" ||
+            provider.availability === "unavailable" ||
+            request.modelSelection.instanceId !== request.providerInstanceId ||
+            !provider.models.some((model) => model.slug === request.modelSelection.model)
+          ) {
+            return fail(
+              "invalid-request",
+              "Requested native provider instance/model is not ready, enabled, or an exact runtime match.",
+            );
+          }
+          if (
+            !/^[a-zA-Z]:\\/.test(request.workspaceRoot) &&
+            !/^\\\\[^\\]+\\[^\\]+/.test(request.workspaceRoot) &&
+            !request.workspaceRoot.startsWith("/")
+          ) {
+            return fail("invalid-request", "workspaceRoot must be an absolute path.");
+          }
+          if ((request.firstMessage === undefined) !== (request.initialMessageId === undefined)) {
+            return fail(
+              "invalid-request",
+              "firstMessage and initialMessageId must be supplied together.",
+            );
+          }
+          const normalizedRoot = normalizeProjectPathForComparison(request.workspaceRoot);
+          const projects = readProjects().filter(
+            (project) => project.environmentId === environmentId,
+          );
+          const matching = findProjectByPath(projects, request.workspaceRoot);
+          if (request.projectId && matching?.id !== request.projectId) {
+            return fail(
+              "invalid-request",
+              "Explicit projectId does not match exact workspaceRoot.",
+            );
+          }
+          if (readThreadShells().some((thread) => thread.id === request.clientRequestId)) {
+            return fail(
+              "invalid-request",
+              "Native thread operation ID already exists; reconcile by thread ID, do not retry.",
+            );
+          }
+          let projectId = matching?.id;
+          if (!projectId) {
+            try {
+              projectId = newProjectId();
+              const created = await createProject({
+                environmentId,
+                input: {
+                  projectId,
+                  title: inferProjectTitleFromPath(request.workspaceRoot),
+                  workspaceRoot: request.workspaceRoot,
+                  createWorkspaceRootIfMissing: false,
+                  defaultModelSelection: null,
+                },
+              });
+              if (created._tag === "Failure") {
+                const cause = squashAtomCommandFailure(created);
+                throw cause instanceof Error ? cause : new Error("Project creation rejected.");
+              }
+              await waitForProject({ environmentId, projectId });
+            } catch (error) {
+              return fail(
+                "project-create-failed",
+                error instanceof Error ? error.message : "Project creation not confirmed.",
+              );
+            }
+          }
+          const confirmedProject = readProjects().find(
+            (project) => project.environmentId === environmentId && project.id === projectId,
+          );
+          if (
+            !confirmedProject ||
+            normalizeProjectPathForComparison(confirmedProject.workspaceRoot) !== normalizedRoot
+          ) {
+            return fail(
+              "project-create-failed",
+              "Project was not persisted at the exact requested workspaceRoot.",
+            );
+          }
+          if (
+            !primaryEnvironment.serverConfig ||
+            !resolveProjectProviderInstanceEnabled(
+              primaryEnvironment.serverConfig.settings,
+              projectId,
+              request.providerInstanceId,
+            )
+          ) {
+            return fail(
+              "invalid-request",
+              "Native provider instance is disabled for the exact requested project.",
+            );
+          }
+          const threadId = ThreadId.make(request.clientRequestId);
+          const createdAt = new Date().toISOString();
+          try {
+            const created = await createNativeThread({
+              environmentId,
+              input: {
+                threadId,
+                projectId,
+                title: request.title,
+                modelSelection: request.modelSelection,
+                runtimeMode: request.runtimeMode,
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                createdAt,
+              },
+            });
+            if (created._tag === "Failure") {
+              const cause = squashAtomCommandFailure(created);
+              return fail(
+                "thread-open-failed",
+                cause instanceof Error ? cause.message : "Native thread creation rejected.",
+              );
+            }
+            await waitForThreadShell({ environmentId, threadId });
+          } catch (error) {
+            return fail(
+              "thread-open-failed",
+              error instanceof Error ? error.message : "Native thread persistence indeterminate.",
+            );
+          }
+          const thread = readThreadShells().find(
+            (candidate) =>
+              candidate.environmentId === environmentId &&
+              candidate.id === threadId &&
+              candidate.deletedAt === null,
+          );
+          if (
+            !thread ||
+            thread.projectId !== projectId ||
+            thread.providerInstanceId !== request.providerInstanceId ||
+            thread.modelSelection.instanceId !== request.modelSelection.instanceId ||
+            thread.modelSelection.model !== request.modelSelection.model ||
+            thread.runtimeMode !== request.runtimeMode
+          ) {
+            return fail(
+              "thread-open-failed",
+              "Native thread shell did not confirm exact persisted project/provider/model.",
+            );
+          }
+          let messageId: string | undefined;
+          if (request.firstMessage !== undefined && request.initialMessageId !== undefined) {
+            try {
+              const result = await startNativeTurn({
+                environmentId,
+                input: {
+                  threadId,
+                  message: {
+                    messageId: MessageId.make(request.initialMessageId),
+                    role: "user",
+                    text: request.firstMessage,
+                    attachments: [],
+                  },
+                  modelSelection: request.modelSelection,
+                  runtimeMode: thread.runtimeMode,
+                  interactionMode: thread.interactionMode,
+                  dispatchMode: "queue",
+                },
+              });
+              if (result._tag === "Failure") {
+                const cause = squashAtomCommandFailure(result);
+                return fail(
+                  "thread-open-failed",
+                  (cause instanceof Error ? cause.message : "Initial message rejected.") +
+                    " Thread persisted; do not retry initial message.",
+                );
+              }
+              const acknowledged = await getNativeProjection({
+                environmentId,
+                input: { threadId },
+              });
+              if (
+                acknowledged._tag === "Failure" ||
+                !acknowledged.value.messages.some(
+                  (message) => message.id === request.initialMessageId && message.role === "user",
+                )
+              ) {
+                return fail(
+                  "thread-open-failed",
+                  "Initial message commit not confirmed in native thread projection; reconcile by message ID, do not retry.",
+                );
+              }
+              messageId = request.initialMessageId;
+            } catch (error) {
+              return fail(
+                "thread-open-failed",
+                (error instanceof Error
+                  ? error.message
+                  : "Initial message acceptance indeterminate.") +
+                  " Thread persisted; do not retry initial message.",
+              );
+            }
+          }
+          return {
+            version: 1,
+            requestId: request.requestId,
+            ok: true,
+            data: {
+              action: "create",
+              environmentId,
+              projectId,
+              threadId,
+              workspaceRoot: confirmedProject.workspaceRoot,
+              runtime: request.runtime,
+              providerInstanceId: thread.providerInstanceId,
+              modelSelection: thread.modelSelection,
+              created: true,
+              ...(messageId ? { messageId, messageSent: true } : { messageSent: false }),
+            },
           };
         }
         const threads = readThreadShells().filter(
@@ -172,7 +463,14 @@ export function DesktopAppActivationCoordinator() {
           id: thread.id,
           title: thread.title,
           projectId: thread.projectId,
-          project: projects.get(thread.projectId) ?? null,
+          project: projects.get(thread.projectId)?.title ?? null,
+          workspaceRoot: projects.get(thread.projectId)?.workspaceRoot ?? null,
+          providerInstanceId: thread.providerInstanceId,
+          runtime:
+            primaryEnvironment.serverConfig?.providers.find(
+              (provider) => provider.instanceId === thread.providerInstanceId,
+            )?.driver ?? null,
+          modelSelection: thread.modelSelection,
           status: thread.runtime?.status ?? "idle",
           provider: thread.providerInstanceId,
           parentThreadId: null,
@@ -193,6 +491,28 @@ export function DesktopAppActivationCoordinator() {
           data: { environmentId, threads: entries },
         };
       }
+      if (request.type === "openrig.human_inbox") {
+        try {
+          const data = await runOpenRigHumanInboxControl({
+            action: request.action,
+            address: request.address,
+            limit: request.limit,
+            itemId: request.itemId,
+            sourceType: request.sourceType,
+            state: request.state,
+            answers: request.answers,
+          });
+          return { version: 1, requestId: request.requestId, ok: true, data };
+        } catch (error) {
+          return {
+            version: 1,
+            requestId: request.requestId,
+            ok: false,
+            code: "internal-error",
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
       if (request.type === "chatgpt.sessions") {
         const environmentId = primaryEnvironment?.environmentId;
         if (!environmentId)
@@ -204,6 +524,149 @@ export function DesktopAppActivationCoordinator() {
             message: "Connect an environment first.",
           };
         try {
+          let sessionSnapshot = readChatGPTBrowserSessions(environmentId);
+          let resolvedSessionId = request.sessionId;
+          let exactConversationId = request.expectedConversationId;
+          let openedConversationSession = false;
+          if ((request.action === "read" || request.action === "send") && request.sessionId) {
+            const address = resolveChatGPTSessionAddress(
+              request.sessionId,
+              sessionSnapshot,
+              (id) => {
+                const preview = readThreadPreviewState(chatGPTBrowserThreadRef(environmentId, id));
+                const current = preview.snapshot?.navStatus;
+                const saved = getLocalStorageItem(
+                  chatGPTBrowserLastUrlKey(environmentId, id),
+                  Schema.String,
+                );
+                const entry = sessionSnapshot.find((session) => session.id === id);
+                // A recovery owner is seeded with /c/<id> before the preview
+                // mounts. Keep that durable hint through its initial homepage
+                // or loading transitions, so retries do not create duplicates.
+                if (
+                  entry?.title.startsWith("Conversation ") &&
+                  saved &&
+                  !chatGPTConversationIdFromUrl(current?._tag === "Success" ? current.url : null)
+                )
+                  return saved;
+                return current?._tag === "Success" ? current.url : saved;
+              },
+              request.expectedConversationId,
+            );
+            exactConversationId = address.conversationId ?? undefined;
+            let needsNewSession = address.create;
+            if (
+              !address.create &&
+              address.conversationId &&
+              address.sessionId !== request.sessionId
+            ) {
+              // A saved last-URL is only a discovery hint. Prove that the
+              // actual loaded guest still owns this exact conversation. A
+              // stale hint must not cause a wrong-recipient send or status.
+              const existing = sessionSnapshot.find((entry) => entry.id === address.sessionId);
+              if (
+                existing?.title.startsWith(`Conversation ${address.conversationId.slice(0, 8)}`)
+              ) {
+                // This recovery session may still be loading; reuse its
+                // durable owner rather than creating duplicate browser tabs.
+                needsNewSession = false;
+                openedConversationSession = true;
+              } else {
+                try {
+                  const observed = (await runChatGPTSessionControl({
+                    environmentId,
+                    sessions: sessionSnapshot,
+                    action: "read",
+                    sessionId: address.sessionId,
+                    expectedConversationId: address.conversationId,
+                    count: 1,
+                  })) as { conversationGuardValidated?: boolean; verifiedConversationId?: string };
+                  needsNewSession =
+                    observed.conversationGuardValidated !== true ||
+                    observed.verifiedConversationId !== address.conversationId;
+                } catch {
+                  needsNewSession = true;
+                }
+              }
+            }
+            if (needsNewSession) {
+              const conversationId = address.conversationId;
+              if (!conversationId) throw new Error("Unknown conversation ID cannot be opened.");
+              const conversationUrl = `https://chatgpt.com/c/${conversationId}`;
+              // Explicit user-directed lookup: create a T3 browser owner, never
+              // create a new ChatGPT conversation or send to a guessed tab.
+              flushSync(() => {
+                resolvedSessionId = createSession(`Conversation ${conversationId.slice(0, 8)}`, {
+                  initialConversationUrl: conversationUrl,
+                });
+              });
+              openedConversationSession = true;
+            } else {
+              if (!address.sessionId)
+                throw new Error("Existing ChatGPT session ID was not resolved.");
+              resolvedSessionId = address.sessionId;
+            }
+            sessionSnapshot = readChatGPTBrowserSessions(environmentId);
+            if (openedConversationSession && resolvedSessionId) {
+              // Wait for the new guest's ACTUAL DOM URL and non-loading page,
+              // not merely for localStorage/preview creation. Never auto-send
+              // if sign-in, an unavailable transcript or a redirect intervenes.
+              const deadline = Date.now() + 55_000;
+              let ready = false;
+              let exactUrlFirstSeenAt: number | null = null;
+              while (Date.now() < deadline) {
+                const entry = readChatGPTBrowserSessions(environmentId).find(
+                  (candidate) => candidate.id === resolvedSessionId,
+                );
+                if (!entry || entry.hidden)
+                  throw new Error("New ChatGPT session disappeared before routing.");
+                const status = await inspectBrowserSession(environmentId, entry, "end", 1, true);
+                if (chatGPTConversationIdFromUrl(status.observedGuestUrl) === exactConversationId) {
+                  exactUrlFirstSeenAt ??= Date.now();
+                  if (
+                    ["done_or_idle", "waiting_for_input", "working", "pending_or_stalled"].includes(
+                      status.status,
+                    ) ||
+                    (request.action === "read" &&
+                      Date.now() - exactUrlFirstSeenAt >= 3_000 &&
+                      !["loading", "hibernated"].includes(status.status))
+                  ) {
+                    // For a status read, a guest may have loaded the exact URL
+                    // yet require sign-in or expose no readable transcript.
+                    // Return that truthful unavailable status, never invent
+                    // readiness. Sends still need a later verified idle read.
+                    ready = true;
+                    break;
+                  }
+                }
+                await new Promise<void>((resolve) => setTimeout(resolve, 500));
+              }
+              if (!ready)
+                throw new Error(
+                  "ChatGPT conversation did not load with verified messages; session retained for manual recovery, no message sent.",
+                );
+            }
+            if (request.action === "send" && exactConversationId && resolvedSessionId) {
+              // The guarded READ confirms the target before any prompt mutation;
+              // T3's SEND still atomically checks URL and empty composer.
+              const prior = (await runChatGPTSessionControl({
+                environmentId,
+                sessions: readChatGPTBrowserSessions(environmentId),
+                action: "read",
+                sessionId: resolvedSessionId,
+                expectedConversationId: exactConversationId,
+                count: 1,
+              })) as { session?: { status?: string; activity?: string } };
+              if (
+                prior.session?.activity !== "idle" ||
+                !["done_or_idle", "waiting_for_input"].includes(prior.session.status ?? "")
+              ) {
+                throw new Error(
+                  "Conversation is not confirmed idle; refusing to send into pending/working/blocked thread.",
+                );
+              }
+            }
+          }
           const data = await runChatGPTSessionControl({
             environmentId,
             sessions: readChatGPTBrowserSessions(environmentId),
@@ -218,6 +681,228 @@ export function DesktopAppActivationCoordinator() {
             expectedConversationId: request.expectedConversationId,
             force: request.force,
           });
+          if (request.action === "change_state") {
+            const confirmation = data as {
+              action: "change_state";
+              state: "hidden" | "unhidden" | "closed";
+              sessionId: string;
+              alreadyInState: boolean;
+              conversationUrl?: string;
+            };
+            const current = readChatGPTBrowserSessions(environmentId).find(
+              (session) => session.id === confirmation.sessionId,
+            );
+            const originally = sessionSnapshot.find(
+              (session) => session.id === confirmation.sessionId,
+            );
+            if (
+              !current ||
+              !originally ||
+              current.hidden !== originally.hidden ||
+              JSON.stringify(current.archive) !== JSON.stringify(originally.archive)
+            )
+              throw new Error("Target session changed during state inspection; retry.");
+            if (!confirmation.alreadyInState) {
+              if (confirmation.state === "closed") {
+                // Same local-close semantics as the sidebar X: release only the
+                // exact target's previews, then remove its T3 record and keys.
+                const threadRef = chatGPTBrowserThreadRef(environmentId, confirmation.sessionId);
+                const snapshots = Object.values(readThreadPreviewState(threadRef).sessions);
+                for (const snapshot of snapshots) {
+                  beginPreviewSessionClose(threadRef, snapshot.tabId);
+                  let result;
+                  try {
+                    result = await closeChatGPTPreview({
+                      environmentId,
+                      input: { threadId: threadRef.threadId, tabId: snapshot.tabId },
+                    });
+                  } catch (error) {
+                    cancelPreviewSessionClose(threadRef, snapshot, snapshot.tabId);
+                    throw error;
+                  }
+                  if (result._tag === "Failure") {
+                    cancelPreviewSessionClose(threadRef, snapshot, snapshot.tabId);
+                    const cause = squashAtomCommandFailure(result);
+                    throw cause instanceof Error
+                      ? cause
+                      : new Error("Unable to close exact ChatGPT preview.");
+                  }
+                }
+                clearThreadPreviewState(threadRef);
+                flushSync(() => removeSession(confirmation.sessionId));
+                removeLocalStorageItem(
+                  chatGPTBrowserLastUrlKey(environmentId, confirmation.sessionId),
+                );
+                removeLocalStorageItem(
+                  chatGPTBrowserLastWorkingKey(environmentId, confirmation.sessionId),
+                );
+              } else {
+                if (confirmation.conversationUrl) {
+                  setLocalStorageItem(
+                    chatGPTBrowserLastUrlKey(environmentId, confirmation.sessionId),
+                    confirmation.conversationUrl,
+                    Schema.String,
+                  );
+                }
+                flushSync(() =>
+                  setSessionHidden(confirmation.sessionId, confirmation.state === "hidden"),
+                );
+              }
+            }
+            const saved = readChatGPTBrowserSessions(environmentId).find(
+              (session) => session.id === confirmation.sessionId,
+            );
+            if (
+              confirmation.state === "closed"
+                ? saved !== undefined
+                : !saved || (saved.hidden === true) !== (confirmation.state === "hidden")
+            )
+              throw new Error("Session state change was not durably persisted.");
+            return {
+              version: 1,
+              requestId: request.requestId,
+              ok: true,
+              data: {
+                action: "change_state",
+                state: confirmation.state,
+                sessionId: confirmation.sessionId,
+                alreadyInState: confirmation.alreadyInState,
+                persisted: true,
+                acknowledged: true,
+                ...(confirmation.state === "closed"
+                  ? { closed: true, scope: "local-t3-session" }
+                  : {}),
+              },
+            };
+          }
+          if (request.action === "archive" || request.action === "restore") {
+            const confirmation = data as {
+              sessionId: string;
+              archive: {
+                archivedAt: string;
+                conversationUrl: string;
+                basis: "completion" | "manager_decision";
+                reason?: string;
+                restoredAt?: string;
+              };
+              alreadyArchived?: boolean;
+              alreadyRestored?: boolean;
+            };
+            const current = readChatGPTBrowserSessions(environmentId).find(
+              (session) => session.id === confirmation.sessionId,
+            );
+            if (!current) throw new Error("Session vanished before persistence.");
+            const lastUrlKey = chatGPTBrowserLastUrlKey(environmentId, confirmation.sessionId);
+            if (request.action === "restore") {
+              // Restore the exact archived conversation, never a new ChatGPT tab.
+              setLocalStorageItem(lastUrlKey, confirmation.archive.conversationUrl, Schema.String);
+              if (current.hidden) setSessionHidden(confirmation.sessionId, false);
+              const saved = readChatGPTBrowserSessions(environmentId).find(
+                (session) => session.id === confirmation.sessionId,
+              );
+              if (
+                saved?.hidden ||
+                saved?.id !== confirmation.sessionId ||
+                saved?.archive?.conversationUrl !== confirmation.archive.conversationUrl ||
+                getLocalStorageItem(lastUrlKey, Schema.String) !==
+                  confirmation.archive.conversationUrl
+              )
+                throw new Error("Session restoration was not durably persisted.");
+              return {
+                version: 1,
+                requestId: request.requestId,
+                ok: true,
+                data: {
+                  action: "restore",
+                  sessionId: confirmation.sessionId,
+                  conversationUrl: confirmation.archive.conversationUrl,
+                  restored: true,
+                  alreadyRestored: confirmation.alreadyRestored === true,
+                  persisted: true,
+                  acknowledged: true,
+                  reattachment: "on-render",
+                },
+              };
+            }
+            if (!confirmation.alreadyArchived) {
+              // A worker can be spawned or resumed while inspections await the
+              // renderer. Refuse a stale decision rather than archive its parent.
+              const signature = (items: typeof sessionSnapshot) =>
+                JSON.stringify(
+                  items.map((entry) => ({
+                    id: entry.id,
+                    parentSessionId: entry.parentSessionId,
+                    hidden: entry.hidden,
+                    archive: entry.archive,
+                    completion: entry.completion,
+                  })),
+                );
+              if (
+                signature(sessionSnapshot) !== signature(readChatGPTBrowserSessions(environmentId))
+              )
+                throw new Error(
+                  "Session or descendant state changed during archive inspection; retry.",
+                );
+            }
+            // Persist the archive first so unmounting the runtime prevents any
+            // reopen race while its guests are being closed. Retry closes on an
+            // idempotent archive call, even after an interrupted earlier attempt.
+            setLocalStorageItem(lastUrlKey, confirmation.archive.conversationUrl, Schema.String);
+            // Unmount the runtime before releasing the preview. Otherwise its
+            // open-on-idle effect could race with our close and leak a new guest.
+            if (!confirmation.alreadyArchived)
+              flushSync(() => setSessionArchived(confirmation.sessionId, confirmation.archive));
+            const saved = readChatGPTBrowserSessions(environmentId).find(
+              (session) => session.id === confirmation.sessionId,
+            );
+            if (
+              !saved?.hidden ||
+              saved?.archive?.restoredAt ||
+              saved?.archive?.conversationUrl !== confirmation.archive.conversationUrl ||
+              getLocalStorageItem(lastUrlKey, Schema.String) !==
+                confirmation.archive.conversationUrl
+            )
+              throw new Error("Session archive was not durably persisted.");
+            const threadRef = chatGPTBrowserThreadRef(environmentId, confirmation.sessionId);
+            const snapshots = Object.values(readThreadPreviewState(threadRef).sessions);
+            for (const snapshot of snapshots) {
+              beginPreviewSessionClose(threadRef, snapshot.tabId);
+              let result;
+              try {
+                result = await closeChatGPTPreview({
+                  environmentId,
+                  input: { threadId: threadRef.threadId, tabId: snapshot.tabId },
+                });
+              } catch (error) {
+                cancelPreviewSessionClose(threadRef, snapshot, snapshot.tabId);
+                throw error;
+              }
+              if (result._tag === "Failure") {
+                cancelPreviewSessionClose(threadRef, snapshot, snapshot.tabId);
+                const cause = squashAtomCommandFailure(result);
+                throw cause instanceof Error
+                  ? cause
+                  : new Error("Could not release archived webview.");
+              }
+            }
+            clearThreadPreviewState(threadRef);
+            return {
+              version: 1,
+              requestId: request.requestId,
+              ok: true,
+              data: {
+                action: "archive",
+                sessionId: confirmation.sessionId,
+                conversationUrl: confirmation.archive.conversationUrl,
+                archive: saved.archive,
+                archived: true,
+                alreadyArchived: confirmation.alreadyArchived === true,
+                guestReleased: true,
+                persisted: true,
+                acknowledged: true,
+              },
+            };
+          }
           if (request.action === "complete") {
             const confirmation = data as {
               sessionId: string;
@@ -233,6 +918,27 @@ export function DesktopAppActivationCoordinator() {
           } else if (request.action === "send") {
             const confirmation = data as { sessionId: string; messageSent: boolean };
             if (confirmation.messageSent) setSessionCompletion(confirmation.sessionId, undefined);
+          }
+          if (request.action === "list") {
+            const list = data as { sessions: Array<{ id: string }> };
+            const known = new Map(
+              readChatGPTSpawnReceipts(environmentId).map((receipt) => [
+                receipt.sessionId,
+                receipt.requestId,
+              ]),
+            );
+            return {
+              version: 1,
+              requestId: request.requestId,
+              ok: true,
+              data: {
+                ...list,
+                sessions: list.sessions.map((entry) => ({
+                  ...entry,
+                  ...(known.has(entry.id) ? { spawnRequestId: known.get(entry.id) } : {}),
+                })),
+              },
+            };
           }
           return { version: 1, requestId: request.requestId, ok: true, data };
         } catch (error) {
@@ -304,28 +1010,61 @@ export function DesktopAppActivationCoordinator() {
           ? createSession(request.title, metadata)
           : createSession(request.title);
         try {
+          // Correlate the durable T3 UUID before beginning the guest prompt. If
+          // the renderer detaches, a read-only sessions.list can recover it by
+          // this original requestId without starting another session.
+          recordChatGPTSpawnCreated(environmentId, request.requestId, sessionId);
           // ChatGPTBrowserSidebarEntry mounts a runtime for every visible
           // session, even when a different T3 route is selected. Let that
           // runtime start the new preview without navigating away from the
           // user's current editor or conversation.
-          await sendInitialChatGPTPrompt({ environmentId, sessionId, prompt: request.prompt });
+          const receipt = await sendInitialChatGPTPrompt({
+            environmentId,
+            sessionId,
+            prompt: request.prompt,
+          });
+          if (receipt.delivery === "user_turn_observed") {
+            return {
+              version: 1,
+              requestId: request.requestId,
+              ok: true,
+              sessionId,
+              messageSent: true,
+              parentSessionId: parentSessionId ?? null,
+            };
+          }
           return {
             version: 1,
             requestId: request.requestId,
             ok: true,
-            sessionId,
-            messageSent: true,
-            parentSessionId: parentSessionId ?? null,
+            data: {
+              action: "spawn",
+              created: true,
+              sessionId,
+              parentSessionId: parentSessionId ?? null,
+              messageSent: false,
+              promptDelivery: receipt.delivery,
+              sendAttempted: receipt.sendAttempted,
+              ...(receipt.reason ? { reason: receipt.reason } : {}),
+            },
           };
         } catch (error) {
-          // Keep the named session and any unsent draft visible for recovery.
+          // A session was created; errors after that point must never erase its
+          // addressability or suggest another spawn as a safe retry.
           return {
             version: 1,
             requestId: request.requestId,
-            ok: false,
-            code: "chatgpt-send-failed",
-            message:
-              error instanceof Error ? error.message : "Could not send ChatGPT's initial message.",
+            ok: true,
+            data: {
+              action: "spawn",
+              created: true,
+              sessionId,
+              parentSessionId: parentSessionId ?? null,
+              messageSent: false,
+              promptDelivery: "unknown",
+              sendAttempted: null,
+              reason: error instanceof Error ? error.message : String(error),
+            },
           };
         }
       }

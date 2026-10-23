@@ -134,6 +134,101 @@ export function createChatGPTSpawnRequest(options, requestId = NodeCrypto.random
   };
 }
 
+// A lost activation response cannot be retried: the renderer may already have
+// persisted a session and clicked Send. Correlate ONLY via a read-only list.
+export async function reconcileCreatedSpawn(address, request, exchange = sendAppControlRequest) {
+  let sessionId = null;
+  let lookupError = null;
+  try {
+    const listed = await exchange(
+      address,
+      {
+        version: 1,
+        requestId: NodeCrypto.randomUUID(),
+        type: "chatgpt.sessions",
+        action: "list",
+        which: "all",
+        includeHidden: true,
+      },
+      95_000,
+    );
+    if (listed.ok && Array.isArray(listed.data?.sessions)) {
+      const matches = listed.data.sessions.filter(
+        (session) =>
+          session.spawnRequestId === request.requestId &&
+          typeof session.id === "string" &&
+          session.id.length > 0,
+      );
+      if (matches.length === 1) sessionId = matches[0].id;
+    }
+  } catch (error) {
+    lookupError = error instanceof Error ? error.message : String(error);
+  }
+  return {
+    requestId: request.requestId,
+    outcome: sessionId ? "created" : "unknown",
+    created: sessionId ? true : null,
+    sessionId,
+    messageSent: false,
+    promptDelivery: "unknown",
+    sendAttempted: null,
+    reconciliation: sessionId ? "read_only_list_correlation" : "unconfirmed",
+    ...(lookupError ? { lookupError } : {}),
+    next: "Inspect the exact session with chatgpt.sessions read/list; do not spawn or send again automatically.",
+  };
+}
+
+export function classifySpawnResponse(response, request) {
+  if (!response.ok) {
+    if (
+      response.code === "chatgpt-send-failed" ||
+      (["request-timeout", "renderer-unavailable"].includes(response.code) &&
+        /UNKNOWN/i.test(response.message ?? ""))
+    )
+      return null;
+    throw new Error(`T3 Code rejected the request (${response.code}): ${response.message}`);
+  }
+  if (
+    response.messageSent === true &&
+    typeof response.sessionId === "string" &&
+    response.sessionId.length > 0
+  ) {
+    return {
+      requestId: request.requestId,
+      outcome: "delivered",
+      created: true,
+      sessionId: response.sessionId,
+      messageSent: true,
+      promptDelivery: "user_turn_observed",
+      sendAttempted: true,
+      parentSessionId: response.parentSessionId ?? null,
+    };
+  }
+  const data = response.data;
+  if (
+    data?.action === "spawn" &&
+    data.created === true &&
+    typeof data.sessionId === "string" &&
+    data.sessionId.length > 0 &&
+    ["unknown", "not_sent"].includes(data.promptDelivery) &&
+    data.messageSent === false
+  ) {
+    return {
+      requestId: request.requestId,
+      outcome: "created",
+      created: true,
+      sessionId: data.sessionId,
+      parentSessionId: data.parentSessionId ?? null,
+      messageSent: false,
+      promptDelivery: data.promptDelivery,
+      sendAttempted: data.sendAttempted ?? null,
+      ...(data.reason ? { reason: data.reason } : {}),
+      next: "Inspect exact session with chatgpt.sessions read/list before any manual decision; do not automatically resend.",
+    };
+  }
+  throw new Error("T3 Code did not provide a valid ChatGPT initial prompt delivery receipt.");
+}
+
 export async function main(args = process.argv.slice(2)) {
   const options = parseArguments(args);
   if (options === null) {
@@ -154,20 +249,12 @@ export async function main(args = process.argv.slice(2)) {
   let response;
   try {
     response = await sendAppControlRequest(address, request);
-  } catch (error) {
-    throw new Error(
-      `Cannot reach the running custom T3 Code app at ${address}. The app must be running with this feature built in. ${error.message}`,
-      { cause: error },
-    );
+  } catch {
+    // The renderer may already have accepted this request. Never replay it.
   }
-  if (!response.ok) {
-    throw new Error(`T3 Code rejected the request (${response.code}): ${response.message}`);
-  }
-  if (!response.messageSent || !response.sessionId) {
-    throw new Error("T3 Code did not confirm that ChatGPT received the initial message.");
-  }
+  const receipt = response ? classifySpawnResponse(response, request) : null;
   process.stdout.write(
-    `Created ChatGPT session "${request.title}" (${response.sessionId}); message sent; parent=${response.parentSessionId ?? "none (no explicit caller identity)"}.\n`,
+    JSON.stringify(receipt ?? (await reconcileCreatedSpawn(address, request))) + "\n",
   );
 }
 
