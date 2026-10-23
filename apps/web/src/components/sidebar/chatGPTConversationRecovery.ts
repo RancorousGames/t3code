@@ -49,6 +49,18 @@ export function hasChatGPTLoadFailure(): boolean {
 }
 
 export const CHATGPT_LOAD_FAILURE_EXPRESSION = `(${hasChatGPTLoadFailure.toString()})()`;
+export type ChatGPTRecoveryProblem = "load-failure" | "interrupted" | "delivery-timeout";
+
+export function chatGPTRecoveryProblem(activity: string): ChatGPTRecoveryProblem | null {
+  if (activity === "invalid: Could not load this ChatGPT conversation") return "load-failure";
+  if (activity === "interrupted" || activity === "delivery-timeout") return activity;
+  return null;
+}
+
+// Brief interruptions often reconnect by themselves. Avoid refreshing a live
+// generation immediately on the first transient orange status.
+export const RECOVERY_ORANGE_GRACE_MS = 60_000;
+export const RECOVERY_REFRESH_TIMEOUT_MS = 8_000;
 export const RECOVERY_SCAN_MS = 30_000;
 export const RECOVERY_GLOBAL_MS = 30_000;
 export const RECOVERY_PER_SESSION_MS = 2 * 60_000;

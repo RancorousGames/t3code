@@ -150,6 +150,17 @@ describe("ChatGPT session startup", () => {
     expect(mocks.setUrl).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "https://chatgpt.com/",
+    "https://chatgpt.com/?src=history_search",
+    "https://chatgpt.com/auth/login",
+    "https://accounts.google.com/v3/signin/identifier",
+  ])("preserves the saved conversation when the guest redirects to %s", async (url) => {
+    mocks.state.snapshot = { tabId: "tab-1", navStatus: { _tag: "Success", url } };
+    await mount();
+    expect(mocks.setUrl).not.toHaveBeenCalled();
+  });
+
   it("opens the saved conversation without refreshing its initial load", async () => {
     mocks.state.serverEpoch = "server-1";
     await mount();

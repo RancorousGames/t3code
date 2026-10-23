@@ -115,10 +115,12 @@ export const chatGPTWebviewAutomation = {
       text,
       clear,
       expectedConversationId,
+      requireEmptyComposer,
     }: {
       selector: string;
       text: string;
       clear?: boolean;
+      requireEmptyComposer?: boolean;
       timeoutMs?: number;
       expectedConversationId?: string | undefined;
     },
@@ -131,6 +133,12 @@ export const chatGPTWebviewAutomation = {
       if (!(el instanceof HTMLElement))
         return { ok: false, reason: "PreviewAutomationTargetNotFoundError" };
       const value = ${JSON.stringify(text)};
+      // One synchronous guest JS turn: NEVER erase a draft typed during async policy intake.
+      if (${Boolean(requireEmptyComposer)}) {
+        const current = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement
+          ? el.value : (el.innerText || el.textContent || "");
+        if (current.trim()) return { ok: false, reason: "Composer contains an existing draft; refusing to overwrite it." };
+      }
       el.focus();
       if (el.isContentEditable) {
         if (${Boolean(clear)}) {

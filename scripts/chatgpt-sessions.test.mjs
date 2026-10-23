@@ -27,6 +27,54 @@ NodeTest.test("list forwards all supported UI filters through the desktop socket
   }
 });
 
+NodeTest.test("list explicitly forwards hidden-session opt-in, even for which=all", async () => {
+  await controlSessions({ action: "list", which: "all" }, options);
+  NodeAssert.equal(calls.at(-1).request.includeHidden, false);
+  await controlSessions({ action: "list", which: "all", includeHidden: true }, options);
+  NodeAssert.equal(calls.at(-1).request.includeHidden, true);
+  await NodeAssert.rejects(
+    controlSessions({ action: "read", sessionId: "id", includeHidden: true }, options),
+    /includeHidden/,
+  );
+  await NodeAssert.rejects(
+    controlSessions({ action: "list", includeHidden: "true" }, options),
+    /includeHidden/,
+  );
+});
+
+NodeTest.test("change_state closes only the exact ID and requires persisted acknowledgement", async () => {
+  const requestLog = [];
+  const exchange = async (_address, request) => {
+    requestLog.push(request);
+    return { ok: true, data: {
+      action: "change_state", state: request.state, sessionId: request.sessionId,
+      persisted: true, acknowledged: true, closed: request.state === "closed",
+    }};
+  };
+  for (const state of ["hidden", "unhidden", "closed"]) {
+    const result = await controlSessions(
+      { action: "change_state", sessionId: "exact-target", state }, { exchange, home: ".t3" },
+    );
+    NodeAssert.equal(result.state, state);
+    NodeAssert.equal(requestLog.at(-1).sessionId, "exact-target");
+  }
+  await NodeAssert.rejects(
+    controlSessions({ action: "change_state", sessionId: "exact-target", state: "delete" }, options),
+    /state=hidden/,
+  );
+  await NodeAssert.rejects(
+    controlSessions({ action: "change_state", state: "closed" }, options),
+    /sessionId is required/,
+  );
+  await NodeAssert.rejects(
+    controlSessions({ action: "change_state", sessionId: "exact-target", state: "closed" },
+      { exchange: async (_address, request) => ({
+        ok: true, data: { action: "change_state", state: "closed", sessionId: request.sessionId },
+      }), home: ".t3" }),
+    /not confirmed persisted/,
+  );
+});
+
 NodeTest.test("read forwards session selection and first/last count", async () => {
   await controlSessions({ action: "read", sessionId: "id-123", from: "start", count: 1 }, options);
   NodeAssert.equal(calls.at(-1).request.sessionId, "id-123");
@@ -265,6 +313,87 @@ NodeTest.test("rejects invalid operations before contacting the running app", as
   );
   NodeAssert.equal(calls.length, count);
 });
+
+NodeTest.test(
+  "archive and restore require a correlated positive persisted desktop acknowledgement",
+  async () => {
+    const delivered = [];
+    const ackExchange = async (_address, request) => {
+      delivered.push(request);
+      return {
+        ok: true,
+        data: {
+          action: request.action,
+          sessionId: request.sessionId,
+          persisted: true,
+          acknowledged: true,
+          archived: request.action === "archive",
+          restored: request.action === "restore",
+        },
+      };
+    };
+    const archive = await controlSessions(
+      {
+        action: "archive",
+        sessionId: "worker",
+        managerDecision: true,
+        reason: "Reviewed completion of assigned work",
+      },
+      { home: ".t3", exchange: ackExchange },
+    );
+    NodeAssert.equal(archive.archived, true);
+    NodeAssert.equal(delivered[0].managerDecision, true);
+    NodeAssert.equal(delivered[0].reason, "Reviewed completion of assigned work");
+    NodeAssert.equal(
+      (
+        await controlSessions(
+          { action: "restore", sessionId: "worker" },
+          { home: ".t3", exchange: ackExchange },
+        )
+      ).restored,
+      true,
+    );
+    NodeAssert.equal(delivered[1].reason, undefined);
+    for (const data of [
+      {},
+      { action: "archive", sessionId: "other", persisted: true, acknowledged: true },
+      { action: "archive", sessionId: "worker", persisted: true },
+      { action: "restore", sessionId: "worker", persisted: true, acknowledged: true },
+    ]) {
+      await NodeAssert.rejects(
+        controlSessions(
+          { action: "archive", sessionId: "worker" },
+          {
+            home: ".t3",
+            exchange: async () => ({ ok: true, data }),
+          },
+        ),
+        /not confirmed persisted/,
+      );
+    }
+  },
+);
+
+NodeTest.test(
+  "archive rejects forged manager identity, missing decisions, or blank reasons",
+  async () => {
+    let called = false;
+    const failExchange = async () => {
+      called = true;
+      throw new Error("should not reach desktop");
+    };
+    for (const bad of [
+      { action: "archive", sessionId: "worker", managerSessionId: "manager" },
+      { action: "archive", sessionId: "worker", managerDecision: true },
+      { action: "archive", sessionId: "worker", managerDecision: true, reason: " " },
+      { action: "restore", sessionId: "worker", managerDecision: true, reason: "no" },
+      { action: "archive", sessionId: "worker", reason: "no decision" },
+    ]) {
+      await NodeAssert.rejects(controlSessions(bad, { home: ".t3", exchange: failExchange }));
+    }
+    NodeAssert.equal(called, false);
+  },
+);
 
 NodeTest.test("complete uses an explicit browser session ID through the desktop pipe", async () => {
   await controlSessions({ action: "complete", sessionId: "agent-A" }, options);

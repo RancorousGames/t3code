@@ -1,8 +1,10 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
-import { chatGPTBrowserThreadRef } from "./chatGPTBrowserSessions";
+import { chatGPTBrowserThreadRef, readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
+import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { acquireBrowserSurfaceActivity } from "./browser/browserSurfaceStore";
+import { wakeChatGPTGuest } from "./browser/chatGPTGuestHibernation";
 import { previewBridge } from "./components/preview/previewBridge";
 import { chatGPTWebviewAutomation } from "./chatGPTWebviewAutomation";
 import { readThreadPreviewState } from "./previewStateStore";
@@ -39,6 +41,7 @@ export async function sendInitialChatGPTPrompt(input: {
   environmentId: EnvironmentId;
   sessionId: string;
   prompt: string;
+  readSessions?: typeof readChatGPTBrowserSessions;
   automation?: ChatGPTPromptAutomation;
   readState?: typeof readThreadPreviewState;
   now?: () => number;
@@ -48,6 +51,15 @@ export async function sendInitialChatGPTPrompt(input: {
 }): Promise<void> {
   const automation = input.automation ?? (previewBridge ? chatGPTWebviewAutomation : undefined);
   if (!automation) throw new Error("ChatGPT automation requires T3 Code desktop.");
+  const session = (input.readSessions ?? readChatGPTBrowserSessions)(input.environmentId).find(
+    (entry) => entry.id === input.sessionId && !entry.hidden,
+  );
+  if (!session) throw new Error("ChatGPT spawn session must be persisted before its first prompt.");
+  const prompt = buildChatGPTSessionHandoffPrompt(
+    input.prompt,
+    session.id,
+    session.parentSessionId,
+  );
   const readState = input.readState ?? readThreadPreviewState;
   const now = input.now ?? Date.now;
   const pause =
@@ -72,6 +84,8 @@ export async function sendInitialChatGPTPrompt(input: {
       // actual guest rather than waiting on that eventually consistent overlay.
       if (tabId) {
         const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
+        // A fresh background session has no work history yet; keep it loaded.
+        wakeChatGPTGuest(runtimeId);
         if (runtimeId !== activeRuntimeId) {
           releaseActivity?.();
           releaseActivity = acquireActivity(runtimeId);
@@ -95,7 +109,7 @@ export async function sendInitialChatGPTPrompt(input: {
             try {
               await automation.type(runtimeId, {
                 selector: COMPOSER_SELECTOR,
-                text: input.prompt,
+                text: prompt,
                 clear: true,
                 timeoutMs: Math.min(COMPOSER_WAIT_MS, Math.max(1, deadline - now())),
               });
@@ -110,7 +124,7 @@ export async function sendInitialChatGPTPrompt(input: {
                 throw error;
               const fallback = await automation.evaluate(runtimeId, {
                 expression: `(() => {
-                const prompt = ${JSON.stringify(input.prompt)};
+                const prompt = ${JSON.stringify(prompt)};
                 const el =
                   document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
                 if (!(el instanceof HTMLElement)) return { ok: false, reason: 'Composer element missing' };
@@ -157,7 +171,7 @@ export async function sendInitialChatGPTPrompt(input: {
             // that ChatGPT accepted this message. Navigation may briefly destroy
             // the guest document, so tolerate transient inspection failures.
             const deliveredExpression = `(() => {
-            const expected = ${JSON.stringify(input.prompt)}.trim();
+            const expected = ${JSON.stringify(prompt)}.trim();
             return [...document.querySelectorAll('[data-message-author-role="user"]')]
               .some((el) => el.textContent?.trim() === expected) ||
               /(?:^|\\/)c\\/[^/]+/.test(window.location.pathname);

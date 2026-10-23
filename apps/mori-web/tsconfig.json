@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "composite": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "types": ["vite/client"],
+    "plugins": [{ "name": "@effect/language-service", "diagnosticSeverity": {
+      "globalDate": "off", "globalRandom": "off", "globalTimers": "off",
+      "cryptoRandomUUID": "off", "globalFetch": "off", "globalConsole": "off"
+    }}]
+  },
+  "include": ["src", "vite.config.ts"]
+}

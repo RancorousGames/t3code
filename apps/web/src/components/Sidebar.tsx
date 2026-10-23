@@ -82,6 +82,7 @@ import {
 } from "react";
 import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import { OpenRigAgentsSidebarEntry } from "./sidebar/OpenRigAgentsSidebarEntry";
+import { OpenRigOperatorInbox } from "./sidebar/OpenRigOperatorInbox";
 
 import {
   isAtomCommandInterrupted,
@@ -3211,6 +3212,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         }
       >
         <SidebarGroup className="flex-1" role="presentation">
+          <OpenRigOperatorInbox />
           <ChatGPTBrowserSidebarEntry showCreateAction={false} />
           <OpenRigAgentsSidebarEntry />
           <OpenRigAgentsSidebarEntry />

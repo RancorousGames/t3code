@@ -14,6 +14,14 @@ export interface PageInspection {
   totalTurns: number;
   lastRole: "user" | "assistant" | null;
   lastText: string;
+  latestMessageFirstFiveWords?: string | null;
+  /** Last visible user turn identity, never its contents; null means unsafe to auto-continue. */
+  lastUserTurnKey: string | null;
+  lastUserTurn: number | null;
+  /** Recovery's own Continue turn must not recursively trigger another Continue. */
+  lastUserIsRecoveryContinue: boolean;
+  /** Empty assistant placeholders are not evidence of a completed reply. */
+  assistantHasContent: boolean;
   messages: PageMessage[];
   url: string;
   diagnostics?: { roleElements: number; turnElements: number; textLength: number; title: string };
@@ -36,6 +44,11 @@ export function inspectChatGPTPage(input: {
       totalTurns: 0,
       lastRole: null,
       lastText: "",
+      latestMessageFirstFiveWords: null,
+      lastUserTurnKey: null,
+      lastUserTurn: null,
+      lastUserIsRecoveryContinue: false,
+      assistantHasContent: false,
       messages: [],
       url,
     };
@@ -131,6 +144,25 @@ export function inspectChatGPTPage(input: {
       : node;
     return (content as HTMLElement).innerText?.trim() || content.textContent?.trim() || "";
   };
+  const lastUser = indexed.findLast((entry) => entry.role === "user");
+  const lastUserTurnKey =
+    lastUser?.node.closest("[data-turn-key]")?.getAttribute("data-turn-key") ??
+    lastUser?.node.getAttribute("data-content-search-unit-key")?.replace(/:user$/, "") ??
+    null;
+  // Toolbar labels such as "Copy" are not generated content. In particular,
+  // a newly inserted empty assistant unit must never become done_or_idle.
+  const assistantText = (node: Element) => {
+    const content =
+      node.querySelector('[data-markdown-text-style="assistant-message"],.markdown,.prose') ?? node;
+    const copy = content.cloneNode(true) as Element;
+    copy
+      .querySelectorAll('button,[role="button"],svg,[data-testid*="action"]')
+      .forEach((el) => el.remove());
+    return copy.textContent?.trim() ?? "";
+  };
+  const latestText = last ? (last.role === "assistant" ? assistantText(last.node) : getText(last.node)) : "";
+  const latestMessageFirstFiveWords = latestText.trim().split(/\s+/u).slice(0, 5).join(" ") || null;
+  const assistantHasContent = !!last && last.role === "assistant" && latestText.length > 0;
   const from = input.from === "start" ? 0 : Math.max(0, totalTurns - input.count);
   const to = input.from === "start" ? input.count : totalTurns;
   const maxMessageChars = Math.max(1, Math.min(24_000, Math.floor(input.maxMessageChars ?? 6000)));
@@ -140,7 +172,12 @@ export function inspectChatGPTPage(input: {
     connectionInterrupted,
     totalTurns,
     lastRole: last?.role ?? null,
-    lastText: last ? getText(last.node).slice(-400) : "",
+    lastText: latestText.slice(-400),
+    latestMessageFirstFiveWords,
+    lastUserTurnKey,
+    lastUserTurn: lastUser?.turn ?? null,
+    lastUserIsRecoveryContinue: !!lastUser && getText(lastUser.node).trim() === "Continue.",
+    assistantHasContent,
     messages: input.includeMessages
       ? indexed
           .filter((m) => m.turn >= from && m.turn < to)
@@ -165,3 +202,32 @@ export function inspectChatGPTPage(input: {
       : undefined,
   };
 }
+
+// Evaluated read-only inside a live ChatGPT guest immediately before a
+// deliberate recover-homepage operation. No input or navigation occurs here.
+export function isSafeEmptyChatGPTHomepage(): boolean {
+  if (!["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(location.hostname))
+    return false;
+  if (new URL(location.href).pathname !== "/") return false;
+  const editor = document.querySelector(
+    '#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]',
+  );
+  if (!(editor instanceof HTMLElement) || !editor.getClientRects().length) return false;
+  const draft =
+    editor instanceof HTMLTextAreaElement
+      ? editor.value
+      : editor.innerText || editor.textContent || "";
+  if (draft.trim()) return false;
+  if (
+    document.querySelector(
+      '[data-message-author-role],[data-testid^="conversation-turn-"],[data-content-search-unit-key$=":user"],[data-content-search-unit-key$=":assistant"]',
+    )
+  )
+    return false;
+  const stop = document.querySelector(
+    'button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]',
+  );
+  return !(stop && stop.getClientRects().length && !stop.hasAttribute("disabled"));
+}
+
+export const CHATGPT_SAFE_EMPTY_HOME_EXPRESSION = `(${isSafeEmptyChatGPTHomepage.toString()})()`;

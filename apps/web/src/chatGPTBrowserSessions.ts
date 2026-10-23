@@ -6,7 +6,7 @@ import { useCallback } from "react";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPTBrowserPrewarm";
-import { getLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
+import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { randomUUID } from "./lib/utils";
 import { readThreadPreviewState } from "./previewStateStore";
 
@@ -15,6 +15,15 @@ export const BrowserSession = Schema.Struct({
   title: Schema.String,
   hidden: Schema.optional(Schema.Boolean),
   hiddenAt: Schema.optional(Schema.Number),
+  archive: Schema.optional(
+    Schema.Struct({
+      archivedAt: Schema.String,
+      conversationUrl: Schema.String,
+      basis: Schema.Literals(["completion", "manager_decision"]),
+      reason: Schema.optional(Schema.String),
+      restoredAt: Schema.optional(Schema.String),
+    }),
+  ),
   snoozedUntil: Schema.optional(Schema.Number),
   // null explicitly detaches a child; undefined means no lineage was ever recorded.
   parentSessionId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -113,8 +122,29 @@ export function setChatGPTSessionHidden(
   const remaining = sessions.filter((session) => session.id !== id);
   const visible = remaining.filter((session) => session.hidden !== true);
   const hiddenSessions = remaining.filter((session) => session.hidden === true);
-  const updated = { ...target, hidden, hiddenAt: hidden ? Date.now() : undefined };
+  const updated = {
+    ...target,
+    hidden,
+    hiddenAt: hidden ? Date.now() : undefined,
+    ...(target.archive && !hidden
+      ? { archive: { ...target.archive, restoredAt: new Date().toISOString() } }
+      : {}),
+  };
   return [...visible, updated, ...hiddenSessions];
+}
+
+/** An archive is a durable, restorable session record, not an expiring sidebar hide. */
+export function setChatGPTSessionArchived(
+  sessions: readonly BrowserSession[],
+  id: string,
+  archive: NonNullable<BrowserSession["archive"]>,
+): BrowserSession[] {
+  const entry = sessions.find((session) => session.id === id);
+  if (!entry) return [...sessions];
+  if (entry.hidden && entry.archive && !entry.archive.restoredAt) return [...sessions];
+  const visible = sessions.filter((session) => session.id !== id && !session.hidden);
+  const hidden = sessions.filter((session) => session.id !== id && session.hidden);
+  return [...visible, { ...entry, hidden: true, hiddenAt: Date.now(), archive }, ...hidden];
 }
 
 export const CHATGPT_HIDDEN_EXPIRY_MS = 3 * 24 * 60 * 60 * 1000;
@@ -128,6 +158,8 @@ export function expiredHiddenSessionIds(
     .filter(
       (session) =>
         session.hidden === true &&
+        // A manager archive survives indefinitely; only a plain UI hide expires.
+        !(session.archive && !session.archive.restoredAt) &&
         typeof session.hiddenAt === "number" &&
         Number.isFinite(session.hiddenAt) &&
         session.hiddenAt > 0 &&
@@ -149,11 +181,11 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   );
 
   const createSession = useCallback(
-    (name?: string, metadata?: { parentSessionId?: string; project?: string }) => {
+    (name?: string, metadata?: { parentSessionId?: string; project?: string; initialConversationUrl?: string }) => {
       let id = randomUUID();
       // Read the current slot synchronously: multiple buttons, the palette and
       // desktop automation can request sessions without waiting for a render.
-      if (environmentId) {
+      if (environmentId && !metadata?.initialConversationUrl) {
         const spareId = getLocalStorageItem(chatGPTPrewarmKey(environmentId), Schema.String);
         if (spareId) {
           const threadRef = chatGPTBrowserThreadRef(environmentId, spareId);
@@ -184,6 +216,15 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             setPrewarmedSessionId(randomUUID());
           }
         }
+      }
+      // Routing an existing /c/<id> must not reuse a prewarmed homepage: its
+      // attached guest would ignore the initial URL and might receive a prompt
+      // in a different conversation. Seed the new owner before it is mounted.
+      if (environmentId && metadata?.initialConversationUrl) {
+        const idInUrl = chatGPTConversationIdFromUrl(metadata.initialConversationUrl);
+        if (!idInUrl || metadata.initialConversationUrl !== `https://chatgpt.com/c/${idInUrl}`)
+          throw new Error("Only an exact canonical ChatGPT conversation URL may seed a session.");
+        setLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id), metadata.initialConversationUrl, Schema.String);
       }
       setSessions((current) => {
         let number = 1;
@@ -368,6 +409,12 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
 
+  const setSessionArchived = useCallback(
+    (id: string, archive: NonNullable<BrowserSession["archive"]>) =>
+      setSessions((current) => setChatGPTSessionArchived(current, id, archive)),
+    [setSessions],
+  );
+
   return {
     sessions,
     prewarmedSessionId,
@@ -378,6 +425,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     renameSessionFromPageTitle,
     removeSession,
     setSessionHidden,
+    setSessionArchived,
     setSessionProject,
     setSessionParent,
     setSessionSnooze,

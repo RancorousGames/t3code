@@ -26,10 +26,46 @@ export const DesktopBackendBootstrap = Schema.Struct({
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
   desktopBrowserFd: Schema.optionalKey(PositiveInt),
   desktopBrowserControlFd: Schema.optionalKey(PositiveInt),
+  /** INACTIVE W2-A only: server -> Windows MAIN private authority output. */
+  desktopPrivateAuthorityOutputFd: Schema.optionalKey(Schema.Literal(8)),
+  /** INACTIVE W2-A only: Windows MAIN -> server private challenge input. */
+  desktopPrivateAuthorityInputFd: Schema.optionalKey(Schema.Literal(9)),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;
 
-/** Written to `<t3Home>/runtime` before update shutdown so the backend retains its managed tunnel. */
+/** Negative-only opt-in. Partial/colliding pairs MUST NEVER become a channel. */
+export function inactivePrivateAuthorityFdPair(
+  bootstrap: Pick<
+    DesktopBackendBootstrap,
+    | "desktopPrivateAuthorityOutputFd"
+    | "desktopPrivateAuthorityInputFd"
+    | "desktopTelemetryFd"
+    | "desktopTelemetryControlFd"
+    | "desktopBrowserFd"
+    | "desktopBrowserControlFd"
+  >,
+): { readonly outputFd: 8; readonly inputFd: 9 } | null {
+  if (
+    bootstrap.desktopPrivateAuthorityOutputFd !== 8 ||
+    bootstrap.desktopPrivateAuthorityInputFd !== 9
+  )
+    return null;
+  const occupied = [
+    3,
+    bootstrap.desktopTelemetryFd,
+    bootstrap.desktopTelemetryControlFd,
+    bootstrap.desktopBrowserFd,
+    bootstrap.desktopBrowserControlFd,
+  ].filter((fd): fd is number => fd !== undefined);
+  if (new Set(occupied).size !== occupied.length || occupied.includes(8) || occupied.includes(9))
+    return null;
+  return { outputFd: 8, inputFd: 9 };
+}
+
+/** Written to `<t3Home>/runtime` just before the desktop app stops its
+    backend to install an update. The updated app starts a new backend right
+    away, so a backend that sees a fresh marker at shutdown keeps its managed
+    tunnel. */
 export const DESKTOP_UPDATE_RESTART_MARKER_FILE = "desktop-update-restart";

@@ -1,42 +1,390 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useEffectEvent } from "react";
 
+import {
+  acquireBrowserSurfaceActivity,
+  useBrowserSurfaceStore,
+} from "../../browser/browserSurfaceStore";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
-import { chatGPTBrowserThreadRef, isChatGPTConversationUrl } from "../../chatGPTBrowserSessions";
+import {
+  chatGPTBrowserLastUrlKey,
+  chatGPTBrowserThreadRef,
+  isChatGPTConversationUrl,
+} from "../../chatGPTBrowserSessions";
+import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
+import { recordChatGPTRecoveryEvent } from "../../chatGPTRecoveryDiagnostics";
+import { isChatGPTHomeUrl } from "../../chatGPTBrowserPrewarm";
+import { inspectChatGPTPage } from "../../chatGPTSessionDom";
+import { isChatGPTGuestHibernated } from "../../browser/chatGPTGuestHibernation";
 import { readThreadPreviewState } from "../../previewStateStore";
 import { previewBridge } from "../preview/previewBridge";
+import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
 import {
-  CHATGPT_LOAD_FAILURE_EXPRESSION,
   RECOVERY_GLOBAL_MS,
   RECOVERY_PER_SESSION_MS,
+  RECOVERY_ORANGE_GRACE_MS,
+  RECOVERY_REFRESH_TIMEOUT_MS,
   RECOVERY_SCAN_MS,
   cooldownElapsed,
+  chatGPTRecoveryProblem,
   orderedCandidates,
   readRecentSessionClicks,
   readRecoveryHistory,
   recordRecoveryAttempt,
+  type ChatGPTRecoveryProblem,
 } from "./chatGPTConversationRecovery";
 
-// One scanner for the entire sidebar, not a timer per ChatGPT tab.
+// One passive guest probe. Keep the draft as a boolean; never persist its text.
+const CHATGPT_RECOVERY_PROBE_EXPRESSION = `(() => {
+  const page = (${inspectChatGPTPage.toString()})({from: "end", count: 1, includeMessages: false});
+  const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]');
+  const draft = editor instanceof HTMLTextAreaElement ? editor.value : editor instanceof HTMLElement ? (editor.innerText || editor.textContent || "") : null;
+  const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+  const visible = (node) => !!node && node.getClientRects().length > 0 && !node.hasAttribute("disabled");
+  const alerts = [...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]')]
+    .filter(el => el.getClientRects().length && !el.closest('[data-message-author-role],pre,code'))
+    .map(el => el.textContent?.trim().slice(0,250) ?? "").join(" ");
+  const permanentReason = /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i.test(alerts) ? "conversation_full"
+    : /(?:access denied|do not have access|don't have access|permission denied)/i.test(alerts) ? "access"
+    : /(?:sign in|log in|session expired|authentication required)/i.test(alerts) ? "auth" : null;
+  return {...page, activity: ${CHATGPT_ACTIVITY_EXPRESSION}, draftEmpty: draft === null ? null : !draft.trim(),
+    stopVisible: visible(stop), permanentReason};
+})()`;
+
+interface RecoverySnapshot {
+  activity: string;
+  url: string;
+  lastUserTurnKey?: string | null;
+  lastUserTurn?: number | null;
+  lastUserIsRecoveryContinue?: boolean;
+  totalTurns?: number;
+  lastRole?: "user" | "assistant" | null;
+  lastText?: string;
+  assistantHasContent?: boolean;
+  draftEmpty?: boolean | null;
+  stopVisible?: boolean;
+  permanentReason?: string | null;
+}
+
+type OrangeStage =
+  | "grace"
+  | "reloaded"
+  | "stop_issued"
+  | "continue_issued"
+  | "recovered"
+  | "needs_human";
+interface OrangeEpisode {
+  conversationId: string;
+  userTurnKey: string;
+  userTurn: number;
+  problem: ChatGPTRecoveryProblem;
+  firstSeenAt: number;
+  stage: OrangeStage;
+  stageAt: number;
+  assistantSignature?: number;
+  continuedTurnKey?: string;
+  reason?: string;
+}
+interface PersistentRecovery {
+  red: Record<string, { attempts: number; nextAt: number; conversationId: string }>;
+  orange: Record<string, OrangeEpisode>;
+  escalation: Record<string, { reason: string; at: number; conversationId: string | null }>;
+}
+const recoveryStateKey = (environmentId: string) =>
+  `t3code:chatgpt-browser:bounded-recovery:${environmentId}`;
+function readBoundedState(environmentId: string): PersistentRecovery {
+  try {
+    const data: unknown = JSON.parse(
+      localStorage.getItem(recoveryStateKey(environmentId)) ?? "null",
+    );
+    if (!data || typeof data !== "object") throw new Error("Invalid recovery record");
+    const parsed = data as Partial<PersistentRecovery>;
+    return {
+      red: parsed.red ?? {},
+      orange: parsed.orange ?? {},
+      escalation: parsed.escalation ?? {},
+    };
+  } catch {
+    return { red: {}, orange: {}, escalation: {} };
+  }
+}
+function saveBoundedState(environmentId: string, state: PersistentRecovery): boolean {
+  try {
+    localStorage.setItem(recoveryStateKey(environmentId), JSON.stringify(state));
+    return true;
+  } catch {
+    // Fail closed if the at-most-once marker cannot be persisted.
+    return false;
+  }
+}
+function escalateRecovery(
+  environmentId: string,
+  state: PersistentRecovery,
+  sessionId: string,
+  conversationId: string | null,
+  reason: string,
+  now: number,
+): void {
+  if (state.escalation[sessionId]?.reason === reason) return;
+  state.escalation[sessionId] = { reason, at: now, conversationId };
+  const episode = state.orange[sessionId];
+  if (episode) state.orange[sessionId] = { ...episode, stage: "needs_human", stageAt: now, reason };
+  saveBoundedState(environmentId, state);
+  recordChatGPTRecoveryEvent(environmentId, sessionId, "escalated", reason);
+  console.warn("[ChatGPT recovery] Human review needed:", { sessionId, conversationId, reason });
+}
+export function nextRedRetryDelay(sessionId: string, attempts: number): number {
+  // Deterministic per-session jitter prevents synchronized restarts and survives remounts.
+  let hash = 2166136261;
+  for (const char of sessionId) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  const jitter = 0.85 + ((hash >>> 0) % 30) / 100;
+  return Math.round(
+    Math.min(30 * 60_000, RECOVERY_PER_SESSION_MS * 2 ** Math.min(6, attempts - 1)) * jitter,
+  );
+}
+function assistantSignature(snapshot: RecoverySnapshot): number {
+  let hash = 2166136261;
+  for (const char of snapshot.lastRole === "assistant" ? (snapshot.lastText ?? "") : "")
+    hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  return hash >>> 0;
+}
+function sameEpisode(snapshot: RecoverySnapshot, episode: OrangeEpisode): boolean {
+  return (
+    snapshot.lastUserTurnKey === episode.userTurnKey && snapshot.lastUserTurn === episode.userTurn
+  );
+}
+function positivelyResumed(snapshot: RecoverySnapshot): boolean {
+  return (
+    snapshot.activity === "working" ||
+    (snapshot.activity === "idle" &&
+      snapshot.lastRole === "assistant" &&
+      snapshot.assistantHasContent === true)
+  );
+}
+function safeIdleForContinue(snapshot: RecoverySnapshot, episode: OrangeEpisode): boolean {
+  return (
+    sameEpisode(snapshot, episode) &&
+    snapshot.activity === "idle" &&
+    snapshot.stopVisible === false &&
+    snapshot.draftEmpty === true &&
+    snapshot.permanentReason == null
+  );
+}
+// The STOP click is scoped to a still-interrupted response, same user turn and exact URL.
+// Persist the stop attempt BEFORE this command; ambiguous results must not be replayed.
+// Type only into a provably empty editor for the exact orphaned turn.
+// This guest-side check and the mutation run in one JS evaluation, avoiding
+// a user draft arriving between the passive probe and editing.
+function guardedRecoveryContinueTypeExpression(
+  conversationId: string,
+  episode: OrangeEpisode,
+): string {
+  return `(() => {
+    const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
+    if (actual !== ${JSON.stringify(conversationId)}) return {result:"identity_changed"};
+    const page = (${inspectChatGPTPage.toString()})({from:"end",count:1,includeMessages:false});
+    if (page.lastUserTurnKey !== ${JSON.stringify(episode.userTurnKey)} ||
+        page.lastUserTurn !== ${episode.userTurn}) return {result:"turn_changed"};
+    if (${CHATGPT_ACTIVITY_EXPRESSION} !== "idle") return {result:"not_idle"};
+    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]');
+    if (!(editor instanceof HTMLElement)) return {result:"editor_missing"};
+    const before = editor instanceof HTMLTextAreaElement ? editor.value : (editor.innerText || editor.textContent || "");
+    if (before.trim()) return {result:"existing_draft"};
+    editor.focus();
+    if (editor.isContentEditable) {
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    } else if (editor instanceof HTMLTextAreaElement) {
+      editor.select();
+    } else return {result:"not_editable"};
+    const inserted = document.execCommand("insertText", false, "Continue.");
+    const after = editor instanceof HTMLTextAreaElement ? editor.value : (editor.innerText || editor.textContent || "");
+    return {result: inserted && after.trim() === "Continue." ? "continue_typed" : "type_uncertain"};
+  })()`;
+}
+
+function guardedRecoveryContinueSendExpression(
+  conversationId: string,
+  episode: OrangeEpisode,
+): string {
+  return `(() => {
+    const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
+    if (actual !== ${JSON.stringify(conversationId)}) return {result:"identity_changed"};
+    const page = (${inspectChatGPTPage.toString()})({from:"end",count:1,includeMessages:false});
+    if (page.lastUserTurnKey !== ${JSON.stringify(episode.userTurnKey)} ||
+        page.lastUserTurn !== ${episode.userTurn}) return {result:"turn_changed"};
+    const status = ${CHATGPT_ACTIVITY_EXPRESSION};
+    if (status !== "idle") return {result:"not_idle"};
+    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+    if (stop && stop.getClientRects().length && !stop.hasAttribute("disabled")) return {result:"still_generating"};
+    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]');
+    const draft = editor instanceof HTMLTextAreaElement ? editor.value : editor instanceof HTMLElement ? (editor.innerText || editor.textContent || "") : null;
+    if (draft?.trim() !== "Continue.") return {result:"draft_changed"};
+    const buttons = ['[data-testid="send-button"]','[data-testid="composer-submit-button"]','button[aria-label="Send prompt"]','button[aria-label="Send message"]','button[aria-label="Send"]','button[type="submit"]']
+      .flatMap(selector => [...document.querySelectorAll(selector)]);
+    const send = buttons.find(node => node instanceof HTMLButtonElement &&
+      !node.disabled && node.getAttribute("aria-disabled") !== "true");
+    if (!(send instanceof HTMLButtonElement)) return {result:"send_control_unavailable"};
+    send.click();
+    return {result:"continue_clicked"};
+  })()`;
+}
+function stopOrphanExpression(conversationId: string, episode: OrangeEpisode): string {
+  return `(() => {
+    const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
+    if (actual !== ${JSON.stringify(conversationId)}) return {result:"identity_changed"};
+    const page = (${inspectChatGPTPage.toString()})({from:"end",count:1,includeMessages:false});
+    if (page.lastUserTurnKey !== ${JSON.stringify(episode.userTurnKey)} ||
+        page.lastUserTurn !== ${episode.userTurn}) return {result:"turn_changed"};
+    const status = ${CHATGPT_ACTIVITY_EXPRESSION};
+    if (status !== "interrupted" && status !== "delivery-timeout") return {result:"resumed"};
+    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]');
+    const draft = editor instanceof HTMLTextAreaElement ? editor.value : editor instanceof HTMLElement ? (editor.innerText || editor.textContent || "") : null;
+    if (draft === null || draft.trim()) return {result:"draft_or_editor"};
+    const button = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled || !button.getClientRects().length) return {result:"no_stop"};
+    button.click();
+    return {result:"stop_clicked"};
+  })()`;
+}
+
+export type ChatGPTRecoveryPhase = "queued" | "checking" | "refreshing";
+const BACKGROUND_PROBES_PER_SCAN = 4;
+const BACKGROUND_PROBE_SETTLE_MS = 1_000;
+
+// A single scan across all ChatGPT tabs avoids concurrent reload storms.
 let scanning = false;
+const NO_DEFERRED_IDS: readonly string[] = [];
+
+// A preview can remain in Loading even after the guest has rendered the
+// conversation error. Use the last confirmed URL as a fallback, but never
+// refresh unless the *actual guest URL* still identifies that conversation.
+function expectedConversationUrl(
+  environmentId: EnvironmentId,
+  sessionId: string,
+  nav: { readonly _tag: string; readonly url?: string } | undefined,
+): string | null {
+  if (nav?.url && isChatGPTConversationUrl(nav.url)) return nav.url;
+  try {
+    const saved: unknown = JSON.parse(
+      localStorage.getItem(chatGPTBrowserLastUrlKey(environmentId, sessionId)) ?? "null",
+    );
+    return typeof saved === "string" && isChatGPTConversationUrl(saved) ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function recoveryProblemForConversation(
+  result: unknown,
+  expectedUrl: string | null,
+): ChatGPTRecoveryProblem | "healthy" | null {
+  if (!result || typeof result !== "object" || !expectedUrl) return null;
+  const probe = result as { activity?: unknown; url?: unknown };
+  const expectedId = chatGPTConversationIdFromUrl(expectedUrl);
+  if (
+    expectedId === null ||
+    typeof probe.url !== "string" ||
+    chatGPTConversationIdFromUrl(probe.url) !== expectedId ||
+    typeof probe.activity !== "string"
+  )
+    return null;
+  return (
+    chatGPTRecoveryProblem(probe.activity) ??
+    (probe.activity === "idle" || probe.activity === "working" ? "healthy" : null)
+  );
+}
+
+async function inspectFailure(
+  webview: { executeJavaScript: (expression: string) => Promise<unknown> },
+  expectedUrl: string,
+): Promise<{ problem: ChatGPTRecoveryProblem | "healthy"; snapshot: RecoverySnapshot } | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      webview.executeJavaScript(CHATGPT_RECOVERY_PROBE_EXPRESSION) as Promise<unknown>,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 4_000);
+      }),
+    ]);
+    const problem = recoveryProblemForConversation(result, expectedUrl);
+    return problem && result && typeof result === "object"
+      ? { problem, snapshot: result as RecoverySnapshot }
+      : null;
+  } catch {
+    // Navigation, detach and unresponsive guests are not confirmed failures.
+    return null;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+// Bounded refresh is essential: a never-settling desktop bridge promise used
+// to leave the module-level scanner locked forever.
+async function refreshWithDeadline(
+  bridge: NonNullable<typeof previewBridge>,
+  runtimeId: string,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const finished = await Promise.race([
+      bridge.refresh(runtimeId).then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), RECOVERY_REFRESH_TIMEOUT_MS);
+      }),
+    ]);
+    if (!finished) console.warn("[ChatGPT recovery] Refresh timed out:", runtimeId);
+    return finished;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export function ChatGPTBrowserRecoveryCoordinator({
   environmentId,
   sessionIds,
-  deferredIds = [],
+  deferredIds = NO_DEFERRED_IDS,
+  wakeupIds = NO_DEFERRED_IDS,
+  onPhaseChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly sessionIds: readonly string[];
   readonly deferredIds?: readonly string[];
+  readonly wakeupIds?: readonly string[];
+  readonly onPhaseChange?: (sessionId: string, phase: ChatGPTRecoveryPhase | null) => void;
 }) {
   const currentSessionIds = useEffectEvent(() => sessionIds);
   const currentDeferredIds = useEffectEvent(() => deferredIds);
+  const currentWakeupIds = useEffectEvent(() => wakeupIds);
+  const reportPhase = useEffectEvent((sessionId: string, phase: ChatGPTRecoveryPhase | null) =>
+    onPhaseChange?.(sessionId, phase),
+  );
 
   useEffect(() => {
     if (!previewBridge) return;
     const bridge = previewBridge;
     const envId = environmentId;
     let disposed = false;
+    const trackedPhases = new Map<string, ChatGPTRecoveryPhase>();
+    let wakeupCursor = 0;
+    // A transient ChatGPT homepage during startup is not proof of URL loss.
+    // Require an unchanged root page across scans before restoring its durable conversation.
+    const lostRouteFirstSeen = new Map<string, { url: string; at: number }>();
+    // Records live in localStorage rather than the React component lifecycle.
+    // This prevents remounts from replaying a STOP or an ambiguous Continue.
+    let cancelIndicatorWait: (() => void) | null = null;
+    const phase = (sessionId: string, state: ChatGPTRecoveryPhase | null) => {
+      if (state === trackedPhases.get(sessionId) || (!state && !trackedPhases.has(sessionId)))
+        return;
+      if (state) {
+        trackedPhases.set(sessionId, state);
+        recordChatGPTRecoveryEvent(envId, sessionId, "phase", state);
+      } else trackedPhases.delete(sessionId);
+      if (!disposed) reportPhase(sessionId, state);
+    };
 
     const scan = async () => {
       if (disposed || scanning) return;
@@ -44,103 +392,777 @@ export function ChatGPTBrowserRecoveryCoordinator({
       try {
         const now = Date.now();
         const history = readRecoveryHistory(envId);
-        if (!cooldownElapsed(history.lastAttemptAt, now, RECOVERY_GLOBAL_MS)) return;
+        const persistent = readBoundedState(envId);
+        let canAttempt = cooldownElapsed(history.lastAttemptAt, now, RECOVERY_GLOBAL_MS);
+        const eligibleIds = new Set(currentSessionIds());
+        // Retain episode markers across hide/restore/remount. In particular,
+        // a dispatched Continue cannot become eligible again after unmount.
+        for (const id of trackedPhases.keys()) if (!eligibleIds.has(id)) phase(id, null);
 
-        // sessionIds contains visible sessions only. Never inspect or refresh
-        // hidden sessions, even if they remain in the persisted click history.
+        // Probe background pages in small batches. Their webviews may be
+        // suspended offscreen until clicked, so DOM-only checks miss failures.
         const clicked = readRecentSessionClicks(envId);
-        for (const sessionId of orderedCandidates(
+        const candidates = orderedCandidates(
           currentSessionIds(),
           history,
           clicked,
           new Set(currentDeferredIds()),
-        )) {
+        );
+        const wakeupSet = new Set(currentWakeupIds());
+        const toWake = candidates.filter((id) => wakeupSet.has(id));
+        const wakeNow = new Set<string>();
+        for (let n = 0; n < Math.min(BACKGROUND_PROBES_PER_SCAN, toWake.length); n++) {
+          wakeNow.add(toWake[(wakeupCursor + n) % toWake.length]!);
+        }
+        if (toWake.length) wakeupCursor = (wakeupCursor + wakeNow.size) % toWake.length;
+        for (const sessionId of candidates) {
           if (disposed) return;
           if (!currentSessionIds().includes(sessionId)) continue;
-          if (!cooldownElapsed(history.bySession[sessionId] ?? 0, now, RECOVERY_PER_SESSION_MS))
-            continue;
 
           const threadRef = chatGPTBrowserThreadRef(envId, sessionId);
           const state = readThreadPreviewState(threadRef);
           const tabId = state.activeTabId;
-          if (!tabId || !state.serverEpoch) continue;
-          const overlay = state.desktopByTabId[tabId];
-          const nav = state.sessions[tabId]?.navStatus;
-          if (
-            !overlay?.hasWebContents ||
-            overlay.loading ||
-            nav?._tag !== "Success" ||
-            !isChatGPTConversationUrl(nav.url)
-          )
+          if (!tabId || !state.serverEpoch) {
+            if (persistent.red[sessionId])
+              recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "preview-not-ready");
+            phase(sessionId, null);
             continue;
+          }
+          const nav = state.sessions[tabId]?.navStatus;
+          const expectedUrl = expectedConversationUrl(envId, sessionId, nav);
+          if (!expectedUrl) {
+            lostRouteFirstSeen.delete(sessionId);
+            if (persistent.orange[sessionId] || persistent.red[sessionId])
+              escalateRecovery(
+                envId,
+                persistent,
+                sessionId,
+                null,
+                "saved_conversation_url_lost",
+                Date.now(),
+              );
+            phase(sessionId, null);
+            continue;
+          }
 
           const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
           const webview = Array.from(document.querySelectorAll("webview")).find(
             (element) => element.dataset.previewTab === runtimeId,
           );
-          if (!webview) continue;
-
-          let failed = false;
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          try {
-            // A hung guest must not stall every other session indefinitely.
-            const inspected = await Promise.race([
-              webview.executeJavaScript(CHATGPT_LOAD_FAILURE_EXPRESSION),
-              new Promise<false>((resolve) => {
-                timeout = setTimeout(() => resolve(false), 4_000);
-              }),
-            ]);
-            failed = inspected === true;
-          } catch {
-            // Guest navigation, detach, or a transient DOM inspection error.
+          if (!webview) {
+            if (persistent.red[sessionId])
+              recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "guest-not-attached");
+            phase(sessionId, null);
             continue;
+          }
+
+          let releasePaint: (() => void) | undefined;
+          try {
+            if (
+              wakeNow.has(sessionId) &&
+              !useBrowserSurfaceStore.getState().byTabId[runtimeId]?.visible
+            ) {
+              releasePaint = acquireBrowserSurfaceActivity(runtimeId);
+              // Allow an offscreen Electron guest to render/hydrate before reading
+              // its DOM. Never focus, navigate or refresh on an unconfirmed error.
+              await new Promise<void>((resolve) => setTimeout(resolve, BACKGROUND_PROBE_SETTLE_MS));
+            }
+
+            if (isChatGPTGuestHibernated(runtimeId)) {
+              if (persistent.red[sessionId])
+                recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "guest-hibernated");
+              continue; // Closed/archived and sleeping guests are not recovery targets.
+            }
+            // The guest can redirect to chatgpt.com/ while the last confirmed
+            // /c/<id> survives in localStorage. A normal refresh would only
+            // reload the empty homepage, so navigate to that exact retained URL.
+            // Never do so on an unknown session, a draft, or a working response.
+            // Electron can display the guest homepage before the preview
+            // state catches up, retaining a stale /c/<id> or Loading status.
+            // Read its actual URL without running JavaScript in every guest.
+            const guestLocation = (
+              webview as typeof webview & { getURL?: () => string }
+            ).getURL?.();
+            if (
+              (nav?._tag === "Success" && isChatGPTHomeUrl(nav.url)) ||
+              (nav?._tag !== "Idle" &&
+                typeof guestLocation === "string" &&
+                isChatGPTHomeUrl(guestLocation))
+            ) {
+              if (persistent.escalation[sessionId]) continue;
+              const first = lostRouteFirstSeen.get(sessionId);
+              if (!first || first.url !== expectedUrl) {
+                lostRouteFirstSeen.set(sessionId, { url: expectedUrl, at: Date.now() });
+                continue;
+              }
+              if (
+                Date.now() - first.at < RECOVERY_SCAN_MS ||
+                !canAttempt ||
+                !cooldownElapsed(
+                  history.bySession[sessionId] ?? 0,
+                  Date.now(),
+                  RECOVERY_PER_SESSION_MS,
+                )
+              )
+                continue;
+              // Both the preview's navigation AND the real guest must still
+              // show an empty homepage, never a new conversation or unsent text.
+              const safeHomepage = async (): Promise<boolean> => {
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                try {
+                  const result = (await Promise.race([
+                    webview.executeJavaScript(CHATGPT_RECOVERY_PROBE_EXPRESSION),
+                    new Promise<null>((resolve) => {
+                      timer = setTimeout(() => resolve(null), 4_000);
+                    }),
+                  ])) as RecoverySnapshot | null;
+                  return (
+                    result !== null &&
+                    isChatGPTHomeUrl(result.url) &&
+                    result.activity === "idle" &&
+                    result.totalTurns === 0 &&
+                    result.lastRole == null &&
+                    result.assistantHasContent !== true &&
+                    result.draftEmpty === true &&
+                    result.stopVisible === false &&
+                    result.permanentReason == null
+                  );
+                } catch {
+                  return false;
+                } finally {
+                  if (timer !== undefined) clearTimeout(timer);
+                }
+              };
+              if (!(await safeHomepage())) continue;
+              const latest = readThreadPreviewState(threadRef);
+              const latestNav = latest.sessions[tabId]?.navStatus;
+              const latestGuestUrl = (
+                webview as typeof webview & { getURL?: () => string }
+              ).getURL?.();
+              if (
+                disposed ||
+                !currentSessionIds().includes(sessionId) ||
+                latest.activeTabId !== tabId ||
+                latest.serverEpoch !== state.serverEpoch ||
+                !(
+                  (latestNav?._tag === "Success" && isChatGPTHomeUrl(latestNav.url)) ||
+                  (latestNav?._tag !== "Idle" &&
+                    typeof latestGuestUrl === "string" &&
+                    isChatGPTHomeUrl(latestGuestUrl))
+                ) ||
+                expectedConversationUrl(envId, sessionId, latestNav) !== expectedUrl ||
+                document.querySelector(`webview[data-preview-tab="${runtimeId}"]`) !== webview ||
+                !(await safeHomepage())
+              )
+                continue;
+              const attemptedAt = Date.now();
+              const recent = readRecoveryHistory(envId);
+              if (
+                !cooldownElapsed(recent.lastAttemptAt, attemptedAt, RECOVERY_GLOBAL_MS) ||
+                !cooldownElapsed(
+                  recent.bySession[sessionId] ?? 0,
+                  attemptedAt,
+                  RECOVERY_PER_SESSION_MS,
+                )
+              )
+                continue;
+              recordRecoveryAttempt(envId, sessionId, attemptedAt, currentSessionIds());
+              canAttempt = false;
+              phase(sessionId, "refreshing");
+              let navigationTimer: ReturnType<typeof setTimeout> | undefined;
+              try {
+                await Promise.race([
+                  bridge.navigate(runtimeId, expectedUrl),
+                  new Promise<never>((_, reject) => {
+                    navigationTimer = setTimeout(
+                      () => reject(new Error("Lost-route navigation timed out")),
+                      RECOVERY_REFRESH_TIMEOUT_MS,
+                    );
+                  }),
+                ]);
+                lostRouteFirstSeen.delete(sessionId);
+              } catch (error) {
+                console.warn("[ChatGPT recovery] Lost-route navigation not confirmed:", {
+                  sessionId,
+                  error,
+                });
+              } finally {
+                if (navigationTimer !== undefined) clearTimeout(navigationTimer);
+                phase(sessionId, null);
+              }
+              continue;
+            }
+            lostRouteFirstSeen.delete(sessionId);
+            const observed = await inspectFailure(webview, expectedUrl);
+            if (disposed || !currentSessionIds().includes(sessionId)) continue;
+            if (!observed) {
+              if (persistent.red[sessionId])
+                recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "probe-unverifiable");
+              const episode = persistent.orange[sessionId];
+              if (episode && Date.now() - episode.stageAt > 2 * RECOVERY_ORANGE_GRACE_MS)
+                escalateRecovery(
+                  envId,
+                  persistent,
+                  sessionId,
+                  episode.conversationId,
+                  "guest_url_or_health_unverifiable",
+                  Date.now(),
+                );
+              const red = persistent.red[sessionId];
+              if (red && Date.now() > red.nextAt + 2 * RECOVERY_ORANGE_GRACE_MS)
+                escalateRecovery(
+                  envId,
+                  persistent,
+                  sessionId,
+                  red.conversationId,
+                  "guest_url_or_health_unverifiable",
+                  Date.now(),
+                );
+              continue; // A detached guest is not proof of recovery.
+            }
+            const { problem, snapshot } = observed;
+            if (problem !== "healthy")
+              recordChatGPTRecoveryEvent(envId, sessionId, "failure-observed", problem);
+            const conversationId = chatGPTConversationIdFromUrl(expectedUrl)!;
+            let episode = persistent.orange[sessionId];
+            const red = persistent.red[sessionId];
+
+            if (
+              (episode && episode.conversationId !== conversationId) ||
+              (red?.conversationId && red.conversationId !== conversationId)
+            ) {
+              escalateRecovery(
+                envId,
+                persistent,
+                sessionId,
+                conversationId,
+                "conversation_identity_changed",
+                Date.now(),
+              );
+              phase(sessionId, null);
+              continue;
+            }
+            if (snapshot.permanentReason) {
+              escalateRecovery(
+                envId,
+                persistent,
+                sessionId,
+                conversationId,
+                snapshot.permanentReason,
+                Date.now(),
+              );
+              phase(sessionId, null);
+              continue;
+            }
+            if (persistent.escalation[sessionId]) {
+              recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "human-review-required");
+              // A permanent/ambiguous case remains held until a human reconciles it.
+              phase(sessionId, null);
+              continue;
+            }
+
+            if (problem === "healthy") {
+              if (red) {
+                recordChatGPTRecoveryEvent(envId, sessionId, "healthy", "red-load-failure-cleared");
+                delete persistent.red[sessionId];
+                saveBoundedState(envId, persistent);
+              }
+              if (
+                episode?.stage === "stop_issued" &&
+                (snapshot.activity === "working" ||
+                  (snapshot.activity === "idle" &&
+                    snapshot.assistantHasContent === true &&
+                    episode.assistantSignature !== undefined &&
+                    assistantSignature(snapshot) !== episode.assistantSignature))
+              ) {
+                // A reply visibly resumed/advanced after STOP; cancel Continue.
+                persistent.orange[sessionId] = {
+                  ...episode,
+                  stage: "recovered",
+                  stageAt: Date.now(),
+                };
+                saveBoundedState(envId, persistent);
+                phase(sessionId, null);
+                continue;
+              }
+              if (
+                episode?.stage === "stop_issued" &&
+                snapshot.activity === "idle" &&
+                !safeIdleForContinue(snapshot, episode) &&
+                Date.now() - episode.stageAt > RECOVERY_ORANGE_GRACE_MS
+              ) {
+                escalateRecovery(
+                  envId,
+                  persistent,
+                  sessionId,
+                  conversationId,
+                  "post_stop_editor_or_turn_changed",
+                  Date.now(),
+                );
+                continue;
+              }
+              if (episode?.stage === "stop_issued" && safeIdleForContinue(snapshot, episode)) {
+                // The STOP click from the previous scan has visibly reached idle.
+                // One durable marker must precede ANY typing or Send operation.
+                const latest = readThreadPreviewState(threadRef);
+                if (latest.activeTabId !== tabId || latest.serverEpoch !== state.serverEpoch)
+                  continue;
+                const beforeContinue = await inspectFailure(webview, expectedUrl);
+                if (
+                  !beforeContinue ||
+                  beforeContinue.problem !== "healthy" ||
+                  !safeIdleForContinue(beforeContinue.snapshot, episode) ||
+                  disposed ||
+                  !currentSessionIds().includes(sessionId)
+                )
+                  continue;
+                const stamped = {
+                  ...episode,
+                  stage: "continue_issued" as const,
+                  stageAt: Date.now(),
+                };
+                persistent.orange[sessionId] = stamped;
+                if (!saveBoundedState(envId, persistent)) {
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "unable_to_persist_at_most_once_continue",
+                    Date.now(),
+                  );
+                  continue;
+                }
+                try {
+                  const typed = (await webview.executeJavaScript(
+                    guardedRecoveryContinueTypeExpression(conversationId, stamped),
+                  )) as { result?: string } | null;
+                  if (typed?.result !== "continue_typed") {
+                    escalateRecovery(
+                      envId,
+                      persistent,
+                      sessionId,
+                      conversationId,
+                      "continue_type_not_confirmed",
+                      Date.now(),
+                    );
+                    continue;
+                  }
+                  const beforePress = await inspectFailure(webview, expectedUrl);
+                  if (
+                    !beforePress ||
+                    beforePress.problem !== "healthy" ||
+                    !sameEpisode(beforePress.snapshot, stamped) ||
+                    beforePress.snapshot.stopVisible !== false ||
+                    beforePress.snapshot.permanentReason
+                  ) {
+                    escalateRecovery(
+                      envId,
+                      persistent,
+                      sessionId,
+                      conversationId,
+                      "continue_typed_but_pre_send_identity_or_health_changed",
+                      Date.now(),
+                    );
+                    continue; // Leave the typed draft for a human; never retry.
+                  }
+                  // Same guest JS turn checks URL, the exact user turn, idle state
+                  // and that the editor is *exactly* our Continue. before clicking.
+                  const dispatched = (await webview.executeJavaScript(
+                    guardedRecoveryContinueSendExpression(conversationId, stamped),
+                  )) as { result?: string } | null;
+                  if (dispatched?.result !== "continue_clicked")
+                    escalateRecovery(
+                      envId,
+                      persistent,
+                      sessionId,
+                      conversationId,
+                      "continue_send_not_confirmed",
+                      Date.now(),
+                    );
+                } catch (error) {
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "continue_dispatch_ambiguous_or_failed",
+                    Date.now(),
+                  );
+                  console.warn("[ChatGPT recovery] Continue left for human reconciliation:", error);
+                }
+                // Even a successful click is NOT proof of delivery or completion.
+                phase(sessionId, null);
+                continue;
+              }
+              if (episode) {
+                if (episode.stage === "grace") {
+                  // An idle composer with an empty assistant is NOT proof of a
+                  // reply, but the orange banner disappeared: its grace interval
+                  // is no longer sustained. Start fresh if it reappears.
+                  delete persistent.orange[sessionId];
+                } else if (episode.stage === "continue_issued") {
+                  if (
+                    snapshot.lastUserTurnKey !== episode.userTurnKey &&
+                    snapshot.lastUserTurnKey != null &&
+                    snapshot.lastUserIsRecoveryContinue === true
+                  )
+                    persistent.orange[sessionId] = {
+                      ...episode,
+                      stage: "recovered",
+                      continuedTurnKey: snapshot.lastUserTurnKey,
+                      stageAt: Date.now(),
+                    };
+                } else if (episode.stage === "reloaded" || episode.stage === "stop_issued") {
+                  if (positivelyResumed(snapshot) && episode.stage === "reloaded")
+                    persistent.orange[sessionId] = {
+                      ...episode,
+                      stage: "recovered",
+                      stageAt: Date.now(),
+                    };
+                  else if (
+                    episode.stage === "reloaded" &&
+                    Date.now() - episode.stageAt > RECOVERY_ORANGE_GRACE_MS &&
+                    snapshot.stopVisible === false
+                  ) {
+                    escalateRecovery(
+                      envId,
+                      persistent,
+                      sessionId,
+                      conversationId,
+                      "orphan_stop_unavailable_after_reload",
+                      Date.now(),
+                    );
+                  }
+                }
+                saveBoundedState(envId, persistent);
+              }
+              phase(sessionId, null);
+              continue;
+            }
+
+            phase(sessionId, "queued");
+            if (problem !== "load-failure") {
+              const key = snapshot.lastUserTurnKey;
+              const turn = snapshot.lastUserTurn;
+              if (!key || typeof turn !== "number") {
+                // May still be rendering; never auto-continue an unidentified turn.
+                if (!episode) {
+                  persistent.orange[sessionId] = {
+                    conversationId,
+                    userTurnKey: "",
+                    userTurn: -1,
+                    problem,
+                    firstSeenAt: Date.now(),
+                    stage: "grace",
+                    stageAt: Date.now(),
+                  };
+                  saveBoundedState(envId, persistent);
+                } else if (Date.now() - episode.firstSeenAt >= RECOVERY_ORANGE_GRACE_MS) {
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "last_user_turn_not_identifiable",
+                    Date.now(),
+                  );
+                }
+                continue;
+              }
+              if (episode?.stage === "recovered") {
+                // Re-arm only for a demonstrably NEW user turn, never for the
+                // continuation turn itself or the same stalled answer.
+                const lastHandled = episode.continuedTurnKey ?? episode.userTurnKey;
+                if (key === lastHandled || snapshot.lastUserIsRecoveryContinue !== false) continue;
+                episode = undefined;
+              }
+              if (episode?.stage === "continue_issued" || episode?.stage === "needs_human") {
+                // Do not infer a new episode from the uncertain Continue delivery.
+                // A new red/orange symptom still needs a durable human handoff.
+                if (
+                  episode.stage === "continue_issued" &&
+                  Date.now() - episode.stageAt >= 2 * RECOVERY_ORANGE_GRACE_MS
+                )
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "continue_followup_still_stuck_or_unconfirmed",
+                    Date.now(),
+                  );
+                continue;
+              }
+              if (
+                !episode ||
+                episode.userTurnKey !== key ||
+                episode.userTurn !== turn ||
+                episode.problem !== problem
+              ) {
+                episode = {
+                  conversationId,
+                  userTurnKey: key,
+                  userTurn: turn,
+                  problem,
+                  firstSeenAt: Date.now(),
+                  stage: "grace",
+                  stageAt: Date.now(),
+                };
+                persistent.orange[sessionId] = episode;
+                saveBoundedState(envId, persistent);
+                continue;
+              }
+              if (Date.now() - episode.firstSeenAt < RECOVERY_ORANGE_GRACE_MS) continue;
+              if (episode.stage === "stop_issued") {
+                if (Date.now() - episode.stageAt > 2 * RECOVERY_ORANGE_GRACE_MS)
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "stop_did_not_reach_idle",
+                    Date.now(),
+                  );
+                continue;
+              }
+              if (episode.stage === "reloaded") {
+                // A *second* exact-conversation health check precedes STOP.
+                if (Date.now() - episode.stageAt < 10_000) continue;
+                const latest = readThreadPreviewState(threadRef);
+                if (
+                  latest.activeTabId !== tabId ||
+                  latest.serverEpoch !== state.serverEpoch ||
+                  document.querySelector(`webview[data-preview-tab="${runtimeId}"]`) !== webview
+                )
+                  continue;
+                const confirmed = await inspectFailure(webview, expectedUrl);
+                if (
+                  !confirmed ||
+                  confirmed.problem !== problem ||
+                  !sameEpisode(confirmed.snapshot, episode) ||
+                  confirmed.snapshot.draftEmpty !== true ||
+                  confirmed.snapshot.stopVisible !== true
+                ) {
+                  if (confirmed?.problem === "healthy") continue;
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "orphan_stop_unavailable_or_draft_present",
+                    Date.now(),
+                  );
+                  continue;
+                }
+                persistent.orange[sessionId] = {
+                  ...episode,
+                  stage: "stop_issued",
+                  stageAt: Date.now(),
+                  assistantSignature: assistantSignature(confirmed.snapshot),
+                };
+                if (!saveBoundedState(envId, persistent)) continue;
+                try {
+                  const response = (await webview.executeJavaScript(
+                    stopOrphanExpression(conversationId, episode),
+                  )) as { result?: string } | null;
+                  if (response?.result !== "stop_clicked")
+                    escalateRecovery(
+                      envId,
+                      persistent,
+                      sessionId,
+                      conversationId,
+                      "stop_not_confirmed",
+                      Date.now(),
+                    );
+                } catch {
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "stop_outcome_ambiguous",
+                    Date.now(),
+                  );
+                }
+                continue;
+              }
+            } else {
+              delete persistent.orange[sessionId];
+              saveBoundedState(envId, persistent);
+            }
+
+            const redNextAt = problem === "load-failure" ? (red?.nextAt ?? 0) : 0;
+            if (
+              !canAttempt ||
+              Date.now() < redNextAt ||
+              !cooldownElapsed(
+                history.bySession[sessionId] ?? 0,
+                Date.now(),
+                RECOVERY_PER_SESSION_MS,
+              )
+            ) {
+              const nextAt = Math.max(
+                redNextAt,
+                (history.bySession[sessionId] ?? 0) + RECOVERY_PER_SESSION_MS,
+              );
+              recordChatGPTRecoveryEvent(
+                envId,
+                sessionId,
+                "waiting",
+                !canAttempt ? "global-cooldown" : `next-eligible:${new Date(nextAt).toISOString()}`,
+              );
+              continue;
+            }
+            phase(sessionId, "checking");
+            let stillFailed = true;
+            try {
+              const latest = readThreadPreviewState(threadRef);
+              if (
+                latest.activeTabId !== tabId ||
+                latest.serverEpoch !== state.serverEpoch ||
+                Array.from(document.querySelectorAll("webview")).find(
+                  (element) => element.dataset.previewTab === runtimeId,
+                ) !== webview ||
+                chatGPTConversationIdFromUrl(
+                  expectedConversationUrl(envId, sessionId, latest.sessions[tabId]?.navStatus),
+                ) !== conversationId
+              ) {
+                stillFailed = false;
+                continue;
+              }
+              const second = await inspectFailure(webview, expectedUrl);
+              if (
+                !second ||
+                second.problem !== problem ||
+                (episode && !sameEpisode(second.snapshot, episode)) ||
+                // A dedicated red load-error panel legitimately has no composer.
+                // No visible editor exists to contain an unsent draft in that
+                // state; otherwise demand a positively empty existing editor.
+                !(
+                  second.snapshot.draftEmpty === true ||
+                  (problem === "load-failure" &&
+                    second.snapshot.draftEmpty === null &&
+                    second.snapshot.stopVisible === false)
+                ) ||
+                second.snapshot.permanentReason ||
+                (second.snapshot.stopVisible === true && problem === "load-failure")
+              ) {
+                if (second?.problem === "healthy" && positivelyResumed(second.snapshot)) {
+                  delete persistent.red[sessionId];
+                  delete persistent.orange[sessionId];
+                  saveBoundedState(envId, persistent);
+                  stillFailed = false;
+                }
+                continue;
+              }
+              if (disposed || !currentSessionIds().includes(sessionId)) continue;
+              const recent = readRecoveryHistory(envId);
+              const attemptedAt = Date.now();
+              if (
+                !cooldownElapsed(recent.lastAttemptAt, attemptedAt, RECOVERY_GLOBAL_MS) ||
+                !cooldownElapsed(
+                  recent.bySession[sessionId] ?? 0,
+                  attemptedAt,
+                  RECOVERY_PER_SESSION_MS,
+                )
+              )
+                continue;
+
+              if (problem === "load-failure") {
+                const attempts = (persistent.red[sessionId]?.attempts ?? 0) + 1;
+                persistent.red[sessionId] = {
+                  attempts,
+                  nextAt: attemptedAt + nextRedRetryDelay(sessionId, attempts),
+                  conversationId,
+                };
+              } else if (episode) {
+                persistent.orange[sessionId] = {
+                  ...episode,
+                  stage: "reloaded",
+                  stageAt: attemptedAt,
+                };
+              }
+              if (!saveBoundedState(envId, persistent)) continue;
+              if (problem === "load-failure")
+                recordChatGPTRecoveryEvent(
+                  envId,
+                  sessionId,
+                  "retry-scheduled",
+                  `attempt:${persistent.red[sessionId]?.attempts},next:${new Date(persistent.red[sessionId]!.nextAt).toISOString()}`,
+                );
+              // Persist global/per-tab serialization independently of component mounts.
+              recordRecoveryAttempt(envId, sessionId, attemptedAt, currentSessionIds());
+              phase(sessionId, "refreshing");
+              const startedAt = Date.now();
+              try {
+                const finished = await refreshWithDeadline(bridge, runtimeId);
+                recordChatGPTRecoveryEvent(
+                  envId,
+                  sessionId,
+                  finished ? "refresh-finished" : "refresh-timeout",
+                  problem,
+                );
+                if (!finished && problem !== "load-failure")
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "reload_outcome_ambiguous",
+                    Date.now(),
+                  );
+              } catch (error) {
+                recordChatGPTRecoveryEvent(envId, sessionId, "refresh-failed", problem);
+                console.warn("[ChatGPT recovery] Refresh failed:", error);
+                if (problem !== "load-failure")
+                  escalateRecovery(
+                    envId,
+                    persistent,
+                    sessionId,
+                    conversationId,
+                    "reload_outcome_ambiguous",
+                    Date.now(),
+                  );
+              } finally {
+                const remaining = Math.max(0, 1_200 - (Date.now() - startedAt));
+                if (remaining) {
+                  await new Promise<void>((resolve) => {
+                    const timer = setTimeout(() => {
+                      cancelIndicatorWait = null;
+                      resolve();
+                    }, remaining);
+                    cancelIndicatorWait = () => {
+                      clearTimeout(timer);
+                      resolve();
+                    };
+                  });
+                }
+              }
+              canAttempt = false;
+            } finally {
+              phase(
+                sessionId,
+                stillFailed && currentSessionIds().includes(sessionId) ? "queued" : null,
+              );
+            }
           } finally {
-            if (timeout !== undefined) clearTimeout(timeout);
+            releasePaint?.();
           }
-          if (!failed || disposed || !currentSessionIds().includes(sessionId)) continue;
-
-          // The page may have navigated during the DOM inspection. Never refresh
-          // a live/working conversation on the basis of an obsolete error.
-          const latest = readThreadPreviewState(threadRef);
-          const current = latest.sessions[tabId]?.navStatus;
-          if (
-            !currentSessionIds().includes(sessionId) ||
-            latest.activeTabId !== tabId ||
-            latest.serverEpoch !== state.serverEpoch ||
-            !latest.desktopByTabId[tabId]?.hasWebContents ||
-            latest.desktopByTabId[tabId]?.loading ||
-            current?._tag !== "Success" ||
-            current.url !== nav.url
-          )
-            continue;
-          const recent = readRecoveryHistory(envId);
-          const attemptedAt = Date.now();
-          if (
-            !cooldownElapsed(recent.lastAttemptAt, attemptedAt, RECOVERY_GLOBAL_MS) ||
-            !cooldownElapsed(recent.bySession[sessionId] ?? 0, attemptedAt, RECOVERY_PER_SESSION_MS)
-          )
-            continue;
-
-          // Persist BEFORE refreshing. A stalled refresh, failed network request
-          // or T3 restart must not create a retry storm against ChatGPT.
-          recordRecoveryAttempt(envId, sessionId, attemptedAt, currentSessionIds());
-          try {
-            await bridge.refresh(runtimeId);
-          } catch (error) {
-            console.warn("[ChatGPT recovery] Refresh failed:", error);
-          }
-          return; // At most ONE session refreshed per scan.
         }
+      } catch (error) {
+        console.warn("[ChatGPT recovery] Scanner failed:", error);
       } finally {
         scanning = false;
       }
     };
 
-    // Let the browser runtimes attach and settle before the first inspection.
     const initial = setTimeout(() => void scan(), 20_000);
     const interval = setInterval(() => void scan(), RECOVERY_SCAN_MS);
     return () => {
       disposed = true;
+      cancelIndicatorWait?.();
+      for (const id of trackedPhases.keys()) reportPhase(id, null);
       clearTimeout(initial);
       clearInterval(interval);
     };

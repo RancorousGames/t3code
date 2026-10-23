@@ -469,6 +469,28 @@ export const ClaudeProviderCapabilitiesV2 = {
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
+/**
+ * Interim native child deny before a Claude SDK query is opened.
+ * Agent launches nested/background children; Workflow launches groups.
+ * SDK 0.3.276 disallowedTools prevents even harness-internal direct calls,
+ * unlike allowedTools or the optional canUseTool permission callback.
+ */
+// SDK 0.3.276 also documents subagents invoked through the legacy "Task"
+// tool name. Deny both native aliases before any root prompt is offered.
+export const CLAUDE_NATIVE_CHILD_DENIED_TOOLS = ["Agent", "Task", "Workflow"] as const;
+export const CLAUDE_NATIVE_CHILD_DENY_POLICY_REVISION = "native-child-deny-v2";
+const CLAUDE_NATIVE_CHILD_WORKFLOW_SETTINGS = {
+  disableWorkflows: true,
+  enableWorkflows: false,
+  workflowKeywordTriggerEnabled: false,
+} as const satisfies Pick<
+  ClaudeSdkSettings,
+  "disableWorkflows" | "enableWorkflows" | "workflowKeywordTriggerEnabled"
+>;
+export function claudeNativeChildToolDenied(toolName: string): boolean {
+  return CLAUDE_NATIVE_CHILD_DENIED_TOOLS.some((name) => name === toolName);
+}
+
 const CLAUDE_CODE_PRESET_TOOLS = {
   type: "preset",
   preset: "claude_code",
@@ -1516,6 +1538,25 @@ export function makeClaudeQueryOptions(input: {
   if (requestThinkingSummaries && extraArgs["thinking-display"] === undefined) {
     extraArgs["thinking-display"] = "summarized";
   }
+  // A caller-supplied settings path/CLI flag can outrank the SDK's inline
+  // settings, and cannot be merged safely without reading an unknown file.
+  // Reject just these incompatible requests before a native query is opened.
+  if (
+    typeof input.sdkSettings === "string" ||
+    Object.keys(extraArgs).some((key) =>
+      [
+        "settings",
+        "managed-settings",
+        "disable-workflows",
+        "enable-workflows",
+        "workflow-keyword-trigger-enabled",
+      ].includes(key.replace(/^--/, "").toLowerCase()),
+    )
+  ) {
+    throw new Error(
+      "Claude native-child workflow policy cannot be enforced with overriding settings arguments.",
+    );
+  }
   const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
     ? { resume: input.nativeThreadId }
     : { sessionId: input.nativeThreadId };
@@ -1563,7 +1604,12 @@ export function makeClaudeQueryOptions(input: {
     ...threadIdentity,
     ...(input.resumeSessionAt === undefined ? {} : { resumeSessionAt: input.resumeSessionAt }),
     ...(input.allowedTools === undefined ? {} : { allowedTools: [...input.allowedTools] }),
-    ...(input.disallowedTools === undefined ? {} : { disallowedTools: [...input.disallowedTools] }),
+    // Mandatory even under bypassPermissions, no-prompt modes, and SDK
+    // resumptions. Preserve additional caller restrictions; caller cannot
+    // accidentally remove this native-child deny set.
+    disallowedTools: [
+      ...new Set([...CLAUDE_NATIVE_CHILD_DENIED_TOOLS, ...(input.disallowedTools ?? [])]),
+    ],
     ...(input.canUseTool === undefined ? {} : { canUseTool: input.canUseTool }),
     ...(input.allowDangerouslySkipPermissions === true
       ? { allowDangerouslySkipPermissions: true }
@@ -2718,6 +2764,8 @@ function claudeRuntimeQueryPolicyKey(policy: ClaudeRuntimeQueryPolicy): string {
     allowedTools: policy.allowedTools,
     allowDangerouslySkipPermissions: policy.allowDangerouslySkipPermissions,
     installPermissionCallback: policy.installPermissionCallback,
+    nativeChildDenyRevision: CLAUDE_NATIVE_CHILD_DENY_POLICY_REVISION,
+    disallowedTools: CLAUDE_NATIVE_CHILD_DENIED_TOOLS,
   });
 }
 
@@ -9715,6 +9763,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           callbackOptions: Parameters<CanUseTool>[2],
           options?: { readonly startToolCall?: boolean },
         ) {
+          // Secondary early negative guard; SDK's disallowedTools is primary
+          // since bypassPermissions / permissionPrompts:none may skip callback.
+          if (claudeNativeChildToolDenied(toolName)) {
+            return {
+              behavior: "deny",
+              message: "Native child execution unavailable pending approval.",
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
           const context = yield* Ref.get(activeTurn);
           if (context === null) {
             return {

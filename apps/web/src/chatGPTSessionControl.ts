@@ -1,38 +1,70 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
+import {
+  isChatGPTGuestHibernated,
+  touchChatGPTGuest,
+  wakeChatGPTGuest,
+} from "./browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { chatGPTWebviewAutomation } from "./chatGPTWebviewAutomation";
 import {
   chatGPTBrowserThreadRef,
   chatGPTBrowserLastWorkingKey,
+  chatGPTBrowserLastUrlKey,
   type BrowserSession,
 } from "./chatGPTBrowserSessions";
 import { COMPOSER_SELECTOR } from "./chatGPTBrowserAutomation";
 import { readThreadPreviewState } from "./previewStateStore";
 import { previewBridge } from "./components/preview/previewBridge";
-import { hasChatGPTLoadFailure } from "./components/sidebar/chatGPTConversationRecovery";
+import {
+  hasChatGPTLoadFailure,
+  recordRecoveryAttempt,
+} from "./components/sidebar/chatGPTConversationRecovery";
 import {
   CHATGPT_ACTIVITY_EXPRESSION,
   chatGPTActivityAge,
   type ChatGPTActivityAge,
 } from "./components/sidebar/chatGPTActivity";
-import { inspectChatGPTPage, type PageInspection, type PageMessage } from "./chatGPTSessionDom";
-import { chatGPTSentTurnObserved, prepareChatGPTSessionMessage } from "./chatGPTSessionMessaging";
 import {
+  CHATGPT_SAFE_EMPTY_HOME_EXPRESSION,
+  inspectChatGPTPage,
+  type PageInspection,
+  type PageMessage,
+} from "./chatGPTSessionDom";
+import { isChatGPTHomeUrl } from "./chatGPTBrowserPrewarm";
+import { appendUnverifiedOpenRigPolicies, chatGPTSentTurnObserved, prepareChatGPTSessionMessage } from "./chatGPTSessionMessaging";
+import {
+  CANONICAL_CHATGPT_CONVERSATION_ID,
   chatGPTConversationIdFromUrl,
   requireExpectedChatGPTConversation,
 } from "./chatGPTConversationIdentity";
+import {
+  readChatGPTRecoveryEvents,
+  readChatGPTRecoveryState,
+  recordChatGPTRecoveryEvent,
+} from "./chatGPTRecoveryDiagnostics";
 import { validChatGPTCompletion } from "./chatGPTSessionCompletion";
+import { assertArchivableSession, descendantSessions } from "./chatGPTSessionArchivePolicy";
 
-export type ChatGPTSessionAction = "list" | "read" | "send" | "reload" | "complete";
+export type ChatGPTSessionAction =
+  | "list"
+  | "read"
+  | "send"
+  | "reload"
+  | "complete"
+  | "archive"
+  | "restore"
+  | "change_state";
 export type ChatGPTSessionWhich = "visible" | "recent" | "working" | "blocked" | "all";
+export const reloadRequiresForce = (color: ChatGPTActivityAge): boolean =>
+  color === "interrupted" || color === "delivery-timeout";
 export function matchesSessionWhich(
   which: ChatGPTSessionWhich,
   age: ChatGPTActivityAge,
   hidden: boolean,
 ): boolean {
-  if (which === "all") return true;
   if (hidden) return false;
+  if (which === "all") return true;
   if (which === "visible") return true;
   if (which === "recent") return age === "recent";
   if (which === "working") return age === "working";
@@ -47,6 +79,7 @@ export type ChatGPTSessionStatus =
   | "stuck_connecting"
   | "loading"
   | "unavailable"
+  | "hibernated"
   | "new";
 
 // First observed time is a local observation, not ChatGPT's disconnection time.
@@ -70,6 +103,33 @@ function guestFor(environmentId: EnvironmentId, sessionId: string) {
     nav: tabId ? state.sessions[tabId]?.navStatus : null,
     loading: tabId ? state.desktopByTabId[tabId]?.loading : false,
   };
+}
+
+const GUEST_WAKE_TIMEOUT_MS = 45_000;
+
+/** Reloads a hibernated guest and waits until its composer can be inspected. */
+async function ensureGuestAwake(environmentId: EnvironmentId, sessionId: string): Promise<void> {
+  const { runtimeId } = guestFor(environmentId, sessionId);
+  if (!runtimeId) return;
+  if (!isChatGPTGuestHibernated(runtimeId)) {
+    touchChatGPTGuest(runtimeId);
+    return;
+  }
+  wakeChatGPTGuest(runtimeId);
+  const deadline = Date.now() + GUEST_WAKE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const guest = guestFor(environmentId, sessionId);
+    if (guest.webview && !guest.loading && guest.nav?._tag === "Success") {
+      try {
+        const page = await readGuest(environmentId, sessionId, "end", 1, false);
+        if (page && (page.activity !== "unknown" || page.stuck)) return;
+      } catch {
+        /* still hydrating */
+      }
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 500));
+  }
+  // Fall through: the caller's inspection reports the actual state.
 }
 
 async function readGuest(
@@ -116,8 +176,20 @@ export async function inspectBrowserSession(
     hidden: entry.hidden === true,
     parentSessionId: entry.parentSessionId ?? null,
     project: entry.project ?? null,
-    url: nav?._tag === "Success" ? nav.url : (null as string | null),
-    conversationId: chatGPTConversationIdFromUrl(nav?._tag === "Success" ? nav.url : null),
+    url:
+      entry.hidden && entry.archive && !entry.archive.restoredAt
+        ? entry.archive.conversationUrl
+        : nav?._tag === "Success"
+          ? nav.url
+          : (null as string | null),
+    conversationId: chatGPTConversationIdFromUrl(
+      entry.hidden && entry.archive && !entry.archive.restoredAt
+        ? entry.archive.conversationUrl
+        : nav?._tag === "Success"
+          ? nav.url
+          : null,
+    ),
+    archive: entry.archive ?? null,
     observedGuestUrl: null as string | null,
     status: "unavailable" as ChatGPTSessionStatus,
     statusReason: "" as string,
@@ -127,6 +199,7 @@ export async function inspectBrowserSession(
     uiColor: "unknown" as ChatGPTActivityAge,
     lastRole: null as PageInspection["lastRole"],
     lastText: "",
+    latestMessageFirstFiveWords: null as string | null,
     totalTurns: 0,
     messages: [] as PageMessage[],
     lastWorkingAt: 0,
@@ -151,6 +224,14 @@ export async function inspectBrowserSession(
   if (!runtimeId) {
     result.status = "loading";
     result.statusReason = "Preview tab has not attached yet.";
+    return result;
+  }
+  if (isChatGPTGuestHibernated(runtimeId)) {
+    result.status = "hibernated";
+    result.statusReason =
+      "Unloaded after inactivity to save memory; read, send, reload or complete reloads it.";
+    result.activity = "idle";
+    result.uiColor = chatGPTActivityAge("idle", result.lastWorkingAt, Date.now());
     return result;
   }
   if (loading) {
@@ -183,6 +264,7 @@ export async function inspectBrowserSession(
     result.activity = page.activity;
     result.lastRole = page.lastRole;
     result.lastText = page.lastText;
+    result.latestMessageFirstFiveWords = page.latestMessageFirstFiveWords ?? null;
     result.totalTurns = page.totalTurns;
     result.messages = page.messages;
     result.diagnostics = page.diagnostics;
@@ -191,6 +273,7 @@ export async function inspectBrowserSession(
     const uiState =
       page.uiActivity === "working" ||
       page.uiActivity === "idle" ||
+      page.uiActivity === "delivery-timeout" ||
       page.uiActivity === "interrupted"
         ? page.uiActivity
         : page.uiActivity?.startsWith("invalid: ")
@@ -233,9 +316,12 @@ export async function inspectBrowserSession(
         result.status = "new";
         result.statusReason = "No messages yet.";
       }
-    } else if (page.lastRole === "user") {
+    } else if (page.lastRole === "user" || !page.assistantHasContent) {
       result.status = "pending_or_stalled";
-      result.statusReason = "Last visible message is from the user; generation is not running.";
+      result.statusReason =
+        page.lastRole === "user"
+          ? "Last visible message is from the user; generation is not running."
+          : "Last assistant unit is empty; no actual reply or generation has been observed.";
     } else {
       // Question marks are only a weak hint. Distinguish it in the explanation.
       const looksLikeQuestion = /\?\s*$/.test(page.lastText.trim());
@@ -256,6 +342,8 @@ export async function runChatGPTSessionControl(input: {
   sessions: readonly BrowserSession[];
   action: ChatGPTSessionAction;
   which?: ChatGPTSessionWhich | undefined;
+  includeHidden?: boolean | undefined;
+  state?: "hidden" | "unhidden" | "closed" | undefined;
   sessionId?: string | undefined;
   from?: "start" | "end" | undefined;
   count?: number | undefined;
@@ -264,6 +352,10 @@ export async function runChatGPTSessionControl(input: {
   senderSessionId?: string | undefined;
   expectedConversationId?: string | undefined;
   force?: boolean | undefined;
+  managerDecision?: boolean | undefined;
+  reason?: string | undefined;
+  /** Local selected-session recovery only. Never exposed over the desktop pipe. */
+  shouldContinue?: (() => boolean) | undefined;
 }): Promise<unknown> {
   const { environmentId, sessions, action } = input;
   const count = Math.max(1, Math.min(20, Math.floor(input.count ?? 3)));
@@ -273,9 +365,9 @@ export async function runChatGPTSessionControl(input: {
   }
   if (action === "list") {
     const which = input.which ?? "visible";
-    // Hidden tabs are not mounted. Skip them for every filtered view and
-    // never try to revive them just to determine their activity.
-    const candidates = which === "all" ? sessions : sessions.filter((entry) => !entry.hidden);
+    // "all" changes activity filtering, never the hidden-session privacy default.
+    // Hidden guests stay unmounted and are never woken merely to list them.
+    const candidates = input.includeHidden === true ? sessions : sessions.filter((entry) => !entry.hidden);
     const inspected: Awaited<ReturnType<typeof inspectBrowserSession>>[] = [];
     for (let i = 0; i < candidates.length; i += 4) {
       inspected.push(
@@ -285,14 +377,160 @@ export async function runChatGPTSessionControl(input: {
       );
     }
     const result = inspected.filter((entry) =>
-      matchesSessionWhich(which, entry.uiColor, entry.hidden),
+      (input.includeHidden === true && entry.hidden) || matchesSessionWhich(which, entry.uiColor, entry.hidden),
     );
     return { which, sessions: result, total: result.length };
   }
   if (!input.sessionId)
-    throw new Error("sessionId is required for read, send, reload and complete.");
+    throw new Error("sessionId is required for read, send, reload, complete, archive, restore and change_state.");
   const entry = sessions.find((session) => session.id === input.sessionId);
   if (!entry) throw new Error("Unknown ChatGPT session id.");
+  if (!entry.hidden && action !== "restore") await ensureGuestAwake(environmentId, entry.id);
+  if (action === "restore") {
+    if (
+      !entry.archive ||
+      !CANONICAL_CHATGPT_CONVERSATION_ID.test(
+        chatGPTConversationIdFromUrl(entry.archive.conversationUrl) ?? "",
+      )
+    )
+      throw new Error("Session has no valid, restorable manager archive.");
+    if (!entry.hidden && !entry.archive.restoredAt)
+      throw new Error("Archive state is inconsistent; refusing restore.");
+    return {
+      sessionId: entry.id,
+      archive: entry.archive,
+      alreadyRestored: !entry.hidden,
+    };
+  }
+  if (action === "archive") {
+    if (entry.hidden) {
+      if (
+        entry.archive &&
+        !entry.archive.restoredAt &&
+        CANONICAL_CHATGPT_CONVERSATION_ID.test(
+          chatGPTConversationIdFromUrl(entry.archive.conversationUrl) ?? "",
+        )
+      ) {
+        const ref = chatGPTBrowserThreadRef(environmentId, entry.id);
+        const state = readThreadPreviewState(ref);
+        const guest = guestFor(environmentId, entry.id);
+        // After a previous successful close there is nothing to inspect or
+        // release. If an interrupted close left an unmounted live preview, its
+        // generation state is unknowable: restoring first is the safe recovery.
+        if (Object.keys(state.sessions).length > 0 && !guest.webview)
+          throw new Error(
+            "Archived preview still exists but cannot be inspected; restore it before retrying archive.",
+          );
+        if (guest.webview) {
+          if (guest.loading) throw new Error("Archived guest is loading; refusing close.");
+          const page = await readGuest(environmentId, entry.id, "end", 1, false);
+          if (
+            !page ||
+            page.activity !== "idle" ||
+            page.lastRole !== "assistant" ||
+            page.stuck ||
+            page.connectionInterrupted ||
+            chatGPTConversationIdFromUrl(page.url) !==
+              chatGPTConversationIdFromUrl(entry.archive.conversationUrl)
+          )
+            throw new Error("Archived guest is active or uncertain; refusing close.");
+        }
+        return { sessionId: entry.id, archive: entry.archive, alreadyArchived: true };
+      }
+      throw new Error("Hidden session has no active manager archive and cannot be inspected.");
+    }
+    const decision = input.managerDecision === true && !!input.reason?.trim();
+    if (input.managerDecision === true && !decision)
+      throw new Error("Explicit managerDecision requires a nonempty reason.");
+    if (input.reason !== undefined && !input.managerDecision)
+      throw new Error("A reason requires managerDecision=true.");
+    if (input.reason && input.reason.length > 500)
+      throw new Error("Manager decision reason must be at most 500 characters.");
+    const check = async () => {
+      const current = await inspectBrowserSession(environmentId, entry);
+      assertArchivableSession(entry, current, decision);
+      const descendants = descendantSessions(sessions, entry.id);
+      for (let i = 0; i < descendants.length; i += 4) {
+        await Promise.all(
+          descendants.slice(i, i + 4).map(async (child) => {
+            if (child.hidden && child.archive && !child.archive.restoredAt) return;
+            if (child.hidden) throw new Error(`Descendant ${child.id} has unknown hidden status.`);
+            const observed = await inspectBrowserSession(environmentId, child);
+            // A manager decision for the parent is not a declaration about its workers.
+            assertArchivableSession(child, observed, false);
+          }),
+        );
+      }
+      return current;
+    };
+    await check();
+    // Recheck directly before the renderer commits the archive. A DOM-idle hint
+    // is not completion and no claimed managerSessionId conveys authority.
+    const current = await check();
+    return {
+      sessionId: entry.id,
+      archive: {
+        archivedAt: new Date().toISOString(),
+        conversationUrl: current.observedGuestUrl!,
+        basis: decision ? ("manager_decision" as const) : ("completion" as const),
+        ...(decision ? { reason: input.reason!.trim() } : {}),
+      },
+      alreadyArchived: false,
+    };
+  }
+  if (action === "change_state") {
+    const state = input.state;
+    if (state !== "hidden" && state !== "unhidden" && state !== "closed")
+      throw new Error("change_state requires state=hidden, unhidden or closed.");
+    if (state === "unhidden") {
+      const archivedUrl = entry.archive && !entry.archive.restoredAt
+        ? entry.archive.conversationUrl : null;
+      if (archivedUrl && !CANONICAL_CHATGPT_CONVERSATION_ID.test(
+        chatGPTConversationIdFromUrl(archivedUrl) ?? "",
+      )) throw new Error("Archived session has no canonical conversation URL; cannot unhide.");
+      return {
+        action, state, sessionId: entry.id, alreadyInState: !entry.hidden,
+        ...(archivedUrl ? { conversationUrl: archivedUrl } : {}),
+      };
+    }
+    if (state === "hidden" && entry.hidden)
+      return { action, state, sessionId: entry.id, alreadyInState: true };
+    if (state === "closed" && entry.hidden) {
+      const preview = readThreadPreviewState(chatGPTBrowserThreadRef(environmentId, entry.id));
+      if (guestFor(environmentId, entry.id).webview || Object.keys(preview.sessions).length)
+        throw new Error("Hidden session still has a preview; unhide and close safely first.");
+      return { action, state, sessionId: entry.id, alreadyInState: false };
+    }
+    const before = await inspectBrowserSession(environmentId, entry);
+    if (before.status === "working" || before.uiColor === "working")
+      throw new Error("Refusing to change state while ChatGPT is generating.");
+    if (state === "hidden") {
+      const latest = await inspectBrowserSession(environmentId, entry);
+      if (latest.status === "working" || latest.uiColor === "working" ||
+          latest.observedGuestUrl !== before.observedGuestUrl)
+        throw new Error("Session became active or navigated during hide inspection.");
+    }
+    if (state === "closed") {
+      if (!["new", "done_or_idle", "waiting_for_input"].includes(before.status) ||
+          !before.observedGuestUrl)
+        throw new Error("Cannot permanently close an unreadable, pending or interrupted session.");
+      const { runtimeId, webview } = guestFor(environmentId, entry.id);
+      if (!runtimeId || !webview)
+        throw new Error("Cannot inspect the exact session guest before permanent close.");
+      const draft = await chatGPTWebviewAutomation.evaluate(runtimeId, {
+        expression: `(() => {const el=document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+          return el instanceof HTMLTextAreaElement ? el.value :
+            el instanceof HTMLElement ? (el.innerText||el.textContent||"") : null;})()`,
+      });
+      if (typeof draft !== "string" || draft.trim())
+        throw new Error("Cannot permanently close: composer draft is nonempty or unreadable.");
+      const latest = await inspectBrowserSession(environmentId, entry);
+      if (latest.observedGuestUrl !== before.observedGuestUrl ||
+          latest.status !== before.status || latest.uiColor === "working")
+        throw new Error("Session changed during close inspection; refusing permanent close.");
+    }
+    return { action, state, sessionId: entry.id, alreadyInState: false };
+  }
   if (entry.hidden) throw new Error("Session is hidden; restore it before controlling it.");
   if (action === "read") {
     const maxMessageChars = Number.isFinite(input.maxMessageChars)
@@ -314,11 +552,18 @@ export async function runChatGPTSessionControl(input: {
       return {
         session,
         selection: { from, count },
+        recoveryLog: readChatGPTRecoveryEvents(environmentId, entry.id),
+        recoveryState: readChatGPTRecoveryState(environmentId, entry.id),
         conversationGuardValidated: true,
         verifiedConversationId,
       };
     }
-    return { session, selection: { from, count } };
+    return {
+      session,
+      selection: { from, count },
+      recoveryLog: readChatGPTRecoveryEvents(environmentId, entry.id),
+      recoveryState: readChatGPTRecoveryState(environmentId, entry.id),
+    };
   }
   if (action === "complete") {
     const observed = await inspectBrowserSession(environmentId, entry);
@@ -342,21 +587,115 @@ export async function runChatGPTSessionControl(input: {
     };
   }
   if (action === "reload") {
+    recordChatGPTRecoveryEvent(
+      environmentId,
+      entry.id,
+      "manual-reload-requested",
+      input.force ? "forced" : "guarded",
+    );
     const before = await inspectBrowserSession(environmentId, entry);
     if (before.status === "working") throw new Error("Refusing to reload a working session.");
-    if (before.status !== "stuck" && before.status !== "stuck_connecting" && !input.force)
-      throw new Error("Session is not confirmed stuck; pass force=true to reload it anyway.");
-    // The connection may have recovered between calls. Verify once more before
-    // refreshing, particularly for the transient interrupted-connection banner.
-    if (before.status === "stuck_connecting") {
-      const latest = await inspectBrowserSession(environmentId, entry);
-      if (latest.status !== "stuck_connecting" && latest.status !== "stuck" && !input.force)
-        throw new Error("Session recovered or changed state before refresh; not reloading.");
-      if (latest.status === "working") throw new Error("Refusing to reload a working session.");
+    // Orange means the same interrupted/delivery-timeout states rendered by the
+    // sidebar. Explicit force is required only there, not for ordinary reloads.
+    const orange = reloadRequiresForce(before.uiColor);
+    if (orange && !input.force) {
+      throw new Error("Session is orange (interrupted delivery); pass force=true to reload.");
     }
+    // A transient redirect from /c/<id> to the empty ChatGPT homepage is
+    // identity loss, not an error that a refresh of / can repair. Reattach only
+    // with a canonical saved identity and two inspections of the same empty guest.
+    if (isChatGPTHomeUrl(before.observedGuestUrl ?? "")) {
+      let saved: unknown = null;
+      try {
+        saved = JSON.parse(
+          localStorage.getItem(chatGPTBrowserLastUrlKey(environmentId, entry.id)) ?? "null",
+        );
+      } catch {
+        throw new Error("Saved ChatGPT URL is unreadable; refusing recovery.");
+      }
+      const expected = typeof saved === "string" ? chatGPTConversationIdFromUrl(saved) : null;
+      if (!expected || !CANONICAL_CHATGPT_CONVERSATION_ID.test(expected)) {
+        throw new Error("No canonical saved ChatGPT conversation URL; refusing recovery.");
+      }
+      const original = guestFor(environmentId, entry.id);
+      if (!original.runtimeId || !original.webview || !previewBridge) {
+        throw new Error("The exact ChatGPT guest is not attached.");
+      }
+      const safeGuest = async () => {
+        const latest = guestFor(environmentId, entry.id);
+        if (latest.runtimeId !== original.runtimeId || latest.webview !== original.webview)
+          return false;
+        const inspection = await readGuest(environmentId, entry.id, "end", 1, false);
+        if (
+          !inspection ||
+          !isChatGPTHomeUrl(inspection.url) ||
+          inspection.activity !== "idle" ||
+          inspection.totalTurns !== 0 ||
+          inspection.connectionInterrupted
+        )
+          return false;
+        return (
+          (await chatGPTWebviewAutomation.evaluate(original.runtimeId!, {
+            expression: CHATGPT_SAFE_EMPTY_HOME_EXPRESSION,
+          })) === true
+        );
+      };
+      if (!(await safeGuest()) || !(await safeGuest()))
+        throw new Error("Guest changed, is active, or contains a draft; refusing recovery.");
+      if (input.shouldContinue && !input.shouldContinue())
+        throw new Error("The target session is no longer selected; cancelling recovery.");
+      // Share the recovery scheduler's global/per-tab history so a manual
+      // navigation cannot be followed by an immediate automatic retry.
+      recordRecoveryAttempt(
+        environmentId,
+        entry.id,
+        Date.now(),
+        sessions.map((s) => s.id),
+      );
+      // Do not overwrite last-url: it is already the durable conversation identity.
+      await previewBridge.navigate(original.runtimeId, saved as string);
+      recordChatGPTRecoveryEvent(environmentId, entry.id, "manual-navigate-issued", "saved-url");
+      return {
+        sessionId: entry.id,
+        recoveredUrl: saved,
+        requestedNavigation: true,
+        previousStatus: before.status,
+      };
+    }
+    // A tab redirected to another conversation is not permission to refresh
+    // that unrelated page, even when the rendered activity looks idle.
+    const observedConversation = chatGPTConversationIdFromUrl(before.observedGuestUrl);
+    if (!observedConversation)
+      throw new Error("Session is not showing a canonical ChatGPT conversation; refusing refresh.");
+    let savedConversation: string | null = null;
+    try {
+      const savedUrl = JSON.parse(
+        localStorage.getItem(chatGPTBrowserLastUrlKey(environmentId, entry.id)) ?? "null",
+      );
+      savedConversation = typeof savedUrl === "string" ? chatGPTConversationIdFromUrl(savedUrl) : null;
+    } catch {
+      throw new Error("Saved ChatGPT URL is unreadable; refusing refresh.");
+    }
+    if (savedConversation && savedConversation !== observedConversation)
+      throw new Error("Session navigated to an unrelated conversation; refusing refresh.");
+    // The page can start generating or change conversation while a pipe request
+    // waits. Recheck on every refresh, including ordinary healthy idle pages.
+    const latest = await inspectBrowserSession(environmentId, entry);
+    if (latest.status === "working" || latest.uiColor === "working")
+      throw new Error("Refusing to reload a working session.");
+    if (latest.observedGuestUrl !== before.observedGuestUrl ||
+        (!input.force && reloadRequiresForce(latest.uiColor)))
+      throw new Error("Session URL or orange state changed before refresh; not reloading.");
     const { runtimeId } = guestFor(environmentId, entry.id);
     if (!runtimeId || !previewBridge) throw new Error("ChatGPT guest is not attached.");
+    recordRecoveryAttempt(
+      environmentId,
+      entry.id,
+      Date.now(),
+      sessions.map((s) => s.id),
+    );
     await previewBridge.refresh(runtimeId);
+    recordChatGPTRecoveryEvent(environmentId, entry.id, "manual-refresh-issued", before.status);
     return { sessionId: entry.id, reloaded: true, previousStatus: before.status };
   }
   if (action === "send") {
@@ -366,7 +705,6 @@ export async function runChatGPTSessionControl(input: {
       input.message ?? "",
       input.senderSessionId,
     );
-    const message = prepared.text;
     const before = await inspectBrowserSession(environmentId, entry, "end", 1, true);
     if (input.expectedConversationId !== undefined) {
       requireExpectedChatGPTConversation(input.expectedConversationId, before.observedGuestUrl);
@@ -389,6 +727,68 @@ export async function runChatGPTSessionControl(input: {
     });
     if (typeof draft === "string" && draft.trim())
       throw new Error("Composer contains an existing draft; refusing to overwrite it.");
+    // Optional C05 applies only to an already authorized guarded send to an existing
+    // guest. Never scans idle browsers or wakes guests solely to fetch policy.
+    let policyEnrichment: {
+      schema: "t3-c05-browser-optional/v1";
+      status: "deferred" | "not_eligible" | "prepared" | "observed_user_turn";
+      reason?: string;
+      qitemIds?: string[];
+    } = { schema: "t3-c05-browser-optional/v1", status: "not_eligible",
+      reason: "exact_conversation_guard_not_supplied" };
+    let message = prepared.text;
+    const policyReader = typeof window !== "undefined"
+      ? window.desktopBridge?.readOpenRigPolicyForBrowserSend : undefined;
+    const guardedConversation = input.expectedConversationId;
+    if (guardedConversation && policyReader &&
+        chatGPTConversationIdFromUrl(before.observedGuestUrl ?? "") === guardedConversation) {
+      try {
+        const intake = await Promise.race([
+          policyReader({ browserSessionId: entry.id, conversationId: guardedConversation }),
+          new Promise<never>((_, reject) => setTimeout(
+            () => reject(new Error("policy_intake_timeout")), 7_000)),
+        ]);
+        if (intake.status === "ready" &&
+            intake.browserSessionId === entry.id &&
+            intake.conversationId === guardedConversation &&
+            intake.policies.length > 0) {
+          // The MAIN bridge independently proves one exact RigSpec manager's current
+          // active primary. The renderer additionally rechecks guest identity below.
+          const candidate = appendUnverifiedOpenRigPolicies(prepared.text, intake.policies);
+          if (candidate.length <= 30_000) {
+            message = candidate;
+            policyEnrichment = {
+              schema: "t3-c05-browser-optional/v1", status: "prepared",
+              qitemIds: [...new Set(intake.policies.map(row => row.qitemId))],
+            };
+          } else policyEnrichment = { schema: "t3-c05-browser-optional/v1",
+            status: "deferred", reason: "policy_context_oversized" };
+        } else if (intake.status === "ready") {
+          policyEnrichment = { schema: "t3-c05-browser-optional/v1", status: "deferred",
+            reason: intake.policies.length === 0 ? "no_pending_policy" : "policy_identity_mismatch" };
+        } else policyEnrichment = { schema: "t3-c05-browser-optional/v1",
+          status: "deferred", reason: intake.reason };
+      } catch (error) {
+        policyEnrichment = { schema: "t3-c05-browser-optional/v1", status: "deferred",
+          reason: error instanceof Error && error.message === "policy_intake_timeout"
+            ? "policy_intake_timeout" : "policy_ipc_unavailable" };
+      }
+    } else if (guardedConversation) {
+      policyEnrichment = { schema: "t3-c05-browser-optional/v1", status: "deferred",
+        reason: policyReader ? "exact_guest_url_not_verified" : "policy_ipc_unavailable" };
+    }
+    // The policy read is optional: original send guards remain binding. Reinspect
+    // the same guest after every awaited policy IPC before a single editor mutation.
+    const refreshed = await inspectBrowserSession(environmentId, entry, "end", 1, true);
+    if (guardedConversation) {
+      requireExpectedChatGPTConversation(guardedConversation, refreshed.observedGuestUrl);
+    }
+    if (refreshed.observedGuestUrl !== before.observedGuestUrl ||
+        refreshed.status === "working" || refreshed.status === "stuck" ||
+        refreshed.status === "stuck_connecting" || refreshed.status === "unavailable" ||
+        refreshed.status === "loading" || guestFor(environmentId, entry.id).runtimeId !== runtimeId) {
+      throw new Error("Session URL, generation or guest changed before typing; refusing send.");
+    }
     await chatGPTWebviewAutomation.waitFor(runtimeId, {
       selector: COMPOSER_SELECTOR,
       timeoutMs: 3000,
@@ -397,6 +797,7 @@ export async function runChatGPTSessionControl(input: {
       selector: COMPOSER_SELECTOR,
       text: message,
       clear: true,
+      requireEmptyComposer: true,
       expectedConversationId: input.expectedConversationId,
     });
     // Once Send is clicked, do not retry: duplicate prompts can be costly.
@@ -408,20 +809,35 @@ export async function runChatGPTSessionControl(input: {
     while (Date.now() < deadline) {
       try {
         const after = await readGuest(environmentId, entry.id, "end", 1, true);
-        if (
-          chatGPTSentTurnObserved(
-            message,
-            after?.messages ?? [],
-            before.totalTurns,
-            after?.totalTurns ?? 0,
-          )
-        )
+        // The ordinary read projection truncates each message to 24k. When
+        // C05 includes more full queue bytes, inspect the actual last user DOM
+        // unit instead; never truncate policy or fabricate a matching turn.
+        let observed = chatGPTSentTurnObserved(
+          message, after?.messages ?? [], before.totalTurns, after?.totalTurns ?? 0,
+        );
+        if (!observed && after && after.totalTurns > before.totalTurns &&
+            after.lastRole === "user" && message.length > 6_000) {
+          const fullText = await chatGPTWebviewAutomation.evaluate(runtimeId, {
+            expression: `(() => {
+              const nodes = document.querySelectorAll('[data-message-author-role="user"],[data-content-search-unit-key$=":user"]');
+              const last = nodes[nodes.length - 1];
+              if (!last) return null;
+              return last.innerText || last.textContent || "";
+            })()`,
+          });
+          const normalize = (value: string) => value.replace(/\\s+/gu, " ").trim();
+          observed = typeof fullText === "string" && normalize(fullText) === normalize(message);
+        }
+        if (observed)
           return {
             sessionId: entry.id,
             recipientSessionId: entry.id,
             senderSessionId: prepared.sender?.id ?? null,
             messageSent: true,
             delivery: "user_turn_observed" as const,
+            policyEnrichment: policyEnrichment.status === "prepared"
+              ? { ...policyEnrichment, status: "observed_user_turn" as const }
+              : policyEnrichment,
             ...(input.expectedConversationId
               ? {
                   conversationGuardValidated: true as const,

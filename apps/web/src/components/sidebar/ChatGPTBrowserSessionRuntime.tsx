@@ -143,7 +143,10 @@ export function ChatGPTBrowserSessionRuntime({
     if (isChatGPTConversationUrl(currentUrl)) renameSessionFromPageTitle(sessionId, currentTitle);
   }, [currentTitle, currentUrl, renameSessionFromPageTitle, sessionId]);
   useEffect(() => {
-    if (currentUrl && /^https?:\/\//i.test(currentUrl) && currentUrl !== lastUrl)
+    // A failed/offline conversation load can redirect the guest to ChatGPT's
+    // homepage. Never replace the durable conversation reference with that
+    // transient URL: otherwise every following T3 restart loses the session.
+    if (currentUrl !== null && isChatGPTConversationUrl(currentUrl) && currentUrl !== lastUrl)
       setLastUrl(currentUrl);
   }, [currentUrl, lastUrl, setLastUrl]);
 

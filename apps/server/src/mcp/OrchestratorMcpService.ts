@@ -148,6 +148,14 @@ type TerminalTaskStatus = Extract<
 >;
 
 export interface OrchestratorMcpServiceShape {
+  /** Read-only provider preflight shared by native-create planning and delegation.
+   * A resolved candidate is never a spawn approval or an execution permit.
+   */
+  readonly resolveTargetCandidate: (
+    parent: Pick<OrchestrationV2ThreadProjection, "thread">,
+    target: OrchestratorMcpTarget | undefined,
+    skipProjectEnablementFilter?: boolean,
+  ) => Effect.Effect<ResolvedTarget, OrchestratorMcpFailure>;
   readonly capabilities: (
     scope: McpInvocationScope,
     input?: OrchestratorMcpCapabilitiesInput,
@@ -221,6 +229,15 @@ const isThreadManagementError = Schema.is(ThreadManagementService.ThreadManageme
 function failure(code: OrchestratorMcpFailure["code"], message: string): OrchestratorMcpFailure {
   return new OrchestratorMcpFailure({ code, message });
 }
+
+// Remove this hold only when create_threads consumes a trusted, durable one-use
+// decision before dispatch. Until then even codex:gpt-6-luna is blocked here.
+const nativeCreateHold: Effect.Effect<void, OrchestratorMcpFailure> = Effect.fail(
+  failure(
+    "capability_denied",
+    "create_threads is disabled until authenticated, single-use human spawn approval is available.",
+  ),
+);
 
 function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   if (!isThreadManagementError(error)) return failure("orchestration_error", errorMessage(error));
@@ -1449,6 +1466,38 @@ const make = Effect.gen(function* () {
       supportedRuntimeModes: provider.supportedRuntimeModes,
     };
   });
+
+  /** Resolve the actual registry/adapters/project candidate without execution. */
+  const resolveTargetCandidate: OrchestratorMcpServiceShape["resolveTargetCandidate"] = (
+    parent,
+    target,
+    skipProjectEnablementFilter = false,
+  ) =>
+    Effect.gen(function* () {
+      const providers = yield* loadProviders;
+      const resolved = yield* resolveTargetRechecking({
+        parent,
+        target,
+        providers,
+        skipProjectEnablementFilter,
+      });
+      // Driver-only selection already filters disabled candidates. Explicit
+      // targets and inherited defaults need the same read-only project check;
+      // an already accepted command can only replay its existing receipt.
+      if (
+        !skipProjectEnablementFilter &&
+        !(yield* threadManagement.isProviderInstanceEnabledForProject({
+          projectId: parent.thread.projectId,
+          instanceId: resolved.modelSelection.instanceId,
+        }))
+      ) {
+        return yield* failure(
+          "invalid_request",
+          `Provider instance ${resolved.modelSelection.instanceId} is disabled for this project.`,
+        );
+      }
+      return resolved;
+    });
 
   const requestKey = (clientRequestId: string | undefined): Effect.Effect<string> =>
     clientRequestId === undefined
@@ -2746,7 +2795,6 @@ const make = Effect.gen(function* () {
           );
         }
         const parentNodeId = parentRun.rootNodeId;
-        const providers = yield* loadProviders;
         const key = yield* requestKey(input.clientRequestId);
         const created = yield* Effect.forEach(
           input.threads,

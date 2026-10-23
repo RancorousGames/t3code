@@ -92,9 +92,11 @@ function readChatGPTActivity(loadFailure: boolean) {
     },
   ] as const;
   const body = document.body;
+  // One read: textContent copies the whole conversation, and this runs per poll.
+  const bodyText = body?.textContent ?? "";
   if (body) {
     for (const notice of notices) {
-      if (!body.textContent?.includes(notice.prefix)) continue;
+      if (!bodyText.includes(notice.prefix)) continue;
       const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
       let node: Node | null;
       while ((node = walker.nextNode())) {

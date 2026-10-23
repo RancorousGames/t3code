@@ -1,7 +1,9 @@
+import * as NodeVM from "node:vm";
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { COMPOSER_SELECTOR, sendInitialChatGPTPrompt } from "./chatGPTBrowserAutomation";
+import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 
 const environmentId = EnvironmentId.make("local");
 
@@ -60,6 +62,9 @@ function harness(
   return {
     automation,
     readState,
+    readSessions: vi.fn(() => [
+      { id: "session-abc", title: "Child", parentSessionId: "parent-123" },
+    ]),
     events,
     acquireActivity,
     releaseActivity,
@@ -80,10 +85,15 @@ describe("ChatGPT initial prompt automation", () => {
       ...h,
       timeoutMs: 5_000,
     } as unknown as Parameters<typeof sendInitialChatGPTPrompt>[0]);
+    const sentPrompt = buildChatGPTSessionHandoffPrompt(
+      "Review the combat spec",
+      "session-abc",
+      "parent-123",
+    );
     expect(h.events).toEqual([
       "guest-background-active",
       "composer-ready",
-      "typed:Review the combat spec",
+      `typed:${sentPrompt}`,
       "pressed-enter",
       "guest-released",
     ]);
@@ -101,17 +111,12 @@ describe("ChatGPT initial prompt automation", () => {
       input.expression.includes("data-message-author-role"),
     )?.[1].expression;
     expect(expression).toBeDefined();
-    const message = document.createElement("div");
-    message.dataset.messageAuthorRole = "user";
-    message.textContent = "Review the combat spec";
-    document.body.appendChild(message);
-    try {
-      expect(window.eval(expression!)).toBe(true);
-      message.remove();
-      expect(window.eval(expression!)).toBe(false);
-    } finally {
-      message.remove();
-    }
+    const context = (message: string | null) => ({
+      document: { querySelectorAll: () => (message === null ? [] : [{ textContent: message }]) },
+      window: { location: { pathname: "/" } },
+    });
+    expect(NodeVM.runInNewContext(expression!, context(sentPrompt))).toBe(true);
+    expect(NodeVM.runInNewContext(expression!, context("wrong task"))).toBe(false);
   });
 
   it("uses the actual guest before upstream's desktop overlay is synchronized", async () => {
@@ -125,6 +130,21 @@ describe("ChatGPT initial prompt automation", () => {
     } as unknown as Parameters<typeof sendInitialChatGPTPrompt>[0]);
     expect(h.automation.type).toHaveBeenCalledOnce();
     expect(h.automation.press).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the new T3 tab ID was not persisted", async () => {
+    const h = harness();
+    await expect(
+      sendInitialChatGPTPrompt({
+        environmentId,
+        sessionId: "unsaved-session",
+        prompt: "Build child",
+        ...h,
+        timeoutMs: 1_000,
+      } as unknown as Parameters<typeof sendInitialChatGPTPrompt>[0]),
+    ).rejects.toThrow("must be persisted");
+    expect(h.automation.type).not.toHaveBeenCalled();
+    expect(h.automation.press).not.toHaveBeenCalled();
   });
 
   it("does not count merely pressing Enter as successful delivery", async () => {

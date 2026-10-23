@@ -18,6 +18,21 @@ const projects = [
 ];
 
 describe("ChatGPT session project grouping", () => {
+  it("keeps permanent groups, prioritizes matching titles and removes bias on unpin", () => {
+    const pinned = [{ key: "name:cascadeur", title: "Cascadeur" }];
+    const sessions = [
+      { id: "a", title: "Cascadeur IK Research" },
+      { id: "b", title: "Cascadeur plugin" },
+      { id: "c", title: "Unrelated project" },
+    ];
+    const groups = groupChatGPTSessions(sessions, projects, pinned);
+    expect(groups[0]?.key).toBe("name:cascadeur");
+    expect(groups[0]?.rows.map((row) => row.session.id)).toEqual(["a", "b"]);
+    expect(groupChatGPTSessions([], projects, pinned)[0]?.title).toBe("Cascadeur");
+    const afterUnpin = groupChatGPTSessions([{ id: "a", title: "Cascadeur IK Research" }], projects);
+    expect(afterUnpin.some((group) => group.key === "name:cascadeur")).toBe(false);
+  });
+
   it("reuses confirmed training without a manually maintained keyword list", () => {
     const lab = {
       id: "animationLab",
@@ -43,21 +58,31 @@ describe("ChatGPT session project grouping", () => {
     expect(matchRegisteredProject("COMBAT TASKS", [...projects, lab])?.id).toBe("wartribes");
   });
 
-  it("displays a user-confirmed child beneath its actual parent without altering raw metadata", () => {
-    const raw = [
-      {
-        id: "2e2b839c-0835-4a86-90bc-fc6511c180f2",
-        title: "Try spawning a chatgpt subagent using omcp for a test",
-      },
-      { id: "b47774ff-4148-4968-876b-ec4b95d076af", title: "OMCP Subagent Spawn Test" },
-    ];
-    const annotated = applyConfirmedChatGPTSessionMetadata(raw);
-    expect(raw[1]).not.toHaveProperty("parentSessionId");
-    expect(annotated[1]?.parentSessionId).toBe(raw[0]?.id);
-    const rows = groupChatGPTSessions(raw, projects).flatMap((group) => group.rows);
-    expect(rows.map(({ session, depth }) => [session.id, depth])).toEqual([
-      [raw[0]!.id, 0],
-      [raw[1]!.id, 1],
+  it("never silently attributes an unlinked OMCP child from build-global historical labels", () => {
+    const root = {
+      id: "2e2b839c-0835-4a86-90bc-fc6511c180f2",
+      title: "Try spawning a chatgpt subagent using omcp for a test",
+    };
+    const spawned = {
+      id: "b47774ff-4148-4968-876b-ec4b95d076af",
+      title: "OMCP Subagent Spawn Test",
+    };
+    // A build-global historical label is not scoped to this environment. The
+    // same IDs could exist in a copied workspace with an unrelated lineage.
+    const raw = [root, spawned];
+    expect(applyConfirmedChatGPTSessionMetadata(raw)[1]?.parentSessionId).toBeUndefined();
+    const unrelatedRows = groupChatGPTSessions(raw, projects).flatMap((group) => group.rows);
+    expect(unrelatedRows.map(({ session, depth }) => [session.id, depth])).toEqual([
+      [root.id, 0],
+      [spawned.id, 0],
+    ]);
+    const linked = groupChatGPTSessions(
+      [root, { ...spawned, parentSessionId: root.id }],
+      projects,
+    ).flatMap((group) => group.rows);
+    expect(linked.map(({ session, depth }) => [session.id, depth])).toEqual([
+      [root.id, 0],
+      [spawned.id, 1],
     ]);
   });
 
@@ -203,24 +228,57 @@ describe("ChatGPT last-active/status sorting", () => {
     const groups = layoutChatGPTSessions(sessions, projects, "activity", byId);
     expect(groups[0]?.title).toBeNull();
     expect(groups[0]?.rows.map(({ session, depth }) => [session.id, depth])).toEqual([
-      ["workingAltraea", 0],
       ["workingWartribes", 0],
+      ["workingAltraea", 0],
       ["recentAltraea", 0],
     ]);
     expect(groups.slice(1).map(({ title }) => title)).toEqual([
-      "Settling Altraea",
       "Wartribes",
+      "Settling Altraea",
       "Errors",
     ]);
     expect(groups[1]?.rows.map(({ session }) => session.id)).toEqual([
-      "idleAltraea",
-      "idleAltraea2",
+      "idleWartribes2",
+      "idleWartribes",
     ]);
     expect(groups[2]?.rows.map(({ session }) => session.id)).toEqual([
-      "idleWartribes",
-      "idleWartribes2",
+      "idleAltraea2",
+      "idleAltraea",
     ]);
     expect(groups[3]?.rows.map(({ session }) => session.id)).toEqual(["interrupted", "invalid"]);
+  });
+
+  it("keeps all working rows stable when their heartbeats change while recent rows remain time ordered", () => {
+    const rows = [
+      { id: "one", title: "Wartribes work A" },
+      { id: "two", title: "Wartribes work B" },
+      { id: "recentA", title: "Altraea recent A" },
+      { id: "recentB", title: "Altraea recent B" },
+    ];
+    const first = layoutChatGPTSessions(rows, projects, "activity", {
+      one: { age: "working", lastWorkingAt: 100 },
+      two: { age: "working", lastWorkingAt: 200 },
+      recentA: { age: "recent", lastWorkingAt: 500 },
+      recentB: { age: "recent", lastWorkingAt: 700 },
+    });
+    const later = layoutChatGPTSessions(rows, projects, "activity", {
+      one: { age: "working", lastWorkingAt: 9_999 },
+      two: { age: "working", lastWorkingAt: 201 },
+      recentA: { age: "recent", lastWorkingAt: 900 },
+      recentB: { age: "recent", lastWorkingAt: 701 },
+    });
+    expect(first[0]?.rows.map(({ session }) => session.id)).toEqual([
+      "one",
+      "two",
+      "recentB",
+      "recentA",
+    ]);
+    expect(later[0]?.rows.map(({ session }) => session.id)).toEqual([
+      "one",
+      "two",
+      "recentA",
+      "recentB",
+    ]);
   });
 
   it("keeps child indentation even when parent and child have different statuses", () => {
