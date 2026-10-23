@@ -14,6 +14,11 @@ import {
   type BrowserSession,
 } from "./chatGPTBrowserSessions";
 import { COMPOSER_SELECTOR } from "./chatGPTBrowserAutomation";
+import {
+  CHATGPT_COMPOSER_PROBE_EXPRESSION,
+  sameComposerProbe,
+  type ComposerProbe,
+} from "./chatGPTDraftInspection";
 import { readThreadPreviewState } from "./previewStateStore";
 import { previewBridge } from "./components/preview/previewBridge";
 import {
@@ -51,6 +56,7 @@ import { assertArchivableSession, descendantSessions } from "./chatGPTSessionArc
 
 export type ChatGPTSessionAction =
   | "list"
+  | "snapshot"
   | "read"
   | "send"
   | "reload"
@@ -450,10 +456,84 @@ export async function runChatGPTSessionControl(input: {
   }
   if (!input.sessionId)
     throw new Error(
-      "sessionId is required for read, send, reload, complete, archive, restore and change_state.",
+      "sessionId is required for snapshot, read, send, reload, complete, archive, restore and change_state.",
     );
   const entry = sessions.find((session) => session.id === input.sessionId);
   if (!entry) throw new Error("Unknown ChatGPT session id.");
+  if (action === "snapshot") {
+    // Do NOT call ensureGuestAwake, inspectBrowserSession, or read: each has
+    // hydration/reconciliation side effects. This is an exact loaded-guest-only read.
+    const receiptKey = sendReceiptKey(environmentId, entry.id);
+    const pending = uncertainChatGPTSends.get(receiptKey) ?? null;
+    const pendingRevision = pending ? JSON.stringify(pending) : null;
+    const ledgerUnchanged = () => {
+      const current = uncertainChatGPTSends.get(receiptKey) ?? null;
+      return current === pending && (current ? JSON.stringify(current) : null) === pendingRevision;
+    };
+    const unknown = (reason: string) => ({
+      sessionId: entry.id,
+      status: "UNKNOWN" as const,
+      reason,
+      uncertainSendPresent: pending !== null,
+    });
+    if (entry.hidden) return unknown("hidden_guest");
+    const guest = guestFor(environmentId, entry.id);
+    if (!guest.runtimeId || !guest.webview || isChatGPTGuestHibernated(guest.runtimeId))
+      return unknown("hibernated_or_unmounted");
+    if (guest.loading || guest.nav?._tag !== "Success") return unknown("guest_not_ready");
+    const read = async (): Promise<ComposerProbe> =>
+      (await guest.webview!.executeJavaScript(CHATGPT_COMPOSER_PROBE_EXPRESSION)) as ComposerProbe;
+    let first: ComposerProbe;
+    let second: ComposerProbe;
+    try {
+      first = await read();
+      second = await read();
+    } catch {
+      return unknown("guest_read_failed");
+    }
+    if (
+      first.status === "unknown" ||
+      !sameComposerProbe(first, second) ||
+      first.url !== guest.nav.url ||
+      guestFor(environmentId, entry.id).webview !== guest.webview ||
+      isChatGPTGuestHibernated(guest.runtimeId)
+    )
+      return unknown("guest_or_draft_changed");
+    const writer = window.desktopBridge?.savePrivateChatGPTDraftSnapshot;
+    if (!writer) return unknown("private_desktop_backup_unavailable");
+    // The ledger is snapshotted without reconciliation or deletion. Fail when
+    // a send arrived during the two DOM observations.
+    if (!ledgerUnchanged()) return unknown("uncertain_send_changed");
+    try {
+      const saved = await writer({
+        sessionId: entry.id,
+        url: first.url,
+        draft: first.text,
+        uncertainSend: pending
+          ? {
+              text: pending.text,
+              original: pending.original,
+              url: pending.url,
+              before: { ...pending.before },
+              policyEnrichment: { ...pending.policyEnrichment },
+            }
+          : null,
+      });
+      if (
+        !ledgerUnchanged() ||
+        guestFor(environmentId, entry.id).webview !== guest.webview ||
+        isChatGPTGuestHibernated(guest.runtimeId)
+      )
+        return unknown("guest_or_send_changed_during_backup");
+      return {
+        status: first.status === "nonempty" ? "backed_up_nonempty" : "backed_up_empty",
+        ...saved,
+        // No raw draft, send text or transcript can escape the desktop-only writer.
+      };
+    } catch {
+      return unknown("private_backup_failed");
+    }
+  }
   if (!entry.hidden && action !== "restore") await ensureGuestAwake(environmentId, entry.id);
   if (action === "restore") {
     if (

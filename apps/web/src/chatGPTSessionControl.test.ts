@@ -109,6 +109,12 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
               : [],
           };
         }
+        if (script.includes("inspectChatGPTComposer"))
+          return {
+            status: composerDraft.trim() ? "nonempty" : "empty",
+            url: guestUrl,
+            text: composerDraft,
+          }; // read-only composer probe, no guest focus or transcript
         if (script.includes("const el=document.querySelector(")) return composerDraft; // existing draft check
         if (script.includes("Boolean(document.querySelector(")) return true; // composer waitFor
         if (script.includes("Contenteditable rejected text")) {
@@ -571,6 +577,89 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
       fixture.guest.remove();
     }
   });
+  it("backs up the exact mounted guest + unresolved send without reconciliation or duplicate click", async () => {
+    const fixture = guestFixture(
+      async () => {
+        throw new Error("offline");
+      },
+      {
+        delayed: true,
+        pressThrows: true,
+      },
+    );
+    const savePrivate = vi.fn(
+      async (input: {
+        sessionId: string;
+        url: string;
+        draft: string;
+        uncertainSend: { original: string } | null;
+      }) => ({
+        sessionId: input.sessionId,
+        url: input.url,
+        bytes: new TextEncoder().encode(input.draft).length,
+        sha256: "f".repeat(64),
+        path: "PRIVATE_FIXTURE_PATH",
+        uncertainSendPresent: input.uncertainSend !== null,
+      }),
+    );
+    Object.assign(window.desktopBridge!, { savePrivateChatGPTDraftSnapshot: savePrivate });
+    fixture.setComposerDraft("");
+    const command = {
+      environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3", hidden: false }] as never,
+      sessionId: browserId,
+    };
+    try {
+      expect(
+        await runChatGPTSessionControl({
+          ...command,
+          action: "send",
+          expectedConversationId: conversationId,
+          message: "Pending private fixture",
+        }),
+      ).toMatchObject({ sendAttempted: true, delivery: "unknown" });
+      fixture.setComposerDraft("Unsent Unicode 🌲");
+      const snapshot = (await runChatGPTSessionControl({
+        ...command,
+        action: "snapshot",
+      })) as { status: string; uncertainSendPresent: boolean; bytes: number; draft?: string };
+      expect(snapshot).toMatchObject({
+        status: "backed_up_nonempty",
+        uncertainSendPresent: true,
+      });
+      expect(snapshot.bytes).toBe(new TextEncoder().encode("Unsent Unicode 🌲").length);
+      expect(snapshot).not.toHaveProperty("draft");
+      const writerPayload = savePrivate.mock.calls[0]![0];
+      expect(writerPayload.uncertainSend?.original).toBe("Pending private fixture");
+      expect(writerPayload.draft).toBe("Unsent Unicode 🌲");
+      // The previous UNKNOWN receipt remains intact; snapshot cannot consume it.
+      expect(
+        await runChatGPTSessionControl({
+          ...command,
+          action: "send",
+          expectedConversationId: conversationId,
+          message: "Pending private fixture",
+        }),
+      ).toMatchObject({ sendAttempted: true, delivery: "unknown" });
+      expect(fixture.presses).toBe(1);
+    } finally {
+      fixture.guest.remove();
+    }
+  });
+
+  it("never wakes a hibernated/unmounted guest for a preservation snapshot", async () => {
+    const command = {
+      environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3", hidden: false }] as never,
+      action: "snapshot" as const,
+      sessionId: browserId,
+    };
+    expect(await runChatGPTSessionControl(command)).toMatchObject({
+      sessionId: browserId,
+      status: "UNKNOWN",
+    });
+  });
+
   it("exposes UNKNOWN then reconciled DELIVERED on read, without resubmitting", async () => {
     const fixture = guestFixture(
       async () => {

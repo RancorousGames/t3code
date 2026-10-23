@@ -14,6 +14,7 @@ import {
   useChatGPTGuestHibernation,
 } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
+import { hasVerifiedEmptyChatGPTComposer } from "../../chatGPTDraftInspection";
 import {
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserThreadRef,
@@ -182,9 +183,30 @@ export function useChatGPTBrowserSessionActivity(
           now: observedAt,
         })
       ) {
-        hibernateChatGPTGuest(runtimeTabId);
-        next = "idle";
-        reason = null;
+        // Hibernation unmounts the guest and irreversibly loses in-memory
+        // composer text. Unknown is NOT empty. Never wake or focus a guest.
+        const attached = Array.from(document.querySelectorAll("webview")).find(
+          (element) => element.dataset.previewTab === runtimeTabId,
+        );
+        const latest = tabId ? readThreadPreviewState(threadRef).sessions[tabId]?.navStatus : null;
+        const provenEmpty =
+          attached &&
+          latest?._tag === "Success" &&
+          (await hasVerifiedEmptyChatGPTComposer(attached, latest.url)) &&
+          Array.from(document.querySelectorAll("webview")).some(
+            (element) => element === attached && element.dataset.previewTab === runtimeTabId,
+          );
+        if (
+          !disposed &&
+          provenEmpty &&
+          useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible !== true
+        ) {
+          hibernateChatGPTGuest(runtimeTabId);
+          next = "idle";
+          reason = null;
+        } else if (!disposed) {
+          reason = "Guest kept loaded: composer draft is nonempty or could not be verified empty.";
+        }
       }
       if (next === "working") {
         // Persist a heartbeat rather than writing localStorage on every 2s probe.

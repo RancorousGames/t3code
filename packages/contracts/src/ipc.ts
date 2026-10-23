@@ -1721,7 +1721,38 @@ export const DesktopOpenRigOperatorReplyResultSchema = Schema.Union([
 ]);
 export type DesktopOpenRigOperatorReplyResult = typeof DesktopOpenRigOperatorReplyResultSchema.Type;
 
+export interface DesktopChatGPTDraftSnapshotInput {
+  readonly sessionId: string;
+  readonly url: string;
+  readonly draft: string;
+  readonly uncertainSend: {
+    readonly text: string;
+    readonly original: string;
+    readonly url: string;
+    readonly before: { readonly totalTurns: number; readonly lastUserTurnKey: string | null };
+    readonly policyEnrichment: {
+      readonly schema: "t3-c05-browser-optional/v1";
+      readonly status: "deferred" | "not_eligible" | "prepared" | "observed_user_turn";
+      readonly reason?: string | undefined;
+      readonly qitemIds?: readonly string[] | undefined;
+    };
+  } | null;
+}
+
+export interface DesktopChatGPTDraftSnapshotReceipt {
+  readonly sessionId: string;
+  readonly url: string;
+  readonly bytes: number;
+  readonly sha256: string;
+  readonly path: string;
+  readonly uncertainSendPresent: boolean;
+}
+
 export interface DesktopBridge {
+  /** Local desktop-only private backup: raw draft and pending send never return over activation IPC. */
+  savePrivateChatGPTDraftSnapshot?: (
+    input: DesktopChatGPTDraftSnapshotInput,
+  ) => Promise<DesktopChatGPTDraftSnapshotReceipt>;
   getAppBranding: () => DesktopAppBranding | null;
   /** Absolute path of a dropped or picked file; absent on desktop builds predating it. */
   getPathForFile?: (file: File) => string;

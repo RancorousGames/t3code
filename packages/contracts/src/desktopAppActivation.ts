@@ -21,19 +21,28 @@ const NativeOperationId = TrimmedNonEmptyString.check(
 // syntax is NOT a grant to create a thread, reserve a spawn or attest an agent.
 // Encoded %HH components are opaque and forwarded verbatim.
 const NativeReadSendThreadId = TrimmedNonEmptyString.check(
-  Schema.isPattern(/^(?:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|mcp:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|thread:mcp:(?:[A-Za-z0-9._~:-]|%[0-9a-f]{2}){1,240})$/i),
-).check(Schema.isMaxLength(256)).check(
-  Schema.makeFilter((id: string) => {
-    try {
-      // Decode only to validate percent encoding; preserve the exact ID on wire.
-      const decoded = decodeURIComponent(id);
-      return !id.includes("..") && !decoded.includes("..") &&
-        ![...decoded].some((char) => /\s/u.test(char) || char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
-    } catch {
-      return false;
-    }
-  }),
-);
+  Schema.isPattern(
+    /^(?:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|mcp:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|thread:mcp:(?:[A-Za-z0-9._~:-]|%[0-9a-f]{2}){1,240})$/i,
+  ),
+)
+  .check(Schema.isMaxLength(256))
+  .check(
+    Schema.makeFilter((id: string) => {
+      try {
+        // Decode only to validate percent encoding; preserve the exact ID on wire.
+        const decoded = decodeURIComponent(id);
+        return (
+          !id.includes("..") &&
+          !decoded.includes("..") &&
+          ![...decoded].some(
+            (char) => /\s/u.test(char) || char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+          )
+        );
+      } catch {
+        return false;
+      }
+    }),
+  );
 
 const NativeCreateRequest = Schema.Struct({
   action: Schema.Literal("create"),
@@ -94,15 +103,29 @@ export const DesktopAppActivationRequest = Schema.Union([
     itemId: Schema.optional(TrimmedNonEmptyString),
     sourceType: Schema.optional(Schema.Literals(["queue", "mailbox", "human_gate"])),
     state: Schema.optional(Schema.Literals(["read", "unread", "archived", "trash", "inbox"])),
-    answers: Schema.optional(Schema.Array(Schema.Struct({
-      questionId: TrimmedNonEmptyString,
-      value: Schema.Union([Schema.String, Schema.Number, Schema.Array(Schema.String)]),
-    }))),
+    answers: Schema.optional(
+      Schema.Array(
+        Schema.Struct({
+          questionId: TrimmedNonEmptyString,
+          value: Schema.Union([Schema.String, Schema.Number, Schema.Array(Schema.String)]),
+        }),
+      ),
+    ),
   }),
   Schema.Struct({
     ...DesktopAppActivationBase,
     type: Schema.Literal("chatgpt.sessions"),
-    action: Schema.Literals(["list", "read", "send", "reload", "complete", "archive", "restore", "change_state"]),
+    action: Schema.Literals([
+      "list",
+      "snapshot",
+      "read",
+      "send",
+      "reload",
+      "complete",
+      "archive",
+      "restore",
+      "change_state",
+    ]),
     which: Schema.optional(Schema.Literals(["visible", "recent", "working", "blocked", "all"])),
     includeHidden: Schema.optional(Schema.Boolean),
     state: Schema.optional(Schema.Literals(["hidden", "unhidden", "closed"])),

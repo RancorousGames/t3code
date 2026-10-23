@@ -35,6 +35,7 @@ export const GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:get-local-environm
 export const SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:set-local-environment-enabled";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
+export const PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL = "desktop:private-chatgpt-draft-snapshot";
 export const OPENRIG_LIST_AGENTS_CHANNEL = "desktop:openrig-list-agents";
 export const OPENRIG_NATIVE_APPROVAL_PENDING_CHANNEL = "desktop:openrig-native-approval-pending";
 export const OPENRIG_NATIVE_APPROVAL_GET_CHANNEL = "desktop:openrig-native-approval-get";
