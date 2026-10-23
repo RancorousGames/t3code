@@ -124,3 +124,110 @@ describe("ChatGPT parent-linked worker visibility", () => {
     ).toEqual([{ key: "permanent", title: "Pinned", rows: [] }]);
   });
 });
+
+describe("verified manager seats are never filtered as subordinate workers", () => {
+  const lineage: BrowserSession[] = [
+    { id: "omni", title: "Omni Coordinator", project: "Omni" },
+    { id: "t3-manager", title: "T3 Code Manager", parentSessionId: "omni", project: "T3 Code" },
+    { id: "t3-worker", title: "T3 source specialist", parentSessionId: "t3-manager" },
+    { id: "wartribes-manager", title: "Wartribes Manager", parentSessionId: "omni" },
+    { id: "rig-manager", title: "RIG MANAGER", parentSessionId: "omni" },
+    { id: "omni-worker", title: "Coordinator worker", parentSessionId: "omni" },
+    { id: "new-manager", title: "Renamed seat", parentSessionId: "t3-manager" },
+    { id: "new-worker", title: "Nested worker", parentSessionId: "new-manager" },
+    { id: "unknown-orphan", title: "Unknown class", parentSessionId: "not-present" },
+    { id: "unknown-root", title: "T3 Code Manager (unverified)", project: "T3 Code" },
+    { id: "hidden-worker", title: "Hidden worker", parentSessionId: "t3-manager", hidden: true },
+    {
+      id: "snoozed-worker",
+      title: "Snoozed worker",
+      parentSessionId: "t3-manager",
+      snoozedUntil: Date.now() + 300_000,
+    },
+    { id: "hidden-manager", title: "Hidden manager", parentSessionId: "omni", hidden: true },
+  ];
+
+  const verifiedManagers = new Set([
+    "omni",
+    "t3-manager",
+    "wartribes-manager",
+    "rig-manager",
+    "new-manager",
+    "hidden-manager",
+  ]);
+
+  it("protects every verified manager at any lineage depth, independent of title", () => {
+    const workers = linkedChatGPTWorkerIds(lineage, verifiedManagers);
+    expect([...workers].sort()).toEqual(
+      ["t3-worker", "omni-worker", "new-worker", "hidden-worker", "snoozed-worker"].sort(),
+    );
+    for (const id of verifiedManagers) expect(workers.has(id)).toBe(false);
+    expect(workers.has("unknown-orphan")).toBe(false);
+    expect(workers.has("unknown-root")).toBe(false);
+    expect(lineage.find((s) => s.id === "t3-manager")?.parentSessionId).toBe("omni");
+  });
+
+  it("keeps verified manager siblings while hiding worker children in their original groups", () => {
+    const visible = lineage.filter((entry) => !entry.hidden && !entry.snoozedUntil);
+    const full = layoutChatGPTSessions(visible, projects, "started", {});
+    const workers = linkedChatGPTWorkerIds(lineage, verifiedManagers);
+    const filtered = filterChatGPTWorkerGroups(full, workers, false, new Set());
+    expect(ids(filtered).sort()).toEqual(
+      [
+        "omni",
+        "t3-manager",
+        "wartribes-manager",
+        "rig-manager",
+        "new-manager",
+        "unknown-orphan",
+        "unknown-root",
+      ].sort(),
+    );
+    expect(ids(filtered)).not.toContain("t3-worker");
+    expect(ids(filtered)).not.toContain("new-worker");
+    // Filtering is presentation-only: the authoritative parent, project and
+    // existing persisted hidden/snoozed fields must not be modified.
+    expect(lineage.find((entry) => entry.id === "t3-worker")?.parentSessionId).toBe("t3-manager");
+    expect(lineage.find((entry) => entry.id === "hidden-worker")?.hidden).toBe(true);
+    expect(lineage.find((entry) => entry.id === "snoozed-worker")?.snoozedUntil).toBeGreaterThan(
+      Date.now(),
+    );
+    expect(filterChatGPTWorkerGroups(full, workers, true, new Set())).toEqual(full);
+  });
+
+  it("shows hidden verified managers in the hidden view without restoring hidden workers", () => {
+    const hidden = lineage.filter((entry) => entry.hidden === true);
+    const full = layoutChatGPTSessions(hidden, projects, "started", {});
+    const workers = linkedChatGPTWorkerIds(lineage, verifiedManagers);
+    expect(ids(filterChatGPTWorkerGroups(full, workers, false, new Set()))).toEqual([
+      "hidden-manager",
+    ]);
+    // The sidebar deliberately bypasses the worker filter when showing hidden sessions.
+    expect(filterChatGPTWorkerGroups(full, workers, true, new Set())).toEqual(full);
+  });
+
+  it("fails open when authoritative manager seat evidence is unavailable", () => {
+    // Parent links alone cannot discriminate a T3 manager under Omni from
+    // workers. Until the seat ledger is verified, do not suppress any row.
+    const workers = linkedChatGPTWorkerIds(lineage, null);
+    expect(workers.size).toBe(0);
+    const displayed = lineage.filter((entry) => !entry.hidden && !entry.snoozedUntil);
+    const full = layoutChatGPTSessions(displayed, projects, "started", {});
+    expect(filterChatGPTWorkerGroups(full, workers, false, new Set())).toEqual(full);
+    expect(ids(full)).toContain("t3-manager");
+    expect(ids(full)).toContain("t3-worker");
+  });
+
+  it("does not promote a manager-like name without verified seat provenance", () => {
+    const fake: BrowserSession[] = [
+      { id: "parent", title: "Omni Coordinator" },
+      { id: "unverified", title: "T3 Code Manager", parentSessionId: "parent" },
+      { id: "orphan", title: "Worker", parentSessionId: "missing" },
+    ];
+    const workers = linkedChatGPTWorkerIds(fake, new Set(["parent"]));
+    expect([...workers]).toEqual(["unverified"]);
+    expect(workers.has("orphan")).toBe(false);
+    // A display title does not authorize manager-role inference; missing
+    // ledger evidence is a provenance limitation, not a reason to invent a role.
+  });
+});
