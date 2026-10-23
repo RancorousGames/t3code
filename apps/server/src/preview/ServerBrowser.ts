@@ -353,6 +353,8 @@ const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> = new 
 
 const AGENT_TAB_LIMIT = 8;
 const SERVER_TAB_LIMIT = 32;
+/** ChatGPT sessions are rendered by the desktop webview, not server Chromium. */
+const CHATGPT_BROWSER_THREAD_PREFIX = "t3-browser-session:";
 const AGENT_TAB_IDLE_MS = 30 * 60 * 1000;
 const IDLE_SWEEP_INTERVAL = "1 minute";
 
@@ -782,11 +784,16 @@ const make = Effect.gen(function* () {
   const createTab = async (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
     const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
     adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
-    const desktop =
-      adopted === undefined && (await desktopRenders(snapshot))
-        ? await connectDesktop(snapshot)
-        : null;
-    // Otherwise a desktop that attaches late shows its own page, and the agent drives another.
+    const attachedToDesktop = adopted === undefined && (await desktopRenders(snapshot));
+    if (
+      adopted === undefined &&
+      !attachedToDesktop &&
+      desktopChannel.available &&
+      snapshot.threadId.startsWith(CHATGPT_BROWSER_THREAD_PREFIX)
+    ) {
+      throw new Error("The ChatGPT session's desktop webview has not attached.");
+    }
+    const desktop = attachedToDesktop ? await connectDesktop(snapshot) : null;
     if (!desktop && desktopChannel.available) {
       await runPromise(
         manager
@@ -2253,6 +2260,14 @@ const make = Effect.gen(function* () {
   const mirrorManagerEvent = (event: PreviewEvent) =>
     Effect.promise(async () => {
       if (event.type === "opened" && event.snapshot.runtime === "server") {
+        // A saved ChatGPT tab must not spawn a second headless renderer while unloaded.
+        if (
+          desktopChannel.available &&
+          event.threadId.startsWith(CHATGPT_BROWSER_THREAD_PREFIX) &&
+          !(await Effect.runPromise(
+            desktopChannel.isAttached({ threadId: event.threadId, tabId: event.tabId }),
+          ))
+        ) return;
         const key = tabKey(event.snapshot.threadId, event.snapshot.tabId);
         if (event.snapshot.automationOwner === undefined || pendingTabs.has(key) || tabs.has(key))
           await ensureTab(event.snapshot).catch(constVoid);
