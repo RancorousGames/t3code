@@ -1,4 +1,5 @@
 import type { BrowserSession } from "./chatGPTBrowserSessions";
+import { validChatGPTCompletion } from "./chatGPTSessionCompletion";
 import {
   CANONICAL_CHATGPT_CONVERSATION_ID,
   chatGPTConversationIdFromUrl,
@@ -30,9 +31,20 @@ export function assertArchivableSession(
     observed.totalTurns < 1
   )
     throw new Error(`Session ${entry.id} has no verified ChatGPT conversation.`);
-  if (!managerDecision && !observed.completion)
+  if (
+    !managerDecision &&
+    (!entry.completion ||
+      !observed.completion ||
+      entry.completion.declaredAt !== observed.completion.declaredAt ||
+      !validChatGPTCompletion(
+        entry.completion,
+        observed.observedGuestUrl,
+        observed.totalTurns,
+        observed.activity === "idle",
+      ))
+  )
     throw new Error(
-      `Session ${entry.id} has no valid completion marker; invoke complete first or supply an explicit manager decision.`,
+      `Session ${entry.id} has no valid persisted completion marker; invoke complete first or supply an explicit manager decision.`,
     );
 }
 
