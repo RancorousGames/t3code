@@ -1,5 +1,7 @@
 import {
   AgentProviderV1DesktopSnapshot,
+  AgentProviderV1HistoryRequest,
+  AgentProviderV1Submit,
   T3_AGENT_PROVIDER_VERSION,
   type AgentProviderV1Session,
   OrchestrationDispatchCommandError,
@@ -10,6 +12,13 @@ import {
   readDesktopCatalog,
   disconnectDesktopCatalog,
 } from "./agentProviderBridge.ts";
+import {
+  rawNativeThreadId,
+  nativeSubmissionIds,
+  nativeTextContent,
+  nativeHistoryItems,
+  nativeLatestPageCursor,
+} from "./agentProviderNative.ts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 
@@ -54,7 +63,7 @@ import {
   type OrchestrationV2Command,
   type GitActionProgressEvent,
   type GitManagerServiceError,
-  type MessageId,
+  MessageId,
   type AcpRegistryImportSessionInput,
   type AcpRegistryDeleteSessionInput,
   type AcpRegistryDisableProviderInput,
@@ -163,6 +172,7 @@ import {
 } from "./orchestration-v2/ThreadStream.ts";
 import {
   buildBoundedThreadProjection,
+  decodeThreadHistoryCursor,
   THREAD_HISTORY_PAGE_POLICY,
   THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
 } from "./orchestration-v2/threadHistoryPaging.ts";
@@ -1218,7 +1228,8 @@ const layerWsRpc = (
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
-      const providerDesktopConnectionId = globalThis.crypto.randomUUID();
+      const crypto = yield* Crypto.Crypto;
+      const providerDesktopConnectionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => disconnectDesktopCatalog(providerDesktopConnectionId)),
       );
@@ -1263,7 +1274,6 @@ const layerWsRpc = (
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
-      const crypto = yield* Crypto.Crypto;
       const serverCommandId = (tag: string) =>
         crypto.randomUUIDv4.pipe(
           Effect.orDie,
@@ -1857,13 +1867,24 @@ const layerWsRpc = (
               data,
             });
             const error = (
-              code: "Unsupported" | "InvalidInput" | "EnvironmentChanged" | "Unavailable",
+              code:
+                | "Unsupported"
+                | "InvalidInput"
+                | "EnvironmentChanged"
+                | "Unavailable"
+                | "NotFound"
+                | "Conflict"
+                | "TimeoutUnknown",
               message: string,
             ) => ({
               apiVersion: T3_AGENT_PROVIDER_VERSION,
               requestId: request.requestId,
               ok: false as const,
-              error: { code, message, retryable: code === "Unavailable" },
+              error: {
+                code,
+                message,
+                retryable: code === "Unavailable" || code === "TimeoutUnknown",
+              },
             });
             const environmentId = yield* serverEnvironment.getEnvironmentId;
             if (request.method === "hello") {
@@ -1872,7 +1893,7 @@ const layerWsRpc = (
                 environmentId,
                 epoch: agentProviderEpoch,
                 supportedKinds: ["t3/thread", "t3/chatgpt"],
-                capabilities: [],
+                capabilities: ["ReadHistory", "Submit", "IdempotentSubmit"],
                 sourceUpdatesComplete: false,
               });
             }
@@ -1882,12 +1903,13 @@ const layerWsRpc = (
               if (clientOrigin.surface !== "desktop") {
                 return error("Unsupported", "Browser catalogs must come from a T3 desktop client.");
               }
-              let snapshot: typeof AgentProviderV1DesktopSnapshot.Type;
-              try {
-                snapshot = Schema.decodeUnknownSync(AgentProviderV1DesktopSnapshot)(request.params);
-              } catch {
+              const decodedSnapshot = yield* Effect.result(
+                Schema.decodeUnknownEffect(AgentProviderV1DesktopSnapshot)(request.params),
+              );
+              if (Result.isFailure(decodedSnapshot)) {
                 return error("InvalidInput", "Invalid desktop session snapshot.");
               }
+              const snapshot = decodedSnapshot.success;
               if (snapshot.environmentId !== environmentId) {
                 return error(
                   "EnvironmentChanged",
@@ -1917,13 +1939,14 @@ const layerWsRpc = (
               return reply({ published: snapshot.sessions.length });
             }
             if (request.method === "sessions.list") {
-              const native = yield* threadManagement
-                .readShellSnapshot({ location: "active" })
-                .pipe(Effect.either);
-              if (native._tag === "Left") {
+              const native = yield* Effect.result(
+                threadManagement.readShellSnapshot({ location: "active" }).pipe(Effect.flatten),
+              );
+              if (Result.isFailure(native)) {
                 return error("Unavailable", "Native thread catalog cannot be read.");
               }
-              const items: AgentProviderV1Session[] = native.right.threads.map(
+              const observedAt = DateTime.formatIso(yield* DateTime.now);
+              const items: AgentProviderV1Session[] = native.success.threads.map(
                 (thread): AgentProviderV1Session => {
                   const active = thread.activeRunId !== null;
                   const activity =
@@ -1941,7 +1964,8 @@ const layerWsRpc = (
                   return {
                     ref: threadRef(thread.id),
                     kind: "t3/thread",
-                    source: { environmentId, rawThreadId: thread.id },
+                    source: { environmentId, rawThreadId: thread.id, projectId: thread.projectId },
+                    workspace: thread.worktreePath,
                     title: thread.title,
                     ...(thread.lineage.parentThreadId === null
                       ? {}
@@ -1951,12 +1975,12 @@ const layerWsRpc = (
                       activity,
                       confidence: activity === "Unknown" ? "Unknown" : "Confirmed",
                       elsewhere: null,
-                      observedAt: new Date().toISOString(),
+                      observedAt,
                     },
-                    // Execution provider methods beyond discovery are deferred
-                    // to WT-0002/0003/0004. Never advertise the blocked pipe create.
-                    capabilities: [],
-                    deliveryModes: [],
+                    // The native command queue already exists. No CreateSession,
+                    // browser send, or management capabilities are implied.
+                    capabilities: ["ReadHistory", "Submit", "IdempotentSubmit"],
+                    deliveryModes: ["Queue"],
                     // updatedAt may reflect titles or other metadata, not
                     // verified message activity; do not claim lastActivityAt.
                   };
@@ -1972,9 +1996,168 @@ const layerWsRpc = (
                 sourceCursor: null,
               });
             }
+            if (request.method === "sessions.history" || request.method === "sessions.submit") {
+              const isSubmit = request.method === "sessions.submit";
+              let input:
+                | typeof AgentProviderV1Submit.Type
+                | typeof AgentProviderV1HistoryRequest.Type;
+              if (isSubmit) {
+                const parsed = yield* Effect.result(
+                  Schema.decodeUnknownEffect(AgentProviderV1Submit)(request.params),
+                );
+                if (Result.isFailure(parsed)) {
+                  return error("InvalidInput", "Invalid native submit request.");
+                }
+                input = parsed.success;
+              } else {
+                const parsed = yield* Effect.result(
+                  Schema.decodeUnknownEffect(AgentProviderV1HistoryRequest)(request.params),
+                );
+                if (Result.isFailure(parsed)) {
+                  return error("InvalidInput", "Invalid native history request.");
+                }
+                input = parsed.success;
+              }
+              const rawId = rawNativeThreadId(input.session);
+              if (rawId === null) {
+                return error(
+                  "Unsupported",
+                  "Only exact native t3/thread references are supported.",
+                );
+              }
+              if (
+                input.expectedEnvironmentId === undefined ||
+                input.expectedEnvironmentId !== environmentId
+              ) {
+                return error("EnvironmentChanged", "Expected native environment does not match.");
+              }
+              const threadId = ThreadId.make(rawId);
+              const target = yield* Effect.result(threadManagement.getThreadShell(threadId));
+              if (Result.isFailure(target) || target.success === null) {
+                return error("NotFound", "Native thread could not be resolved.");
+              }
+              if (target.success.archivedAt !== null || target.success.deletedAt !== null) {
+                return error("NotFound", "Native thread is no longer active.");
+              }
+              if (!isSubmit) {
+                const historyInput = input as typeof AgentProviderV1HistoryRequest.Type;
+                if (historyInput.cursor) {
+                  const parsedCursor = yield* Effect.result(
+                    Effect.try(() => decodeThreadHistoryCursor(historyInput.cursor!)),
+                  );
+                  if (Result.isFailure(parsedCursor)) {
+                    return error("InvalidInput", "Invalid native history cursor.");
+                  }
+                }
+                const initialNonce = historyInput.cursor
+                  ? null
+                  : yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+                const page = yield* Effect.result(
+                  threadManagement.getThreadHistoryPage(
+                    threadId,
+                    historyInput.cursor ?? nativeLatestPageCursor(rawId, initialNonce!),
+                  ),
+                );
+                if (Result.isFailure(page)) {
+                  return error("Unavailable", "Native history page could not be read.");
+                }
+                return reply({
+                  items: nativeHistoryItems(page.success.items, page.success.snapshotSequence),
+                  older: page.success.nextCursor,
+                  newer: null,
+                  complete: !page.success.hasMoreHistory,
+                  snapshotSequence: page.success.snapshotSequence,
+                });
+              }
+              const submit = input as typeof AgentProviderV1Submit.Type;
+              if (submit.expectedConversation != null) {
+                return error(
+                  "InvalidInput",
+                  "Native threads have no ChatGPT conversation identity.",
+                );
+              }
+              const text = nativeTextContent(submit.content);
+              if (submit.delivery !== "Queue" || text === null) {
+                return error(
+                  "Unsupported",
+                  "Native v1 submit accepts Queue and one nonempty text part.",
+                );
+              }
+              // Length prefixes separate opaque IDs without collision-prone delimiters.
+              const digestInput = [environmentId, rawId, submit.clientRequestId]
+                .map((value) => `${value.length}:${value}`)
+                .join("");
+              const digest = yield* crypto
+                .digest("SHA-256", new TextEncoder().encode(digestInput))
+                .pipe(Effect.orDie);
+              const ids = nativeSubmissionIds(digest);
+              const dispatched = yield* Effect.result(
+                startup.enqueueCommand(
+                  ThreadMessageIntake.sendToThread({
+                    projectId: target.success.projectId,
+                    threadId,
+                    commandId: CommandId.make(ids.commandId),
+                    messageId: MessageId.make(ids.messageId),
+                    text,
+                    attachments: [],
+                    mode: "queue",
+                    createdBy: "user",
+                    creationSource: "mcp",
+                  }).pipe(Effect.provide(intakeContext)),
+                ),
+              );
+              if (Result.isFailure(dispatched)) {
+                const failure = dispatched.failure;
+                const tag =
+                  typeof failure === "object" && failure !== null && "_tag" in failure
+                    ? failure._tag
+                    : null;
+                if (
+                  tag === "OrchestratorCommandIdConflictError" ||
+                  tag === "OrchestratorCommandPreviouslyRejectedError"
+                ) {
+                  return error(
+                    "Conflict",
+                    "Native submission id was already used with different content.",
+                  );
+                }
+                if (
+                  tag === "ThreadManagementThreadNotFoundError" ||
+                  tag === "ThreadManagementThreadArchivedError"
+                ) {
+                  return error("NotFound", "Native thread is no longer available for submission.");
+                }
+                if (
+                  tag === "ThreadManagementNoSteerableRunError" ||
+                  tag === "ThreadManagementProviderInstanceDisabledError" ||
+                  tag === "OrchestratorCommandRejectedError"
+                ) {
+                  return error("Conflict", "Native orchestrator refused the command.");
+                }
+                // An effect can fail after the event-store commit. The same
+                // clientRequestId is safe to retry; never assert rejection.
+                return error(
+                  "TimeoutUnknown",
+                  "Native command outcome is uncertain; retry using the SAME clientRequestId.",
+                );
+              }
+              return reply({
+                operationId: ids.commandId,
+                clientRequestId: submit.clientRequestId,
+                state: dispatched.success.delivery === "queued" ? "Queued" : "Accepted",
+                confirmedStage: "Accepted",
+                session: submit.session,
+                observedAt: DateTime.formatIso(yield* DateTime.now),
+                providerOperationId: dispatched.success.run.id,
+                nativeRunId: dispatched.success.run.id,
+                nativeMessageId: dispatched.success.message.id,
+                sourceSequence: dispatched.success.dispatch.sequence,
+                receiptBasis: "native_event_store_command_commit;not_agent_completion",
+              });
+            }
             return error(
               "Unsupported",
-              `Provider method ${request.method} is not available in v1 discovery.`,
+              `Provider method ${request.method} is not available for this session kind.`,
             );
           }),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
