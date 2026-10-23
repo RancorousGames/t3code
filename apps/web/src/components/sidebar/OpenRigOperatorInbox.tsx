@@ -20,12 +20,42 @@ import { createPortal } from "react-dom";
 
 import { isElectron } from "../../env";
 import { OpenRigFloatingWindow, type FloatingSize } from "./OpenRigFloatingWindow";
-import { OpenRigRichInboxMessage } from "./OpenRigRichInboxMessage";
+import { OpenRigHumanReplyComposer } from "./OpenRigHumanReplyComposer";
+import { OpenRigRichInboxMessage, isNativeInboxDecision } from "./OpenRigRichInboxMessage";
 import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
 import { observeResize } from "../../lib/observeResize";
 
 type InboxItem = DesktopOpenRigInboxItem;
-type Filter = "all" | "unread" | "action" | "archived" | "trash";
+type Filter = "all" | "unread" | "action" | "alerts" | "archived" | "trash";
+type AttentionKind = "form" | "approval" | "legacy" | "alert" | "none";
+
+/** Server requiresAction also marks recovery sweeps and unread mailbox notices.
+ * It is not evidence of a native form the human can submit from T3. */
+export function inboxAttentionKind(item: InboxItem, address: string): AttentionKind {
+  if (isNativeInboxDecision(item, address)) return "form";
+  if (item.sourceType === "human_gate" && item.requiresAction && item.state !== "done")
+    return "approval";
+  if (item.humanQuestions != null && item.state === "pending") return "legacy";
+  if (item.requiresAction) return "alert";
+  return "none";
+}
+
+function attentionLabel(kind: AttentionKind, item: InboxItem) {
+  switch (kind) {
+    case "form":
+      return "Answer form";
+    case "approval":
+      return "Approval blocked · no form here";
+    case "legacy":
+      return "Legacy choices · preview only";
+    case "alert":
+      return item.humanIntent === "decision"
+        ? "Decision flagged · form missing"
+        : "Alert · no reply form";
+    case "none":
+      return "";
+  }
+}
 type InboxFolder = "archived" | "trash";
 type Menu =
   | { kind: "item"; key: string; x: number; y: number }
@@ -40,7 +70,9 @@ const GEOMETRY_KEY = "t3code:openrig-human-inbox-geometry:v1";
 const MIN_SIZE: FloatingSize = { width: 340, height: 360 };
 function isEditable(target: EventTarget | null) {
   const element = target as { tagName?: string; isContentEditable?: boolean } | null;
-  return Boolean(element?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(element?.tagName ?? ""));
+  return Boolean(
+    element?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(element?.tagName ?? ""),
+  );
 }
 const TOAST_DURATION_MS = 9_000;
 const READ_KEY = "t3code:openrig-human-inbox-read:v1";
@@ -334,7 +366,15 @@ export function OpenRigOperatorInbox() {
   );
   const trashedItems = items.filter((item) => trashed.has(inboxKey(address, item)));
   const unread = active.filter((item) => !knownRead.has(inboxKey(address, item)));
-  const action = active.filter((item) => item.requiresAction);
+  const action = active.filter((item) => inboxAttentionKind(item, address) === "form");
+  const alerts = active.filter((item) =>
+    ["approval", "legacy", "alert"].includes(inboxAttentionKind(item, address)),
+  );
+  // The current desktop schema may omit this newer OpenRig capability field.
+  // Do not conflate an omitted value with server-confirmed writer unavailability.
+  const answerWriteAvailable = (
+    snapshot as (DesktopOpenRigInbox & { answerWriteAvailable?: boolean }) | null
+  )?.answerWriteAvailable;
   const filtered = (
     filter === "archived" ? archivedItems : filter === "trash" ? trashedItems : active
   ).filter((item) => {
@@ -349,8 +389,11 @@ export function OpenRigOperatorInbox() {
         (filter === "unread"
           ? !knownRead.has(inboxKey(address, item))
           : filter === "action"
-            ? item.requiresAction
-            : true))
+            ? inboxAttentionKind(item, address) === "form"
+            : filter === "alerts"
+              ? inboxAttentionKind(item, address) !== "none" &&
+                inboxAttentionKind(item, address) !== "form"
+              : true))
     );
   });
   // Keep the right-hand detail visible when opening a message marks it read
@@ -548,7 +591,12 @@ export function OpenRigOperatorInbox() {
   const defaultGeometry = useCallback((viewport: FloatingSize) => {
     const rect = buttonRef.current?.getBoundingClientRect?.();
     const left = rect ? rect.right + 12 : 338;
-    return { left, top: 64, width: Math.min(970, viewport.width - left - 22), height: Math.min(790, viewport.height - 90) };
+    return {
+      left,
+      top: 64,
+      width: Math.min(970, viewport.width - left - 22),
+      height: Math.min(790, viewport.height - 90),
+    };
   }, []);
 
   if (!isElectron) return null;
@@ -645,395 +693,432 @@ export function OpenRigOperatorInbox() {
           )}
         >
           {({ compact }) => (
-          <>
-            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2">
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                Inbox
-                <select
-                  aria-label="OpenRig human destination"
-                  className="max-w-52 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
-                  value={address}
-                  onChange={(event) => {
-                    setAddress(event.currentTarget.value);
-                    setSelected(null);
-                    setSearch("");
-                    setFilter("all");
-                  }}
-                >
-                  {addresses.map((entry) => (
-                    <option key={entry.address} value={entry.address}>
-                      {entry.label} · {entry.address}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <span className="flex-1" />
-              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
-                <input
-                  type="checkbox"
-                  aria-label="Enable notification popups"
-                  checked={notifications}
-                  onChange={(e) => {
-                    setNotifications(e.currentTarget.checked);
-                    if (!e.currentTarget.checked) setNotice(null);
-                  }}
-                />
-                <BellIcon className="size-3.5 text-muted-foreground" /> Popups
-              </label>
-              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
-                <input
-                  type="checkbox"
-                  aria-label="Enable inbox notification sound"
-                  checked={sound}
-                  onChange={(e) => setSound(e.currentTarget.checked)}
-                />
-                {sound ? (
-                  <Volume2Icon className="size-3.5 text-muted-foreground" />
-                ) : (
-                  <VolumeXIcon className="size-3.5 text-muted-foreground" />
-                )}{" "}
-                Sound
-              </label>
-              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
-                <input
-                  type="checkbox"
-                  aria-label="Enable AISpeak message previews"
-                  checked={speech}
-                  disabled={!window.desktopBridge?.speakOpenRigPreview}
-                  onChange={(e) => setSpeech(e.currentTarget.checked)}
-                />
-                AISpeak <span className="text-2xs text-muted-foreground">(20 words)</span>
-              </label>
-            </div>
-            {connection === "error" && (
-              <div
-                role="status"
-                className="mx-4 mt-2 flex shrink-0 items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
-              >
-                <AlertCircleIcon className="size-4 shrink-0" />{" "}
-                {errorMessage || "OpenRig inbox is unavailable."}{" "}
-                {snapshot?.available ? "Showing last synced messages." : ""}
-              </div>
-            )}
-            {address === "human@kernel" && (
-              <div className="max-h-72 shrink-0 overflow-y-auto border-b border-border px-4 py-2">
-                <OpenRigCanonicalSpawnApprovals seatId={null} seatName={(seatId) => seatId} />
-              </div>
-            )}
-            <div className={compact ? "flex min-h-0 flex-1 flex-col" : "grid min-h-0 flex-1 grid-cols-[minmax(150px,36%)_minmax(0,1fr)]"}>
-              <div className={`min-h-0 min-w-0 flex-col bg-muted/10 ${compact ? (chosen ? "hidden" : "flex flex-1") : "flex border-r border-border"}`}>
-                <div className="shrink-0 space-y-2 border-b border-border p-3">
-                  <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-2.5">
-                    <SearchIcon className="size-4 shrink-0 text-muted-foreground" />
-                    <input
-                      ref={searchRef}
-                      aria-label="Search human inbox messages"
-                      type="search"
-                      placeholder="Search messages"
-                      className="h-9 w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                      value={search}
-                      onChange={(e) => setSearch(e.currentTarget.value)}
-                      onKeyDown={(event) => {
-                        // First Escape clears the query; the next one closes the inbox.
-                        if (event.key === "Escape" && search) {
-                          event.preventDefault();
-                          setSearch("");
-                        }
-                      }}
-                    />
-                  </div>
-                  <div
-                    role="group"
-                    aria-label="Filter OpenRig inbox"
-                    className="flex flex-wrap gap-1"
-                  >
-                    {(
-                      [
-                        ["all", "All", active.length],
-                        ["unread", "Unread", unread.length],
-                        ["action", "Action", action.length],
-                        ["archived", "Archived", archivedItems.length],
-                        ["trash", "Trash", trashedItems.length],
-                      ] as const
-                    ).map(([mode, text, count]) => (
-                      <button
-                        type="button"
-                        key={mode}
-                        aria-label={`Filter OpenRig inbox: ${mode === "action" ? "Needs action" : text}`}
-                        aria-pressed={filter === mode}
-                        className={`rounded-md px-2 py-1.5 text-2xs font-medium ${filter === mode ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"}`}
-                        onClick={() => setFilter(mode)}
-                      >
-                        {text}{" "}
-                        <span
-                          className={
-                            mode === "unread" && count
-                              ? "text-info"
-                              : mode === "action" && count
-                                ? "text-warning"
-                                : ""
-                          }
-                        >
-                          {count}
-                          {snapshot?.truncated ? "+" : ""}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="Manage inbox messages"
-                    className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1.5 text-2xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-                    onClick={(event) => {
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      showBulkMenu(rect.left, rect.bottom + 6);
+            <>
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  Inbox
+                  <select
+                    aria-label="OpenRig human destination"
+                    className="max-w-52 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
+                    value={address}
+                    onChange={(event) => {
+                      setAddress(event.currentTarget.value);
+                      setSelected(null);
+                      setSearch("");
+                      setFilter("all");
                     }}
                   >
-                    <MoreHorizontalIcon className="size-3.5" /> Manage
-                  </button>
-                  {unread.length > 0 && filter !== "archived" && filter !== "trash" && (
-                    <button
-                      type="button"
-                      aria-label="Mark all loaded as read"
-                      className="flex items-center gap-1 text-2xs font-medium text-muted-foreground hover:text-foreground"
-                      onClick={() => markRead(unread.map((item) => inboxKey(address, item)))}
-                    >
-                      <CheckCheckIcon className="size-3.5" /> Mark loaded as read
-                    </button>
-                  )}
-                </div>
-                <div
-                  role="list"
-                  aria-label="Human messages"
-                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-                  onKeyDown={(event) => {
-                    if (
-                      !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) ||
-                      filtered.length === 0
-                    )
-                      return;
-                    event.preventDefault();
-                    const index = filtered.findIndex(
-                      (item) => inboxKey(address, item) === selected,
-                    );
-                    const next =
-                      event.key === "Home"
-                        ? 0
-                        : event.key === "End"
-                          ? filtered.length - 1
-                          : event.key === "ArrowDown"
-                            ? Math.min(filtered.length - 1, index + 1)
-                            : index < 0
-                              ? filtered.length - 1
-                              : Math.max(0, index - 1);
-                    openMessage(filtered[next]!);
-                    const rows =
-                      event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                        'button[role="listitem"]',
-                      );
-                    rows[next]?.focus();
-                  }}
-                >
-                  {filtered.length === 0 && (
-                    <p className="px-4 py-8 text-center text-xs leading-relaxed text-muted-foreground">
-                      {connection === "loading"
-                        ? "Loading inbox…"
-                        : connection === "error" && !snapshot?.available
-                          ? "Messages unavailable."
-                          : search
-                            ? "No matching messages."
-                            : filter === "unread"
-                              ? "You're caught up."
-                              : filter === "action"
-                                ? "No action-required messages."
-                                : filter === "archived"
-                                  ? "No archived messages on this device."
-                                  : filter === "trash"
-                                    ? "Local trash is empty."
-                                    : "No messages for this address."}
-                    </p>
-                  )}
-                  {filtered.map((item) => {
-                    const key = inboxKey(address, item);
-                    const isUnread = !knownRead.has(key);
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        role="listitem"
-                        aria-label={`Open inbox message: ${item.subject}`}
-                        aria-current={selected === key ? "true" : undefined}
-                        onClick={() => openMessage(item)}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          showItemMenu(key, event.clientX, event.clientY);
-                        }}
-                        onKeyDown={(event) => {
-                          if (
-                            event.key === "ContextMenu" ||
-                            (event.shiftKey && event.key === "F10")
-                          ) {
-                            event.preventDefault();
-                            const rect = event.currentTarget.getBoundingClientRect();
-                            showItemMenu(key, rect.left + 20, rect.top + 20);
-                          }
-                        }}
-                        className={`flex w-full items-start gap-2 border-b border-border/60 px-3 py-3 text-left transition-colors hover:bg-muted/50 ${selected === key ? "bg-info/10 border-l-3 border-l-info" : isUnread ? "bg-info/5" : ""}`}
-                      >
-                        <span
-                          className={`mt-1.5 size-2 shrink-0 rounded-full ${isUnread ? "bg-info" : "bg-transparent"}`}
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="flex min-w-0 items-center justify-between gap-2">
-                            <span
-                              className={`truncate text-xs ${isUnread ? "font-bold" : "font-medium"}`}
-                            >
-                              {item.sender}
-                            </span>
-                            <time
-                              dateTime={item.createdAt}
-                              className="shrink-0 text-3xs text-muted-foreground"
-                            >
-                              {shortLabel(item.createdAt)}
-                            </time>
-                          </span>
-                          <span
-                            className={`mt-0.5 block truncate text-xs ${isUnread ? "font-semibold" : ""}`}
-                          >
-                            {item.subject}
-                          </span>
-                          <span className="mt-1 line-clamp-2 text-2xs leading-relaxed text-muted-foreground">
-                            {inboxPreview(item, 110)}
-                          </span>
-                          {item.requiresAction && (
-                            <span className="mt-1.5 inline-flex rounded bg-warning/15 px-1.5 py-0.5 text-3xs font-semibold text-warning">
-                              Action needed
-                            </span>
-                          )}
-                        </span>
-                        <ChevronRightIcon className="mt-4 size-3.5 shrink-0 text-muted-foreground/50" />
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="shrink-0 border-t border-border px-3 py-2 text-3xs text-muted-foreground">
-                  {snapshot?.truncated
-                    ? "More messages exist. Counts cover loaded results only."
-                    : "Read status saved locally to this T3 installation."}
-                </div>
+                    {addresses.map((entry) => (
+                      <option key={entry.address} value={entry.address}>
+                        {entry.label} · {entry.address}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="flex-1" />
+                <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label="Enable notification popups"
+                    checked={notifications}
+                    onChange={(e) => {
+                      setNotifications(e.currentTarget.checked);
+                      if (!e.currentTarget.checked) setNotice(null);
+                    }}
+                  />
+                  <BellIcon className="size-3.5 text-muted-foreground" /> Popups
+                </label>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label="Enable inbox notification sound"
+                    checked={sound}
+                    onChange={(e) => setSound(e.currentTarget.checked)}
+                  />
+                  {sound ? (
+                    <Volume2Icon className="size-3.5 text-muted-foreground" />
+                  ) : (
+                    <VolumeXIcon className="size-3.5 text-muted-foreground" />
+                  )}{" "}
+                  Sound
+                </label>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label="Enable AISpeak message previews"
+                    checked={speech}
+                    disabled={!window.desktopBridge?.speakOpenRigPreview}
+                    onChange={(e) => setSpeech(e.currentTarget.checked)}
+                  />
+                  AISpeak <span className="text-2xs text-muted-foreground">(20 words)</span>
+                </label>
               </div>
-              <div className={`min-h-0 min-w-0 flex-col ${compact && !chosen ? "hidden" : "flex flex-1"}`}>
-                {!chosen ? (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-2 p-5 text-center text-muted-foreground">
-                    <InboxIcon className="size-8 opacity-40" />
-                    <p className="text-sm font-medium">Select a message</p>
-                    <p className="max-w-xs text-xs">
-                      Choose a message on the left to read it here, without leaving your current T3
-                      session.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="shrink-0 border-b border-border px-5 py-4">
-                      {compact && (
-                        <button
-                          type="button"
-                          aria-label="Back to inbox message list"
-                          className="mb-2 inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground hover:text-foreground"
-                          onClick={() => setSelected(null)}
-                        >
-                          ← Messages
-                        </button>
-                      )}
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <h3 className="break-words text-lg font-semibold leading-snug">
-                            {chosen.subject}
-                          </h3>
-                          <p className="mt-1 break-all text-sm text-muted-foreground">
-                            {chosen.sender}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          aria-label={
-                            knownRead.has(inboxKey(address, chosen))
-                              ? `Mark inbox message unread: ${chosen.subject}`
-                              : `Mark inbox message read: ${chosen.subject}`
+              {connection === "error" && (
+                <div
+                  role="status"
+                  className="mx-4 mt-2 flex shrink-0 items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
+                >
+                  <AlertCircleIcon className="size-4 shrink-0" />{" "}
+                  {errorMessage || "OpenRig inbox is unavailable."}{" "}
+                  {snapshot?.available ? "Showing last synced messages." : ""}
+                </div>
+              )}
+              {address === "human@kernel" && (
+                <div className="max-h-72 shrink-0 overflow-y-auto border-b border-border px-4 py-2">
+                  <OpenRigCanonicalSpawnApprovals seatId={null} seatName={(seatId) => seatId} />
+                </div>
+              )}
+              <div
+                className={
+                  compact
+                    ? "flex min-h-0 flex-1 flex-col"
+                    : "grid min-h-0 flex-1 grid-cols-[minmax(150px,36%)_minmax(0,1fr)]"
+                }
+              >
+                <div
+                  className={`min-h-0 min-w-0 flex-col bg-muted/10 ${compact ? (chosen ? "hidden" : "flex flex-1") : "flex border-r border-border"}`}
+                >
+                  <div className="shrink-0 space-y-2 border-b border-border p-3">
+                    <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-2.5">
+                      <SearchIcon className="size-4 shrink-0 text-muted-foreground" />
+                      <input
+                        ref={searchRef}
+                        aria-label="Search human inbox messages"
+                        type="search"
+                        placeholder="Search messages"
+                        className="h-9 w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                        value={search}
+                        onChange={(e) => setSearch(e.currentTarget.value)}
+                        onKeyDown={(event) => {
+                          // First Escape clears the query; the next one closes the inbox.
+                          if (event.key === "Escape" && search) {
+                            event.preventDefault();
+                            setSearch("");
                           }
-                          className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
-                          onClick={() =>
-                            knownRead.has(inboxKey(address, chosen))
-                              ? markUnread(inboxKey(address, chosen))
-                              : markRead([inboxKey(address, chosen)])
-                          }
-                        >
-                          {knownRead.has(inboxKey(address, chosen)) ? "Mark unread" : "Mark read"}
-                        </button>
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-muted-foreground">
-                        <time dateTime={chosen.createdAt}>{dateLabel(chosen.createdAt)}</time>
-                        <span>{sourceLabel(chosen)}</span>
-                        <span>State: {chosen.state}</span>
-                        {chosen.requiresAction && (
-                          <span className="rounded-md bg-warning/15 px-2 py-0.5 font-semibold text-warning">
-                            Needs your attention
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 text-sm leading-7">
-                      {chosen.sourceType === "human_gate" && (
-                        <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
-                          A human decision is blocking an agent. This view is read-only; no approval
-                          has been sent.
-                        </div>
-                      )}
-                      <OpenRigRichInboxMessage
-                        key={inboxKey(address, chosen)}
-                        item={chosen}
-                        address={address}
-                        onAnnouncement={setAnnouncement}
+                        }}
                       />
                     </div>
-                    <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-2 text-2xs text-muted-foreground">
-                      <span className="min-w-0 break-all">
-                        To: {address} · Record: {chosen.id}
-                      </span>
+                    <div
+                      role="group"
+                      aria-label="Filter OpenRig inbox"
+                      className="flex flex-wrap gap-1"
+                    >
+                      {(
+                        [
+                          ["all", "All", active.length],
+                          ["unread", "Unread", unread.length],
+                          ["action", "Forms", action.length],
+                          ["alerts", "Alerts", alerts.length],
+                          ["archived", "Archived", archivedItems.length],
+                          ["trash", "Trash", trashedItems.length],
+                        ] as const
+                      ).map(([mode, text, count]) => (
+                        <button
+                          type="button"
+                          key={mode}
+                          aria-label={`Filter OpenRig inbox: ${text}`}
+                          aria-pressed={filter === mode}
+                          className={`rounded-md px-2 py-1.5 text-2xs font-medium ${filter === mode ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                          onClick={() => setFilter(mode)}
+                        >
+                          {text}{" "}
+                          <span
+                            className={
+                              mode === "unread" && count
+                                ? "text-info"
+                                : (mode === "action" || mode === "alerts") && count
+                                  ? "text-warning"
+                                  : ""
+                            }
+                          >
+                            {count}
+                            {snapshot?.truncated ? "+" : ""}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Manage inbox messages"
+                      className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1.5 text-2xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                      onClick={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        showBulkMenu(rect.left, rect.bottom + 6);
+                      }}
+                    >
+                      <MoreHorizontalIcon className="size-3.5" /> Manage
+                    </button>
+                    {unread.length > 0 && filter !== "archived" && filter !== "trash" && (
                       <button
                         type="button"
-                        aria-label="Message options"
-                        className="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
-                        onClick={(event) => {
-                          const rect = event.currentTarget.getBoundingClientRect();
-                          showItemMenu(inboxKey(address, chosen), rect.left, rect.bottom + 4);
-                        }}
+                        aria-label="Mark all loaded as read"
+                        className="flex items-center gap-1 text-2xs font-medium text-muted-foreground hover:text-foreground"
+                        onClick={() => markRead(unread.map((item) => inboxKey(address, item)))}
                       >
-                        <MoreHorizontalIcon className="size-4" />
+                        <CheckCheckIcon className="size-3.5" /> Mark loaded as read
                       </button>
-                      <button
-                        type="button"
-                        aria-label="Copy inbox message"
-                        className="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
-                        onClick={() => {
-                          void navigator.clipboard
-                            ?.writeText(
-                              `${chosen.subject}\nFrom: ${chosen.sender}\n\n${chosen.body}`,
-                            )
-                            .then(
-                              () => setAnnouncement("Message copied."),
-                              () => setAnnouncement("Copy was not available."),
-                            );
-                        }}
-                      >
-                        Copy
-                      </button>
-                    </footer>
-                  </>
-                )}
+                    )}
+                  </div>
+                  <div
+                    role="list"
+                    aria-label="Human messages"
+                    className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                    onKeyDown={(event) => {
+                      if (
+                        !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) ||
+                        filtered.length === 0
+                      )
+                        return;
+                      event.preventDefault();
+                      const index = filtered.findIndex(
+                        (item) => inboxKey(address, item) === selected,
+                      );
+                      const next =
+                        event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? filtered.length - 1
+                            : event.key === "ArrowDown"
+                              ? Math.min(filtered.length - 1, index + 1)
+                              : index < 0
+                                ? filtered.length - 1
+                                : Math.max(0, index - 1);
+                      openMessage(filtered[next]!);
+                      const rows =
+                        event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                          'button[role="listitem"]',
+                        );
+                      rows[next]?.focus();
+                    }}
+                  >
+                    {filtered.length === 0 && (
+                      <p className="px-4 py-8 text-center text-xs leading-relaxed text-muted-foreground">
+                        {connection === "loading"
+                          ? "Loading inbox…"
+                          : connection === "error" && !snapshot?.available
+                            ? "Messages unavailable."
+                            : search
+                              ? "No matching messages."
+                              : filter === "unread"
+                                ? "You're caught up."
+                                : filter === "action"
+                                  ? "No pending native answer forms."
+                                  : filter === "alerts"
+                                    ? "No alerts or read-only decisions."
+                                    : filter === "archived"
+                                      ? "No archived messages on this device."
+                                      : filter === "trash"
+                                        ? "Local trash is empty."
+                                        : "No messages for this address."}
+                      </p>
+                    )}
+                    {filtered.map((item) => {
+                      const key = inboxKey(address, item);
+                      const isUnread = !knownRead.has(key);
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          role="listitem"
+                          aria-label={`Open inbox message: ${item.subject}`}
+                          aria-current={selected === key ? "true" : undefined}
+                          onClick={() => openMessage(item)}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            showItemMenu(key, event.clientX, event.clientY);
+                          }}
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === "ContextMenu" ||
+                              (event.shiftKey && event.key === "F10")
+                            ) {
+                              event.preventDefault();
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              showItemMenu(key, rect.left + 20, rect.top + 20);
+                            }
+                          }}
+                          className={`flex w-full items-start gap-2 border-b border-border/60 px-3 py-3 text-left transition-colors hover:bg-muted/50 ${selected === key ? "bg-info/10 border-l-3 border-l-info" : isUnread ? "bg-info/5" : ""}`}
+                        >
+                          <span
+                            className={`mt-1.5 size-2 shrink-0 rounded-full ${isUnread ? "bg-info" : "bg-transparent"}`}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex min-w-0 items-center justify-between gap-2">
+                              <span
+                                className={`truncate text-xs ${isUnread ? "font-bold" : "font-medium"}`}
+                              >
+                                {item.sender}
+                              </span>
+                              <time
+                                dateTime={item.createdAt}
+                                className="shrink-0 text-3xs text-muted-foreground"
+                              >
+                                {shortLabel(item.createdAt)}
+                              </time>
+                            </span>
+                            <span
+                              className={`mt-0.5 block truncate text-xs ${isUnread ? "font-semibold" : ""}`}
+                            >
+                              {item.subject}
+                            </span>
+                            <span className="mt-1 line-clamp-2 text-2xs leading-relaxed text-muted-foreground">
+                              {inboxPreview(item, 110)}
+                            </span>
+                            {inboxAttentionKind(item, address) !== "none" && (
+                              <span className="mt-1.5 inline-flex rounded bg-warning/15 px-1.5 py-0.5 text-3xs font-semibold text-warning">
+                                {attentionLabel(inboxAttentionKind(item, address), item)}
+                              </span>
+                            )}
+                          </span>
+                          <ChevronRightIcon className="mt-4 size-3.5 shrink-0 text-muted-foreground/50" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="shrink-0 border-t border-border px-3 py-2 text-3xs text-muted-foreground">
+                    {snapshot?.truncated
+                      ? "More messages exist. Counts cover loaded results only."
+                      : "Read status saved locally to this T3 installation."}
+                  </div>
+                </div>
+                <div
+                  className={`min-h-0 min-w-0 flex-col ${compact && !chosen ? "hidden" : "flex flex-1"}`}
+                >
+                  {!chosen ? (
+                    <div className="flex flex-1 flex-col items-center justify-center gap-2 p-5 text-center text-muted-foreground">
+                      <InboxIcon className="size-8 opacity-40" />
+                      <p className="text-sm font-medium">Select a message</p>
+                      <p className="max-w-xs text-xs">
+                        Choose a message on the left to read it here, without leaving your current
+                        T3 session.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="shrink-0 border-b border-border px-5 py-4">
+                        {compact && (
+                          <button
+                            type="button"
+                            aria-label="Back to inbox message list"
+                            className="mb-2 inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground hover:text-foreground"
+                            onClick={() => setSelected(null)}
+                          >
+                            ← Messages
+                          </button>
+                        )}
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="break-words text-lg font-semibold leading-snug">
+                              {chosen.subject}
+                            </h3>
+                            <p className="mt-1 break-all text-sm text-muted-foreground">
+                              {chosen.sender}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={
+                              knownRead.has(inboxKey(address, chosen))
+                                ? `Mark inbox message unread: ${chosen.subject}`
+                                : `Mark inbox message read: ${chosen.subject}`
+                            }
+                            className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
+                            onClick={() =>
+                              knownRead.has(inboxKey(address, chosen))
+                                ? markUnread(inboxKey(address, chosen))
+                                : markRead([inboxKey(address, chosen)])
+                            }
+                          >
+                            {knownRead.has(inboxKey(address, chosen)) ? "Mark unread" : "Mark read"}
+                          </button>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-muted-foreground">
+                          <time dateTime={chosen.createdAt}>{dateLabel(chosen.createdAt)}</time>
+                          <span>{sourceLabel(chosen)}</span>
+                          <span>State: {chosen.state}</span>
+                          {inboxAttentionKind(chosen, address) !== "none" && (
+                            <span className="rounded-md bg-warning/15 px-2 py-0.5 font-semibold text-warning">
+                              {attentionLabel(inboxAttentionKind(chosen, address), chosen)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 text-sm leading-7">
+                        {inboxAttentionKind(chosen, address) === "approval" && (
+                          <div
+                            role="status"
+                            className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+                          >
+                            An agent is blocked awaiting human approval. This message has no native
+                            T3 approval form; the inbox is read-only and no approval has been sent.
+                          </div>
+                        )}
+                        {inboxAttentionKind(chosen, address) === "alert" && (
+                          <div
+                            role="status"
+                            className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+                          >
+                            OpenRig flagged this record as requiring action, but supplied no
+                            answerable structured decision form.{" "}
+                            {chosen.humanIntent === "decision"
+                              ? "The requested decision form is missing from this payload."
+                              : "This is an alert or recovery/status notice, not a multiple-choice prompt."}{" "}
+                            No reply or approval has been sent.
+                          </div>
+                        )}
+                        <OpenRigRichInboxMessage
+                          key={inboxKey(address, chosen)}
+                          item={chosen}
+                          address={address}
+                          answerWriteAvailable={answerWriteAvailable}
+                          onAnnouncement={setAnnouncement}
+                        />
+                        <div className="mt-5">
+                          <OpenRigHumanReplyComposer
+                            item={chosen}
+                            address={address}
+                            onAnnouncement={setAnnouncement}
+                          />
+                        </div>
+                      </div>
+                      <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-2 text-2xs text-muted-foreground">
+                        <span className="min-w-0 break-all">
+                          To: {address} · Record: {chosen.id}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Message options"
+                          className="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+                          onClick={(event) => {
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            showItemMenu(inboxKey(address, chosen), rect.left, rect.bottom + 4);
+                          }}
+                        >
+                          <MoreHorizontalIcon className="size-4" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Copy inbox message"
+                          className="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+                          onClick={() => {
+                            void navigator.clipboard
+                              ?.writeText(
+                                `${chosen.subject}\nFrom: ${chosen.sender}\n\n${chosen.body}`,
+                              )
+                              .then(
+                                () => setAnnouncement("Message copied."),
+                                () => setAnnouncement("Copy was not available."),
+                              );
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </footer>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          </>
+            </>
           )}
         </OpenRigFloatingWindow>
       )}
@@ -1167,10 +1252,19 @@ export function OpenRigOperatorInbox() {
           )}
           {connection === "ready" && action.length > 0 && (
             <span
-              aria-label={`${action.length} messages needing action in loaded results`}
+              aria-label={`${action.length} pending native answer forms in loaded results`}
               className="min-w-6 rounded-full bg-warning/20 px-1.5 py-0.5 text-center text-xs font-bold text-warning"
             >
               {action.length}
+              {snapshot?.truncated ? "+" : ""}
+            </span>
+          )}
+          {connection === "ready" && alerts.length > 0 && (
+            <span
+              aria-label={`${alerts.length} alerts or read-only decisions in loaded results`}
+              className="min-w-6 rounded-full bg-muted px-1.5 py-0.5 text-center text-xs font-bold text-muted-foreground"
+            >
+              {alerts.length}
               {snapshot?.truncated ? "+" : ""}
             </span>
           )}

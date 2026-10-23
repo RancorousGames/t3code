@@ -328,6 +328,22 @@ export function parseInboxRichContent(item: DesktopOpenRigInboxItem): {
     const form = parseHumanFormV2(item.humanForm);
     return { text: item.body, form, invalid: form === null };
   }
+  // Legacy queue questions are actual structured options, but use a different
+  // reply protocol. Present them as editable local previews, never as v2 sends.
+  if (item.humanQuestions !== undefined && item.humanQuestions !== null) {
+    const questions = item.humanQuestions;
+    const form = Array.isArray(questions)
+      ? parseRichForm({
+          version: 1,
+          title: "Legacy human questions",
+          questions: questions.map((q: unknown) => {
+            const raw = object(q);
+            return raw ? { ...raw, type: "choice", label: raw.question } : q;
+          }),
+        })
+      : null;
+    return { text: item.body, form, invalid: form === null };
+  }
   const match = RICH_FENCE.exec(item.body);
   // Optional future server field. Existing OpenRig versions can embed a fenced form.
   const raw = "rich" in item && item.rich !== undefined ? item.rich : null;
@@ -351,6 +367,23 @@ export function parseInboxRichContent(item: DesktopOpenRigInboxItem): {
         invalid: false,
       }
     : { text: item.body, form: null, invalid: true };
+}
+
+/** Only a pending, recipient-matched native v2 queue decision is answerable here. */
+export function isNativeInboxDecision(
+  item: DesktopOpenRigInboxItem,
+  address: string,
+  form: RichForm | null = parseInboxRichContent(item).form,
+): boolean {
+  return (
+    form?.version === 2 &&
+    item.humanForm !== undefined &&
+    item.sourceType === "queue" &&
+    item.recipient === address &&
+    item.humanIntent === "decision" &&
+    address === "human@kernel" &&
+    item.state === "pending"
+  );
 }
 
 function draftKey(address: string, item: DesktopOpenRigInboxItem): string {
@@ -488,10 +521,13 @@ export function OpenRigRichInboxMessage({
   item,
   address,
   onAnnouncement,
+  answerWriteAvailable,
 }: {
   item: DesktopOpenRigInboxItem;
   address: string;
   onAnnouncement: (text: string) => void;
+  /** Absent on older desktop bridges; false means the server cannot accept answers. */
+  answerWriteAvailable?: boolean | undefined;
 }) {
   const parsed = useMemo(() => parseInboxRichContent(item), [item]);
   const form = parsed.form;
@@ -503,14 +539,9 @@ export function OpenRigRichInboxMessage({
   const [accepted, setAccepted] = useState<DesktopOpenRigHumanResponseResult | null>(null);
   const [imagePreview, setImagePreview] = useState<RichMedia | null>(null);
   const recorded = useMemo(() => object(item.humanAnswers) ?? {}, [item.humanAnswers]);
-  const isNativeForm =
-    form?.version === 2 &&
-    item.humanForm !== undefined &&
-    item.sourceType === "queue" &&
-    item.recipient === address &&
-    item.humanIntent === "decision" &&
-    address === "human@kernel";
-  const isActiveDecision = isNativeForm && item.state === "pending";
+  const isActiveDecision = isNativeInboxDecision(item, address, form);
+  const isNativeForm = form?.version === 2 && item.humanForm !== undefined;
+  const writerReady = answerWriteAvailable === true;
   const completed =
     Boolean(accepted?.complete) ||
     Boolean(form?.questions.length && form.questions.every((q) => Object.hasOwn(recorded, q.id))) ||
@@ -564,7 +595,7 @@ export function OpenRigRichInboxMessage({
     }
   };
   const submit = async () => {
-    if (!form || !isActiveDecision || submitting || completed || accepted) return;
+    if (!form || !isActiveDecision || !writerReady || submitting || completed || accepted) return;
     const error = validateRichAnswers(form, effectiveAnswers);
     if (error) {
       setFailure(error);
@@ -865,12 +896,32 @@ export function OpenRigRichInboxMessage({
                     : `Agent delivery: ${accepted.delivery}.`}
                 </p>
               )}
+              {isNativeForm && answerWriteAvailable === false && !completed && (
+                <p
+                  role="status"
+                  className="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning"
+                >
+                  OpenRig's durable answer writer is unavailable. You can choose options and save a
+                  local draft or copy a summary, but this form cannot be submitted from T3 now.
+                </p>
+              )}
+              {isNativeForm && answerWriteAvailable === undefined && isActiveDecision && (
+                <p
+                  role="status"
+                  className="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning"
+                >
+                  This desktop did not report OpenRig answer-writer availability. Answers can be
+                  drafted or copied, but sending is disabled until the server writer is verified.
+                </p>
+              )}
               {!isNativeForm && (
                 <p
                   role="status"
                   className="rounded-md border border-warning/25 bg-warning/10 p-2 text-2xs text-warning"
                 >
-                  This interactive form is a display-only preview, not a server-authorized decision.
+                  {item.humanQuestions
+                    ? "Legacy OpenRig choices are display-only in T3; the native v2 answer writer cannot submit them."
+                    : "This interactive form is a display-only preview, not a server-authorized decision."}{" "}
                   Copy the answer summary to reply through another channel.
                 </p>
               )}
@@ -883,7 +934,13 @@ export function OpenRigRichInboxMessage({
                 <button
                   type="button"
                   aria-label="Send answers"
-                  disabled={!isActiveDecision || submitting || completed || Boolean(accepted)}
+                  disabled={
+                    !isActiveDecision ||
+                    !writerReady ||
+                    submitting ||
+                    completed ||
+                    Boolean(accepted)
+                  }
                   className="inline-flex items-center gap-2 rounded-lg bg-info px-3.5 py-2 text-xs font-semibold text-info-foreground hover:bg-info/90 disabled:opacity-50"
                   onClick={() => void submit()}
                 >
@@ -892,9 +949,13 @@ export function OpenRigRichInboxMessage({
                     ? "Sending…"
                     : completed
                       ? "Recorded"
-                      : accepted
-                        ? "Refresh to continue"
-                        : "Send answers"}
+                      : !isNativeForm
+                        ? "Preview only"
+                        : !writerReady
+                          ? "Sending unavailable"
+                          : accepted
+                            ? "Refresh to continue"
+                            : "Send answers"}
                 </button>
                 <button
                   type="button"

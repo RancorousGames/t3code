@@ -99,10 +99,15 @@ afterEach(() => {
   rendered = undefined;
   vi.unstubAllGlobals();
 });
-async function mount(current = item) {
+async function mount(current = item, answerWriteAvailable: boolean | undefined = true) {
   await act(async () => {
     rendered = create(
-      <OpenRigRichInboxMessage item={current} address="human@kernel" onAnnouncement={announce} />,
+      <OpenRigRichInboxMessage
+        item={current}
+        address="human@kernel"
+        answerWriteAvailable={answerWriteAvailable}
+        onAnnouncement={announce}
+      />,
     );
   });
 }
@@ -242,6 +247,55 @@ describe("agent-authored OpenRig v2 human forms", () => {
     });
     expect(output()).toContain("Recorded");
     await click("Send answers");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("shows a writer-unavailable native v2 form with selectable drafts but no false send affordance", async () => {
+    await mount(item, false);
+    expect(output()).toContain("durable answer writer is unavailable");
+    expect(rendered!.root.findByProps({ "aria-label": "Send answers" }).props.disabled).toBe(true);
+    await selectValidAnswers();
+    expect([...storage.values()].join(" ")).toContain("staging");
+    expect(submit).not.toHaveBeenCalled();
+    await click("Copy answer summary");
+    expect(announce).toHaveBeenCalledWith(expect.stringContaining("not been sent"));
+  });
+
+  it("treats an older bridge with unreported writer capability as draft-only", async () => {
+    await act(async () => {
+      rendered = create(
+        <OpenRigRichInboxMessage item={item} address="human@kernel" onAnnouncement={announce} />,
+      );
+    });
+    expect(output()).toContain("did not report OpenRig answer-writer availability");
+    expect(rendered!.root.findByProps({ "aria-label": "Send answers" }).props.disabled).toBe(true);
+    await click("Which environment?: Staging");
+    expect([...storage.values()].join(" ")).toContain("staging");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("projects real legacy queue humanQuestions as read-only selections instead of losing them", async () => {
+    const legacyItem = {
+      ...item,
+      humanForm: undefined,
+      humanQuestions: [
+        {
+          id: "db",
+          question: "Which database?",
+          options: [
+            { id: "pg", label: "Postgres" },
+            { id: "sqlite", label: "SQLite" },
+          ],
+        },
+      ],
+    };
+    expect(parseInboxRichContent(legacyItem).form?.version).toBe(1);
+    await mount(legacyItem);
+    expect(output()).toContain("Which database?");
+    expect(output()).toContain("Legacy OpenRig choices");
+    expect(rendered!.root.findByProps({ "aria-label": "Send answers" }).props.disabled).toBe(true);
+    await click("Which database?: Postgres");
+    expect([...storage.values()].join(" ")).toContain("pg");
     expect(submit).not.toHaveBeenCalled();
   });
 

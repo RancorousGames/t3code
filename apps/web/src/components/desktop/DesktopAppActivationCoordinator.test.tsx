@@ -10,6 +10,12 @@ const mocks = vi.hoisted(() => ({
   sendInitial: vi.fn(async () => ({ delivery: "user_turn_observed", sendAttempted: true })),
   recordSpawn: vi.fn(),
   readSpawn: vi.fn(() => [] as Array<{ sessionId: string; requestId: string }>),
+  browserSessions: [] as Array<{
+    id: string;
+    title: string;
+    parentSessionId?: string;
+    hidden?: boolean;
+  }>,
   runControl: vi.fn(),
   navigate: vi.fn(),
   createProject: vi.fn(),
@@ -37,12 +43,9 @@ vi.mock("../../hooks/useLocalStorage", () => ({
 vi.mock("../../chatGPTSessionControl", () => ({
   runChatGPTSessionControl: mocks.runControl,
 }));
-vi.mock("../../chatGPTSessionLineage", () => ({
-  resolveExplicitChatGPTParent: vi.fn(),
-}));
 vi.mock("../../chatGPTSessionGrouping", () => ({
-  applyConfirmedChatGPTSessionMetadata: vi.fn(),
-  matchRegisteredProject: vi.fn(),
+  applyConfirmedChatGPTSessionMetadata: vi.fn((sessions) => sessions),
+  matchRegisteredProject: vi.fn(() => null),
 }));
 vi.mock("../../previewStateStore", () => ({
   beginPreviewSessionClose: vi.fn(),
@@ -76,7 +79,7 @@ vi.mock("../../chatGPTSpawnReceipts", () => ({
 }));
 vi.mock("../../chatGPTBrowserSessions", () => ({
   useChatGPTBrowserSessions: () => ({ createSession: mocks.createSession }),
-  readChatGPTBrowserSessions: () => [],
+  readChatGPTBrowserSessions: () => mocks.browserSessions,
 }));
 vi.mock("../../desktopAppActivation", () => ({
   handleDesktopAppActivationRequest: vi.fn(),
@@ -191,6 +194,7 @@ describe("background ChatGPT activation", () => {
     mocks.nativeProjection.mockResolvedValue({ _tag: "Success", value: { messages: [] } });
     mocks.projects = [];
     mocks.threads = [];
+    mocks.browserSessions = [];
     complete.mockClear();
     setReady.mockClear();
     onRequest = null;
@@ -310,6 +314,64 @@ describe("background ChatGPT activation", () => {
         sessions: [{ id: "spawned-session", title: "Worker", spawnRequestId: "lost-response" }],
       },
     });
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    expect(mocks.sendInitial).not.toHaveBeenCalled();
+  });
+
+  it("persists an exact explicit parent in the spawn metadata and receipt", async () => {
+    const parentId = "385e7c81-23f5-48f3-89de-c1f9c63893d2";
+    mocks.browserSessions = [
+      { id: parentId, title: "Manager" },
+      { id: "active-other", title: "Active unrelated" },
+    ];
+    await act(async () => {
+      renderer = create(<DesktopAppActivationCoordinator />);
+    });
+    await act(async () =>
+      onRequest?.({
+        version: 1,
+        requestId: "explicit-parent",
+        type: "chatgpt.spawn",
+        title: "Worker",
+        prompt: "Do bounded work",
+        parentSessionId: parentId,
+      }),
+    );
+    expect(mocks.createSession).toHaveBeenCalledExactlyOnceWith("Worker", {
+      parentSessionId: parentId,
+    });
+    expect(complete).toHaveBeenCalledWith({
+      version: 1,
+      requestId: "explicit-parent",
+      ok: true,
+      sessionId: "spawned-session",
+      messageSent: true,
+      parentSessionId: parentId,
+    });
+  });
+
+  it("rejects unknown or hidden explicit parents before session creation or prompt delivery", async () => {
+    mocks.browserSessions = [{ id: "known-hidden", title: "Hidden manager", hidden: true }];
+    await act(async () => {
+      renderer = create(<DesktopAppActivationCoordinator />);
+    });
+    for (const parentSessionId of ["unknown", "known-hidden"]) {
+      await act(async () =>
+        onRequest?.({
+          version: 1,
+          requestId: parentSessionId,
+          type: "chatgpt.spawn",
+          title: "Worker",
+          prompt: "Do bounded work",
+          parentSessionId,
+        }),
+      );
+      expect(complete.mock.lastCall?.[0]).toMatchObject({
+        requestId: parentSessionId,
+        ok: false,
+        code: "invalid-request",
+      });
+    }
     expect(mocks.createSession).not.toHaveBeenCalled();
     expect(mocks.sendInitial).not.toHaveBeenCalled();
   });
