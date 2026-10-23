@@ -1,6 +1,5 @@
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
-  AuthPreviewOperateScope,
   type DesktopPreviewBridge,
   type DesktopPreviewOpenLinkEvent,
   type EnvironmentId,
@@ -8,12 +7,10 @@ import {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import { type ComponentProps, useState } from "react";
 
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 import { isElectron } from "~/env";
-import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { useDesktopHostedPreviewSessions } from "~/components/preview/usePreviewSession";
 import {
   readActivePreviewSessions,
@@ -22,24 +19,11 @@ import {
 } from "~/previewStateStore";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { previewEnvironment } from "~/state/preview";
-import { useEnvironmentScope } from "~/state/session";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
-import {
-  chatGPTGuestHydrationLimiter,
-  shouldStaggerChatGPTGuest,
-} from "./chatGPTGuestHydrationLimiter";
-import {
-  isChatGPTGuestWoken,
-  selectChatGPTGuestHibernated,
-  useChatGPTGuestHibernation,
-  wakeChatGPTGuest,
-} from "./chatGPTGuestHibernation";
-import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
-import { HostedBrowserWebview } from "./HostedBrowserWebview";
+import { AuthorizedBrowserWebview } from "./ChatGPTGuestWebviewGate";
 import { openUrlInPreview } from "./openFileInPreview";
-import { useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { rendersServerTabNatively } from "./previewRuntime";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
@@ -135,6 +119,8 @@ export function startElectronBrowserHost(): () => void {
     for (const dispose of disposers) dispose();
   };
 }
+// Preserve the previous public re-export.
+export { shouldOpenChatGPTLinkInDefaultBrowser } from "./chatGPTExternalLinkRouting";
 
 export function ElectronBrowserHost() {
   const previewByThreadKey = useActivePreviewSessions();
@@ -172,57 +158,4 @@ export function ElectronBrowserHost() {
       })}
     </div>
   );
-}
-
-function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {
-  const canOperatePreview = useEnvironmentScope(
-    props.threadRef.environmentId,
-    AuthPreviewOperateScope,
-  );
-  const profileId = useTabProfileId(props.profileId);
-  const selected = useBrowserSurfaceStore(
-    (state) => state.byTabId[props.runtimeTabId]?.visible === true,
-  );
-  const hibernated = useChatGPTGuestHibernation((state) =>
-    selectChatGPTGuestHibernated(state, props.runtimeTabId),
-  );
-  const woken = useChatGPTGuestHibernation((state) =>
-    isChatGPTGuestWoken(state, props.runtimeTabId),
-  );
-  const stagger = shouldStaggerChatGPTGuest(props.threadRef.threadId, props.initialUrl) && !woken;
-  const [guestMayAttach, setGuestMayAttach] = useState(!stagger);
-
-  useEffect(() => {
-    if (hibernated && selected) wakeChatGPTGuest(props.runtimeTabId);
-  }, [hibernated, selected, props.runtimeTabId]);
-
-  useEffect(() => {
-    if (!stagger || !canOperatePreview || hibernated) return;
-    const controller = new AbortController();
-    void chatGPTGuestHydrationLimiter
-      .request(props.runtimeTabId, controller.signal)
-      .then((allowed) => {
-        if (allowed && !controller.signal.aborted) setGuestMayAttach(true);
-      });
-    return () => controller.abort();
-  }, [stagger, canOperatePreview, hibernated, props.runtimeTabId]);
-
-  useEffect(() => {
-    if (stagger && selected) chatGPTGuestHydrationLimiter.prioritize(props.runtimeTabId);
-  }, [stagger, selected, props.runtimeTabId]);
-
-  return canOperatePreview && (guestMayAttach || !stagger) && !hibernated ? (
-    <HostedBrowserWebview {...props} profileId={profileId} />
-  ) : null;
-}
-
-// Latch after hydration: Electron fixes the partition when the guest attaches.
-function useTabProfileId(profileId: string | undefined): string | undefined {
-  const hydrated = useClientSettingsHydrated();
-  const defaultProfileId = useBrowserDefaults().profileId;
-  const [fallback, setFallback] = useState<string | undefined>(undefined);
-  if (profileId === undefined && hydrated && fallback === undefined) {
-    setFallback(defaultProfileId);
-  }
-  return profileId ?? fallback;
 }
