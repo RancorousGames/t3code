@@ -162,6 +162,9 @@ export const AgentProviderV1DesktopWorkResult = Schema.Struct({
 export type AgentProviderV1DesktopWorkResult = typeof AgentProviderV1DesktopWorkResult.Type;
 
 export const AgentProviderV1SessionPage = Schema.Struct({
+  /** sourceCursor is native-only; this mixed listing is never a complete ChatGPT snapshot. */
+  sourceEpoch: Schema.optional(OpaqueId),
+  nativeSnapshotSequence: Schema.optional(Schema.Number),
   items: Schema.Array(AgentProviderV1Session),
   next: Schema.NullOr(Schema.String),
   complete: Schema.Boolean,
@@ -201,6 +204,20 @@ export const AgentProviderV1Operation = Schema.Struct({
 });
 export type AgentProviderV1Operation = typeof AgentProviderV1Operation.Type;
 
+/** Reconcile a submit using its original immutable identity; never infer a browser send from a key alone. */
+export const AgentProviderV1OperationGet = Schema.Struct({
+  operationId: OpaqueId,
+  session: AgentProviderV1SessionRef,
+  clientRequestId: RequestId,
+  expectedEnvironmentId: OpaqueId,
+});
+
+export const AgentProviderV1UpdatesRequest = Schema.Struct({
+  expectedEnvironmentId: OpaqueId,
+  cursor: Schema.optional(Schema.NullOr(OpaqueId)),
+  limit: Schema.optional(Schema.Number),
+});
+
 export const AgentProviderV1Submit = Schema.Struct({
   session: AgentProviderV1SessionRef,
   content: Schema.Array(Schema.Unknown),
@@ -219,6 +236,11 @@ export const AgentProviderV1Update = Schema.Struct({
   observedAt: Schema.String,
 });
 export const AgentProviderV1UpdateBatch = Schema.Struct({
+  /** Native event-store epoch remains stable across process restarts. Browser updates are not durable. */
+  sourceEpoch: Schema.optional(OpaqueId),
+  browserEpoch: Schema.optional(OpaqueId),
+  browserUpdatesComplete: Schema.optional(Schema.Boolean),
+  nativeSnapshotSequence: Schema.optional(Schema.Number),
   cursor: Schema.NullOr(Schema.String),
   changes: Schema.Array(AgentProviderV1Update),
   gap: Schema.Boolean,
