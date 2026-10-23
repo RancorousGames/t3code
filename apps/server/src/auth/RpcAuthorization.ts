@@ -17,6 +17,7 @@ import {
   AuthFilesystemWriteScope,
   AuthDiagnosticsReadScope,
   AuthOrchestrationOperateScope,
+  AgentProviderV1Request,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
   AuthRelayReadScope,
@@ -61,6 +62,7 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
   [WS_METHODS.projectsMutate]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
+  [WS_METHODS.agentProviderCall]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateProvider]: AuthProvidersManageScope,
@@ -267,6 +269,22 @@ const requiredScopesForRpcCall = (
     ];
   }
   if (method === WS_METHODS.serverUpdateSettings) return requiredScopesForSettingsUpdate(payload);
+  if (method === WS_METHODS.agentProviderCall) {
+    const request = Schema.decodeUnknownSync(AgentProviderV1Request)(payload);
+    return [
+      "hello",
+      "sessions.list",
+      "sessions.get",
+      "sessions.history",
+      "sessions.updates",
+      "sessions.subscribe",
+      "sessions.queue",
+      "sessions.settings.get",
+      "operations.get",
+    ].includes(request.method)
+      ? [AuthOrchestrationReadScope]
+      : [AuthOrchestrationOperateScope];
+  }
   if (method === WS_METHODS.projectsMutate) {
     return requiredScopesForProjectMutation(decodeProjectMutation(payload));
   }

@@ -1,6 +1,12 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import * as Schema from "effect/Schema";
-import { MessageId, ThreadId, resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
+import {
+  MessageId,
+  ThreadId,
+  T3_AGENT_PROVIDER_VERSION,
+  type AgentProviderV1Session,
+  resolveProjectProviderInstanceEnabled,
+} from "@t3tools/contracts";
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
 
 import { sendInitialChatGPTPrompt } from "../../chatGPTBrowserAutomation";
@@ -58,6 +64,7 @@ import {
 } from "../../state/entities";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
+import { agentProviderCall } from "../../state/agentProvider";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentShell } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -72,6 +79,10 @@ export function DesktopAppActivationCoordinator() {
     setSessionHidden,
   } = useChatGPTBrowserSessions(primaryEnvironment?.environmentId ?? null);
   const closeChatGPTPreview = useAtomCommand(previewEnvironment.close, { reportFailure: false });
+  const publishAgentProvider = useAtomCommand(agentProviderCall, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const openThread = useNewThreadHandler();
   const startNativeTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
@@ -1138,6 +1149,64 @@ export function DesktopAppActivationCoordinator() {
       });
     },
   );
+
+  useEffect(() => {
+    if (!ready || primaryEnvironment === null || activation === undefined) return;
+    const environmentId = primaryEnvironment.environmentId;
+    let stopped = false;
+    // The browser session inventory is desktop-local. Announce only identities
+    // and currently known metadata; never wake/inspect guests or imply send
+    // availability from a persisted browser tab alone.
+    const publish = async () => {
+      const observedAt = new Date().toISOString();
+      const sessions: AgentProviderV1Session[] = readChatGPTBrowserSessions(environmentId).map(
+        (entry): AgentProviderV1Session => {
+          const preview = readThreadPreviewState(chatGPTBrowserThreadRef(environmentId, entry.id));
+          const nav = preview.snapshot?.navStatus;
+          const conversationId =
+            !entry.hidden && nav?._tag === "Success" ? chatGPTConversationIdFromUrl(nav.url) : null;
+          return {
+            ref: { provider: "t3", id: entry.id },
+            kind: "t3/chatgpt",
+            source: { environmentId, browserSessionId: entry.id, conversationId },
+            title: entry.title,
+            conversation: conversationId,
+            ...(entry.parentSessionId
+              ? { parent: { provider: "t3", id: entry.parentSessionId } }
+              : {}),
+            state: {
+              reachability: entry.hidden ? "Unreachable" : "Unknown",
+              activity: "Unknown",
+              confidence: "Unknown",
+              elsewhere: null,
+              observedAt,
+            },
+            capabilities: [],
+            deliveryModes: [],
+          };
+        },
+      );
+      const response = await publishAgentProvider({
+        environmentId,
+        input: {
+          apiVersion: T3_AGENT_PROVIDER_VERSION,
+          requestId: globalThis.crypto.randomUUID(),
+          method: "desktop.sessions.publish",
+          params: { environmentId, sessions },
+        },
+      });
+      if (response._tag === "Failure" && !stopped) {
+        // The server may be older during staged desktop/server upgrades.
+        // No retry loop or background guest activity is justified here.
+      }
+    };
+    void publish();
+    const interval = window.setInterval(() => void publish(), 30_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [activation, ready, primaryEnvironment?.environmentId, publishAgentProvider]);
 
   useEffect(() => {
     if (!ready || activation === undefined) return;

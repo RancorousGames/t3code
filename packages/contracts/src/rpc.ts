@@ -1,3 +1,4 @@
+import { AgentProviderV1Request, AgentProviderV1Reply } from "./agentProvider.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -402,6 +403,9 @@ export const WS_METHODS = {
   mcpAppsReadResource: "mcpApps.readResource",
   mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
 
+  // Unified execution provider (additive to the existing native and desktop interfaces).
+  agentProviderCall: "agentProvider.call",
+
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
   providerAuthStart: "provider.auth.start",
@@ -596,6 +600,12 @@ const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, 
   payload: ServerRemoveKeybindingInput,
   success: ServerRemoveKeybindingResult,
   error: Schema.Union([KeybindingsConfigError, EnvironmentAuthorizationError]),
+});
+
+const WsAgentProviderCallRpc = Rpc.make(WS_METHODS.agentProviderCall, {
+  payload: AgentProviderV1Request,
+  success: AgentProviderV1Reply,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
@@ -1876,6 +1886,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 ) {}
 
 export const WsRpcGroup = RpcGroup.make(
+  WsAgentProviderCallRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

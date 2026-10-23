@@ -1,4 +1,15 @@
-import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import {
+  AgentProviderV1DesktopSnapshot,
+  T3_AGENT_PROVIDER_VERSION,
+  type AgentProviderV1Session,
+  OrchestrationDispatchCommandError,
+} from "@t3tools/contracts";
+import {
+  agentProviderEpoch,
+  publishDesktopCatalog,
+  readDesktopCatalog,
+  disconnectDesktopCatalog,
+} from "./agentProviderBridge.ts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 
@@ -1207,6 +1218,10 @@ const layerWsRpc = (
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const providerDesktopConnectionId = globalThis.crypto.randomUUID();
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => disconnectDesktopCatalog(providerDesktopConnectionId)),
+      );
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const intakeContext = yield* Effect.context<
@@ -1833,6 +1848,135 @@ const layerWsRpc = (
       });
 
       const handlers = ServerWsRpcGroup.of({
+        [WS_METHODS.agentProviderCall]: (request) =>
+          Effect.gen(function* () {
+            const reply = (data: unknown) => ({
+              apiVersion: T3_AGENT_PROVIDER_VERSION,
+              requestId: request.requestId,
+              ok: true as const,
+              data,
+            });
+            const error = (
+              code: "Unsupported" | "InvalidInput" | "EnvironmentChanged" | "Unavailable",
+              message: string,
+            ) => ({
+              apiVersion: T3_AGENT_PROVIDER_VERSION,
+              requestId: request.requestId,
+              ok: false as const,
+              error: { code, message, retryable: code === "Unavailable" },
+            });
+            const environmentId = yield* serverEnvironment.getEnvironmentId;
+            if (request.method === "hello") {
+              return reply({
+                apiVersion: T3_AGENT_PROVIDER_VERSION,
+                environmentId,
+                epoch: agentProviderEpoch,
+                supportedKinds: ["t3/thread", "t3/chatgpt"],
+                capabilities: [],
+                sourceUpdatesComplete: false,
+              });
+            }
+            if (request.method === "desktop.sessions.publish") {
+              // The existing authenticated WS operation scope and desktop
+              // origin must both hold. No local named pipe grants authority.
+              if (clientOrigin.surface !== "desktop") {
+                return error("Unsupported", "Browser catalogs must come from a T3 desktop client.");
+              }
+              let snapshot: typeof AgentProviderV1DesktopSnapshot.Type;
+              try {
+                snapshot = Schema.decodeUnknownSync(AgentProviderV1DesktopSnapshot)(request.params);
+              } catch {
+                return error("InvalidInput", "Invalid desktop session snapshot.");
+              }
+              if (snapshot.environmentId !== environmentId) {
+                return error(
+                  "EnvironmentChanged",
+                  "Desktop catalog belongs to another environment.",
+                );
+              }
+              if (
+                snapshot.sessions.length > 1000 ||
+                snapshot.sessions.some(
+                  (session) =>
+                    session.kind !== "t3/chatgpt" ||
+                    session.source.environmentId !== environmentId ||
+                    session.source.browserSessionId !== session.ref.id ||
+                    session.ref.id.startsWith("thread:") ||
+                    session.source.rawThreadId !== undefined ||
+                    session.ref.provider !== "t3" ||
+                    session.capabilities.length !== 0 ||
+                    session.deliveryModes.length !== 0,
+                )
+              ) {
+                return error(
+                  "InvalidInput",
+                  "Desktop catalog contains invalid session identities or claims.",
+                );
+              }
+              publishDesktopCatalog(providerDesktopConnectionId, environmentId, snapshot.sessions);
+              return reply({ published: snapshot.sessions.length });
+            }
+            if (request.method === "sessions.list") {
+              const native = yield* threadManagement
+                .readShellSnapshot({ location: "active" })
+                .pipe(Effect.either);
+              if (native._tag === "Left") {
+                return error("Unavailable", "Native thread catalog cannot be read.");
+              }
+              const items: AgentProviderV1Session[] = native.right.threads.map(
+                (thread): AgentProviderV1Session => {
+                  const active = thread.activeRunId !== null;
+                  const activity =
+                    thread.pendingRuntimeRequest !== null
+                      ? "WaitingOnUser"
+                      : active
+                        ? "Working"
+                        : thread.status === "idle"
+                          ? "Idle"
+                          : "Unknown";
+                  const threadRef = (id: string) => ({
+                    provider: "t3" as const,
+                    id: `thread:${encodeURIComponent(id)}`,
+                  });
+                  return {
+                    ref: threadRef(thread.id),
+                    kind: "t3/thread",
+                    source: { environmentId, rawThreadId: thread.id },
+                    title: thread.title,
+                    ...(thread.lineage.parentThreadId === null
+                      ? {}
+                      : { parent: threadRef(thread.lineage.parentThreadId) }),
+                    state: {
+                      reachability: "Reachable",
+                      activity,
+                      confidence: activity === "Unknown" ? "Unknown" : "Confirmed",
+                      elsewhere: null,
+                      observedAt: new Date().toISOString(),
+                    },
+                    // Execution provider methods beyond discovery are deferred
+                    // to WT-0002/0003/0004. Never advertise the blocked pipe create.
+                    capabilities: [],
+                    deliveryModes: [],
+                    // updatedAt may reflect titles or other metadata, not
+                    // verified message activity; do not claim lastActivityAt.
+                  };
+                },
+              );
+              items.push(...readDesktopCatalog(environmentId));
+              return reply({
+                items,
+                next: null,
+                // Desktop catalogs reflect only presently connected/publishing
+                // Electron owners, not an authoritative remote ChatGPT index.
+                complete: false,
+                sourceCursor: null,
+              });
+            }
+            return error(
+              "Unsupported",
+              `Provider method ${request.method} is not available in v1 discovery.`,
+            );
+          }),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
