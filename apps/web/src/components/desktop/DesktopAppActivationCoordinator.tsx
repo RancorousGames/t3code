@@ -40,8 +40,7 @@ import {
 import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
 import { resolveChatGPTSessionAddress } from "../../chatGPTConversationRouting";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
-import { runOpenRigHumanInboxControl } from "../../openRigHumanInboxControl";
-import { applyConfirmedChatGPTSessionMetadata, matchRegisteredProject } from "../../chatGPTSessionGrouping";
+import { handleOpenRigHumanInboxActivation } from "./openRigHumanInboxActivation";
 import { resolveExplicitChatGPTParent } from "../../chatGPTSessionLineage";
 import {
   readChatGPTBrowserSessions,
@@ -509,26 +508,7 @@ export function DesktopAppActivationCoordinator() {
         };
       }
       if (request.type === "openrig.human_inbox") {
-        try {
-          const data = await runOpenRigHumanInboxControl({
-            action: request.action,
-            address: request.address,
-            limit: request.limit,
-            itemId: request.itemId,
-            sourceType: request.sourceType,
-            state: request.state,
-            answers: request.answers,
-          });
-          return { version: 1, requestId: request.requestId, ok: true, data };
-        } catch (error) {
-          return {
-            version: 1,
-            requestId: request.requestId,
-            ok: false,
-            code: "internal-error",
-            message: error instanceof Error ? error.message : String(error),
-          };
-        }
+        return handleOpenRigHumanInboxActivation(request);
       }
       if (request.type === "chatgpt.sessions") {
         const environmentId = primaryEnvironment?.environmentId;

@@ -50,6 +50,8 @@ import {
   ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+import { ProviderResetWakeup } from "./providerResetWakeup.ts";
+export { ProviderResetWakeup } from "./providerResetWakeup.ts";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -1178,30 +1180,6 @@ export const StorageCleanupSettings = Schema.Struct({
   logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
-
-export const ProviderResetWakeup = Schema.Struct({
-  enabled: Schema.Boolean,
-  projectId: ProjectId,
-  armedResetAt: Schema.optionalKey(TrimmedNonEmptyString),
-  lastTriggeredResetAt: Schema.optionalKey(TrimmedNonEmptyString),
-  /** One-off explicit test, not tied to a provider quota window. */
-  testRequestedAt: Schema.optionalKey(TrimmedNonEmptyString),
-  lastTestResult: Schema.optionalKey(
-    Schema.Struct({
-      requestedAt: TrimmedNonEmptyString,
-      status: Schema.Literals(["succeeded", "failed"]),
-      message: TrimmedNonEmptyString,
-      threadId: Schema.optionalKey(TrimmedNonEmptyString),
-    }),
-  ),
-  queued: Schema.optionalKey(
-    Schema.Struct({
-      text: TrimmedNonEmptyString,
-      model: Schema.optionalKey(TrimmedNonEmptyString),
-    }),
-  ),
-});
-export type ProviderResetWakeup = typeof ProviderResetWakeup.Type;
 
 export const ServerSettings = Schema.Struct({
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.

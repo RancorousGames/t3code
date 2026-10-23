@@ -96,6 +96,7 @@ import { runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { nativeCreateHold, unavailableNativeSpawnCapabilities } from "./NativeSpawnApprovalHook.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import { userFacingDispatchErrorMessage } from "../orchestration-v2/UserFacingErrors.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -229,15 +230,6 @@ const isThreadManagementError = Schema.is(ThreadManagementService.ThreadManageme
 function failure(code: OrchestratorMcpFailure["code"], message: string): OrchestratorMcpFailure {
   return new OrchestratorMcpFailure({ code, message });
 }
-
-// Remove this hold only when create_threads consumes a trusted, durable one-use
-// decision before dispatch. Until then even codex:gpt-6-luna is blocked here.
-const nativeCreateHold: Effect.Effect<void, OrchestratorMcpFailure> = Effect.fail(
-  failure(
-    "capability_denied",
-    "create_threads is disabled until authenticated, single-use human spawn approval is available.",
-  ),
-);
 
 function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   if (!isThreadManagementError(error)) return failure("orchestration_error", errorMessage(error));
