@@ -73,6 +73,7 @@ import {
 import { recordSessionClick } from "./chatGPTConversationRecovery";
 import { readChatGPTRecoveryState } from "../../chatGPTRecoveryDiagnostics";
 import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
+import { ChatGPTWorkerCleanupCoordinator } from "./ChatGPTWorkerCleanupCoordinator";
 import { ChatGPTBrowserSelectionRecovery } from "./ChatGPTBrowserSelectionRecovery";
 import { ChatGPTProjectStatusIcon } from "./ChatGPTProjectStatusIcon";
 import { chatGPTSidebarProjectTitles } from "./chatGPTSidebarVisuals";
@@ -612,6 +613,7 @@ export function ChatGPTBrowserSidebarEntry({
           </span>
         </Button>
       </SidebarMenuItem>
+      <ChatGPTWorkerCleanupCoordinator environmentId={environmentId} sessions={sessions} />
       {!showWorkers && (
         <SidebarMenuItem>
           <p className="px-2 text-xs text-muted-foreground">
