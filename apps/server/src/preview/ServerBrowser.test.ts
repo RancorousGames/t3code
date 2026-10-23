@@ -1310,6 +1310,59 @@ it.live("viewers see the agent's pointer move to its target and click there", ()
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("unloaded ChatGPT previews retain their sessions without opening headless renderers", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const manager = yield* Manager.PreviewManager;
+      const browser = yield* ServerBrowser.ServerBrowser;
+      yield* Effect.yieldNow;
+      const threadId = ThreadId.make("t3-browser-session:hibernated");
+      const opened = yield* Effect.forEach(
+        Array.from({ length: 6 }, (_, index) => index),
+        () =>
+          manager.open({
+            threadId,
+            runtime: "server",
+            url: "https://chatgpt.com/c/saved",
+            profileId: "default",
+          }),
+      );
+      // The desktop's attach listener runs independently of the manager's
+      // event consumer. None of these owner records requires a live renderer.
+      while (desktopDetaches.listenerCount("attach") === 0) yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      expect((yield* manager.list({ threadId })).sessions).toHaveLength(opened.length);
+      expect(contextRequests).toEqual([]);
+      expect(desktopConnections).toEqual([]);
+
+      // A viewer trying to attach before the native guest exists may retry, but
+      // must not silently create a second persistent headless ChatGPT instance.
+      const failed = yield* browser
+        .attachViewer({
+          threadId,
+          tabId: opened[0]!.tabId,
+          canOperate: true,
+          maxWidth: 1280,
+          maxHeight: 800,
+          quality: 70,
+        })
+        .pipe(Effect.flip);
+      expect(failed._tag).toBe("ServerBrowserLaunchError");
+      expect(contextRequests).toEqual([]);
+
+      // Attaching one real desktop webview restores exactly that preview owner.
+      const attached = opened[0]!;
+      desktopTabs.add(attached.tabId);
+      desktopDetaches.emit("attach", { threadId, tabId: attached.tabId });
+      while (desktopConnections.length === 0) yield* Effect.yieldNow;
+      expect(desktopConnections).toHaveLength(1);
+      expect(desktopConnections[0]!.endpoint).toBe(`ws://desktop/${attached.tabId}`);
+      expect(contextRequests).toEqual([]);
+      expect((yield* manager.list({ threadId })).sessions).toHaveLength(opened.length);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("drives the desktop's own page for a tab the desktop renders", () =>
   Effect.scoped(
     Effect.gen(function* () {

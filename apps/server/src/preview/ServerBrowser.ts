@@ -370,6 +370,8 @@ const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> = new 
 
 const AGENT_TAB_LIMIT = 8;
 const SERVER_TAB_LIMIT = 32;
+/** ChatGPT browser owners are rendered by the desktop's webview, not by server Chromium. */
+const CHATGPT_BROWSER_THREAD_PREFIX = "t3-browser-session:";
 /** Agent tabs nobody watches close after this long without an agent request. */
 const AGENT_TAB_IDLE_MS = 30 * 60 * 1000;
 const IDLE_SWEEP_INTERVAL = "1 minute";
@@ -745,10 +747,18 @@ const make = Effect.gen(function* () {
   const createTab = async (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
     const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
     adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
-    const desktop =
-      adopted === undefined && (await desktopRenders(snapshot))
-        ? await connectDesktop(snapshot)
-        : null;
+    const attachedToDesktop = adopted === undefined && (await desktopRenders(snapshot));
+    // An unloaded ChatGPT webview may never attach. Do not launch a second,
+    // persistent headless Chrome renderer for its saved conversation in that case.
+    if (
+      adopted === undefined &&
+      !attachedToDesktop &&
+      desktopChannel.available &&
+      snapshot.threadId.startsWith(CHATGPT_BROWSER_THREAD_PREFIX)
+    ) {
+      throw new Error("The ChatGPT session's desktop webview has not attached.");
+    }
+    const desktop = attachedToDesktop ? await connectDesktop(snapshot) : null;
     // An agent tab without a profile (no client reported one) keeps throwaway storage.
     const isolatedContext =
       adopted === undefined &&
@@ -1996,6 +2006,17 @@ const make = Effect.gen(function* () {
   const mirrorManagerEvent = (event: PreviewEvent) =>
     Effect.promise(async () => {
       if (event.type === "opened" && event.snapshot.runtime === "server") {
+        // Sidebar restoration opens many ChatGPT preview sessions at once, including
+        // unloaded/hibernated ones. Defer their pages until a desktop webview actually
+        // attaches; otherwise each 10s attach timeout launches a 500MB headless renderer.
+        if (
+          desktopChannel.available &&
+          event.threadId.startsWith(CHATGPT_BROWSER_THREAD_PREFIX) &&
+          !(await Effect.runPromise(
+            desktopChannel.isAttached({ threadId: event.threadId, tabId: event.tabId }),
+          ))
+        )
+          return;
         await ensureTab(event.snapshot).catch(constVoid);
         return;
       }
