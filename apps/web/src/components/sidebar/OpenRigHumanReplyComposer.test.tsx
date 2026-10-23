@@ -141,15 +141,17 @@ describe("ordinary OpenRig human Reply composer", () => {
 
   it("requires exact source, recipient, replyTo, operation and durable acceptance; locks after unknown", async () => {
     const send = vi.fn(async (request: HumanReplyRequest) => ({
+      outcome: "accepted" as const,
+      requestId: request.operationId,
+      qitemId: request.sourceId,
+      replyQitemId: "qitem-new",
+      recipient: "wrong@rig",
+      source: "human@kernel" as const,
+      messageSha256: "not-relevant-here",
       acceptedIntoQueue: true as const,
-      durable: true as const,
-      operationId: request.operationId,
-      sourceType: request.sourceType,
-      sourceId: request.sourceId,
-      replyTo: request.replyTo,
-      from: request.from,
-      to: "wrong@rig",
-      replyId: "qitem-new",
+      deliveredToAgent: false as const,
+      status: "recorded" as const,
+      delivery: "queued" as const,
     }));
     await mount(item, "human@kernel", send);
     await edit("Yes");
@@ -165,7 +167,7 @@ describe("ordinary OpenRig human Reply composer", () => {
       to: item.sender,
       body: "Yes",
     });
-    expect(output()).toContain("Reply outcome unknown");
+    expect(output()).toContain("Outcome unknown");
     expect(disabled()).toBe(true);
     await click("Submit reply");
     expect(send).toHaveBeenCalledTimes(1);
@@ -181,15 +183,17 @@ describe("ordinary OpenRig human Reply composer", () => {
 
   it("considers only exact matching durable receipt accepted; never equates queue acceptance with agent delivery", async () => {
     const send = vi.fn(async (request: HumanReplyRequest) => ({
+      outcome: "accepted" as const,
+      requestId: request.operationId,
+      qitemId: request.sourceId,
+      replyQitemId: "qitem-reply-10",
+      recipient: request.to,
+      source: "human@kernel" as const,
+      messageSha256: "verified-in-MAIN",
       acceptedIntoQueue: true as const,
-      durable: true as const,
-      operationId: request.operationId,
-      sourceType: request.sourceType,
-      sourceId: request.sourceId,
-      replyTo: request.replyTo,
-      from: request.from,
-      to: request.to,
-      replyId: "qitem-reply-10",
+      deliveredToAgent: false as const,
+      status: "recorded" as const,
+      delivery: "queued" as const,
     }));
     await mount(item, "human@kernel", send);
     await edit("The update is approved.");
@@ -218,6 +222,55 @@ describe("ordinary OpenRig human Reply composer", () => {
     expect(output()).toContain("outcome unknown");
     expect(disabled()).toBe(true);
     expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("restores definite not-sent drafts and reconciles unknown by read-only operation ID", async () => {
+    const send = vi.fn(async () => ({ outcome: "not_sent" as const, reason: "Writer offline" }));
+    const lookup = vi.fn(async (request: HumanReplyRequest) => ({
+      outcome: "accepted" as const,
+      requestId: request.operationId,
+      qitemId: request.sourceId,
+      replyQitemId: "qitem-read-only",
+      recipient: request.to,
+      source: "human@kernel" as const,
+      messageSha256: "verified-in-MAIN",
+      acceptedIntoQueue: true as const,
+      deliveredToAgent: false as const,
+      status: "recorded" as const,
+      delivery: "queued" as const,
+    }));
+    await mount(item, "human@kernel", send);
+    await edit("Reply");
+    await click("Submit reply");
+    expect(send).toHaveBeenCalledOnce();
+    expect(output()).toContain("Not sent");
+    expect(disabled()).toBe(false);
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    await mount(
+      item,
+      "human@kernel",
+      vi.fn(async () => ({ outcome: "unknown" as const, reason: "lost POST" })),
+    );
+    await click("Submit reply");
+    expect(disabled()).toBe(true);
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    await act(async () => {
+      rendered = create(
+        <OpenRigHumanReplyComposer
+          item={item}
+          address="human@kernel"
+          onSend={send}
+          onReconcile={lookup}
+        />,
+      );
+    });
+    expect(output()).toContain("Check receipt (read-only)");
+    await click("Check receipt (read-only)");
+    expect(lookup).toHaveBeenCalledOnce();
+    expect(output()).toContain("durably accepted");
+    expect(disabled()).toBe(true);
   });
 
   it("copy text retains the original mailbox ID (no invented queue ID)", () => {

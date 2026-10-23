@@ -1,9 +1,12 @@
-import type { DesktopOpenRigInboxItem } from "@t3tools/contracts";
-import { useState } from "react";
+import type {
+  DesktopOpenRigInboxItem,
+  DesktopOpenRigOperatorReplyResult,
+} from "@t3tools/contracts";
+import { useRef, useState } from "react";
 import { randomUUID } from "../../lib/utils";
 
 const PREFIX = "t3code:openrig-human-reply-draft:v1:";
-const MAX_REPLY = 8_000;
+const MAX_REPLY = 4_000;
 
 type InboxItem = DesktopOpenRigInboxItem;
 
@@ -23,19 +26,10 @@ export interface HumanReplyRequest {
   body: string;
 }
 
-export interface HumanReplyReceipt {
-  acceptedIntoQueue: true;
-  durable: true;
-  operationId: string;
-  sourceType: InboxItem["sourceType"];
-  sourceId: string;
-  replyTo: string;
-  from: string;
-  to: string;
-  replyId: string;
-}
-
-export type HumanReplySend = (request: HumanReplyRequest) => Promise<HumanReplyReceipt>;
+export type HumanReplySend = (
+  request: HumanReplyRequest,
+) => Promise<DesktopOpenRigOperatorReplyResult>;
+export type HumanReplyReconcile = HumanReplySend;
 
 interface StoredDraft {
   text: string;
@@ -86,18 +80,19 @@ export function humanReplyCopyText(address: string, item: InboxItem, body: strin
   return `From: ${address}\nTo: ${item.sender}\nIn reply to: ${item.sourceType}/${item.id}\n\n${body}`;
 }
 
-function receiptMatches(request: HumanReplyRequest, receipt: HumanReplyReceipt): boolean {
+function receiptMatches(
+  request: HumanReplyRequest,
+  receipt: DesktopOpenRigOperatorReplyResult,
+): boolean {
   return (
+    receipt.outcome === "accepted" &&
     receipt.acceptedIntoQueue === true &&
-    receipt.durable === true &&
-    typeof receipt.replyId === "string" &&
-    receipt.replyId.length > 0 &&
-    receipt.operationId === request.operationId &&
-    receipt.sourceType === request.sourceType &&
-    receipt.sourceId === request.sourceId &&
-    receipt.replyTo === request.replyTo &&
-    receipt.from === request.from &&
-    receipt.to === request.to
+    receipt.deliveredToAgent === false &&
+    receipt.requestId === request.operationId &&
+    receipt.qitemId === request.sourceId &&
+    receipt.source === request.from &&
+    receipt.recipient === request.to &&
+    receipt.replyQitemId.length > 0
   );
 }
 
@@ -105,11 +100,15 @@ export function OpenRigHumanReplyComposer({
   item,
   address,
   onSend,
+  onReconcile,
+  unavailableReason,
   onAnnouncement,
 }: {
   item: InboxItem;
   address: string;
   onSend?: HumanReplySend;
+  onReconcile?: HumanReplyReconcile;
+  unavailableReason?: string;
   onAnnouncement?: (text: string) => void;
 }) {
   return (
@@ -118,6 +117,8 @@ export function OpenRigHumanReplyComposer({
       item={item}
       address={address}
       {...(onSend ? { onSend } : {})}
+      {...(onReconcile ? { onReconcile } : {})}
+      {...(unavailableReason ? { unavailableReason } : {})}
       {...(onAnnouncement ? { onAnnouncement } : {})}
     />
   );
@@ -127,11 +128,15 @@ function ReplyComposer({
   item,
   address,
   onSend,
+  onReconcile,
+  unavailableReason,
   onAnnouncement,
 }: {
   item: InboxItem;
   address: string;
   onSend?: HumanReplySend;
+  onReconcile?: HumanReplyReconcile;
+  unavailableReason?: string;
   onAnnouncement?: (text: string) => void;
 }) {
   const key = keyFor(address, item);
@@ -144,8 +149,11 @@ function ReplyComposer({
     }
   });
   const [sending, setSending] = useState(false);
+  const busy = useRef(false);
   const [notice, setNotice] = useState("");
-  const canSubmit = Boolean(onSend && stored && !sending && !draft.attempt && draft.text.trim());
+  const canSubmit = Boolean(
+    onSend && stored && !sending && !busy.current && !draft.attempt && draft.text.trim(),
+  );
 
   function update(text: string) {
     const next = { ...draft, text: text.slice(0, MAX_REPLY) };
@@ -169,10 +177,9 @@ function ReplyComposer({
     }
   }
 
-  async function submit() {
-    if (!canSubmit || !onSend) return;
-    const request: HumanReplyRequest = {
-      operationId: randomUUID(),
+  function requestFor(operationId: string): HumanReplyRequest {
+    return {
+      operationId,
       sourceType: item.sourceType,
       sourceId: item.id,
       replyTo: item.id,
@@ -180,6 +187,22 @@ function ReplyComposer({
       to: item.sender,
       body: draft.text,
     };
+  }
+
+  function accept(operationId: string, text: string) {
+    const accepted: StoredDraft = { text, attempt: { operationId, state: "accepted" } };
+    setStored(saveDraft(key, accepted));
+    setDraft(accepted);
+    setNotice(
+      "OpenRig durably accepted this reply into its queue; agent consumption is unverified.",
+    );
+    onAnnouncement?.("Reply accepted into OpenRig queue; agent delivery is not implied.");
+  }
+
+  async function submit() {
+    if (!canSubmit || !onSend || busy.current) return;
+    busy.current = true;
+    const request = requestFor(randomUUID());
     // Persist the in-flight operation BEFORE transport. An unknown result (including
     // a component reload or malformed receipt) must never silently create a retry.
     const pending: StoredDraft = {
@@ -187,6 +210,7 @@ function ReplyComposer({
       attempt: { operationId: request.operationId, state: "unknown" },
     };
     if (!saveDraft(key, pending)) {
+      busy.current = false;
       setStored(false);
       setNotice("Not sent: local operation record could not be saved.");
       return;
@@ -195,23 +219,37 @@ function ReplyComposer({
     setSending(true);
     try {
       const receipt = await onSend(request);
-      if (!receiptMatches(request, receipt))
-        throw new Error("OpenRig did not confirm the exact durable reply identity.");
-      const accepted: StoredDraft = {
-        ...pending,
-        attempt: { operationId: request.operationId, state: "accepted" },
-      };
-      setStored(saveDraft(key, accepted));
-      setDraft(accepted);
-      setNotice(
-        "OpenRig durably accepted this reply into its queue; agent consumption is unverified.",
-      );
-      onAnnouncement?.("Reply accepted into OpenRig queue; agent delivery is not implied.");
+      if (receiptMatches(request, receipt)) {
+        accept(request.operationId, request.body);
+      } else if (receipt.outcome === "not_sent") {
+        const retryable: StoredDraft = { text: request.body, attempt: null };
+        setStored(saveDraft(key, retryable));
+        setDraft(retryable);
+        setNotice("Not sent (before POST or authoritative rejection): " + receipt.reason);
+      } else {
+        setNotice("Outcome unknown. No repeat POST. Check the exact recorded operation.");
+      }
     } catch {
-      setNotice(
-        "Reply outcome unknown. Draft retained; inspect the exact OpenRig operation before any retry.",
-      );
+      setNotice("Reply outcome unknown. No repeat POST; check the exact operation.");
     } finally {
+      busy.current = false;
+      setSending(false);
+    }
+  }
+
+  async function reconcile() {
+    if (!draft.attempt || draft.attempt.state !== "unknown" || !onReconcile || busy.current) return;
+    busy.current = true;
+    setSending(true);
+    const request = requestFor(draft.attempt.operationId);
+    try {
+      const receipt = await onReconcile(request);
+      if (receiptMatches(request, receipt)) accept(request.operationId, request.body);
+      else setNotice("No matching durable receipt confirmed yet. Do not resend.");
+    } catch {
+      setNotice("Receipt lookup unavailable. Do not resend.");
+    } finally {
+      busy.current = false;
       setSending(false);
     }
   }
@@ -222,7 +260,8 @@ function ReplyComposer({
       : draft.attempt?.state === "accepted"
         ? "Reply recorded by OpenRig. Agent delivery is not implied."
         : !onSend
-          ? "Sending unavailable: OpenRig has no supported ordinary human Reply endpoint yet. This is a local draft only."
+          ? (unavailableReason ??
+            "Sending unavailable: backend writer capability not confirmed. Local draft only.")
           : !stored
             ? "Local draft storage unavailable. Sending requires a persisted operation ID."
             : "An exact OpenRig durable acceptance receipt is required before a reply counts as sent.";
@@ -245,7 +284,7 @@ function ReplyComposer({
         placeholder="Write your reply…"
         maxLength={MAX_REPLY}
         value={draft.text}
-        disabled={sending || draft.attempt?.state === "accepted"}
+        disabled={sending || draft.attempt !== null}
         onChange={(event) => update(event.currentTarget.value)}
       />
       <div className="flex flex-wrap items-center gap-2">
@@ -264,6 +303,16 @@ function ReplyComposer({
         >
           {sending ? "Submitting…" : "Submit reply"}
         </button>
+        {draft.attempt?.state === "unknown" && onReconcile && (
+          <button
+            type="button"
+            disabled={sending}
+            onClick={() => void reconcile()}
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs hover:bg-muted"
+          >
+            Check receipt (read-only)
+          </button>
+        )}
         <span className="text-2xs text-muted-foreground">
           {stored ? "Draft saved on this device" : "Storage unavailable — copy your draft"}
         </span>

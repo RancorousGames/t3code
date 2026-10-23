@@ -164,6 +164,108 @@ async function manageMessages() {
 }
 
 describe("OpenRig floating desktop inbox", () => {
+  it("only enables canonical Reply for verified direct queue items with live writer capability", async () => {
+    const direct = {
+      ...sample.items[0]!,
+      id: "qitem-replyable-77",
+      sourceType: "queue" as const,
+      state: "pending",
+      sender: "manager@omni",
+      recipient: "human@kernel",
+      attentionKind: "message" as const,
+      replyEligible: true,
+    };
+    const send = vi.fn(
+      async (input: {
+        requestId: string;
+        qitemId: string;
+        expectedRecipient: string;
+        message: string;
+      }) => ({
+        outcome: "accepted" as const,
+        requestId: input.requestId,
+        qitemId: input.qitemId,
+        replyQitemId: "qitem-reply-mocked",
+        recipient: input.expectedRecipient,
+        source: "human@kernel" as const,
+        messageSha256: "validated-in-main",
+        acceptedIntoQueue: true as const,
+        deliveredToAgent: false as const,
+        status: "recorded" as const,
+        delivery: "queued" as const,
+      }),
+    );
+    (
+      window as unknown as { desktopBridge: Record<string, unknown> }
+    ).desktopBridge.sendOpenRigOperatorReply = send;
+    read.mockResolvedValue({
+      ...sample,
+      items: [direct],
+      count: 1,
+      pendingCount: 0,
+      replyWriteAvailable: true,
+    });
+    await mount();
+    await click("OpenRig human inbox");
+    await click("Open inbox message: Build complete");
+    await act(async () => {
+      rendered!.root.findByProps({ "aria-label": "Ordinary OpenRig reply draft" }).props.onChange({
+        currentTarget: { value: "Please implement the fix." },
+      });
+    });
+    expect(rendered!.root.findByProps({ children: "Submit reply" }).props.disabled).toBe(false);
+    await act(async () => rendered!.root.findByProps({ children: "Submit reply" }).props.onClick());
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceType: "queue",
+        qitemId: direct.id,
+        destination: "human@kernel",
+        expectedRecipient: direct.sender,
+        message: "Please implement the fix.",
+      }),
+    );
+    expect(output()).toContain("durably accepted");
+
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    read.mockResolvedValue({
+      ...sample,
+      items: [{ ...direct, replyEligible: false }],
+      count: 1,
+      replyWriteAvailable: true,
+    });
+    await mount();
+    await click("OpenRig human inbox");
+    await click("Open inbox message: Build complete");
+    expect(rendered!.root.findByProps({ children: "Submit reply" }).props.disabled).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not turn explicit automatic notices into needs-attention alerts or replyable records", async () => {
+    const warning = {
+      ...sample.items[0]!,
+      id: "qitem-warning-1",
+      requiresAction: false,
+      sender: "daemon@kernel",
+      attentionKind: "notice" as const,
+      replyEligible: false,
+      replyUnavailableReason: "automated_notice",
+    };
+    expect(inboxAttentionKind(warning, "human@kernel")).toBe("none");
+    read.mockResolvedValue({
+      ...sample,
+      items: [warning],
+      count: 1,
+      pendingCount: 0,
+      replyWriteAvailable: true,
+    });
+    await mount();
+    expect(output()).not.toContain("alerts or read-only decisions in loaded results");
+    await click("OpenRig human inbox");
+    await click("Open inbox message: Build complete");
+    expect(rendered!.root.findByProps({ children: "Submit reply" }).props.disabled).toBe(true);
+  });
   it("uses a compact prominent sidebar launcher; details are a separate two-column window", async () => {
     read.mockResolvedValue(sample);
     await mount();
@@ -504,7 +606,9 @@ describe("actual server action flags versus response forms", () => {
     expect(output()).toContain("not a multiple-choice prompt");
     expect(output()).not.toContain("Send answers");
     expect(rendered!.root.findByProps({ "aria-label": "Reply to OpenRig message" })).toBeTruthy();
-    expect(output()).toContain("no supported ordinary human Reply endpoint yet");
+    expect(output()).toContain(
+      "Ordinary Reply unavailable until the OpenRig writer is configured.",
+    );
     expect(rendered!.root.findByProps({ children: "Submit reply" }).props.disabled).toBe(true);
   });
 

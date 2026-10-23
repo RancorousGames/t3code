@@ -20,7 +20,7 @@ import { createPortal } from "react-dom";
 
 import { isElectron } from "../../env";
 import { OpenRigFloatingWindow, type FloatingSize } from "./OpenRigFloatingWindow";
-import { OpenRigHumanReplyComposer } from "./OpenRigHumanReplyComposer";
+import { OpenRigHumanReplyComposer, type HumanReplyRequest } from "./OpenRigHumanReplyComposer";
 import { OpenRigRichInboxMessage, isNativeInboxDecision } from "./OpenRigRichInboxMessage";
 import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
 import { observeResize } from "../../lib/observeResize";
@@ -33,6 +33,8 @@ type AttentionKind = "form" | "approval" | "legacy" | "alert" | "none";
  * It is not evidence of a native form the human can submit from T3. */
 export function inboxAttentionKind(item: InboxItem, address: string): AttentionKind {
   if (isNativeInboxDecision(item, address)) return "form";
+  if (item.attentionKind === "notice" || item.attentionKind === "message") return "none";
+  if (item.sourceType === "spawn_approval") return "approval";
   if (item.sourceType === "human_gate" && item.requiresAction && item.state !== "done")
     return "approval";
   if (item.humanQuestions != null && item.state === "pending") return "legacy";
@@ -372,9 +374,8 @@ export function OpenRigOperatorInbox() {
   );
   // The current desktop schema may omit this newer OpenRig capability field.
   // Do not conflate an omitted value with server-confirmed writer unavailability.
-  const answerWriteAvailable = (
-    snapshot as (DesktopOpenRigInbox & { answerWriteAvailable?: boolean }) | null
-  )?.answerWriteAvailable;
+  const answerWriteAvailable = snapshot?.answerWriteAvailable;
+  const replyWriteAvailable = snapshot?.available === true && snapshot.replyWriteAvailable === true;
   const filtered = (
     filter === "archived" ? archivedItems : filter === "trash" ? trashedItems : active
   ).filter((item) => {
@@ -1078,6 +1079,45 @@ export function OpenRigOperatorInbox() {
                             item={chosen}
                             address={address}
                             onAnnouncement={setAnnouncement}
+                            unavailableReason={
+                              chosen.replyUnavailableReason
+                                ? "Reply unavailable: " +
+                                  chosen.replyUnavailableReason.replaceAll("_", " ")
+                                : "Ordinary Reply unavailable until the OpenRig writer is configured."
+                            }
+                            {...(chosen.sourceType === "queue" &&
+                            chosen.replyEligible === true &&
+                            chosen.recipient === "human@kernel" &&
+                            address === "human@kernel" &&
+                            replyWriteAvailable &&
+                            window.desktopBridge?.sendOpenRigOperatorReply
+                              ? {
+                                  onSend: (request: HumanReplyRequest) =>
+                                    window.desktopBridge!.sendOpenRigOperatorReply!({
+                                      sourceType: "queue",
+                                      qitemId: request.sourceId,
+                                      destination: "human@kernel",
+                                      requestId: request.operationId,
+                                      expectedRecipient: request.to,
+                                      message: request.body,
+                                    }),
+                                }
+                              : {})}
+                            {...(chosen.sourceType === "queue" &&
+                            address === "human@kernel" &&
+                            window.desktopBridge?.reconcileOpenRigOperatorReply
+                              ? {
+                                  onReconcile: (request: HumanReplyRequest) =>
+                                    window.desktopBridge!.reconcileOpenRigOperatorReply!({
+                                      sourceType: "queue",
+                                      qitemId: request.sourceId,
+                                      destination: "human@kernel",
+                                      requestId: request.operationId,
+                                      expectedRecipient: request.to,
+                                      message: request.body,
+                                    }),
+                                }
+                              : {})}
                           />
                         </div>
                       </div>
