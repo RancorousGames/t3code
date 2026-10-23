@@ -27,6 +27,7 @@ export type AgentProviderV1SessionRef = typeof AgentProviderV1SessionRef.Type;
 export const AgentProviderV1Source = Schema.Struct({
   environmentId: OpaqueId,
   rawThreadId: Schema.optional(OpaqueId),
+  projectId: Schema.optional(OpaqueId),
   browserSessionId: Schema.optional(OpaqueId),
   conversationId: Schema.optional(Schema.NullOr(OpaqueId)),
 });
@@ -108,6 +109,14 @@ export const AgentProviderV1HistoryItem = Schema.Struct({
 });
 export type AgentProviderV1HistoryItem = typeof AgentProviderV1HistoryItem.Type;
 
+/** Read newest native timeline window, then walk backward with the server's opaque cursor. */
+export const AgentProviderV1HistoryRequest = Schema.Struct({
+  session: AgentProviderV1SessionRef,
+  expectedEnvironmentId: OpaqueId,
+  cursor: Schema.optional(Schema.NullOr(OpaqueId)),
+});
+export type AgentProviderV1HistoryRequest = typeof AgentProviderV1HistoryRequest.Type;
+
 export const AgentProviderV1HistoryPage = Schema.Struct({
   items: Schema.Array(AgentProviderV1HistoryItem),
   older: Schema.NullOr(Schema.String),
@@ -158,6 +167,9 @@ export const AgentProviderV1Operation = Schema.Struct({
    * Browser observed user turn is Delivered, NOT completed assistant turn.
    */
   receiptBasis: Schema.optional(Schema.String),
+  nativeMessageId: Schema.optional(OpaqueId),
+  nativeRunId: Schema.optional(OpaqueId),
+  sourceSequence: Schema.optional(Schema.Number),
 });
 export type AgentProviderV1Operation = typeof AgentProviderV1Operation.Type;
 
