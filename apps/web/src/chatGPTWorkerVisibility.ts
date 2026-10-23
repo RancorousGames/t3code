@@ -6,12 +6,26 @@ export const chatGPTWorkerVisibilityStorageKey = (environmentId: string | null) 
   `t3code:chatgpt-browser:show-manager-workers:${environmentId ?? "unconnected"}`;
 
 /**
- * A worker must have a real, same-environment T3 parent link. A title,
- * project, or an orphaned parent ID cannot establish a spawn relationship.
+ * Parentage alone does not establish a worker role: an authoritative OpenRig
+ * manager seat can itself be nested under another manager. The caller passes
+ * only active manager tab UUIDs verified against RigSpec seat roles and ledgers.
+ * Never classify managers from their display titles or project names.
+ *
+ * Missing/cyclic parent links stay visible rather than guessing worker status.
  */
-export function linkedChatGPTWorkerIds(sessions: readonly BrowserSession[]): ReadonlySet<string> {
+export function linkedChatGPTWorkerIds(
+  sessions: readonly BrowserSession[],
+  verifiedManagerSessionIds: ReadonlySet<string> | null = new Set(),
+): ReadonlySet<string> {
+  // The manager-seat ledger is unavailable: a linked child may itself be an
+  // active manager, so unknown role classifications must stay visible.
+  if (verifiedManagerSessionIds === null) return new Set();
   const parentById = chatGPTParentIndex(sessions);
-  return new Set(sessions.flatMap((session) => (parentById.get(session.id) ? [session.id] : [])));
+  return new Set(
+    sessions.flatMap((session) =>
+      parentById.get(session.id) && !verifiedManagerSessionIds.has(session.id) ? [session.id] : [],
+    ),
+  );
 }
 
 /**

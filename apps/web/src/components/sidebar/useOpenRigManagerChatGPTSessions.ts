@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { isElectron } from "../../env";
 import { isOpenRigManagerRole, verifiedManagerChatGPTTabIds } from "./chatGPTSidebarVisuals";
 
-const EMPTY_IDS: ReadonlySet<string> = new Set();
 const REFRESH_MS = 90_000;
 
 /**
@@ -14,8 +13,13 @@ const REFRESH_MS = 90_000;
  */
 export function useOpenRigManagerChatGPTSessions(
   environmentId: string | null,
-): ReadonlySet<string> {
-  const [ids, setIds] = useState<ReadonlySet<string>>(EMPTY_IDS);
+): ReadonlySet<string> | null {
+  // null means the authoritative seat roles have NOT been verified, not
+  // "there are no managers". Keep unknown nested sessions visible.
+  const [evidence, setEvidence] = useState<{
+    environmentId: string;
+    ids: ReadonlySet<string> | null;
+  } | null>(null);
   useEffect(() => {
     if (!isElectron || !environmentId) return;
     let disposed = false;
@@ -25,7 +29,7 @@ export function useOpenRigManagerChatGPTSessions(
       const discover = window.desktopBridge?.discoverOpenRigSeats;
       const read = window.desktopBridge?.listOpenRigManagedSessions;
       if (!discover || !read) {
-        setIds(EMPTY_IDS);
+        setEvidence({ environmentId, ids: null });
         return;
       }
       requesting = true;
@@ -34,15 +38,24 @@ export function useOpenRigManagerChatGPTSessions(
         if (topology.source !== "openrig-rigspec") throw new Error("Unverified seat topology");
         const managerSeats = topology.seats.filter((seat) => isOpenRigManagerRole(seat.role));
         const responses = await Promise.allSettled(managerSeats.map((seat) => read(seat.id)));
-        const ledgers: DesktopOpenRigSeatSessions[] = responses.flatMap((result, index) =>
-          result.status === "fulfilled" && result.value.seatId === managerSeats[index]?.id
-            ? [result.value]
-            : [],
+        if (
+          responses.some(
+            (result, index) =>
+              result.status !== "fulfilled" || result.value.seatId !== managerSeats[index]?.id,
+          )
+        )
+          throw new Error("Incomplete authoritative manager seat ledgers");
+        const ledgers: DesktopOpenRigSeatSessions[] = responses.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
         );
-        if (!disposed) setIds(verifiedManagerChatGPTTabIds(topology, ledgers, environmentId));
+        if (!disposed)
+          setEvidence({
+            environmentId,
+            ids: verifiedManagerChatGPTTabIds(topology, ledgers, environmentId),
+          });
       } catch {
         // Offline or absent OpenRig evidence is not permission to label by title.
-        if (!disposed) setIds(EMPTY_IDS);
+        if (!disposed) setEvidence({ environmentId, ids: null });
       } finally {
         requesting = false;
       }
@@ -61,5 +74,5 @@ export function useOpenRigManagerChatGPTSessions(
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [environmentId]);
-  return ids;
+  return evidence?.environmentId === environmentId ? evidence.ids : null;
 }

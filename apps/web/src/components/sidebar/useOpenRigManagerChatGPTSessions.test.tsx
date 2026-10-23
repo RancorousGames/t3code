@@ -76,7 +76,7 @@ const ledger: DesktopOpenRigSeatSessions = {
 
 function Probe(): ReactElement {
   const ids = useOpenRigManagerChatGPTSessions("env-1");
-  return <output>{[...ids].join(",")}</output>;
+  return <output>{ids === null ? "unknown" : [...ids].join(",")}</output>;
 }
 
 let renderer: ReactTestRenderer | null = null;
@@ -123,7 +123,7 @@ describe("read-only OpenRig manager sidebar attribution", () => {
     expect(rendered()).toBe("browser-1");
   });
 
-  it("fails closed on bridge unavailability instead of recognizing manager-looking names", async () => {
+  it("marks manager seat evidence unknown on bridge failure instead of guessing from titles", async () => {
     bridge(
       async () => {
         throw new Error("offline");
@@ -133,7 +133,7 @@ describe("read-only OpenRig manager sidebar attribution", () => {
     await act(async () => {
       renderer = create(<Probe />);
     });
-    expect(rendered()).toBe("");
+    expect(rendered()).toBe("unknown");
   });
 
   it("ignores a failed manager ledger response and never includes a worker seat", async () => {
@@ -145,6 +145,41 @@ describe("read-only OpenRig manager sidebar attribution", () => {
       renderer = create(<Probe />);
     });
     expect(read).toHaveBeenCalledExactlyOnceWith("manager");
+    expect(rendered()).toBe("unknown");
+  });
+
+  it("treats an incomplete set of manager ledgers as unknown rather than clearing manager exemptions", async () => {
+    const secondManager = {
+      ...topology.seats[0]!,
+      id: "new-manager",
+      name: "Future Manager",
+      logicalId: "projects-new",
+    };
+    const read = vi.fn(async (seatId: string) => {
+      if (seatId === "new-manager") throw new Error("temporarily unavailable");
+      return ledger;
+    });
+    bridge(async () => ({ ...topology, seats: [...topology.seats, secondManager] }), read);
+    await act(async () => {
+      renderer = create(<Probe />);
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(rendered()).toBe("unknown");
+  });
+
+  it("distinguishes trusted topology with zero manager seats from unavailable topology", async () => {
+    const read = vi.fn(async () => ledger);
+    bridge(
+      async () => ({
+        ...topology,
+        seats: topology.seats.filter((seat) => seat.role === "specialist"),
+      }),
+      read,
+    );
+    await act(async () => {
+      renderer = create(<Probe />);
+    });
+    expect(read).not.toHaveBeenCalled();
     expect(rendered()).toBe("");
   });
 });

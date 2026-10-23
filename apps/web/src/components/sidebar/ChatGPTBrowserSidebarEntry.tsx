@@ -394,7 +394,12 @@ export function ChatGPTBrowserSidebarEntry({
   // webview runtime all continue using the full non-hidden session list.
   const visibleSessions = sessions.filter((session) => !session.hidden);
   const hiddenSessions = sessions.filter((session) => session.hidden);
-  const workerIds = useMemo(() => linkedChatGPTWorkerIds(sessions), [sessions]);
+  // The verified manager seat ledger, not a parent link or title, determines
+  // which nested manager rows are exempt from the worker visibility toggle.
+  const workerIds = useMemo(
+    () => linkedChatGPTWorkerIds(sessions, verifiedManagerSessionIds),
+    [sessions, verifiedManagerSessionIds],
+  );
   const visibleWorkerCount = visibleSessions.filter((session) => workerIds.has(session.id)).length;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
@@ -835,7 +840,8 @@ export function ChatGPTBrowserSidebarEntry({
                                       ? "Queued for automatic recovery if the connection stays interrupted"
                                       : "Queued for automatic recovery; waiting for its turn or retry cooldown"
                                   : null;
-                        const isVerifiedManager = verifiedManagerSessionIds.has(session.id);
+                        const isVerifiedManager =
+                          verifiedManagerSessionIds?.has(session.id) === true;
                         const projectTitle = projectTitles.get(session.id);
                         return (
                           <div
