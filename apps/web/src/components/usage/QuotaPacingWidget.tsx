@@ -2,12 +2,14 @@ import { useAtomValue } from "@effect/atom-react";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { collectLimitAccounts, elapsedShare, paceOf } from "@t3tools/shared/usageLimits";
 import { GaugeIcon, RotateCcwIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import * as Schema from "effect/Schema";
 
+import { isElectron } from "../../env";
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -27,6 +29,14 @@ import {
   recordQuotaSamples,
 } from "./quotaPacing";
 import { resetCreditsSummary } from "./UsageLimits";
+import {
+  ACTIVE_HISTORY_WINDOW_MS,
+  ACTIVE_SAMPLE_GAP_MS,
+  ACTIVE_SAMPLE_INTERVAL_MS,
+  type ActiveSample,
+  activeSampleRuns,
+  useChatGPTActiveHistory,
+} from "./chatGPTActiveHistory";
 
 const STORAGE_KEY = "t3code:quota-pacing:v1";
 const HistorySchema = Schema.Record(
@@ -55,6 +65,215 @@ function formatPromptCache(promptCache: PromptCacheSnapshot, now: number) {
   return remainingMins < 1 ? "warm · <1m left" : `warm · ${Math.floor(remainingMins)}m left`;
 }
 
+const ACTIVE_COLOR = "#84cc16";
+const PLOT = { left: 18, right: 274, top: 6, bottom: 48 };
+const HOUR_MS = 60 * 60_000;
+
+/** Step chart of sampled working ChatGPT sessions; unobserved spans are hatched, never filled in. */
+function ChatGPTActiveSessions({
+  samples,
+  now,
+}: {
+  samples: readonly ActiveSample[];
+  now: number;
+}) {
+  const patternId = `chatgpt-gap-${useId().replace(/[^\w-]/g, "")}`;
+  const latest = samples[samples.length - 1];
+  const end = Math.max(now, latest?.at ?? 0);
+  const start = end - ACTIVE_HISTORY_WINDOW_MS;
+  const chart = useMemo(() => {
+    const inWindow = samples.filter((sample) => sample.at >= start);
+    const peak = inWindow.reduce((max, sample) => Math.max(max, sample.working), 0);
+    const yMax = Math.max(2, peak);
+    const x = (at: number) =>
+      PLOT.left +
+      ((PLOT.right - PLOT.left) * (Math.min(end, Math.max(start, at)) - start)) /
+        ACTIVE_HISTORY_WINDOW_MS;
+    const y = (value: number) => PLOT.bottom - ((PLOT.bottom - PLOT.top) * value) / yMax;
+    const lines: string[] = [];
+    const areas: string[] = [];
+    const gaps: Array<readonly [number, number]> = [];
+    let cursor = start;
+    for (const run of activeSampleRuns(inWindow)) {
+      const first = run[0]!;
+      if (first.at - cursor > 1_000) gaps.push([x(cursor), x(first.at)]);
+      // Each sample holds until the next one, or for one sampling interval at the end of a run.
+      const runEnd = Math.min(end, run[run.length - 1]!.at + ACTIVE_SAMPLE_INTERVAL_MS);
+      let line = `M${x(first.at).toFixed(1)} ${y(first.working).toFixed(1)}`;
+      for (const sample of run.slice(1)) {
+        line += ` H${x(sample.at).toFixed(1)} V${y(sample.working).toFixed(1)}`;
+      }
+      line += ` H${x(runEnd).toFixed(1)}`;
+      lines.push(line);
+      areas.push(`${line} V${PLOT.bottom} H${x(first.at).toFixed(1)} Z`);
+      cursor = runEnd;
+    }
+    if (end - cursor > 1_000) gaps.push([x(cursor), x(end)]);
+    const ticks = [5, 4, 3, 2, 1, 0].map((hours) => ({
+      x: x(end - hours * HOUR_MS),
+      label: hours === 0 ? "now" : `-${hours}h`,
+    }));
+    return { peak, yMax, x, y, lines, areas, gaps, ticks, observed: inWindow.length > 0 };
+  }, [samples, start, end]);
+  const fresh = latest !== undefined && end - latest.at <= ACTIVE_SAMPLE_GAP_MS;
+  const middle = chart.yMax % 2 === 0 ? chart.yMax / 2 : null;
+
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between px-1">
+        <span className="text-xs font-semibold">ChatGPT active</span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                tabIndex={0}
+                className="text-xl leading-none font-bold tracking-tight tabular-nums"
+                style={{ color: fresh ? ACTIVE_COLOR : undefined }}
+                aria-label={
+                  fresh
+                    ? `${latest.working} ChatGPT sessions working now`
+                    : "Current ChatGPT activity unknown"
+                }
+              />
+            }
+          >
+            {fresh ? latest.working : "—"}
+          </TooltipTrigger>
+          <TooltipPopup>
+            {fresh
+              ? `${latest.working} of ${latest.tracked} tracked ChatGPT sessions working · sampled ${new Date(latest.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+              : "No recent sample; current ChatGPT activity is unknown"}
+          </TooltipPopup>
+        </Tooltip>
+      </div>
+      <div className="mb-1 flex justify-between px-1 text-2xs tabular-nums text-muted-foreground">
+        <span>Last 5h{chart.observed ? ` · peak ${chart.peak}` : ""}</span>
+        <span className="flex items-center gap-2">
+          <span className="flex items-center gap-1">
+            <span className="size-2 rounded-xs" style={{ background: ACTIVE_COLOR }} />
+            working
+          </span>
+          <span className="flex items-center gap-1">
+            <svg aria-hidden viewBox="0 0 8 8" className="size-2 rounded-xs">
+              <rect width="8" height="8" fill={`url(#${patternId})`} />
+            </svg>
+            no data
+          </span>
+        </span>
+      </div>
+      <svg
+        viewBox="0 0 280 60"
+        className="h-[60px] w-full rounded-md border border-white bg-background/80"
+        role="img"
+        aria-label={`Working ChatGPT sessions over the last five hours, sampled once a minute${chart.observed ? `; peak ${chart.peak}` : ""}. Hatched spans had no observation.`}
+      >
+        <defs>
+          <pattern
+            id={patternId}
+            width="4"
+            height="4"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <line x1="0" x2="0" y1="0" y2="4" stroke="var(--muted-foreground)" opacity="0.45" />
+          </pattern>
+        </defs>
+        {[chart.yMax, middle].map((value) =>
+          value === null ? null : (
+            <g key={value}>
+              <line
+                x1={PLOT.left}
+                x2={PLOT.right}
+                y1={chart.y(value)}
+                y2={chart.y(value)}
+                stroke="var(--border)"
+              />
+              <text
+                x={PLOT.left - 4}
+                y={chart.y(value) + 2.5}
+                textAnchor="end"
+                fontSize="7"
+                fill="var(--muted-foreground)"
+              >
+                {value}
+              </text>
+            </g>
+          ),
+        )}
+        {chart.gaps.map(([from, to]) => (
+          <rect
+            key={`${from}:${to}`}
+            x={from}
+            width={Math.max(0, to - from)}
+            y={PLOT.top}
+            height={PLOT.bottom - PLOT.top}
+            fill={`url(#${patternId})`}
+          />
+        ))}
+        <line
+          x1={PLOT.left}
+          x2={PLOT.right}
+          y1={PLOT.bottom}
+          y2={PLOT.bottom}
+          stroke="var(--muted-foreground)"
+          opacity="0.6"
+        />
+        <text
+          x={PLOT.left - 4}
+          y={PLOT.bottom + 2.5}
+          textAnchor="end"
+          fontSize="7"
+          fill="var(--muted-foreground)"
+        >
+          0
+        </text>
+        {chart.areas.map((area) => (
+          <path key={area} d={area} fill={ACTIVE_COLOR} opacity="0.18" />
+        ))}
+        {chart.lines.map((line) => (
+          <path
+            key={line}
+            d={line}
+            fill="none"
+            stroke={ACTIVE_COLOR}
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+        ))}
+        {fresh ? (
+          <circle
+            cx={chart.x(latest.at + ACTIVE_SAMPLE_INTERVAL_MS)}
+            cy={chart.y(latest.working)}
+            r="2.5"
+            fill={ACTIVE_COLOR}
+          />
+        ) : null}
+        {chart.ticks.map((tick, index) => (
+          <g key={tick.label}>
+            <line
+              x1={tick.x}
+              x2={tick.x}
+              y1={PLOT.bottom}
+              y2={PLOT.bottom + 2}
+              stroke="var(--muted-foreground)"
+              opacity="0.6"
+            />
+            <text
+              x={tick.x}
+              y={PLOT.bottom + 9}
+              textAnchor={index === 0 ? "start" : index === 5 ? "end" : "middle"}
+              fontSize="7"
+              fill="var(--muted-foreground)"
+            >
+              {tick.label}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 export function QuotaPacingWidget({
   contextWindow,
   promptCache,
@@ -65,6 +284,8 @@ export function QuotaPacingWidget({
   const canvas = useChatCanvas();
   const viewportHasRoom = useMediaQuery("(min-width: 1024px) and (min-height: 480px)");
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const activeSamples = useChatGPTActiveHistory(primaryEnvironmentId, isElectron);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -313,6 +534,9 @@ export function QuotaPacingWidget({
                 </svg>
               </div>
             ))}
+            {isElectron && primaryEnvironmentId ? (
+              <ChatGPTActiveSessions samples={activeSamples} now={now} />
+            ) : null}
             {contextWindow ? (
               <div className="flex items-baseline justify-between px-1 pt-1 text-2xs text-muted-foreground tabular-nums">
                 <span>Context</span>
