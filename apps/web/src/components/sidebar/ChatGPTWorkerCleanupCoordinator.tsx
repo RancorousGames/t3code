@@ -1,7 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { ArchiveIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { useState } from "react";
 
 import type { BrowserSession } from "../../chatGPTBrowserSessions";
 import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
@@ -11,8 +9,15 @@ import {
   type WorkerCleanupSettings,
 } from "../../chatGPTWorkerCleanupPolicy";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { Button } from "../ui/button";
-import { SidebarMenuItem } from "../ui/sidebar";
+import {
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
+import { Switch } from "../ui/switch";
 import { previewUnverifiedWorkerCleanup } from "./chatGPTWorkerCleanupPreview";
 
 const SettingsSchema = Schema.Struct({
@@ -30,26 +35,30 @@ export const chatGPTWorkerCleanupSettingsKey = (environmentId: EnvironmentId) =>
  * Preference and preview only. No current runtime source can independently
  * attest both managed-child parent provenance and owner-issued Done receipts.
  * Never derive either from a sidebar parent link, idle tab or local completion.
+ * Opened from the ChatGPT sidebar's View options menu.
  */
 export function ChatGPTWorkerCleanupCoordinator({
   environmentId,
   sessions,
+  open,
+  onOpenChange,
 }: {
   environmentId: EnvironmentId;
   sessions: readonly BrowserSession[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [settings, setSettings] = useLocalStorage(
     chatGPTWorkerCleanupSettingsKey(environmentId),
     DEFAULT_WORKER_CLEANUP_SETTINGS as WorkerCleanupSettings,
     SettingsSchema,
   );
 
-  // Only inspect spawn receipts when the user opens the preview. A recorded
-  // spawn is evidence of a request ID, not authoritative parent provenance.
-  const spawnReceipts = expanded ? readChatGPTSpawnReceipts(environmentId) : [];
-  const preview = previewUnverifiedWorkerCleanup(sessions, spawnReceipts);
-  const blockedPlan = expanded
+  // Only inspect spawn receipts while the dialog is open. A recorded spawn is
+  // evidence of a request ID, not authoritative parent provenance.
+  const spawnReceipts = open ? readChatGPTSpawnReceipts(environmentId) : [];
+  const preview = open ? previewUnverifiedWorkerCleanup(sessions, spawnReceipts) : [];
+  const blockedPlan = open
     ? planChatGPTWorkerCleanup({
         sessions,
         links: [], // Authoritative parent-spawn attestation is not yet exposed.
@@ -65,82 +74,68 @@ export function ChatGPTWorkerCleanupCoordinator({
     : null;
 
   return (
-    <>
-      <SidebarMenuItem>
-        <Button
-          size="sm"
-          variant="ghost-muted"
-          aria-label="Worker auto-cleanup settings and dry-run preview"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <ArchiveIcon aria-hidden className="size-3.5" />
-          <span>Worker cleanup (preview only)</span>
-          {expanded ? <ChevronDownIcon aria-hidden /> : <ChevronRightIcon aria-hidden />}
-        </Button>
-      </SidebarMenuItem>
-      {expanded && (
-        <SidebarMenuItem>
-          <section
-            aria-label="Worker auto-cleanup preferences"
-            className="space-y-2 px-2 pb-2 text-xs"
-          >
-            <p className="text-muted-foreground">
-              No automatic hiding, archiving, or closing is running. These preferences are saved for
-              a future verified completion-owner integration.
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
-              aria-label="Opt in to future automatic archive of verified completed workers"
-              aria-pressed={settings.enabled}
-              onClick={() =>
-                setSettings((current) => ({
-                  ...current,
-                  enabled: !current.enabled,
-                  enabledAtMs: current.enabled ? null : Date.now(),
-                }))
-              }
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPopup className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Worker cleanup</DialogTitle>
+          <DialogDescription>Preview only. Nothing is archived, hidden or closed yet.</DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <section aria-label="Worker auto-cleanup preferences" className="space-y-3 text-sm">
+            <label className="flex items-center justify-between gap-4">
+              <span>Auto-archive finished workers</span>
+              <Switch
+                size="sm"
+                aria-label="Opt in to future automatic archive of verified completed workers"
+                checked={settings.enabled}
+                onCheckedChange={(enabled) =>
+                  setSettings((current) => ({
+                    ...current,
+                    enabled,
+                    enabledAtMs: enabled ? Date.now() : null,
+                  }))
+                }
+              />
+            </label>
+            <label
+              className={`flex items-center justify-between gap-4 ${settings.enabled ? "" : "text-muted-foreground"}`}
             >
-              Auto-archive preference: {settings.enabled ? "On" : "Off"}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!settings.enabled}
-              aria-label="Allow future local closing of archived workers after seven days"
-              aria-pressed={settings.closeEnabled && settings.enabled}
-              onClick={() =>
-                setSettings((current) => ({ ...current, closeEnabled: !current.closeEnabled }))
-              }
-            >
-              Close after 7 days: {settings.closeEnabled && settings.enabled ? "On" : "Off"}
-            </Button>
-            <div role="status" className="space-y-1 text-muted-foreground">
-              <p>
-                Dry run: {preview.length} parent-linked session{preview.length === 1 ? "" : "s"} to
-                review; {blockedPlan?.actions.length ?? 0} authorized cleanup actions.
-              </p>
-              <p>
-                Blocked: spawn receipts do not authenticate parent ownership; verified worker Done
-                receipts and guest draft/send/recovery clearance are unavailable. Restart
-                reconciliation is not connected. Existing sessions are untouched.
-              </p>
-            </div>
-            {preview.slice(0, 8).map((entry) => (
-              <p key={entry.sessionId} className="break-words text-muted-foreground">
-                <span className="font-medium text-foreground">{entry.title}</span>:{" "}
-                {entry.blockReason}
-              </p>
-            ))}
-            {preview.length > 8 && (
-              <p className="text-muted-foreground">
-                {preview.length - 8} more blocked parent-linked sessions.
-              </p>
-            )}
+              <span>Close 7 days after archiving</span>
+              <Switch
+                size="sm"
+                disabled={!settings.enabled}
+                aria-label="Allow future local closing of archived workers after seven days"
+                checked={settings.closeEnabled && settings.enabled}
+                onCheckedChange={(closeEnabled) =>
+                  setSettings((current) => ({ ...current, closeEnabled }))
+                }
+              />
+            </label>
           </section>
-        </SidebarMenuItem>
-      )}
-    </>
+          <div role="status" className="space-y-1 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">
+              Dry run: {preview.length} parent-linked session{preview.length === 1 ? "" : "s"} to
+              review; {blockedPlan?.actions.length ?? 0} authorized cleanup actions.
+            </p>
+            <p>
+              Blocked: spawn receipts do not authenticate parent ownership; verified worker Done
+              receipts and guest draft/send/recovery clearance are unavailable. Restart
+              reconciliation is not connected. Existing sessions are untouched.
+            </p>
+          </div>
+          {preview.length > 0 && (
+            <div className="space-y-1 text-xs text-muted-foreground">
+              {preview.slice(0, 8).map((entry) => (
+                <p key={entry.sessionId} className="break-words">
+                  <span className="font-medium text-foreground">{entry.title}</span>:{" "}
+                  {entry.blockReason}
+                </p>
+              ))}
+              {preview.length > 8 && <p>{preview.length - 8} more blocked parent-linked sessions.</p>}
+            </div>
+          )}
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
   );
 }
