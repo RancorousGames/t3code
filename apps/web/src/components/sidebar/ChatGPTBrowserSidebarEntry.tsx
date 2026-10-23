@@ -8,13 +8,12 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ChevronUpIcon,
-  ClockIcon,
   CrownIcon,
   EyeOffIcon,
-  UsersIcon,
   PencilIcon,
   PlusIcon,
   SearchIcon,
+  SlidersHorizontalIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -63,8 +62,20 @@ import { previewEnvironment } from "../../state/preview";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { closePreviewSession } from "../preview/closePreviewSession";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuItemLabel,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import {
@@ -256,6 +267,7 @@ export function ChatGPTBrowserSidebarEntry({
     [permanentProjects],
   );
   const [showSnoozed, setShowSnoozed] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -403,9 +415,13 @@ export function ChatGPTBrowserSidebarEntry({
   const visibleWorkerCount = visibleSessions.filter((session) => workerIds.has(session.id)).length;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
+  // Like Hidden, the Snoozed view falls back to active sessions once it empties.
+  const showingSnoozed = !showingHidden && showSnoozed && snoozedSessions.length > 0;
   const displayedSessions = showingHidden
     ? hiddenSessions
-    : visibleSessions.filter((session) => (showSnoozed ? isSnoozed(session) : !isSnoozed(session)));
+    : visibleSessions.filter((session) =>
+        showingSnoozed ? isSnoozed(session) : !isSnoozed(session),
+      );
   const groupedSessions = useMemo(() => {
     const groups = layoutChatGPTSessions(
       displayedSessions,
@@ -517,117 +533,162 @@ export function ChatGPTBrowserSidebarEntry({
 
   if (!isElectron || !environmentId) return null;
 
+  const searchToggle = (
+    <Button
+      size="icon-xs"
+      variant="ghost-muted"
+      aria-label={searchOpen ? "Close ChatGPT session search" : "Search ChatGPT sessions"}
+      aria-expanded={searchOpen}
+      aria-pressed={searchOpen}
+      title={searchOpen ? "Close session search" : "Search sessions"}
+      onClick={() => {
+        setSearchOpen((current) => !current);
+        setSearchQuery("");
+        setSectionCollapsed(false);
+      }}
+    >
+      <SearchIcon aria-hidden />
+    </Button>
+  );
+
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <div className="flex min-w-0 items-center gap-1">
-          {hiddenSessions.length > 0 && (
+        {showingHidden || showingSnoozed ? (
+          // Hidden and Snoozed are alternate lists; this row replaces the header
+          // while one is shown.
+          <div className="flex min-w-0 items-center gap-1 ps-1">
+            <Badge variant="secondary">
+              {showingHidden
+                ? `Hidden · ${hiddenSessions.length}`
+                : `Snoozed · ${snoozedSessions.length}`}
+            </Badge>
+            <span className="flex-1" />
+            {searchToggle}
             <Button
-              size="sm"
+              size="xs"
               variant="ghost-muted"
-              aria-label={
-                showingHidden
-                  ? "Back to ChatGPT sessions"
-                  : `Show hidden ChatGPT sessions (${hiddenSessions.length})`
-              }
-              aria-pressed={showingHidden}
-              title={showingHidden ? "Back to sessions" : "Show hidden sessions"}
+              aria-label="Back to ChatGPT sessions"
               onClick={() => {
-                setShowHidden(!showingHidden);
-                setSectionCollapsed(false);
-              }}
-            >
-              <EyeOffIcon aria-hidden />
-              <span>{showingHidden ? "Back" : `Hidden (${hiddenSessions.length})`}</span>
-            </Button>
-          )}
-          <Button
-            size="icon-xs"
-            variant="ghost-muted"
-            aria-label={`Sort ChatGPT sessions: ${sortMode === "started" ? "Started" : "Last active/status"}. Click to switch to ${sortMode === "started" ? "Last active/status" : "Started"}.`}
-            title={
-              sortMode === "started"
-                ? "Started order (switch to last active/status)"
-                : "Last active/status (switch to started order)"
-            }
-            onClick={() =>
-              setSortMode((current) => (current === "started" ? "activity" : "started"))
-            }
-          >
-            <ArrowDownUpIcon aria-hidden />
-          </Button>
-          <Button
-            size="icon-xs"
-            variant="ghost-muted"
-            aria-label={searchOpen ? "Close ChatGPT session search" : "Search ChatGPT sessions"}
-            aria-expanded={searchOpen}
-            aria-pressed={searchOpen}
-            title={searchOpen ? "Close session search" : "Search sessions"}
-            onClick={() => {
-              setSearchOpen((current) => !current);
-              setSearchQuery("");
-              setSectionCollapsed(false);
-            }}
-          >
-            <SearchIcon aria-hidden />
-          </Button>
-          {snoozedSessions.length > 0 && (
-            <Button
-              size="sm"
-              variant="ghost-muted"
-              aria-pressed={showSnoozed}
-              title={showSnoozed ? "Show active sessions" : "Show snoozed sessions"}
-              onClick={() => {
-                setShowSnoozed(!showSnoozed);
                 setShowHidden(false);
+                setShowSnoozed(false);
               }}
             >
-              <ClockIcon aria-hidden className="size-3.5" />
-              <span>{showSnoozed ? "Back" : snoozedSessions.length}</span>
+              Back
             </Button>
-          )}
-          <Button
-            size="icon-xs"
-            variant="ghost-muted"
-            aria-label={sectionCollapsed ? "Expand ChatGPT sessions" : "Collapse ChatGPT sessions"}
-            title={sectionCollapsed ? "Expand ChatGPT sessions" : "Collapse ChatGPT sessions"}
-            aria-expanded={!sectionCollapsed}
-            onClick={() => setSectionCollapsed((current) => !current)}
-          >
-            {sectionCollapsed ? <ChevronDownIcon aria-hidden /> : <ChevronUpIcon aria-hidden />}
-          </Button>
-        </div>
+          </div>
+        ) : (
+          <div className="flex min-w-0 items-center gap-1">
+            <span className="min-w-0 flex-1 truncate ps-2 text-2xs font-semibold tracking-wide text-muted-foreground uppercase">
+              ChatGPT
+            </span>
+            <Button
+              size="icon-xs"
+              variant="ghost-muted"
+              aria-label={`Sort ChatGPT sessions: ${sortMode === "started" ? "Started" : "Last active/status"}. Click to switch to ${sortMode === "started" ? "Last active/status" : "Started"}.`}
+              title={
+                sortMode === "started"
+                  ? "Started order (switch to last active/status)"
+                  : "Last active/status (switch to started order)"
+              }
+              onClick={() =>
+                setSortMode((current) => (current === "started" ? "activity" : "started"))
+              }
+            >
+              <ArrowDownUpIcon aria-hidden />
+            </Button>
+            {searchToggle}
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    size="icon-xs"
+                    variant="ghost-muted"
+                    aria-label={`ChatGPT view options${showWorkers ? "" : " (workers hidden)"}`}
+                    title="View options"
+                    // Highlighted while the list differs from the default view.
+                    data-pressed={showWorkers ? undefined : ""}
+                  />
+                }
+              >
+                <SlidersHorizontalIcon aria-hidden />
+              </MenuTrigger>
+              <MenuPopup align="end">
+                <MenuGroup>
+                  <MenuGroupLabel>View options</MenuGroupLabel>
+                  <MenuCheckboxItem
+                    checked={showWorkers}
+                    onCheckedChange={(checked) => setShowWorkers(checked)}
+                    aria-label={`Show parent-linked ChatGPT workers (${visibleWorkerCount})`}
+                    title="Hiding parent-linked workers doesn't close or suspend them. Unlinked workers remain visible; Shift-drag a session onto its parent in the same project to link it."
+                  >
+                    <span className="flex items-center gap-4">
+                      <span className="flex-1">Show workers</span>
+                      <span className="text-xs text-muted-foreground">{visibleWorkerCount}</span>
+                    </span>
+                  </MenuCheckboxItem>
+                  {snoozedSessions.length > 0 && (
+                    <MenuItem
+                      inset
+                      aria-label={`Show snoozed ChatGPT sessions (${snoozedSessions.length})`}
+                      onClick={() => {
+                        setShowSnoozed(true);
+                        setShowHidden(false);
+                        setSectionCollapsed(false);
+                      }}
+                    >
+                      <MenuItemLabel>Snoozed sessions</MenuItemLabel>
+                      <span className="ms-auto ps-4 text-xs text-muted-foreground">
+                        {snoozedSessions.length}
+                      </span>
+                    </MenuItem>
+                  )}
+                  {hiddenSessions.length > 0 && (
+                    <MenuItem
+                      inset
+                      aria-label={`Show hidden ChatGPT sessions (${hiddenSessions.length})`}
+                      onClick={() => {
+                        setShowHidden(true);
+                        setShowSnoozed(false);
+                        setSectionCollapsed(false);
+                      }}
+                    >
+                      <MenuItemLabel>Hidden sessions</MenuItemLabel>
+                      <span className="ms-auto ps-4 text-xs text-muted-foreground">
+                        {hiddenSessions.length}
+                      </span>
+                    </MenuItem>
+                  )}
+                </MenuGroup>
+                <MenuSeparator />
+                <MenuItem
+                  inset
+                  aria-label="Worker auto-cleanup settings and dry-run preview"
+                  onClick={() => setCleanupOpen(true)}
+                >
+                  <MenuItemLabel>Worker cleanup…</MenuItemLabel>
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
+            <Button
+              size="icon-xs"
+              variant="ghost-muted"
+              aria-label={sectionCollapsed ? "Expand ChatGPT sessions" : "Collapse ChatGPT sessions"}
+              title={sectionCollapsed ? "Expand ChatGPT sessions" : "Collapse ChatGPT sessions"}
+              aria-expanded={!sectionCollapsed}
+              onClick={() => setSectionCollapsed((current) => !current)}
+            >
+              {sectionCollapsed ? <ChevronDownIcon aria-hidden /> : <ChevronUpIcon aria-hidden />}
+            </Button>
+          </div>
+        )}
       </SidebarMenuItem>
-      <SidebarMenuItem>
-        <Button
-          size="sm"
-          variant="ghost-muted"
-          aria-label={`${showWorkers ? "Hide" : "Show"} parent-linked ChatGPT workers (${visibleWorkerCount})`}
-          aria-pressed={showWorkers}
-          title={
-            showWorkers
-              ? "Hide parent-linked workers from the sidebar, without closing or suspending them"
-              : "Show parent-linked workers. Sessions without a verified parent remain visible; Shift-drag onto a session in the same project to attach."
-          }
-          onClick={() => setShowWorkers((current) => !current)}
-        >
-          <UsersIcon aria-hidden className="size-3.5" />
-          <span>
-            {showWorkers
-              ? `Hide workers (${visibleWorkerCount})`
-              : `Show workers (${visibleWorkerCount})`}
-          </span>
-        </Button>
-      </SidebarMenuItem>
-      <ChatGPTWorkerCleanupCoordinator environmentId={environmentId} sessions={sessions} />
-      {!showWorkers && (
-        <SidebarMenuItem>
-          <p className="px-2 text-xs text-muted-foreground">
-            Unlinked workers remain visible. Shift-drag a session onto its parent in the same
-            project to link it.
-          </p>
-        </SidebarMenuItem>
-      )}
+      <ChatGPTWorkerCleanupCoordinator
+        environmentId={environmentId}
+        sessions={sessions}
+        open={cleanupOpen}
+        onOpenChange={setCleanupOpen}
+      />
       {searchOpen && (
         <SidebarMenuItem>
           <div className="flex min-w-0 items-center gap-1 px-1 py-1">
