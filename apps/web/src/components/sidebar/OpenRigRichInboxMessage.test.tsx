@@ -220,7 +220,8 @@ describe("agent-authored OpenRig v2 human forms", () => {
     await mount();
     await selectValidAnswers();
     await click("Send answers");
-    expect(output()).toContain("nothing was submitted");
+    expect(output()).toContain("may already have been recorded");
+    expect(output()).toContain("Sending is locked");
     expect(output()).not.toContain("OpenRig recorded");
     const key = [...storage.keys()].find((key) => key.includes("draft"));
     expect(key).toBeTruthy();
@@ -235,8 +236,235 @@ describe("agent-authored OpenRig v2 human forms", () => {
         "aria-pressed"
       ],
     ).toBe(true);
+    expect(rendered!.root.findByProps({ "aria-label": "Send answers" }).props.disabled).toBe(true);
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledTimes(1);
     await click("Copy answer summary");
     expect(announce).toHaveBeenCalledWith(expect.stringContaining("not been sent"));
+  });
+
+  it("locks an indeterminate thrown or aborted v2 POST before it leaves the renderer, including after remount", async () => {
+    submit.mockRejectedValue(new Error("network interrupted after possible commit"));
+    await mount();
+    await selectValidAnswers();
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledTimes(1);
+    const lock = [...storage.entries()].find(([key]) => key.includes("human-form-attempt"));
+    expect(lock).toBeDefined();
+    expect(JSON.parse(lock![1])).toMatchObject({
+      answers: [
+        { questionId: "target", value: "staging" },
+        { questionId: "features", value: ["search"] },
+        { questionId: "rollout", value: 0 },
+      ],
+    });
+    expect(output()).toContain("may already be recorded");
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    await mount();
+    expect(output()).toContain("Sending is locked");
+    await click("Send answers"); // Simulated click even though a native disabled button ignores it.
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(
+      rendered!.root.findByProps({ "aria-label": "Which environment?: Staging" }).props[
+        "aria-pressed"
+      ],
+    ).toBe(true);
+  });
+
+  it("retains UNKNOWN after HTTP 409 and mismatched 2xx receipts; never announces acceptance", async () => {
+    submit.mockRejectedValueOnce(new Error("OpenRig human answer endpoint returned HTTP 409."));
+    await mount();
+    await selectValidAnswers();
+    await click("Send answers");
+    expect(output()).toContain("conflict with recorded answers");
+    expect(output()).toContain("Sending is locked");
+    expect(output()).not.toContain("OpenRig recorded");
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledTimes(1);
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    storage.clear();
+    submit.mockResolvedValue({
+      version: 2,
+      qitemId: "qitem-wrong",
+      actor: "human@kernel",
+      acceptedIntoQueue: true,
+      deliveredToAgent: false,
+      complete: true,
+      answeredCount: 3,
+      remainingQuestionIds: [],
+      delivery: "queued",
+    });
+    await mount();
+    await selectValidAnswers();
+    await click("Send answers");
+    expect(output()).toContain("outcome is unknown");
+    expect(output()).toContain("Sending is locked");
+    expect(announce).not.toHaveBeenCalledWith(expect.stringContaining("committed"));
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
+  it("prevents synchronous double clicks and leaves an UNKNOWN barrier while the promise is in flight", async () => {
+    let rejectPending: ((reason: Error) => void) | undefined;
+    submit.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectPending = reject;
+        }),
+    );
+    await mount();
+    await selectValidAnswers();
+    await act(async () => {
+      const button = rendered!.root.findByProps({ "aria-label": "Send answers" });
+      button.props.onClick();
+      button.props.onClick();
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect([...storage.keys()].some((key) => key.includes("human-form-attempt"))).toBe(true);
+    await act(async () => rejectPending!(new Error("AbortError")));
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(output()).toContain("Sending is locked");
+  });
+
+  it("clears an exact acknowledged attempt, but a 503/abort cannot clear it", async () => {
+    const reply = {
+      version: 2,
+      qitemId: item.id,
+      actor: "human@kernel",
+      acceptedIntoQueue: true,
+      deliveredToAgent: false,
+      complete: true,
+      answeredCount: 3,
+      remainingQuestionIds: [],
+      replyQitemId: "qitem-form-answer",
+      status: "recorded",
+      delivery: "queued",
+    };
+    submit.mockResolvedValue(reply);
+    await mount();
+    await selectValidAnswers();
+    await click("Send answers");
+    expect(output()).toContain("OpenRig recorded");
+    expect([...storage.keys()].some((key) => key.includes("human-form-attempt"))).toBe(false);
+    expect([...storage.keys()].some((key) => key.includes("human-form-draft"))).toBe(false);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps UNKNOWN on original qitem when its form changes; a distinct qitem remains independent", async () => {
+    submit.mockRejectedValue(new Error("transport timed out"));
+    await mount();
+    await selectValidAnswers();
+    await click("Send answers");
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    const changed = { ...item, humanForm: { ...native, title: "New deployment decision" } };
+    await mount(changed);
+    expect(output()).toContain("form changed since the uncertain submission");
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledTimes(1);
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    const distinct = { ...item, id: "qitem-another-decision" };
+    await mount(distinct);
+    await selectValidAnswers();
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves recorded subsets and excludes them from the uncertain write while retaining remaining drafts", async () => {
+    const partial = { ...item, humanAnswers: { target: "production" } };
+    submit.mockRejectedValue(new Error("HTTP 503 after write may have started"));
+    await mount(partial);
+    await changeCheckbox("Which features?: Search", true);
+    await click("Use slider value: Rollout percent");
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledWith({
+      version: 2,
+      destination: "human@kernel",
+      qitemId: item.id,
+      answers: [
+        { questionId: "features", value: ["search"] },
+        { questionId: "rollout", value: 0 },
+      ],
+    });
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    await mount(partial);
+    expect(output()).toContain("Sending is locked");
+    expect(
+      rendered!.root.findByProps({ "aria-label": "Which environment?: Production" }).props[
+        "aria-pressed"
+      ],
+    ).toBe(true);
+    expect(
+      rendered!.root.findByProps({ "aria-label": "Which features?: Search" }).props.checked,
+    ).toBe(true);
+    await click("Send answers");
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses POST when durable submission storage is unavailable, retaining local editing", async () => {
+    const view = window as typeof window & { localStorage: Storage };
+    const original = view.localStorage;
+    Object.defineProperty(view, "localStorage", {
+      configurable: true,
+      value: {
+        ...original,
+        getItem: () => {
+          throw new Error("storage denied");
+        },
+        setItem: () => {
+          throw new Error("storage denied");
+        },
+      },
+    });
+    await mount();
+    await selectValidAnswers();
+    await click("Send answers");
+    expect(submit).not.toHaveBeenCalled();
+    expect(output()).toContain("Sending is disabled");
+    expect(output()).not.toContain("OpenRig recorded");
+  });
+
+  it("retains a pending barrier even if the server now reports a closed decision", async () => {
+    submit.mockRejectedValue(new Error("request timeout"));
+    await mount();
+    await selectValidAnswers();
+    await click("Send answers");
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    await mount({
+      ...item,
+      humanAnswers: { target: "staging", features: ["search"], rollout: 0 },
+      state: "done",
+    });
+    expect(output()).toContain("Sending is locked");
+    expect(output()).toContain("no confirmed receipt");
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("never starts a network request if writing the submission barrier fails", async () => {
+    const local = window.localStorage;
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: local.getItem,
+        removeItem: local.removeItem,
+        setItem: (key: string, value: string) => {
+          if (key.includes("human-form-attempt")) throw new Error("quota exceeded");
+          local.setItem(key, value);
+        },
+      },
+    });
+    await mount();
+    await selectValidAnswers();
+    await click("Send answers");
+    expect(submit).not.toHaveBeenCalled();
+    expect(output()).toContain("No request was sent");
+    expect([...storage.keys()].some((key) => key.includes("human-form-draft"))).toBe(true);
   });
 
   it("prevents changing previously recorded server answers and suppresses resending a closed decision", async () => {
