@@ -11,6 +11,7 @@ import {
   ClockIcon,
   CrownIcon,
   EyeOffIcon,
+  UsersIcon,
   PencilIcon,
   PlusIcon,
   SearchIcon,
@@ -44,6 +45,11 @@ import {
 } from "../../chatGPTSessionGrouping";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { searchChatGPTSessionGroups } from "../../chatGPTSessionSearch";
+import {
+  chatGPTWorkerVisibilityStorageKey,
+  filterChatGPTWorkerGroups,
+  linkedChatGPTWorkerIds,
+} from "../../chatGPTWorkerVisibility";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { resolveSnoozePresets } from "../Sidebar.snooze";
 import { useClientSettings } from "../../hooks/useSettings";
@@ -214,6 +220,11 @@ export function ChatGPTBrowserSidebarEntry({
   }, []);
   const [title, setTitle] = useState("");
   const [showHidden, setShowHidden] = useState(false);
+  const [showWorkers, setShowWorkers] = useLocalStorage(
+    chatGPTWorkerVisibilityStorageKey(environmentId),
+    true,
+    Schema.Boolean,
+  );
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const isSearching = searchQuery.trim().length > 0;
@@ -238,7 +249,10 @@ export function ChatGPTBrowserSidebarEntry({
     [] as ChatGPTPermanentProject[],
     Schema.Array(Schema.Struct({ key: Schema.String, title: Schema.String })),
   );
-  const permanentProjectKeys = useMemo(() => new Set(permanentProjects.map((project) => project.key)), [permanentProjects]);
+  const permanentProjectKeys = useMemo(
+    () => new Set(permanentProjects.map((project) => project.key)),
+    [permanentProjects],
+  );
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [contextMenu, setContextMenu] = useState<{
@@ -374,8 +388,12 @@ export function ChatGPTBrowserSidebarEntry({
   }, [environmentId, pruneExpiredHidden, close]);
   const isSnoozed = (session: { readonly snoozedUntil?: number | undefined }) =>
     typeof session.snoozedUntil === "number" && session.snoozedUntil > clockNow;
+  // Visibility only affects sidebar rows. Recovery, activity monitoring and
+  // webview runtime all continue using the full non-hidden session list.
   const visibleSessions = sessions.filter((session) => !session.hidden);
   const hiddenSessions = sessions.filter((session) => session.hidden);
+  const workerIds = useMemo(() => linkedChatGPTWorkerIds(sessions), [sessions]);
+  const visibleWorkerCount = visibleSessions.filter((session) => workerIds.has(session.id)).length;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
   const displayedSessions = showingHidden
@@ -389,11 +407,27 @@ export function ChatGPTBrowserSidebarEntry({
       activities as Readonly<Record<string, ChatGPTSessionSortActivity>>,
       permanentProjects,
     );
+    const filtered = filterChatGPTWorkerGroups(
+      groups,
+      workerIds,
+      showingHidden || showWorkers,
+      permanentProjectKeys,
+    );
     // Always provide a stable drop target for the default Other project.
-    return groups.some((group) => group.key === "other")
-      ? groups
-      : [...groups, { key: "other", title: "Other", rows: [] }];
-  }, [displayedSessions, registeredProjects, showingHidden, sortMode, activities, permanentProjects]);
+    return filtered.some((group) => group.key === "other")
+      ? filtered
+      : [...filtered, { key: "other", title: "Other", rows: [] }];
+  }, [
+    displayedSessions,
+    registeredProjects,
+    showingHidden,
+    sortMode,
+    activities,
+    permanentProjects,
+    workerIds,
+    showWorkers,
+    permanentProjectKeys,
+  ]);
   const searchResults = useMemo(
     () => searchChatGPTSessionGroups(groupedSessions, searchQuery),
     [groupedSessions, searchQuery],
@@ -557,6 +591,35 @@ export function ChatGPTBrowserSidebarEntry({
           </Button>
         </div>
       </SidebarMenuItem>
+      <SidebarMenuItem>
+        <Button
+          size="sm"
+          variant="ghost-muted"
+          aria-label={`${showWorkers ? "Hide" : "Show"} parent-linked ChatGPT workers (${visibleWorkerCount})`}
+          aria-pressed={showWorkers}
+          title={
+            showWorkers
+              ? "Hide parent-linked workers from the sidebar, without closing or suspending them"
+              : "Show parent-linked workers. Sessions without a verified parent remain visible; Shift-drag onto a session in the same project to attach."
+          }
+          onClick={() => setShowWorkers((current) => !current)}
+        >
+          <UsersIcon aria-hidden className="size-3.5" />
+          <span>
+            {showWorkers
+              ? `Hide workers (${visibleWorkerCount})`
+              : `Show workers (${visibleWorkerCount})`}
+          </span>
+        </Button>
+      </SidebarMenuItem>
+      {!showWorkers && (
+        <SidebarMenuItem>
+          <p className="px-2 text-xs text-muted-foreground">
+            Unlinked workers remain visible. Shift-drag a session onto its parent in the same
+            project to link it.
+          </p>
+        </SidebarMenuItem>
+      )}
       {searchOpen && (
         <SidebarMenuItem>
           <div className="flex min-w-0 items-center gap-1 px-1 py-1">
@@ -715,7 +778,12 @@ export function ChatGPTBrowserSidebarEntry({
                         <ChevronDownIcon aria-hidden />
                       )}
                       <span className="truncate font-medium">{group.title}</span>
-                      {permanentProjectKeys.has(group.key) && <CrownIcon aria-label="Permanent project" className="size-3 text-muted-foreground" />}
+                      {permanentProjectKeys.has(group.key) && (
+                        <CrownIcon
+                          aria-label="Permanent project"
+                          className="size-3 text-muted-foreground"
+                        />
+                      )}
                       <span className="ml-auto text-xs text-muted-foreground">
                         {group.rows.length}
                       </span>
@@ -959,8 +1027,10 @@ export function ChatGPTBrowserSidebarEntry({
             };
             return (
               <>
-                {contextMenu.groupKey && group?.title &&
-                  contextMenu.groupKey !== "other" && !contextMenu.groupKey.startsWith("status:") && (
+                {contextMenu.groupKey &&
+                  group?.title &&
+                  contextMenu.groupKey !== "other" &&
+                  !contextMenu.groupKey.startsWith("status:") && (
                     <button
                       type="button"
                       role="menuitem"
@@ -968,13 +1038,17 @@ export function ChatGPTBrowserSidebarEntry({
                       onClick={() => {
                         const key = contextMenu.groupKey!;
                         const name = group.title!;
-                        setPermanentProjects((current) => current.some((project) => project.key === key)
-                          ? current.filter((project) => project.key !== key)
-                          : [...current, { key, title: name }]);
+                        setPermanentProjects((current) =>
+                          current.some((project) => project.key === key)
+                            ? current.filter((project) => project.key !== key)
+                            : [...current, { key, title: name }],
+                        );
                         setContextMenu(null);
                       }}
                     >
-                      {permanentProjectKeys.has(contextMenu.groupKey) ? "Remove permanent" : "Make permanent"}
+                      {permanentProjectKeys.has(contextMenu.groupKey)
+                        ? "Remove permanent"
+                        : "Make permanent"}
                     </button>
                   )}
                 {snoozed ? (
