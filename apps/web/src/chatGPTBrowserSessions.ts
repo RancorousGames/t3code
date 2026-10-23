@@ -79,6 +79,127 @@ export const chatGPTBrowserLastUrlKey = (environmentId: EnvironmentId, sessionId
 export const chatGPTBrowserLastWorkingKey = (environmentId: EnvironmentId, sessionId: string) =>
   `t3code:chatgpt-browser:last-working:${environmentId}:${sessionId}`;
 
+export const chatGPTBrowserRemovalAuditKey = (environmentId: EnvironmentId) =>
+  `t3code:chatgpt-browser:removal-audit:v1:${environmentId}`;
+
+export type ChatGPTSessionRemovalSource =
+  | "sidebar-user-action"
+  | "desktop-menu-action"
+  | "desktop-IPC-request"
+  | "expiration"
+  | "unknown";
+
+export type ChatGPTSessionRemovalReceipt = {
+  readonly version: 1;
+  readonly sessionId: string;
+  readonly removedAt: string;
+  readonly title: string;
+  readonly parentSessionId: string | null | "UNKNOWN";
+  readonly conversationId: string | null;
+  readonly source: ChatGPTSessionRemovalSource;
+  // A UI click or desktop IPC request is not proof of the actual human caller.
+  readonly authenticatedCaller: "UNKNOWN";
+  readonly draftSafetyVerified: false;
+  readonly completionVerified: false;
+  readonly persistence: "local-session-list-verified";
+};
+
+const MAX_REMOVAL_RECEIPTS = 128;
+
+/** Merge idempotently by the removed local UUID. Oldest entries rotate at the cap. */
+export function mergeChatGPTSessionRemovalReceipts(
+  current: readonly ChatGPTSessionRemovalReceipt[],
+  receipt: ChatGPTSessionRemovalReceipt,
+): ChatGPTSessionRemovalReceipt[] {
+  if (current.some((entry) => entry.sessionId === receipt.sessionId)) return [...current];
+  return [...current, receipt].slice(-MAX_REMOVAL_RECEIPTS);
+}
+
+/**
+ * Evidence is limited to a verified change in T3's locally persisted session
+ * index. It does not prove guest deletion, safe drafts, completion, or a user's
+ * identity. Never load or navigate a guest to infer its conversation identity.
+ */
+function recordPersistedChatGPTSessionRemoval(
+  environmentId: EnvironmentId | null,
+  entry: BrowserSession | undefined,
+  source: ChatGPTSessionRemovalSource,
+): void {
+  if (!environmentId || !entry) return;
+  try {
+    if (readChatGPTBrowserSessions(environmentId).some((saved) => saved.id === entry.id)) return;
+    const key = chatGPTBrowserRemovalAuditKey(environmentId);
+    const storage = window.localStorage;
+    const raw = storage.getItem(key);
+    const decoded: unknown = raw === null ? [] : JSON.parse(raw);
+    if (!Array.isArray(decoded)) throw new Error("Invalid removal journal.");
+    // Never replace corrupt historical evidence or accidentally copy other data.
+    if (decoded.some((value) => !isChatGPTSessionRemovalReceipt(value)))
+      throw new Error("Invalid removal journal receipt.");
+    const existing = decoded as ChatGPTSessionRemovalReceipt[];
+    if (existing.some((value) => value.sessionId === entry.id)) return;
+    let cachedUrl: string | null = null;
+    try {
+      cachedUrl = getLocalStorageItem(
+        chatGPTBrowserLastUrlKey(environmentId, entry.id),
+        Schema.String,
+      );
+    } catch {
+      // A missing/invalid cached URL is not evidence of a particular conversation.
+    }
+    const receipt: ChatGPTSessionRemovalReceipt = {
+      version: 1,
+      sessionId: entry.id,
+      removedAt: new Date().toISOString(),
+      title: entry.title,
+      parentSessionId: entry.parentSessionId === undefined ? "UNKNOWN" : entry.parentSessionId,
+      conversationId: chatGPTConversationIdFromUrl(
+        cachedUrl ?? entry.archive?.conversationUrl ?? null,
+      ),
+      source,
+      authenticatedCaller: "UNKNOWN",
+      draftSafetyVerified: false,
+      completionVerified: false,
+      persistence: "local-session-list-verified",
+    };
+    const updated = JSON.stringify(mergeChatGPTSessionRemovalReceipts(existing, receipt));
+    storage.setItem(key, updated);
+    if (storage.getItem(key) !== updated) throw new Error("Removal journal write did not persist.");
+  } catch {
+    // Audit is best-effort, never a reason to change an existing close/save flow.
+    console.warn("[ChatGPT removal audit] Could not persist local removal provenance.");
+  }
+}
+
+function isChatGPTSessionRemovalReceipt(value: unknown): value is ChatGPTSessionRemovalReceipt {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<ChatGPTSessionRemovalReceipt>;
+  // Never round-trip unknown fields from a corrupted or externally modified
+  // journal: an extra field could otherwise smuggle message or draft content.
+  if (
+    Object.keys(value).sort().join(",") !==
+    "authenticatedCaller,completionVerified,conversationId,draftSafetyVerified,parentSessionId,persistence,removedAt,sessionId,source,title,version"
+  )
+    return false;
+  return (
+    entry.version === 1 &&
+    typeof entry.sessionId === "string" &&
+    typeof entry.removedAt === "string" &&
+    typeof entry.title === "string" &&
+    (typeof entry.parentSessionId === "string" || entry.parentSessionId === null) &&
+    (typeof entry.conversationId === "string" || entry.conversationId === null) &&
+    (entry.source === "sidebar-user-action" ||
+      entry.source === "desktop-menu-action" ||
+      entry.source === "desktop-IPC-request" ||
+      entry.source === "expiration" ||
+      entry.source === "unknown") &&
+    entry.authenticatedCaller === "UNKNOWN" &&
+    entry.draftSafetyVerified === false &&
+    entry.completionVerified === false &&
+    entry.persistence === "local-session-list-verified"
+  );
+}
+
 // Preview uses this owner only to group tabs; no agent conversation is created.
 export const chatGPTBrowserThreadRef = (environmentId: EnvironmentId, sessionId: string) =>
   scopeThreadRef(environmentId, ThreadId.make(`t3-browser-session:${sessionId}`));
@@ -181,7 +302,10 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   );
 
   const createSession = useCallback(
-    (name?: string, metadata?: { parentSessionId?: string; project?: string; initialConversationUrl?: string }) => {
+    (
+      name?: string,
+      metadata?: { parentSessionId?: string; project?: string; initialConversationUrl?: string },
+    ) => {
       let id = randomUUID();
       // Read the current slot synchronously: multiple buttons, the palette and
       // desktop automation can request sessions without waiting for a render.
@@ -224,7 +348,11 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         const idInUrl = chatGPTConversationIdFromUrl(metadata.initialConversationUrl);
         if (!idInUrl || metadata.initialConversationUrl !== `https://chatgpt.com/c/${idInUrl}`)
           throw new Error("Only an exact canonical ChatGPT conversation URL may seed a session.");
-        setLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id), metadata.initialConversationUrl, Schema.String);
+        setLocalStorageItem(
+          chatGPTBrowserLastUrlKey(environmentId, id),
+          metadata.initialConversationUrl,
+          Schema.String,
+        );
       }
       setSessions((current) => {
         let number = 1;
@@ -345,18 +473,22 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       const expired = expiredHiddenSessionIds(sessions, now);
       if (!expired.length) return [] as string[];
       const ids = new Set(expired);
-      setSessions((current) =>
-        current
+      let removed: BrowserSession[] = [];
+      setSessions((current) => {
+        removed = current.filter((session) => ids.has(session.id));
+        return current
           .filter((session) => !ids.has(session.id))
           .map((session) =>
             session.parentSessionId && ids.has(session.parentSessionId)
               ? { ...session, parentSessionId: null }
               : session,
-          ),
-      );
+          );
+      });
+      for (const entry of removed)
+        recordPersistedChatGPTSessionRemoval(environmentId, entry, "expiration");
       return expired;
     },
-    [sessions, setSessions],
+    [environmentId, sessions, setSessions],
   );
 
   const renameSession = useCallback(
@@ -386,15 +518,19 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   );
 
   const removeSession = useCallback(
-    (id: string) =>
-      setSessions((current) =>
-        current
+    (id: string, source: ChatGPTSessionRemovalSource = "unknown") => {
+      let removed: BrowserSession | undefined;
+      setSessions((current) => {
+        removed = current.find((session) => session.id === id);
+        return current
           .filter((session) => session.id !== id)
           .map((session) =>
             session.parentSessionId === id ? { ...session, parentSessionId: null } : session,
-          ),
-      ),
-    [setSessions],
+          );
+      });
+      recordPersistedChatGPTSessionRemoval(environmentId, removed, source);
+    },
+    [environmentId, setSessions],
   );
 
   const reorderSessions = useCallback(
