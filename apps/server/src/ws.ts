@@ -3,6 +3,8 @@ import {
   AgentProviderV1DesktopWorkResult,
   AgentProviderV1HistoryPage,
   AgentProviderV1HistoryRequest,
+  AgentProviderV1OperationGet,
+  AgentProviderV1UpdatesRequest,
   AgentProviderV1Submit,
   T3_AGENT_PROVIDER_VERSION,
   type AgentProviderV1Session,
@@ -24,6 +26,13 @@ import {
   nativeHistoryItems,
   nativeLatestPageCursor,
 } from "./agentProviderNative.ts";
+import {
+  beginBrowserSubmission,
+  recordBrowserSubmission,
+  readBrowserSubmission,
+  nativeUpdateCursor,
+  parseNativeUpdateCursor,
+} from "./agentProviderOperations.ts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 
@@ -1995,6 +2004,11 @@ const layerWsRpc = (
               });
             }
             if (request.method === "sessions.list") {
+              // Capture before the shell read so replay can duplicate, but
+              // never miss, native changes committed during the snapshot.
+              const baseline = yield* Effect.result(applicationEvents.latestApplicationSequence);
+              if (Result.isFailure(baseline))
+                return error("Unavailable", "Native event-store watermark cannot be read.");
               const native = yield* Effect.result(
                 threadManagement.readShellSnapshot({ location: "active" }).pipe(Effect.flatten),
               );
@@ -2049,7 +2063,174 @@ const layerWsRpc = (
                 // Desktop catalogs reflect only presently connected/publishing
                 // Electron owners, not an authoritative remote ChatGPT index.
                 complete: false,
-                sourceCursor: null,
+                sourceEpoch: environmentId,
+                nativeSnapshotSequence: baseline.success,
+                sourceCursor: nativeUpdateCursor(environmentId, baseline.success),
+              });
+            }
+            if (request.method === "operations.get") {
+              const decoded = yield* Effect.result(
+                Schema.decodeUnknownEffect(AgentProviderV1OperationGet)(request.params),
+              );
+              if (Result.isFailure(decoded))
+                return error("InvalidInput", "Invalid operation identity.");
+              const input = decoded.success;
+              if (input.expectedEnvironmentId !== environmentId)
+                return error("EnvironmentChanged", "Operation environment does not match.");
+              const observedAt = DateTime.formatIso(yield* DateTime.now);
+              const rawId = rawNativeThreadId(input.session);
+              if (rawId === null) {
+                if (input.session.provider !== "t3" || input.session.id.startsWith("thread:"))
+                  return error("Unsupported", "Unknown operation session kind.");
+                const operation = readBrowserSubmission({ ...input, observedAt });
+                return operation
+                  ? reply(operation)
+                  : error("NotFound", "No browser operation with that handle.");
+              }
+              // The caller supplies the original identity so the digest can be
+              // verified; a command receipt alone cannot recover a client key.
+              const digestInput = [environmentId, rawId, input.clientRequestId]
+                .map((value) => `${value.length}:${value}`)
+                .join("");
+              const digest = yield* crypto
+                .digest("SHA-256", new TextEncoder().encode(digestInput))
+                .pipe(Effect.orDie);
+              const ids = nativeSubmissionIds(digest);
+              if (ids.commandId !== input.operationId)
+                return error(
+                  "Conflict",
+                  "Operation handle does not match the native submission identity.",
+                );
+              const saved = yield* Effect.result(sql<{
+                readonly commandId: string;
+                readonly threadId: string;
+                readonly commandType: string;
+                readonly acceptedAt: string;
+                readonly resultSequence: number;
+                readonly status: "accepted" | "rejected";
+                readonly error: string | null;
+              }>`
+                SELECT command_id AS "commandId", aggregate_id AS "threadId",
+                       command_type AS "commandType", accepted_at AS "acceptedAt",
+                       result_sequence AS "resultSequence", status, error
+                FROM orchestration_command_receipts
+                WHERE command_id = ${ids.commandId} AND aggregate_kind = 'thread'
+              `);
+              if (Result.isFailure(saved))
+                return error("Unavailable", "Native command receipt store cannot be read.");
+              const receipt = saved.success[0];
+              if (!receipt) {
+                return reply({
+                  operationId: ids.commandId,
+                  clientRequestId: input.clientRequestId,
+                  state: "Unknown",
+                  session: input.session,
+                  observedAt,
+                  receiptBasis:
+                    "native_receipt_missing;dispatch_not_proven;retry_only_with_same_clientRequestId",
+                });
+              }
+              if (receipt.threadId !== rawId || receipt.commandType !== "message.dispatch")
+                return error("Conflict", "Stored receipt belongs to another native command.");
+              return reply({
+                operationId: ids.commandId,
+                clientRequestId: input.clientRequestId,
+                state: receipt.status === "accepted" ? "Accepted" : "Failed",
+                ...(receipt.status === "accepted" ? { confirmedStage: "Accepted" as const } : {}),
+                session: input.session,
+                observedAt: receipt.acceptedAt,
+                nativeMessageId: ids.messageId,
+                sourceSequence: receipt.resultSequence,
+                ...(receipt.error === null ? {} : { error: receipt.error }),
+                receiptBasis: "native_persisted_command_receipt;not_agent_completion",
+              });
+            }
+            if (request.method === "sessions.updates") {
+              const decoded = yield* Effect.result(
+                Schema.decodeUnknownEffect(AgentProviderV1UpdatesRequest)(request.params),
+              );
+              if (Result.isFailure(decoded))
+                return error("InvalidInput", "Invalid updates cursor or environment.");
+              const input = decoded.success;
+              if (input.expectedEnvironmentId !== environmentId)
+                return error("EnvironmentChanged", "Updates environment does not match.");
+              if (
+                input.limit !== undefined &&
+                (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)
+              )
+                return error("InvalidInput", "Updates limit must be 1..100.");
+              const latest = yield* Effect.result(applicationEvents.latestApplicationSequence);
+              if (Result.isFailure(latest))
+                return error("Unavailable", "Native event-store watermark cannot be read.");
+              const through = latest.success;
+              const retained = yield* Effect.result(sql<{ readonly firstSequence: number | null }>`
+                SELECT MIN(sequence) AS "firstSequence" FROM orchestration_events
+                WHERE aggregate_kind = 'project'
+                   OR (aggregate_kind = 'thread' AND application_event_version = 2)
+              `);
+              if (Result.isFailure(retained))
+                return error("Unavailable", "Native event-store retention cannot be checked.");
+              const firstRetained = retained.success[0]?.firstSequence ?? 0;
+              const after =
+                input.cursor == null ? null : parseNativeUpdateCursor(environmentId, input.cursor);
+              // A fresh snapshot, invalid/foreign epoch or future cursor cannot
+              // claim that earlier changes were delivered. No synthetic replay.
+              if (
+                after === null ||
+                after > through ||
+                (firstRetained > 0 && after < firstRetained - 1)
+              ) {
+                return reply({
+                  sourceEpoch: environmentId,
+                  browserEpoch: agentProviderEpoch,
+                  browserUpdatesComplete: false,
+                  nativeSnapshotSequence: through,
+                  cursor: nativeUpdateCursor(environmentId, through),
+                  changes: [],
+                  gap: true,
+                  complete: false, // ChatGPT DOM has no reliable delta stream.
+                });
+              }
+              const scanned = yield* Effect.result(sql<{
+                readonly sequence: number;
+                readonly commandId: string | null;
+                readonly occurredAt: string;
+                readonly threadId: string;
+              }>`
+                SELECT sequence, command_id AS "commandId",
+                       occurred_at AS "occurredAt", stream_id AS "threadId"
+                FROM orchestration_events
+                WHERE aggregate_kind = 'thread' AND application_event_version = 2
+                  AND sequence > ${after} AND sequence <= ${through}
+                ORDER BY sequence ASC LIMIT ${input.limit ?? 100}
+              `);
+              if (Result.isFailure(scanned))
+                return error("Unavailable", "Native provider events cannot be read.");
+              const rows = scanned.success;
+              const watermark = rows.at(-1)?.sequence ?? through;
+              return reply({
+                sourceEpoch: environmentId,
+                browserEpoch: agentProviderEpoch,
+                browserUpdatesComplete: false,
+                nativeSnapshotSequence: through,
+                cursor: nativeUpdateCursor(environmentId, watermark),
+                changes: rows
+                  .filter((row) => row.commandId?.startsWith("provider-v1-command:"))
+                  .map((row) => ({
+                    id: `native-event:${row.sequence}`,
+                    kind: "operation.changed",
+                    session: { provider: "t3", id: `thread:${encodeURIComponent(row.threadId)}` },
+                    observedAt: row.occurredAt,
+                    payload: {
+                      operationId: row.commandId,
+                      state: "Accepted",
+                      confirmedStage: "Accepted",
+                      sourceSequence: row.sequence,
+                      receiptBasis: "native_committed_event;not_agent_completion",
+                    },
+                  })),
+                gap: false,
+                complete: false, // Native cursor is resumable; mixed browser deltas are not.
               });
             }
             if (request.method === "sessions.history" || request.method === "sessions.submit") {
@@ -2116,6 +2297,29 @@ const layerWsRpc = (
                     return error("InvalidInput", "Browser prompt exceeds 30,000 characters.");
                   message = text;
                 }
+                // Reserve the client key BEFORE any one-shot desktop handoff.
+                // A retry within this process only reads the prior operation;
+                // a browser Enter click is never replayed by provider v1.
+                const browserAttempt = isSubmit
+                  ? beginBrowserSubmission({
+                      environmentId,
+                      session: input.session,
+                      clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
+                      expectedConversation: expected,
+                      text: message!,
+                      observedAt: DateTime.formatIso(yield* DateTime.now),
+                    })
+                  : null;
+                if (browserAttempt?.kind === "conflict")
+                  return error(
+                    "Conflict",
+                    "Browser clientRequestId was reused with different content.",
+                  );
+                if (browserAttempt?.kind === "capacity")
+                  return error("Busy", "Browser uncertainty ledger is full; no send attempted.");
+                if (browserAttempt?.kind === "duplicate") return reply(browserAttempt.operation);
+                const browserOperationId =
+                  browserAttempt?.kind === "new" ? browserAttempt.operation.operationId : null;
                 const result = yield* Effect.promise(() =>
                   dispatchBrowserWork(
                     environmentId,
@@ -2131,16 +2335,26 @@ const layerWsRpc = (
                       "Unavailable",
                       "Browser desktop owner unavailable or read timed out.",
                     );
-                  return reply({
-                    operationId: request.requestId,
-                    clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
-                    state: "Unknown",
-                    session: input.session,
-                    observedAt: DateTime.formatIso(yield* DateTime.now),
-                    receiptBasis: "browser_handoff_timeout;send_may_have_happened;do_not_retry",
-                  });
+                  return reply(
+                    recordBrowserSubmission(
+                      browserOperationId!,
+                      "Unknown",
+                      DateTime.formatIso(yield* DateTime.now),
+                      "browser_handoff_timeout;send_may_have_happened;never_auto_replay",
+                    ),
+                  );
                 }
-                if (!result.ok) return error(result.code, result.message);
+                if (!result.ok) {
+                  if (!isSubmit) return error(result.code, result.message);
+                  return reply(
+                    recordBrowserSubmission(
+                      browserOperationId!,
+                      "Unknown",
+                      DateTime.formatIso(yield* DateTime.now),
+                      `browser_handoff_refused_or_uncertain:${result.code};never_auto_replay`,
+                    ),
+                  );
+                }
                 if (!isSubmit) {
                   const validated = yield* Effect.result(
                     Schema.decodeUnknownEffect(AgentProviderV1HistoryPage)(result.data),
@@ -2161,29 +2375,28 @@ const layerWsRpc = (
                   !("delivery" in receipt) ||
                   (receipt.delivery !== "user_turn_observed" && receipt.delivery !== "unknown")
                 )
-                  return reply({
-                    operationId: request.requestId,
-                    clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
-                    state: "Unknown",
-                    session: input.session,
-                    observedAt: DateTime.formatIso(yield* DateTime.now),
-                    receiptBasis: "browser_receipt_unverifiable;do_not_retry",
-                  });
+                  return reply(
+                    recordBrowserSubmission(
+                      browserOperationId!,
+                      "Unknown",
+                      DateTime.formatIso(yield* DateTime.now),
+                      "browser_receipt_unverifiable;never_auto_replay",
+                    ),
+                  );
                 const delivered =
                   receipt.delivery === "user_turn_observed" &&
                   "messageSent" in receipt &&
                   receipt.messageSent === true;
-                return reply({
-                  operationId: request.requestId,
-                  clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
-                  state: delivered ? "Delivered" : "Unknown",
-                  ...(delivered ? { confirmedStage: "Delivered" as const } : {}),
-                  session: input.session,
-                  observedAt: DateTime.formatIso(yield* DateTime.now),
-                  receiptBasis: delivered
-                    ? "observed_matching_user_dom_turn;not_assistant_completion"
-                    : "browser_send_attempt_uncertain;do_not_retry",
-                });
+                return reply(
+                  recordBrowserSubmission(
+                    browserOperationId!,
+                    delivered ? "Delivered" : "Unknown",
+                    DateTime.formatIso(yield* DateTime.now),
+                    delivered
+                      ? "observed_matching_user_dom_turn;not_assistant_completion"
+                      : "browser_send_attempt_uncertain;never_auto_replay",
+                  ),
+                );
               }
               if (
                 input.expectedEnvironmentId === undefined ||
