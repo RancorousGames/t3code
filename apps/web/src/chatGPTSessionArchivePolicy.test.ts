@@ -4,7 +4,15 @@ import type { BrowserSession } from "./chatGPTBrowserSessions";
 
 describe("safe worker session archive decisions", () => {
   const url = "https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-  const entry: BrowserSession = { id: "worker", title: "Worker" };
+  const entry: BrowserSession = {
+    id: "worker",
+    title: "Worker",
+    completion: {
+      declaredAt: "2026-10-18T10:00:00.000Z",
+      observedUrl: url,
+      observedTurns: 5,
+    },
+  };
   const observed = {
     id: "worker",
     hidden: false,
@@ -20,6 +28,23 @@ describe("safe worker session archive decisions", () => {
     const withoutMarker = { ...observed, completion: null };
     expect(() => assertArchivableSession(entry, withoutMarker, false)).toThrow(/completion marker/);
     expect(() => assertArchivableSession(entry, withoutMarker, true)).not.toThrow();
+    expect(() =>
+      assertArchivableSession({ ...entry, completion: undefined }, observed, false),
+    ).toThrow(/completion marker/);
+    expect(() =>
+      assertArchivableSession(
+        { ...entry, completion: { ...entry.completion!, observedTurns: 4 } },
+        observed,
+        false,
+      ),
+    ).toThrow(/completion marker/);
+    expect(() =>
+      assertArchivableSession(
+        { ...entry, completion: { ...entry.completion!, declaredAt: "2026-10-18T09:00:00Z" } },
+        observed,
+        false,
+      ),
+    ).toThrow(/completion marker/);
   });
 
   it("refuses active, pending, stalled, loading, hidden, and unverified conversations", () => {
