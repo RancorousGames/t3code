@@ -32,7 +32,10 @@ import {
   type PageMessage,
 } from "./chatGPTSessionDom";
 import { isChatGPTHomeUrl } from "./chatGPTBrowserPrewarm";
-import { appendUnverifiedOpenRigPolicies, chatGPTSentTurnObserved, prepareChatGPTSessionMessage } from "./chatGPTSessionMessaging";
+import {
+  appendUnverifiedOpenRigPolicies,
+  prepareChatGPTSessionMessage,
+} from "./chatGPTSessionMessaging";
 import {
   CANONICAL_CHATGPT_CONVERSATION_ID,
   chatGPTConversationIdFromUrl,
@@ -81,6 +84,63 @@ export type ChatGPTSessionStatus =
   | "unavailable"
   | "hibernated"
   | "new";
+
+// Browser-renderer-local receipt ledger. Keep uncertain attempts across subsequent
+// socket calls so the same prompt is never clicked twice after a lost DOM ack.
+// A desktop renderer restart loses this ledger; callers must read/reconcile then.
+interface PendingChatGPTSend {
+  readonly text: string;
+  readonly original: string;
+  readonly url: string;
+  readonly before: Pick<PageInspection, "totalTurns" | "lastUserTurnKey">;
+  readonly policyEnrichment: {
+    schema: "t3-c05-browser-optional/v1";
+    status: "deferred" | "not_eligible" | "prepared" | "observed_user_turn";
+    reason?: string;
+    qitemIds?: string[];
+  };
+}
+const uncertainChatGPTSends = new Map<string, PendingChatGPTSend>();
+
+function sendReceiptKey(environmentId: EnvironmentId, sessionId: string): string {
+  return `${environmentId}:${sessionId}`;
+}
+
+async function reconcileChatGPTSend(
+  environmentId: EnvironmentId,
+  sessionId: string,
+  runtimeId: string,
+  attempt: PendingChatGPTSend,
+): Promise<boolean> {
+  const after = await readGuest(environmentId, sessionId, "end", 1, true);
+  if (
+    !after ||
+    after.url !== attempt.url ||
+    guestFor(environmentId, sessionId).runtimeId !== runtimeId
+  )
+    return false;
+  const newKey =
+    !!after.lastUserTurnKey && after.lastUserTurnKey !== attempt.before.lastUserTurnKey;
+  const newTurn = after.totalTurns > attempt.before.totalTurns;
+  if (!newKey && !newTurn) return false;
+  const normalize = (value: string) => value.replace(/\s+/gu, " ").trim();
+  if (
+    after.messages.some(
+      (item) => item.role === "user" && normalize(item.text) === normalize(attempt.text),
+    )
+  )
+    return true;
+  // A turn's DOM projection may truncate at 6k or include wrapper controls.
+  // Require the new turn identity *and* the complete guest user text.
+  const fullText = await chatGPTWebviewAutomation.evaluate(runtimeId, {
+    expression: `(() => {
+      const nodes = document.querySelectorAll('[data-message-author-role="user"],[data-content-search-unit-key$=":user"]');
+      const last = nodes[nodes.length - 1];
+      return last ? (last.innerText || last.textContent || "") : null;
+    })()`,
+  });
+  return typeof fullText === "string" && normalize(fullText) === normalize(attempt.text);
+}
 
 // First observed time is a local observation, not ChatGPT's disconnection time.
 // Keep it until a later inspection shows recovery. Never assume the banner is permanent.
@@ -198,6 +258,8 @@ export async function inspectBrowserSession(
     activity: "unknown" as PageInspection["activity"],
     uiColor: "unknown" as ChatGPTActivityAge,
     lastRole: null as PageInspection["lastRole"],
+    lastUserTurnKey: null as string | null,
+    lastUserTurn: null as number | null,
     lastText: "",
     latestMessageFirstFiveWords: null as string | null,
     totalTurns: 0,
@@ -263,6 +325,8 @@ export async function inspectBrowserSession(
     );
     result.activity = page.activity;
     result.lastRole = page.lastRole;
+    result.lastUserTurnKey = page.lastUserTurnKey;
+    result.lastUserTurn = page.lastUserTurn;
     result.lastText = page.lastText;
     result.latestMessageFirstFiveWords = page.latestMessageFirstFiveWords ?? null;
     result.totalTurns = page.totalTurns;
@@ -320,8 +384,8 @@ export async function inspectBrowserSession(
       result.status = "pending_or_stalled";
       result.statusReason =
         page.lastRole === "user"
-          ? "Last visible message is from the user; generation is not running."
-          : "Last assistant unit is empty; no actual reply or generation has been observed.";
+          ? "User turn is visible, but there is no active Stop control or assistant reply. Delivery is observable; assistant processing/completion is unknown."
+          : "Assistant placeholder is empty and no Stop control is active; a reply or completion has NOT been observed.";
     } else {
       // Question marks are only a weak hint. Distinguish it in the explanation.
       const looksLikeQuestion = /\?\s*$/.test(page.lastText.trim());
@@ -367,7 +431,8 @@ export async function runChatGPTSessionControl(input: {
     const which = input.which ?? "visible";
     // "all" changes activity filtering, never the hidden-session privacy default.
     // Hidden guests stay unmounted and are never woken merely to list them.
-    const candidates = input.includeHidden === true ? sessions : sessions.filter((entry) => !entry.hidden);
+    const candidates =
+      input.includeHidden === true ? sessions : sessions.filter((entry) => !entry.hidden);
     const inspected: Awaited<ReturnType<typeof inspectBrowserSession>>[] = [];
     for (let i = 0; i < candidates.length; i += 4) {
       inspected.push(
@@ -376,13 +441,17 @@ export async function runChatGPTSessionControl(input: {
         )),
       );
     }
-    const result = inspected.filter((entry) =>
-      (input.includeHidden === true && entry.hidden) || matchesSessionWhich(which, entry.uiColor, entry.hidden),
+    const result = inspected.filter(
+      (entry) =>
+        (input.includeHidden === true && entry.hidden) ||
+        matchesSessionWhich(which, entry.uiColor, entry.hidden),
     );
     return { which, sessions: result, total: result.length };
   }
   if (!input.sessionId)
-    throw new Error("sessionId is required for read, send, reload, complete, archive, restore and change_state.");
+    throw new Error(
+      "sessionId is required for read, send, reload, complete, archive, restore and change_state.",
+    );
   const entry = sessions.find((session) => session.id === input.sessionId);
   if (!entry) throw new Error("Unknown ChatGPT session id.");
   if (!entry.hidden && action !== "restore") await ensureGuestAwake(environmentId, entry.id);
@@ -483,13 +552,18 @@ export async function runChatGPTSessionControl(input: {
     if (state !== "hidden" && state !== "unhidden" && state !== "closed")
       throw new Error("change_state requires state=hidden, unhidden or closed.");
     if (state === "unhidden") {
-      const archivedUrl = entry.archive && !entry.archive.restoredAt
-        ? entry.archive.conversationUrl : null;
-      if (archivedUrl && !CANONICAL_CHATGPT_CONVERSATION_ID.test(
-        chatGPTConversationIdFromUrl(archivedUrl) ?? "",
-      )) throw new Error("Archived session has no canonical conversation URL; cannot unhide.");
+      const archivedUrl =
+        entry.archive && !entry.archive.restoredAt ? entry.archive.conversationUrl : null;
+      if (
+        archivedUrl &&
+        !CANONICAL_CHATGPT_CONVERSATION_ID.test(chatGPTConversationIdFromUrl(archivedUrl) ?? "")
+      )
+        throw new Error("Archived session has no canonical conversation URL; cannot unhide.");
       return {
-        action, state, sessionId: entry.id, alreadyInState: !entry.hidden,
+        action,
+        state,
+        sessionId: entry.id,
+        alreadyInState: !entry.hidden,
         ...(archivedUrl ? { conversationUrl: archivedUrl } : {}),
       };
     }
@@ -506,13 +580,18 @@ export async function runChatGPTSessionControl(input: {
       throw new Error("Refusing to change state while ChatGPT is generating.");
     if (state === "hidden") {
       const latest = await inspectBrowserSession(environmentId, entry);
-      if (latest.status === "working" || latest.uiColor === "working" ||
-          latest.observedGuestUrl !== before.observedGuestUrl)
+      if (
+        latest.status === "working" ||
+        latest.uiColor === "working" ||
+        latest.observedGuestUrl !== before.observedGuestUrl
+      )
         throw new Error("Session became active or navigated during hide inspection.");
     }
     if (state === "closed") {
-      if (!["new", "done_or_idle", "waiting_for_input"].includes(before.status) ||
-          !before.observedGuestUrl)
+      if (
+        !["new", "done_or_idle", "waiting_for_input"].includes(before.status) ||
+        !before.observedGuestUrl
+      )
         throw new Error("Cannot permanently close an unreadable, pending or interrupted session.");
       const { runtimeId, webview } = guestFor(environmentId, entry.id);
       if (!runtimeId || !webview)
@@ -525,8 +604,11 @@ export async function runChatGPTSessionControl(input: {
       if (typeof draft !== "string" || draft.trim())
         throw new Error("Cannot permanently close: composer draft is nonempty or unreadable.");
       const latest = await inspectBrowserSession(environmentId, entry);
-      if (latest.observedGuestUrl !== before.observedGuestUrl ||
-          latest.status !== before.status || latest.uiColor === "working")
+      if (
+        latest.observedGuestUrl !== before.observedGuestUrl ||
+        latest.status !== before.status ||
+        latest.uiColor === "working"
+      )
         throw new Error("Session changed during close inspection; refusing permanent close.");
     }
     return { action, state, sessionId: entry.id, alreadyInState: false };
@@ -544,6 +626,24 @@ export async function runChatGPTSessionControl(input: {
       true,
       maxMessageChars,
     );
+    const receiptKey = sendReceiptKey(environmentId, entry.id);
+    const pending = uncertainChatGPTSends.get(receiptKey);
+    let sendReceipt:
+      | { delivery: "unknown" | "user_turn_observed"; sendAttempted: true }
+      | undefined;
+    if (pending && pending.url === session.observedGuestUrl) {
+      let delivered = false;
+      const { runtimeId } = guestFor(environmentId, entry.id);
+      if (runtimeId) {
+        try {
+          delivered = await reconcileChatGPTSend(environmentId, entry.id, runtimeId, pending);
+        } catch {
+          /* read still reports the actual transcript */
+        }
+      }
+      if (delivered) uncertainChatGPTSends.delete(receiptKey);
+      sendReceipt = { delivery: delivered ? "user_turn_observed" : "unknown", sendAttempted: true };
+    } else if (pending) uncertainChatGPTSends.delete(receiptKey);
     if (input.expectedConversationId !== undefined) {
       const verifiedConversationId = requireExpectedChatGPTConversation(
         input.expectedConversationId,
@@ -554,6 +654,7 @@ export async function runChatGPTSessionControl(input: {
         selection: { from, count },
         recoveryLog: readChatGPTRecoveryEvents(environmentId, entry.id),
         recoveryState: readChatGPTRecoveryState(environmentId, entry.id),
+        ...(sendReceipt ? { sendReceipt } : {}),
         conversationGuardValidated: true,
         verifiedConversationId,
       };
@@ -563,6 +664,7 @@ export async function runChatGPTSessionControl(input: {
       selection: { from, count },
       recoveryLog: readChatGPTRecoveryEvents(environmentId, entry.id),
       recoveryState: readChatGPTRecoveryState(environmentId, entry.id),
+      ...(sendReceipt ? { sendReceipt } : {}),
     };
   }
   if (action === "complete") {
@@ -672,7 +774,8 @@ export async function runChatGPTSessionControl(input: {
       const savedUrl = JSON.parse(
         localStorage.getItem(chatGPTBrowserLastUrlKey(environmentId, entry.id)) ?? "null",
       );
-      savedConversation = typeof savedUrl === "string" ? chatGPTConversationIdFromUrl(savedUrl) : null;
+      savedConversation =
+        typeof savedUrl === "string" ? chatGPTConversationIdFromUrl(savedUrl) : null;
     } catch {
       throw new Error("Saved ChatGPT URL is unreadable; refusing refresh.");
     }
@@ -683,8 +786,10 @@ export async function runChatGPTSessionControl(input: {
     const latest = await inspectBrowserSession(environmentId, entry);
     if (latest.status === "working" || latest.uiColor === "working")
       throw new Error("Refusing to reload a working session.");
-    if (latest.observedGuestUrl !== before.observedGuestUrl ||
-        (!input.force && reloadRequiresForce(latest.uiColor)))
+    if (
+      latest.observedGuestUrl !== before.observedGuestUrl ||
+      (!input.force && reloadRequiresForce(latest.uiColor))
+    )
       throw new Error("Session URL or orange state changed before refresh; not reloading.");
     const { runtimeId } = guestFor(environmentId, entry.id);
     if (!runtimeId || !previewBridge) throw new Error("ChatGPT guest is not attached.");
@@ -708,6 +813,53 @@ export async function runChatGPTSessionControl(input: {
     const before = await inspectBrowserSession(environmentId, entry, "end", 1, true);
     if (input.expectedConversationId !== undefined) {
       requireExpectedChatGPTConversation(input.expectedConversationId, before.observedGuestUrl);
+    }
+    const receiptKey = sendReceiptKey(environmentId, entry.id);
+    const unresolved = uncertainChatGPTSends.get(receiptKey);
+    if (unresolved && unresolved.url !== before.observedGuestUrl)
+      uncertainChatGPTSends.delete(receiptKey);
+    else if (unresolved && unresolved.original === prepared.text) {
+      const attached = guestFor(environmentId, entry.id);
+      if (attached.runtimeId) {
+        try {
+          if (await reconcileChatGPTSend(environmentId, entry.id, attached.runtimeId, unresolved)) {
+            uncertainChatGPTSends.delete(receiptKey);
+            return {
+              sessionId: entry.id,
+              recipientSessionId: entry.id,
+              senderSessionId: prepared.sender?.id ?? null,
+              messageSent: true,
+              delivery: "user_turn_observed" as const,
+              reconciled: true,
+              ...(input.expectedConversationId
+                ? {
+                    conversationGuardValidated: true as const,
+                    verifiedConversationId: input.expectedConversationId,
+                  }
+                : {}),
+              observedAt: new Date().toISOString(),
+            };
+          }
+        } catch {
+          /* uncertain remains uncertain */
+        }
+      }
+      return {
+        sessionId: entry.id,
+        recipientSessionId: entry.id,
+        senderSessionId: prepared.sender?.id ?? null,
+        messageSent: false,
+        delivery: "unknown" as const,
+        sendAttempted: true,
+        ...(input.expectedConversationId
+          ? {
+              conversationGuardValidated: true as const,
+              verifiedConversationId: input.expectedConversationId,
+            }
+          : {}),
+        reason:
+          "A matching send was previously invoked but its user turn has not been proven. No duplicate click was issued; read the session and do not blindly retry.",
+      };
     }
     if (
       before.status === "working" ||
@@ -734,48 +886,79 @@ export async function runChatGPTSessionControl(input: {
       status: "deferred" | "not_eligible" | "prepared" | "observed_user_turn";
       reason?: string;
       qitemIds?: string[];
-    } = { schema: "t3-c05-browser-optional/v1", status: "not_eligible",
-      reason: "exact_conversation_guard_not_supplied" };
+    } = {
+      schema: "t3-c05-browser-optional/v1",
+      status: "not_eligible",
+      reason: "exact_conversation_guard_not_supplied",
+    };
     let message = prepared.text;
-    const policyReader = typeof window !== "undefined"
-      ? window.desktopBridge?.readOpenRigPolicyForBrowserSend : undefined;
+    const policyReader =
+      typeof window !== "undefined"
+        ? window.desktopBridge?.readOpenRigPolicyForBrowserSend
+        : undefined;
     const guardedConversation = input.expectedConversationId;
-    if (guardedConversation && policyReader &&
-        chatGPTConversationIdFromUrl(before.observedGuestUrl ?? "") === guardedConversation) {
+    if (
+      guardedConversation &&
+      policyReader &&
+      chatGPTConversationIdFromUrl(before.observedGuestUrl ?? "") === guardedConversation
+    ) {
       try {
         const intake = await Promise.race([
           policyReader({ browserSessionId: entry.id, conversationId: guardedConversation }),
-          new Promise<never>((_, reject) => setTimeout(
-            () => reject(new Error("policy_intake_timeout")), 7_000)),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("policy_intake_timeout")), 7_000),
+          ),
         ]);
-        if (intake.status === "ready" &&
-            intake.browserSessionId === entry.id &&
-            intake.conversationId === guardedConversation &&
-            intake.policies.length > 0) {
+        if (
+          intake.status === "ready" &&
+          intake.browserSessionId === entry.id &&
+          intake.conversationId === guardedConversation &&
+          intake.policies.length > 0
+        ) {
           // The MAIN bridge independently proves one exact RigSpec manager's current
           // active primary. The renderer additionally rechecks guest identity below.
           const candidate = appendUnverifiedOpenRigPolicies(prepared.text, intake.policies);
           if (candidate.length <= 30_000) {
             message = candidate;
             policyEnrichment = {
-              schema: "t3-c05-browser-optional/v1", status: "prepared",
-              qitemIds: [...new Set(intake.policies.map(row => row.qitemId))],
+              schema: "t3-c05-browser-optional/v1",
+              status: "prepared",
+              qitemIds: [...new Set(intake.policies.map((row) => row.qitemId))],
             };
-          } else policyEnrichment = { schema: "t3-c05-browser-optional/v1",
-            status: "deferred", reason: "policy_context_oversized" };
+          } else
+            policyEnrichment = {
+              schema: "t3-c05-browser-optional/v1",
+              status: "deferred",
+              reason: "policy_context_oversized",
+            };
         } else if (intake.status === "ready") {
-          policyEnrichment = { schema: "t3-c05-browser-optional/v1", status: "deferred",
-            reason: intake.policies.length === 0 ? "no_pending_policy" : "policy_identity_mismatch" };
-        } else policyEnrichment = { schema: "t3-c05-browser-optional/v1",
-          status: "deferred", reason: intake.reason };
+          policyEnrichment = {
+            schema: "t3-c05-browser-optional/v1",
+            status: "deferred",
+            reason: intake.policies.length === 0 ? "no_pending_policy" : "policy_identity_mismatch",
+          };
+        } else
+          policyEnrichment = {
+            schema: "t3-c05-browser-optional/v1",
+            status: "deferred",
+            reason: intake.reason,
+          };
       } catch (error) {
-        policyEnrichment = { schema: "t3-c05-browser-optional/v1", status: "deferred",
-          reason: error instanceof Error && error.message === "policy_intake_timeout"
-            ? "policy_intake_timeout" : "policy_ipc_unavailable" };
+        policyEnrichment = {
+          schema: "t3-c05-browser-optional/v1",
+          status: "deferred",
+          reason:
+            error instanceof Error && error.message === "policy_intake_timeout"
+              ? "policy_intake_timeout"
+              : "policy_ipc_unavailable",
+        };
       }
     } else if (guardedConversation) {
-      policyEnrichment = { schema: "t3-c05-browser-optional/v1", status: "deferred",
-        reason: policyReader ? "exact_guest_url_not_verified" : "policy_ipc_unavailable" };
+      policyEnrichment = {
+        schema: "t3-c05-browser-optional/v1",
+        status: "deferred",
+        reason: policyReader ? "exact_guest_url_not_verified" : "policy_ipc_unavailable",
+      };
     }
     // The policy read is optional: original send guards remain binding. Reinspect
     // the same guest after every awaited policy IPC before a single editor mutation.
@@ -783,10 +966,15 @@ export async function runChatGPTSessionControl(input: {
     if (guardedConversation) {
       requireExpectedChatGPTConversation(guardedConversation, refreshed.observedGuestUrl);
     }
-    if (refreshed.observedGuestUrl !== before.observedGuestUrl ||
-        refreshed.status === "working" || refreshed.status === "stuck" ||
-        refreshed.status === "stuck_connecting" || refreshed.status === "unavailable" ||
-        refreshed.status === "loading" || guestFor(environmentId, entry.id).runtimeId !== runtimeId) {
+    if (
+      refreshed.observedGuestUrl !== before.observedGuestUrl ||
+      refreshed.status === "working" ||
+      refreshed.status === "stuck" ||
+      refreshed.status === "stuck_connecting" ||
+      refreshed.status === "unavailable" ||
+      refreshed.status === "loading" ||
+      guestFor(environmentId, entry.id).runtimeId !== runtimeId
+    ) {
       throw new Error("Session URL, generation or guest changed before typing; refusing send.");
     }
     await chatGPTWebviewAutomation.waitFor(runtimeId, {
@@ -800,44 +988,54 @@ export async function runChatGPTSessionControl(input: {
       requireEmptyComposer: true,
       expectedConversationId: input.expectedConversationId,
     });
-    // Once Send is clicked, do not retry: duplicate prompts can be costly.
-    await chatGPTWebviewAutomation.press(runtimeId, {
-      key: "Enter",
-      expectedConversationId: input.expectedConversationId,
-    });
+    // Record the attempt before the click: even an exception from the bridge
+    // may follow a real side effect. A repeated call must reconcile, not click.
+    const attempt: PendingChatGPTSend = {
+      original: prepared.text,
+      text: message,
+      url: before.observedGuestUrl ?? "",
+      before,
+      policyEnrichment,
+    };
+    uncertainChatGPTSends.set(receiptKey, attempt);
+    try {
+      await chatGPTWebviewAutomation.press(runtimeId, {
+        key: "Enter",
+        expectedConversationId: input.expectedConversationId,
+      });
+    } catch {
+      return {
+        sessionId: entry.id,
+        recipientSessionId: entry.id,
+        senderSessionId: prepared.sender?.id ?? null,
+        messageSent: false,
+        delivery: "unknown" as const,
+        sendAttempted: true,
+        ...(input.expectedConversationId
+          ? {
+              conversationGuardValidated: true as const,
+              verifiedConversationId: input.expectedConversationId,
+            }
+          : {}),
+        reason:
+          "Send was invoked but the guest bridge did not confirm the click. Outcome unknown; never retry blindly.",
+      };
+    }
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       try {
-        const after = await readGuest(environmentId, entry.id, "end", 1, true);
-        // The ordinary read projection truncates each message to 24k. When
-        // C05 includes more full queue bytes, inspect the actual last user DOM
-        // unit instead; never truncate policy or fabricate a matching turn.
-        let observed = chatGPTSentTurnObserved(
-          message, after?.messages ?? [], before.totalTurns, after?.totalTurns ?? 0,
-        );
-        if (!observed && after && after.totalTurns > before.totalTurns &&
-            after.lastRole === "user" && message.length > 6_000) {
-          const fullText = await chatGPTWebviewAutomation.evaluate(runtimeId, {
-            expression: `(() => {
-              const nodes = document.querySelectorAll('[data-message-author-role="user"],[data-content-search-unit-key$=":user"]');
-              const last = nodes[nodes.length - 1];
-              if (!last) return null;
-              return last.innerText || last.textContent || "";
-            })()`,
-          });
-          const normalize = (value: string) => value.replace(/\\s+/gu, " ").trim();
-          observed = typeof fullText === "string" && normalize(fullText) === normalize(message);
-        }
-        if (observed)
+        if (await reconcileChatGPTSend(environmentId, entry.id, runtimeId, attempt)) {
+          uncertainChatGPTSends.delete(receiptKey);
           return {
             sessionId: entry.id,
             recipientSessionId: entry.id,
             senderSessionId: prepared.sender?.id ?? null,
             messageSent: true,
             delivery: "user_turn_observed" as const,
-            policyEnrichment: policyEnrichment.status === "prepared"
-              ? { ...policyEnrichment, status: "observed_user_turn" as const }
-              : policyEnrichment,
+            policyEnrichment:
+              policyEnrichment.status === "prepared"
+                ? { ...policyEnrichment, status: "observed_user_turn" as const }
+                : policyEnrichment,
             ...(input.expectedConversationId
               ? {
                   conversationGuardValidated: true as const,
@@ -846,14 +1044,29 @@ export async function runChatGPTSessionControl(input: {
               : {}),
             observedAt: new Date().toISOString(),
           };
+        }
       } catch {
-        /* navigation */
+        /* guest inspection can fail after the click; receipt remains unknown */
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 250));
     }
-    throw new Error(
-      "Send was invoked but ChatGPT did not confirm the new user turn. Do not retry blindly.",
-    );
+    return {
+      sessionId: entry.id,
+      recipientSessionId: entry.id,
+      senderSessionId: prepared.sender?.id ?? null,
+      messageSent: false,
+      delivery: "unknown" as const,
+      sendAttempted: true,
+      ...(input.expectedConversationId
+        ? {
+            conversationGuardValidated: true as const,
+            verifiedConversationId: input.expectedConversationId,
+          }
+        : {}),
+      policyEnrichment,
+      reason:
+        "Send was invoked but no new matching user turn could be proven. Inspect the session; do not retry blindly.",
+    };
   }
   throw new Error("Unsupported action.");
 }

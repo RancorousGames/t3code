@@ -208,3 +208,154 @@ describe("DesktopAppActivationBroker", () => {
     }
   });
 });
+
+describe("side-effecting renderer handoff receipts", () => {
+  const spawn: DesktopAppActivationRequest = {
+    version: 1,
+    requestId: "spawn-detached",
+    type: "chatgpt.spawn",
+    title: "Isolated child",
+    prompt: "Carry out the task",
+  };
+
+  it("keeps a dispatched spawn pending across renderer loss and accepts a late CREATED receipt", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new DesktopAppActivationBroker({
+        requestTimeoutMs: 100,
+        chatGPTRequestTimeoutMs: 1_000,
+        activate: vi.fn(),
+      });
+      const firstRenderer = vi.fn();
+      const replacement = vi.fn();
+      broker.registerRenderer(firstRenderer);
+      const pending = broker.request(spawn);
+      broker.clearRenderer();
+      broker.registerRenderer(replacement);
+      expect(firstRenderer).toHaveBeenCalledOnce();
+      expect(replacement).not.toHaveBeenCalled();
+      broker.complete({
+        version: 1,
+        requestId: spawn.requestId,
+        ok: true,
+        sessionId: "created-before-detach",
+        messageSent: true,
+      });
+      await expect(pending).resolves.toMatchObject({
+        ok: true,
+        sessionId: "created-before-detach",
+        messageSent: true,
+      });
+      broker.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports UNKNOWN after dispatched spawn times out, never says it was not created or replays it", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new DesktopAppActivationBroker({
+        requestTimeoutMs: 100,
+        chatGPTRequestTimeoutMs: 1_000,
+        activate: vi.fn(),
+      });
+      const firstRenderer = vi.fn();
+      const replacement = vi.fn();
+      broker.registerRenderer(firstRenderer);
+      const pending = broker.request(spawn);
+      broker.clearRenderer();
+      broker.registerRenderer(replacement);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        code: "request-timeout",
+        message: expect.stringContaining("Outcome UNKNOWN"),
+      });
+      expect(firstRenderer).toHaveBeenCalledOnce();
+      expect(replacement).not.toHaveBeenCalled();
+      broker.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not replay a possibly dispatched send even when the renderer transport throws", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new DesktopAppActivationBroker({
+        requestTimeoutMs: 100,
+        chatGPTRequestTimeoutMs: 500,
+        activate: vi.fn(),
+      });
+      const sent = vi.fn(() => {
+        throw new Error("bridge disconnected");
+      });
+      broker.registerRenderer(sent);
+      const pending = broker.request({
+        version: 1,
+        requestId: "send-detached",
+        type: "chatgpt.sessions",
+        action: "send",
+        sessionId: "existing",
+        message: "Only once",
+      });
+      const next = vi.fn();
+      broker.registerRenderer(next);
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        code: "request-timeout",
+        message: expect.stringContaining("Outcome UNKNOWN"),
+      });
+      expect(sent).toHaveBeenCalledOnce();
+      expect(next).not.toHaveBeenCalled();
+      broker.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("distinguishes a queued command never dispatched from an unknown dispatched result", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new DesktopAppActivationBroker({
+        requestTimeoutMs: 100,
+        chatGPTRequestTimeoutMs: 500,
+        activate: vi.fn(),
+      });
+      const pending = broker.request(spawn);
+      await vi.advanceTimersByTimeAsync(500);
+      const response = await pending;
+      expect(response).toMatchObject({ ok: false, code: "request-timeout" });
+      if (!response.ok) expect(response.message).not.toContain("Outcome UNKNOWN");
+      broker.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("dispatched cancellation is not proof of non-delivery", () => {
+  it("labels the canceled side-effecting request UNKNOWN without retry", async () => {
+    const broker = new DesktopAppActivationBroker({ requestTimeoutMs: 1_000, activate: vi.fn() });
+    const send = vi.fn();
+    broker.registerRenderer(send);
+    const request: DesktopAppActivationRequest = {
+      version: 1,
+      requestId: "cancel-after-dispatch",
+      type: "chatgpt.spawn",
+      title: "Child",
+      prompt: "Run exactly once",
+    };
+    const pending = broker.request(request);
+    broker.cancel(request.requestId);
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      code: "renderer-unavailable",
+      message: expect.stringContaining("Outcome UNKNOWN"),
+    });
+    expect(send).toHaveBeenCalledOnce();
+    broker.close();
+  });
+});
