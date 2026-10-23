@@ -4,7 +4,7 @@ import type {
   DesktopOpenRigInboxItem,
 } from "@t3tools/contracts";
 import { CheckIcon, ExternalLinkIcon, SendIcon, CopyIcon, AlertCircleIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -77,6 +77,7 @@ export type RichAnswers = Record<string, RichAnswer>;
 const MAX_RICH_BYTES = 16_000;
 const ID = /^[A-Za-z0-9_-]{1,40}$/u;
 const DRAFT_PREFIX = "t3code:openrig-human-form-draft:v1:";
+const FORM_ATTEMPT_PREFIX = "t3code:openrig-human-form-attempt:v1:";
 const RICH_FENCE = /(?:^|\n)```openrig-form[ \t]*\r?\n([\s\S]*?)\r?\n```(?=\r?\n|$)/iu;
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -394,6 +395,56 @@ function draftKey(address: string, item: DesktopOpenRigInboxItem): string {
     encodeURIComponent(item.sourceType + ":" + item.id)
   );
 }
+// An indeterminate v2 POST has no authoritative per-attempt GET receipt route.
+// Preserve the write barrier at the original qitem, even when a server refresh
+// changes the form or only some questions were answered. Do not clear it based
+// on a changed form, HTTP error, missing draft, or a remount.
+function formAttemptKey(address: string, item: DesktopOpenRigInboxItem): string {
+  return (
+    FORM_ATTEMPT_PREFIX + encodeURIComponent(JSON.stringify([address, item.sourceType, item.id]))
+  );
+}
+
+function readFormAttempt(key: string): { fingerprint: string | null } | "unavailable" | null {
+  try {
+    const stored = window.localStorage.getItem(key);
+    if (stored === null) return null;
+    try {
+      const parsed = object(JSON.parse(stored));
+      return { fingerprint: typeof parsed?.fingerprint === "string" ? parsed.fingerprint : null };
+    } catch {
+      // Malformed/corrupt storage is not proof that a previous POST did not run.
+      return { fingerprint: null };
+    }
+  } catch {
+    return "unavailable";
+  }
+}
+
+function persistFormAttempt(
+  key: string,
+  draft: string,
+  address: string,
+  item: DesktopOpenRigInboxItem,
+  form: RichForm,
+  input: DesktopOpenRigHumanResponseInput,
+): boolean {
+  try {
+    // A second window must not overwrite an already reserved submission identity.
+    if (window.localStorage.getItem(key) !== null) return false;
+    window.localStorage.setItem(draftKey(address, item), draft);
+    const value = JSON.stringify({
+      fingerprint: JSON.stringify([address, item.sourceType, item.id, item.sender, form]),
+      answers: input.answers,
+    });
+    // Persist an UNKNOWN barrier BEFORE POST, including while a request is in flight.
+    window.localStorage.setItem(key, value);
+    return window.localStorage.getItem(key) === value;
+  } catch {
+    return false;
+  }
+}
+
 function initialAnswers(
   address: string,
   item: DesktopOpenRigInboxItem,
@@ -536,11 +587,15 @@ export function OpenRigRichInboxMessage({
   );
   const [failure, setFailure] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const [, refreshAttempt] = useState(0);
   const [accepted, setAccepted] = useState<DesktopOpenRigHumanResponseResult | null>(null);
   const [imagePreview, setImagePreview] = useState<RichMedia | null>(null);
   const recorded = useMemo(() => object(item.humanAnswers) ?? {}, [item.humanAnswers]);
   const isActiveDecision = isNativeInboxDecision(item, address, form);
   const isNativeForm = form?.version === 2 && item.humanForm !== undefined;
+  const attemptKey = formAttemptKey(address, item);
+  const attempt = isNativeForm ? readFormAttempt(attemptKey) : null;
   const writerReady = answerWriteAvailable === true;
   const completed =
     Boolean(accepted?.complete) ||
@@ -595,7 +650,23 @@ export function OpenRigRichInboxMessage({
     }
   };
   const submit = async () => {
-    if (!form || !isActiveDecision || !writerReady || submitting || completed || accepted) return;
+    if (
+      !form ||
+      !isNativeForm ||
+      !isActiveDecision ||
+      !writerReady ||
+      submittingRef.current ||
+      submitting ||
+      completed ||
+      accepted
+    )
+      return;
+    // Read synchronously again: an earlier in-flight click or another window
+    // may have reserved this qitem since the last render.
+    if (readFormAttempt(attemptKey) !== null) {
+      refreshAttempt((version) => version + 1);
+      return;
+    }
     const error = validateRichAnswers(form, effectiveAnswers);
     if (error) {
       setFailure(error);
@@ -606,8 +677,6 @@ export function OpenRigRichInboxMessage({
       setFailure("This desktop version cannot submit answers. You can copy them below.");
       return;
     }
-    setSubmitting(true);
-    setFailure("");
     const input: DesktopOpenRigHumanResponseInput = {
       version: 2,
       destination: "human@kernel",
@@ -616,17 +685,41 @@ export function OpenRigRichInboxMessage({
         .filter((q) => !Object.hasOwn(recorded, q.id))
         .map((q) => ({ questionId: q.id, value: effectiveAnswers[q.id]! })),
     };
+    if (input.answers.length === 0) return;
+    // A failed local durable write is a definite NO-POST. Do not rely on an
+    // in-memory React flag to survive an Electron or renderer restart.
+    if (
+      !persistFormAttempt(attemptKey, JSON.stringify(effectiveAnswers), address, item, form, input)
+    ) {
+      refreshAttempt((version) => version + 1);
+      setFailure(
+        "Could not preserve a durable submission lock. No request was sent; check local storage.",
+      );
+      return;
+    }
+    submittingRef.current = true;
+    setSubmitting(true);
+    refreshAttempt((version) => version + 1);
+    setFailure("");
     try {
       const result = await action(input);
-      if (!result.acceptedIntoQueue || result.qitemId !== item.id) {
-        setFailure("OpenRig did not confirm this response on the original queue.");
+      if (
+        result.version !== 2 ||
+        result.acceptedIntoQueue !== true ||
+        result.qitemId !== item.id ||
+        result.actor !== "human@kernel" ||
+        result.deliveredToAgent !== false
+      ) {
+        setFailure("OpenRig did not confirm this exact durable response. Its outcome is unknown.");
         return;
       }
+      // Only the exact acknowledged call may release the UNKNOWN barrier.
       setAccepted(result);
       try {
         window.localStorage.removeItem(draftKey(address, item));
+        window.localStorage.removeItem(attemptKey);
       } catch {
-        /* no-op */
+        // Keep the durable lock if its removal cannot be confirmed.
       }
       onAnnouncement(
         "OpenRig committed your answers to its durable queue. Agent delivery is not implied.",
@@ -634,13 +727,12 @@ export function OpenRigRichInboxMessage({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setFailure(
-        /\b503\b/u.test(message) || /not configured/u.test(message)
-          ? "OpenRig has not enabled its secure answer writer. Your selections remain saved locally; nothing was submitted."
-          : /\b409\b/u.test(message)
-            ? "This decision already has a conflicting recorded answer. Refresh the inbox; nothing new was submitted."
-            : `Could not confirm durable acceptance: ${message}. Your selections remain saved. Do not assume the answer was sent.`,
+        /\b409\b/u.test(message)
+          ? "OpenRig reported a conflict with recorded answers. Verify the original queue item; do not resend."
+          : `Could not confirm durable acceptance: ${message}. The request may already have been recorded; do not resend.`,
       );
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -881,6 +973,23 @@ export function OpenRigRichInboxMessage({
                   {failure}
                 </p>
               )}
+              {isNativeForm && attempt !== null && !accepted && !submitting && (
+                <p
+                  role="alert"
+                  className="rounded-md border border-warning/40 bg-warning/10 p-2.5 text-xs text-warning"
+                >
+                  {attempt === "unavailable"
+                    ? "Local submission history cannot be read. Sending is disabled to avoid a possible duplicate."
+                    : "A previous answer submission has no confirmed receipt. It may already be recorded. Sending is locked across restarts; do not retry."}{" "}
+                  Refresh to inspect recorded answers, or copy your draft for the operator to
+                  reconcile against the original queue item. T3 has no authoritative answer-receipt
+                  lookup or automatic unlock.
+                  {attempt !== "unavailable" &&
+                    attempt.fingerprint !==
+                      JSON.stringify([address, item.sourceType, item.id, item.sender, form]) &&
+                    " The form changed since the uncertain submission; the original lock remains."}
+                </p>
+              )}
               {accepted && (
                 <p
                   role="status"
@@ -939,7 +1048,8 @@ export function OpenRigRichInboxMessage({
                     !writerReady ||
                     submitting ||
                     completed ||
-                    Boolean(accepted)
+                    Boolean(accepted) ||
+                    attempt !== null
                   }
                   className="inline-flex items-center gap-2 rounded-lg bg-info px-3.5 py-2 text-xs font-semibold text-info-foreground hover:bg-info/90 disabled:opacity-50"
                   onClick={() => void submit()}
@@ -947,15 +1057,17 @@ export function OpenRigRichInboxMessage({
                   <SendIcon className="size-3.5" />
                   {submitting
                     ? "Sending…"
-                    : completed
-                      ? "Recorded"
-                      : !isNativeForm
-                        ? "Preview only"
-                        : !writerReady
-                          ? "Sending unavailable"
-                          : accepted
-                            ? "Refresh to continue"
-                            : "Send answers"}
+                    : attempt !== null && !accepted
+                      ? "Sending locked"
+                      : completed
+                        ? "Recorded"
+                        : !isNativeForm
+                          ? "Preview only"
+                          : !writerReady
+                            ? "Sending unavailable"
+                            : accepted
+                              ? "Refresh to continue"
+                              : "Send answers"}
                 </button>
                 <button
                   type="button"
@@ -969,8 +1081,9 @@ export function OpenRigRichInboxMessage({
                 </button>
               </div>
               <p className="text-2xs leading-relaxed text-muted-foreground">
-                Choices remain local drafts until OpenRig confirms a durable queue write. A queued
-                response does not prove the agent has received or acted on it.
+                Choices remain local drafts until OpenRig confirms a durable queue write. If an
+                attempt has an unknown result, it cannot be retried from T3 without an authoritative
+                read-only reconciliation. Queue acceptance does not prove agent consumption.
               </p>
             </section>
           )}
