@@ -279,6 +279,38 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
+  it.effect("W2-A fd8/9 is absent by default; only explicit Windows opt-in is accepted", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const config = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const resolved = yield* config.resolvePrimary;
+        assert.isUndefined(resolved.bootstrap.desktopPrivateAuthorityOutputFd);
+        assert.isUndefined(resolved.bootstrap.desktopPrivateAuthorityInputFd);
+        const opted = DesktopBackendConfiguration.withInactivePrivateAuthorityFds(resolved);
+        assert.equal(opted?.bootstrap.desktopPrivateAuthorityOutputFd, 8);
+        assert.equal(opted?.bootstrap.desktopPrivateAuthorityInputFd, 9);
+        assert.isNull(
+          DesktopBackendConfiguration.withInactivePrivateAuthorityFds({
+            ...resolved,
+            runningDistro: "Ubuntu",
+          }),
+        );
+        assert.isNull(
+          DesktopBackendConfiguration.withInactivePrivateAuthorityFds({
+            ...resolved,
+            bootstrap: { ...resolved.bootstrap, desktopBrowserFd: 8 },
+          }),
+        );
+        assert.isNull(
+          DesktopBackendConfiguration.withInactivePrivateAuthorityFds({
+            ...resolved,
+            bootstrap: { ...resolved.bootstrap, desktopPrivateAuthorityOutputFd: 8 },
+          }),
+        );
+      }),
+    ),
+  );
+
   it.effect("resolvePrimary starts from server.asar without materializing the WSL tree", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

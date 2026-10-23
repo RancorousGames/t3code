@@ -1,4 +1,6 @@
-// @vitest-environment jsdom
+// @vitest-environment node
+// @ts-expect-error jsdom test runtime is installed without its type declarations.
+import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -9,7 +11,16 @@ import {
 } from "./chatGPTActivity";
 
 const readActivity = () => window.eval(CHATGPT_ACTIVITY_EXPRESSION);
+let dom: JSDOM;
 beforeEach(() => {
+  dom = new JSDOM("", { url: "https://chatgpt.com/c/test", runScripts: "outside-only" });
+  vi.stubGlobal("window", dom.window);
+  vi.stubGlobal("document", dom.window.document);
+  vi.stubGlobal("location", dom.window.location);
+  vi.stubGlobal("Element", dom.window.Element);
+  vi.stubGlobal("Node", dom.window.Node);
+  vi.stubGlobal("NodeFilter", dom.window.NodeFilter);
+  vi.stubGlobal("getComputedStyle", dom.window.getComputedStyle.bind(dom.window));
   vi.stubGlobal("location", { hostname: "chatgpt.com" });
   vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
 });
@@ -17,6 +28,7 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  dom.window.close();
 });
 
 describe("ChatGPT activity recency", () => {
@@ -96,7 +108,7 @@ describe("ChatGPT composer activity", () => {
     document.body.innerHTML =
       '<div id="prompt-textarea"></div><button aria-label="Stop recording"></button>';
     expect(readActivity()).toBe("idle");
-    vi.stubGlobal("location", { hostname: "example.com" });
+    dom.reconfigure({ url: "https://example.com/" });
     expect(readActivity()).toBe("invalid: this page is not on ChatGPT");
   });
 

@@ -46,6 +46,7 @@ import {
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   DesktopTelemetryControlMessage,
+  inactivePrivateAuthorityFdPair,
   type DesktopTelemetryControlMessage as DesktopTelemetryControlMessageValue,
 } from "@t3tools/contracts";
 import { waitForHttpReady as waitForHttpReadyShared } from "@t3tools/shared/httpReadiness";
@@ -54,6 +55,13 @@ import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+import type {
+  InactiveWindowsBackendProcessWitnessSeam,
+  InactiveDualWindowsProcessWitness,
+  RetainedWindowsBackendProcessWitness,
+  TrustedWindowsBackendLaunchProvenance,
+  WindowsBackendProcessWitnessSnapshot,
+} from "../electron/DesktopBackendProcessWitness.ts";
 
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
@@ -225,6 +233,12 @@ interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly desktopTelemetryStream: Stream.Stream<Uint8Array>;
   /** Events for the desktop's browser tabs, written to `desktopBrowserFd`. */
   readonly desktopBrowserStream?: Stream.Stream<Uint8Array>;
+  /** W2-A inactive only. Never installed by production; server reads fd9. */
+  readonly inactiveMainToServerStream?: Stream.Stream<Uint8Array>;
+  /** W2-A inactive synthetic server->MAIN fd8 lines, NOT provider authority. */
+  readonly onInactiveServerLine?: (line: string) => Effect.Effect<void>;
+  /** W2-A terminal callback for EOF/read/decode failure. No positive host. */
+  readonly onInactiveServerChannelClosed?: () => Effect.Effect<void>;
   /** Each line the backend writes to `desktopBrowserControlFd`. */
   readonly onDesktopBrowserCommand?: (line: string) => Effect.Effect<void>;
   readonly onDesktopTelemetryControl?: (
@@ -273,6 +287,8 @@ export interface DesktopBackendInstance {
   readonly stop: (options?: { readonly timeout?: Duration.Duration }) => Effect.Effect<void>;
   readonly currentConfig: Effect.Effect<Option.Option<DesktopBackendStartConfig>>;
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
+  /** Diagnostic-only Win32 witness; no enrolled lease, generation or authority. */
+  readonly inactiveWindowsWitnessSnapshot?: Effect.Effect<WindowsBackendProcessWitnessSnapshot | null>;
   // Polls desiredRunning + the instance's own ready flag until the
   // backend reports ready, or the timeout elapses. Returns true on
   // ready, false on timeout. Used by the WSL backend swap to drive its
@@ -304,6 +320,17 @@ export interface BackendInstanceSpec {
   // retries. Returns true when the callback changed configuration and the
   // manager should resolve once more; false stops the failed instance.
   readonly onPreflightFailed?: (failure: PreflightFailure) => Effect.Effect<boolean>;
+  /** Optional inactive source-only seam; no production MAIN/pool spec injects it. */
+  readonly inactiveWindowsProcessWitness?: InactiveWindowsBackendProcessWitnessSeam;
+  /** Explicit inactive private fd8/fd9 opt-in. Production never supplies this. */
+  readonly inactivePrivateAuthority?: {
+    readonly prepareConfig: (
+      original: DesktopBackendStartConfig,
+    ) => DesktopBackendStartConfig | null;
+    readonly mainToServer: Stream.Stream<Uint8Array>;
+    readonly onServerLine: (line: string) => Effect.Effect<void>;
+    readonly onRevoked?: () => Effect.Effect<void>;
+  };
 }
 
 interface ActiveBackendRun {
@@ -313,6 +340,7 @@ interface ActiveBackendRun {
   readonly pid: Option.Option<number>;
   readonly exitObserved: boolean;
   readonly stopRequested: boolean;
+  readonly inactiveWindowsWitness?: RetainedWindowsBackendProcessWitness;
 }
 
 interface BackendManagerState {
@@ -442,10 +470,460 @@ const decodeDesktopTelemetryControlLine = Schema.decodeUnknownEffect(
   Schema.fromJsonString(DesktopTelemetryControlMessage),
 );
 
+/**
+ * W2-A *negative-only* MAIN-side one-use server challenge/ACK verification.
+ * This is NOT an enrolled lease or OpenRig host witness. MAIN will need to
+ * bind an independently held W1 child HANDLE and inherited FD channel before
+ * ever using a positive bridge; no production caller instantiates this gate.
+ */
+export function makeInactiveMainChallengeGate(input: {
+  readonly mainRunId: string;
+  readonly serverGenerationId: string;
+  readonly serverChannelIncarnationId: string;
+  readonly challengeId: string;
+  readonly nonce: string;
+  readonly begunAtMs: number;
+  readonly now: () => number;
+}) {
+  if (
+    ![
+      input.mainRunId,
+      input.serverGenerationId,
+      input.serverChannelIncarnationId,
+      input.challengeId,
+    ].every((value) => /^[A-Za-z0-9_:-]{1,128}$/.test(value)) ||
+    !/^[A-Za-z0-9_-]{32,128}$/.test(input.nonce) ||
+    !Number.isSafeInteger(input.begunAtMs)
+  )
+    throw new Error("Invalid W2-A challenge correlation");
+  let state: "pending" | "acknowledged" | "revoked" = "pending";
+  const challenge = {
+    type: "challenge" as const,
+    version: 1 as const,
+    mainRunId: input.mainRunId,
+    serverGenerationId: input.serverGenerationId,
+    serverChannelIncarnationId: input.serverChannelIncarnationId,
+    challengeId: input.challengeId,
+    nonce: input.nonce,
+  };
+  const expected = {
+    ...challenge,
+    type: "challenge_ack" as const,
+  };
+  const outbound = JSON.stringify(challenge) + "\\n";
+  if (Buffer.byteLength(outbound, "utf8") > 4096) throw new Error("Oversized W2-A challenge");
+  return {
+    challengeLine: outbound,
+    get acknowledged() {
+      return state === "acknowledged";
+    },
+    get revoked() {
+      return state === "revoked";
+    },
+    close() {
+      state = "revoked";
+    },
+    acceptAckLine(line: string): boolean {
+      if (state !== "pending") {
+        state = "revoked";
+        return false;
+      }
+      if (
+        input.now() < input.begunAtMs ||
+        input.now() - input.begunAtMs >= 5000 ||
+        Buffer.byteLength(line, "utf8") > 4096 ||
+        line.includes("\\r") ||
+        line.includes("\\n")
+      ) {
+        state = "revoked";
+        return false;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        state = "revoked";
+        return false;
+      }
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed) ||
+        JSON.stringify(parsed) !== line
+      ) {
+        state = "revoked";
+        return false;
+      }
+      const obj = parsed as Record<string, unknown>;
+      const valid =
+        Object.keys(obj).length === Object.keys(expected).length &&
+        Object.entries(expected).every(([key, value]) => obj[key] === value);
+      state = valid ? "acknowledged" : "revoked";
+      return valid;
+    },
+  };
+}
+
+/**
+ * INACTIVE W2-B MAIN-only contract: the future owner must inject two actually
+ * owned private-pipe capabilities. An opaque pipeIdentity is a locally held
+ * capability token, NOT a JSON field, Win32 HANDLE proof or authentication.
+ * Production DesktopBackendPool never injects this producer.
+ */
+export interface InactiveMainOwnedPrivateLeg {
+  readonly readOwnedCurrent: () => {
+    readonly pipeIdentity: symbol;
+    readonly processId: number;
+    readonly channelIncarnationId: string;
+  } | null;
+  /** Read exclusively from the previously owned child private pipe, once. */
+  readonly consumeOneUseAckBytes: () => Uint8Array | null;
+}
+export interface InactiveMainDualLegEvidence {
+  /** Deliberately unassignable to any positive OpenRig/Stage B issuer. */
+  readonly notEnrolled: true;
+  readonly mainRunId: string;
+  readonly serverInstanceId: string;
+  readonly serverGenerationId: string;
+  readonly leaseId: string;
+  readonly serverChannelIncarnationId: string;
+  readonly hostChannelIncarnationId: string;
+  readonly serverHandshakeChallengeId: string;
+  readonly hostHandshakeChallengeId: string;
+  readonly backend: WindowsBackendProcessWitnessSnapshot;
+  readonly host: WindowsBackendProcessWitnessSnapshot;
+  readonly leaseBirthEpochMs: number;
+  readonly earlierRetirementCutoffEpochMs: number | null;
+  readonly leaseExpiresAtEpochMs: number;
+  /** MAIN monotonic clock since BOTH independent one-use ACKs and handle checks. */
+  readonly leaseElapsedMonotonicMs: number;
+}
+
+const INACTIVE_DUAL_LEG_MAX_MS = 300_000;
+const INACTIVE_CHALLENGE_ID = /^[A-Za-z0-9_:-]{1,128}$/;
+const INACTIVE_NONCE = /^[A-Za-z0-9_-]{32,128}$/;
+/** Exact compact UTF-8 and one LF; rejects duplicate/extra/aliased JSON keys. */
+function decodeInactiveOwnedAck(
+  raw: Uint8Array | null,
+  expected: Readonly<Record<string, string | number>>,
+  cap: number,
+): boolean {
+  if (
+    !(raw instanceof Uint8Array) ||
+    raw.byteLength < 3 ||
+    raw.byteLength > cap + 1 ||
+    raw[raw.length - 1] !== 10
+  )
+    return false;
+  const payload = raw.subarray(0, -1);
+  if (payload.includes(0) || payload.includes(10) || payload.includes(13)) return false;
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(payload);
+    const parsed: unknown = JSON.parse(decoded);
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      JSON.stringify(parsed) !== decoded
+    )
+      return false;
+    const received = parsed as Record<string, unknown>;
+    return (
+      Object.keys(received).length === Object.keys(expected).length &&
+      Object.entries(expected).every(([key, value]) => received[key] === value)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Unwired, fail-closed, one-incarnation issuer *fixture*. Neither returned
+ * evidence nor booleans/nonce prove physical pipe/PROCESS_HANDLE ownership.
+ * A separately owned future MAIN runner must wire real physical transport
+ * and attest all OS facts BEFORE this ever becomes an enrolled source.
+ */
+export function createInactiveMainDualLegIssuer(input: {
+  readonly processes: InactiveDualWindowsProcessWitness;
+  readonly serverLeg: InactiveMainOwnedPrivateLeg;
+  readonly hostLeg: InactiveMainOwnedPrivateLeg;
+  readonly mainRunId: string;
+  readonly serverInstanceId: string;
+  readonly serverGenerationId: string;
+  readonly leaseId: string;
+  readonly serverChannelIncarnationId: string;
+  readonly hostChannelIncarnationId: string;
+  readonly serverChallengeId: string;
+  readonly serverNonce: string;
+  readonly hostChallengeId: string;
+  readonly hostNonce: string;
+  /** MAIN pinned immutable cutoff, known BEFORE dual-handshake birth. */
+  readonly earlierRetirementCutoffEpochMs: number | null;
+  /** MAIN-owned clock; no substitute Date.now-origin monotonic projection. */
+  readonly clock: {
+    readonly epochMs: () => number;
+    readonly monotonicMs: () => number;
+  };
+}) {
+  // Snapshot MAIN-owned immutable intent at construction. TypeScript readonly
+  // alone does not prevent callers from mutating the original object later.
+  input = Object.freeze({ ...input });
+  let revoked = false;
+  let attempted = false;
+  let birthEpochMs: number | null = null;
+  let birthMonotonicMs: number | null = null;
+  let lastEpochMs: number | null = null;
+  let lastMonotonicMs: number | null = null;
+  let expiresAtEpochMs: number | null = null;
+  let pinnedServer: ReturnType<InactiveMainOwnedPrivateLeg["readOwnedCurrent"]> = null;
+  let pinnedHost: ReturnType<InactiveMainOwnedPrivateLeg["readOwnedCurrent"]> = null;
+  let pinnedProcesses: ReturnType<InactiveDualWindowsProcessWitness["readCurrent"]> = null;
+  const invalidate = (reason: string): void => {
+    if (revoked) return;
+    revoked = true;
+    input.processes.revoke(reason);
+  };
+  const ids = [
+    input.mainRunId,
+    input.serverInstanceId,
+    input.serverGenerationId,
+    input.leaseId,
+    input.serverChannelIncarnationId,
+    input.hostChannelIncarnationId,
+    input.serverChallengeId,
+    input.hostChallengeId,
+  ];
+  const configured =
+    ids.every((id) => typeof id === "string" && INACTIVE_CHALLENGE_ID.test(id)) &&
+    input.serverChannelIncarnationId !== input.hostChannelIncarnationId &&
+    input.serverChallengeId !== input.hostChallengeId &&
+    INACTIVE_NONCE.test(input.serverNonce) &&
+    INACTIVE_NONCE.test(input.hostNonce) &&
+    (input.earlierRetirementCutoffEpochMs === null ||
+      (Number.isSafeInteger(input.earlierRetirementCutoffEpochMs) &&
+        input.earlierRetirementCutoffEpochMs > 0));
+  if (!configured) invalidate("invalid-dual-leg-intent");
+
+  const readBoth = () => {
+    if (revoked) return null;
+    try {
+      const processes = input.processes.readCurrent();
+      const server = input.serverLeg.readOwnedCurrent();
+      const host = input.hostLeg.readOwnedCurrent();
+      if (
+        !processes ||
+        !server ||
+        !host ||
+        processes.backend.pid === processes.host.pid ||
+        processes.backend.launch.entryPath === processes.host.launch.entryPath ||
+        processes.backend.launch.entrySha256 === processes.host.launch.entrySha256 ||
+        server.processId !== processes.backend.pid ||
+        host.processId !== processes.host.pid ||
+        server.pipeIdentity === host.pipeIdentity ||
+        server.channelIncarnationId !== input.serverChannelIncarnationId ||
+        host.channelIncarnationId !== input.hostChannelIncarnationId ||
+        (pinnedServer !== null &&
+          (server.pipeIdentity !== pinnedServer.pipeIdentity ||
+            server.processId !== pinnedServer.processId ||
+            server.channelIncarnationId !== pinnedServer.channelIncarnationId)) ||
+        (pinnedHost !== null &&
+          (host.pipeIdentity !== pinnedHost.pipeIdentity ||
+            host.processId !== pinnedHost.processId ||
+            host.channelIncarnationId !== pinnedHost.channelIncarnationId)) ||
+        (pinnedProcesses !== null &&
+          (processes.backend.processCreationFiletimeTicks !==
+            pinnedProcesses.backend.processCreationFiletimeTicks ||
+            processes.host.processCreationFiletimeTicks !==
+              pinnedProcesses.host.processCreationFiletimeTicks ||
+            processes.backend.launch.entrySha256 !== pinnedProcesses.backend.launch.entrySha256 ||
+            processes.host.launch.entrySha256 !== pinnedProcesses.host.launch.entrySha256 ||
+            processes.backend.launch.entryPath !== pinnedProcesses.backend.launch.entryPath ||
+            processes.host.launch.entryPath !== pinnedProcesses.host.launch.entryPath ||
+            processes.backend.osExecutablePath !== pinnedProcesses.backend.osExecutablePath ||
+            processes.host.osExecutablePath !== pinnedProcesses.host.osExecutablePath))
+      ) {
+        invalidate("owned-dual-leg-lost-or-drifted");
+        return null;
+      }
+      return { processes, server, host };
+    } catch {
+      invalidate("owned-dual-leg-observation-error");
+      return null;
+    }
+  };
+  const readClock = () => {
+    try {
+      const wall = input.clock.epochMs();
+      const monotonic = input.clock.monotonicMs();
+      if (
+        !Number.isSafeInteger(wall) ||
+        wall <= 0 ||
+        !Number.isSafeInteger(monotonic) ||
+        monotonic < 0 ||
+        (lastEpochMs !== null && wall < lastEpochMs) ||
+        (lastMonotonicMs !== null && monotonic < lastMonotonicMs)
+      ) {
+        invalidate("main-clock-regressed-or-invalid");
+        return null;
+      }
+      lastEpochMs = wall;
+      lastMonotonicMs = monotonic;
+      return { wall, monotonic };
+    } catch {
+      invalidate("main-clock-unavailable");
+      return null;
+    }
+  };
+  const begin = (): boolean => {
+    if (attempted || revoked) {
+      invalidate("reused-dual-leg-handshake");
+      return false;
+    }
+    attempted = true;
+    // First ensure BOTH independently owned handles and pipes are present.
+    const initial = readBoth();
+    if (!initial) return false;
+    const serverExpected = {
+      type: "challenge_ack",
+      version: 1,
+      mainRunId: input.mainRunId,
+      serverGenerationId: input.serverGenerationId,
+      serverChannelIncarnationId: input.serverChannelIncarnationId,
+      challengeId: input.serverChallengeId,
+      nonce: input.serverNonce,
+    };
+    const hostExpected = {
+      type: "host_challenge_ack",
+      version: 1,
+      role: "provider-only",
+      mainRunId: input.mainRunId,
+      serverInstanceId: input.serverInstanceId,
+      serverGenerationId: input.serverGenerationId,
+      serverChannelIncarnationId: input.serverChannelIncarnationId,
+      hostChannelIncarnationId: input.hostChannelIncarnationId,
+      serverHandshakeChallengeId: input.serverChallengeId,
+      challengeId: input.hostChallengeId,
+      nonce: input.hostNonce,
+    };
+    // Each callback consumes bytes from a separately retained private child
+    // pipe. A fabricated JSON ACK or caller flag must not be used as a proxy.
+    let valid = false;
+    try {
+      const serverAck = input.serverLeg.consumeOneUseAckBytes();
+      const hostAck = input.hostLeg.consumeOneUseAckBytes();
+      valid =
+        decodeInactiveOwnedAck(serverAck, serverExpected, 4096) &&
+        decodeInactiveOwnedAck(hostAck, hostExpected, 2048);
+    } catch {
+      valid = false;
+    }
+    if (!valid) {
+      invalidate("missing-or-mismatched-independent-ack");
+      return false;
+    }
+    // Re-observe process and channel ownership AFTER both ACKs, BEFORE birth.
+    const after = readBoth();
+    if (
+      !after ||
+      initial.server.pipeIdentity !== after.server.pipeIdentity ||
+      initial.host.pipeIdentity !== after.host.pipeIdentity ||
+      initial.processes.backend.processCreationFiletimeTicks !==
+        after.processes.backend.processCreationFiletimeTicks ||
+      initial.processes.host.processCreationFiletimeTicks !==
+        after.processes.host.processCreationFiletimeTicks
+    ) {
+      invalidate("dual-leg-changed-during-handshake");
+      return false;
+    }
+    const clock = readClock();
+    if (!clock) return false;
+    const upper = clock.wall + INACTIVE_DUAL_LEG_MAX_MS;
+    if (
+      !Number.isSafeInteger(upper) ||
+      (input.earlierRetirementCutoffEpochMs !== null &&
+        input.earlierRetirementCutoffEpochMs <= clock.wall) ||
+      after.processes.backend.createdAtEpochMs > clock.wall ||
+      after.processes.host.createdAtEpochMs > clock.wall
+    ) {
+      invalidate("invalid-immutable-dual-leg-birth");
+      return false;
+    }
+    birthEpochMs = clock.wall;
+    birthMonotonicMs = clock.monotonic;
+    expiresAtEpochMs = Math.min(upper, input.earlierRetirementCutoffEpochMs ?? upper);
+    pinnedServer = after.server;
+    pinnedHost = after.host;
+    pinnedProcesses = after.processes;
+    return true;
+  };
+  const readInactiveEvidence = (): InactiveMainDualLegEvidence | null => {
+    if (revoked || birthEpochMs === null || birthMonotonicMs === null || expiresAtEpochMs === null)
+      return null;
+    const current = readBoth();
+    const clock = readClock();
+    if (!current || !clock) return null;
+    const elapsed = clock.monotonic - birthMonotonicMs;
+    if (
+      !Number.isSafeInteger(elapsed) ||
+      elapsed < 0 ||
+      elapsed >= expiresAtEpochMs - birthEpochMs ||
+      clock.wall >= expiresAtEpochMs
+    ) {
+      invalidate("dual-leg-lease-expired-or-regressed");
+      return null;
+    }
+    return Object.freeze({
+      notEnrolled: true as const,
+      mainRunId: input.mainRunId,
+      serverInstanceId: input.serverInstanceId,
+      serverGenerationId: input.serverGenerationId,
+      leaseId: input.leaseId,
+      serverChannelIncarnationId: input.serverChannelIncarnationId,
+      hostChannelIncarnationId: input.hostChannelIncarnationId,
+      serverHandshakeChallengeId: input.serverChallengeId,
+      hostHandshakeChallengeId: input.hostChallengeId,
+      backend: current.processes.backend,
+      host: current.processes.host,
+      leaseBirthEpochMs: birthEpochMs,
+      earlierRetirementCutoffEpochMs: input.earlierRetirementCutoffEpochMs,
+      leaseExpiresAtEpochMs: expiresAtEpochMs,
+      leaseElapsedMonotonicMs: elapsed,
+    });
+  };
+  return Object.freeze({
+    begin,
+    readInactiveEvidence,
+    revoke: invalidate,
+    get revoked() {
+      return revoked;
+    },
+  });
+}
+
 export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   options: RunBackendProcessOptions,
 ): Effect.fn.Return<BackendProcessExit, BackendProcessError, BackendProcessRunRequirements> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const claimedPrivateFds =
+    options.bootstrap.desktopPrivateAuthorityOutputFd !== undefined ||
+    options.bootstrap.desktopPrivateAuthorityInputFd !== undefined;
+  const privatePair = inactivePrivateAuthorityFdPair(options.bootstrap);
+  if (
+    claimedPrivateFds &&
+    (options.bootstrapDelivery !== "fd3" ||
+      options.runningDistro !== undefined ||
+      privatePair === null ||
+      options.inactiveMainToServerStream === undefined ||
+      options.onInactiveServerLine === undefined)
+  ) {
+    return yield* new BackendProcessBootstrapEncodeError({
+      executablePath: options.executablePath,
+      entryPath: options.entryPath,
+      cwd: options.cwd,
+      httpBaseUrl: options.httpBaseUrl,
+      cause: "Invalid W2-A private fd8/9 opt-in; child was not spawned.",
+    });
+  }
   const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
     Effect.mapError(
       (cause) =>
@@ -488,6 +966,12 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     }
     if (options.bootstrap.desktopBrowserControlFd !== undefined) {
       additionalFds[`fd${options.bootstrap.desktopBrowserControlFd}`] = { type: "output" };
+    }
+    // privatePair is validated before any child is spawned.
+    if (privatePair && options.inactiveMainToServerStream && options.onInactiveServerLine) {
+      // W2-A: injected synthetic pipe ONLY; no production source/host binding.
+      additionalFds.fd8 = { type: "output" };
+      additionalFds.fd9 = { type: "input", stream: options.inactiveMainToServerStream };
     }
   }
   const command = ChildProcess.make(options.executablePath, options.args, {
@@ -576,6 +1060,35 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
           cause: Cause.pretty(cause),
         }),
       ),
+      Effect.forkScoped,
+    );
+  }
+  if (privatePair && options.inactiveMainToServerStream && options.onInactiveServerLine) {
+    const onLine = options.onInactiveServerLine;
+    let partial = Buffer.alloc(0);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    // Byte-guard BEFORE UTF8/JSON; no unbounded Stream.splitLines buffering.
+    // LF only; CRLF intentionally invalid. This is control-only, NOT an
+    // OpenRig compact provider response or source/material observation cap.
+    yield* handle.getOutputFd(privatePair.outputFd).pipe(
+      Stream.runForEach((chunk) =>
+        Effect.gen(function* () {
+          if (chunk.byteLength > 4096 || partial.byteLength + chunk.byteLength > 4096)
+            return yield* Effect.die("W2-A FD8 input exceeds bounded cap");
+          partial = Buffer.concat([partial, Buffer.from(chunk)]);
+          let end: number;
+          while ((end = partial.indexOf(10)) !== -1) {
+            const raw = partial.subarray(0, end);
+            partial = partial.subarray(end + 1);
+            if (raw.byteLength === 0 || raw.includes(13))
+              return yield* Effect.die("W2-A FD8 empty/CR frame");
+            const line = decoder.decode(raw);
+            yield* onLine(line);
+          }
+        }),
+      ),
+      Effect.ignoreCause, // a broken synthetic channel never authorizes.
+      Effect.ensuring(options.onInactiveServerChannelClosed?.() ?? Effect.void),
       Effect.forkScoped,
     );
   }
@@ -700,6 +1213,49 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
   const updateActiveRun = (runId: number, f: (run: ActiveBackendRun) => ActiveBackendRun) =>
     Ref.update(state, withActiveRun(runId, f));
+
+  // The W1 seam is never installed by the production DesktopBackendPool.
+  // A future provider-host lease needs an independently rechecked MAIN run,
+  // live channel/host incarnations and source evidence; this value is NOT one.
+  const inactiveWindowsWitnessSnapshot = Ref.get(state).pipe(
+    Effect.map((current): WindowsBackendProcessWitnessSnapshot | null => {
+      const active = Option.getOrUndefined(current.active);
+      if (
+        !current.desiredRunning ||
+        !current.ready ||
+        active === undefined ||
+        active.stopRequested ||
+        active.exitObserved
+      )
+        return null;
+      return active.inactiveWindowsWitness?.readCurrent() ?? null;
+    }),
+  );
+
+  const revokeInactiveWitness = (
+    witness: RetainedWindowsBackendProcessWitness | undefined,
+    reason: string,
+  ): Effect.Effect<void> =>
+    Effect.sync(() => {
+      if (witness) {
+        try {
+          witness.revoke(reason);
+        } catch {
+          /* The witness is irrevocably inactive even on CloseHandle error. */
+        }
+      }
+    });
+
+  const revokeActiveWitness = (runId: number, reason: string): Effect.Effect<void> =>
+    Ref.get(state).pipe(
+      Effect.flatMap((current) => {
+        const active = Option.getOrUndefined(current.active);
+        return revokeInactiveWitness(
+          active?.id === runId ? active.inactiveWindowsWitness : undefined,
+          reason,
+        );
+      }),
+    );
 
   const snapshot = Ref.get(state).pipe(
     Effect.map((current): DesktopBackendSnapshot => ({
@@ -848,6 +1404,62 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           return;
         }
 
+        // INACTIVE: no production caller supplies this opt-in hook.
+        // Trusted MAIN entry path/hash/argv are captured before any spawn.
+        let preparedWindowsLaunch: TrustedWindowsBackendLaunchProvenance | undefined;
+        const windowsSeam = spec.inactiveWindowsProcessWitness;
+        if (windowsSeam !== undefined) {
+          if (
+            spec.id !== PRIMARY_INSTANCE_ID ||
+            config.value.bootstrapDelivery !== "fd3" ||
+            config.value.runningDistro !== undefined
+          ) {
+            yield* logInstanceWarning("inactive Windows witness only supports local primary");
+            yield* Ref.update(state, (latest) => ({
+              ...latest,
+              desiredRunning: false,
+              ready: false,
+            }));
+            return;
+          }
+          const prepared = yield* Effect.exit(
+            Effect.promise(() => windowsSeam.prepareLaunch(config.value)),
+          );
+          if (Exit.isFailure(prepared)) {
+            yield* logInstanceWarning("inactive Windows witness launch provenance unavailable");
+            yield* Ref.update(state, (latest) => ({
+              ...latest,
+              desiredRunning: false,
+              ready: false,
+            }));
+            return;
+          }
+          preparedWindowsLaunch = prepared.value;
+        }
+        // W2-A optional, source-only. A private fd must be explicitly supplied
+        // *and* W1 witness opted in; otherwise there is no positive channel.
+        let runStartConfig = config.value;
+        const inactivePrivate = spec.inactivePrivateAuthority;
+        if (inactivePrivate !== undefined) {
+          const prepared =
+            windowsSeam !== undefined &&
+            spec.id === PRIMARY_INSTANCE_ID &&
+            config.value.runningDistro === undefined &&
+            config.value.bootstrapDelivery === "fd3"
+              ? inactivePrivate.prepareConfig(config.value)
+              : null;
+          if (!prepared || inactivePrivateAuthorityFdPair(prepared.bootstrap) === null) {
+            yield* logInstanceWarning("inactive W2-A private channel preflight refused");
+            yield* Ref.update(state, (latest) => ({
+              ...latest,
+              desiredRunning: false,
+              ready: false,
+            }));
+            return;
+          }
+          runStartConfig = prepared;
+        }
+
         const runScope = yield* Scope.make("sequential");
         const runId = yield* Ref.modify(state, (latest) => [
           latest.nextRunId,
@@ -868,6 +1480,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         const finalizeRun = Effect.fn("desktop.backendInstance.finalizeRun")(function* (
           reason: string,
         ) {
+          yield* revokeActiveWitness(runId, "backend-finalized");
+          yield* inactivePrivate?.onRevoked?.() ?? Effect.void;
           yield* mutex.withPermits(1)(
             Effect.gen(function* () {
               const { isCurrentRun, nextState, pid, exitObserved, stopRequested, wasReady } =
@@ -944,7 +1558,14 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         });
 
         const program = runBackendProcess({
-          ...config.value,
+          ...runStartConfig,
+          ...(inactivePrivate === undefined
+            ? {}
+            : {
+                inactiveMainToServerStream: inactivePrivate.mainToServer,
+                onInactiveServerLine: inactivePrivate.onServerLine,
+                onInactiveServerChannelClosed: inactivePrivate.onRevoked,
+              }),
           desktopTelemetryStream: desktopTelemetryPublisher.encoded,
           // Only a bootstrap that names the browser fds (the local primary) gets them.
           desktopBrowserStream: desktopBrowserHost.events,
@@ -956,6 +1577,39 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               ...run,
               pid: Option.some(pid),
             }));
+            if (windowsSeam !== undefined && preparedWindowsLaunch !== undefined) {
+              const launch = preparedWindowsLaunch;
+              const observed = yield* Effect.exit(
+                Effect.promise(() => windowsSeam.observeStarted({ pid, runId, launch })),
+              );
+              if (Exit.isSuccess(observed)) {
+                const witness = observed.value;
+                const accepted = yield* Ref.modify(state, (current) => {
+                  const active = Option.getOrUndefined(current.active);
+                  if (
+                    !current.desiredRunning ||
+                    active?.id !== runId ||
+                    active.stopRequested ||
+                    active.exitObserved
+                  )
+                    return [false, current] as const;
+                  return [
+                    true,
+                    {
+                      ...current,
+                      active: Option.some({ ...active, inactiveWindowsWitness: witness }),
+                    },
+                  ] as const;
+                });
+                if (!accepted) {
+                  yield* revokeInactiveWitness(witness, "run-stopped-before-observation");
+                }
+              } else {
+                yield* logInstanceWarning(
+                  "inactive Windows process witness unavailable; no authority established",
+                );
+              }
+            }
             yield* backendOutputLog.beginSession({
               details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
             });
@@ -964,7 +1618,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             updateActiveRun(runId, (run) => ({
               ...run,
               exitObserved: true,
-            })),
+            })).pipe(Effect.andThen(revokeActiveWitness(runId, "process-exited"))),
           onReady: Effect.fn("desktop.backendInstance.onReady")(function* () {
             const isCurrentRun = yield* Ref.modify(state, (latest) => {
               const activeRun = Option.getOrUndefined(latest.active);
@@ -998,6 +1652,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           }),
           onReadinessFailure: Effect.fn("desktop.backendInstance.onReadinessFailure")(
             function* (error) {
+              yield* revokeActiveWitness(runId, "backend-not-ready");
+              yield* inactivePrivate?.onRevoked?.() ?? Effect.void;
               yield* logInstanceWarning("backend readiness check failed during bootstrap", {
                 error: error.message,
               });
@@ -1115,6 +1771,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       }),
     );
 
+    // Invalidate the retained HANDLE immediately after marking stopRequested,
+    // before waiting for child teardown or possible backend restart.
+    yield* Option.match(active, {
+      onNone: () => Effect.void,
+      onSome: (run) => revokeInactiveWitness(run.inactiveWindowsWitness, "stop-requested"),
+    });
     if (notifyShutdown) {
       yield* (spec.onShutdown?.() ?? Effect.void).pipe(Effect.ignore);
     }
@@ -1205,6 +1867,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     stop,
     currentConfig,
     snapshot,
+    inactiveWindowsWitnessSnapshot,
     waitForReady,
   } satisfies DesktopBackendInstance;
 });

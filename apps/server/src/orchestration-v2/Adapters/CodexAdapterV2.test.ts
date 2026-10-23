@@ -637,6 +637,27 @@ describe("CodexAdapterV2 runtime policy", () => {
 });
 
 describe("CodexAdapterV2 process spawning", () => {
+  it("pins both native collaboration feature gates for every per-thread start/resume/fork path", () => {
+    assert.deepEqual(CodexAdapterV2.CODEX_THREAD_CONFIG, {
+      "tools.update_plan.enabled": true,
+      "features.multi_agent": false,
+      "features.multi_agent_v2": false,
+    });
+    for (const runtimeMode of ["full-access", "approval-required", "auto-accept-edits"] as const) {
+      const params = CodexAdapterV2.codexThreadRuntimeParams({
+        mcpSession: undefined,
+        runtimePolicy: {
+          runtimeMode,
+          interactionMode: "default",
+          cwd: "/workspace",
+        },
+      });
+      assert.equal(params.config["features.multi_agent"], false);
+      assert.equal(params.config["features.multi_agent_v2"], false);
+      assert.equal(params.config["tools.update_plan.enabled"], true);
+    }
+  });
+
   it("injects cwd, model, and MCP authorization into thread-scoped params", () => {
     const threadId = ThreadId.make("thread-codex-mcp");
     const mcpSession = {
@@ -664,6 +685,8 @@ describe("CodexAdapterV2 process spawning", () => {
         model: "gpt-5.4",
         config: {
           "tools.update_plan.enabled": true,
+          "features.multi_agent": false,
+          "features.multi_agent_v2": false,
           mcp_servers: {
             "t3-code": {
               url: "http://127.0.0.1:43123/mcp",
@@ -8272,11 +8295,22 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           {
             type: "emit_inbound",
             label: "thread/fork",
-            frame: { id: 3, error: { code: -32000, message: "fork exploded" } },
+            frame: {
+              id: 3,
+              error: { code: -32000, message: "required child-disable config unsupported" },
+            },
           },
         ],
       });
-      const harness = yield* makeCodexReplayHarness(transcript);
+      const invokedMethods: Array<string> = [];
+      const harness = yield* makeCodexReplayHarness(
+        transcript,
+        () => Effect.void,
+        (method) =>
+          Effect.sync(() => {
+            invokedMethods.push(method);
+          }),
+      );
       const now = yield* DateTime.now;
       const firstTurn = codexReplaySourceTurn({
         id: "provider-turn-first",
@@ -8296,7 +8330,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       );
 
       assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
-      assert.include(errorCauseChainText(error), "fork exploded");
+      assert.include(errorCauseChainText(error), "required child-disable config unsupported");
+      assert.include(invokedMethods, "thread/fork");
+      assert.notInclude(invokedMethods, "turn/start", "rejected native policy never starts a turn");
     }).pipe(
       Effect.scoped,
       Effect.provide(

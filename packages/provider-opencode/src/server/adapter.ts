@@ -43,7 +43,6 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -593,7 +592,6 @@ const OPENCODE_ALWAYS_ALLOWED_PERMISSIONS = [
   "grep",
   "lsp",
   "todowrite",
-  "task",
   "skill",
 ] as const;
 
@@ -614,6 +612,19 @@ const OPENCODE_RESTRICTED_PERMISSIONS = [
  * while shell/network/external access remains gated unless policy explicitly
  * allows it.
  */
+// Pin the task deny at both edges of the session ruleset, so a wildcard
+// inside it cannot override this rule under first- OR last-match semantics.
+// This is not proof about an external native server's cross-ruleset order.
+const OPENCODE_TASK_DENY = { permission: "task", pattern: "*", action: "deny" } as const;
+
+function withoutNativeTaskOverrides(rules: PermissionRuleset): PermissionRuleset {
+  return [
+    OPENCODE_TASK_DENY,
+    ...rules.filter((rule) => rule.permission !== "task"),
+    OPENCODE_TASK_DENY,
+  ];
+}
+
 export function openCodePermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
 ): PermissionRuleset {
@@ -632,7 +643,7 @@ export function openCodePermissionRules(
     sandboxType === undefined && runtimePolicy.runtimeMode === "full-access";
 
   if (!requiresApproval && (externallySandboxed || dangerFullAccess || implicitFullAccess)) {
-    return [{ permission: "*", pattern: "*", action: "allow" }];
+    return withoutNativeTaskOverrides([{ permission: "*", pattern: "*", action: "allow" }]);
   }
 
   // Task sessions initially inherit only parent deny rules. Seed explicit
@@ -703,7 +714,7 @@ export function openCodePermissionRules(
     }
   }
 
-  return rules;
+  return withoutNativeTaskOverrides(rules);
 }
 
 function permissionRuleEquals(
@@ -714,6 +725,19 @@ function permissionRuleEquals(
     left.permission === right.permission &&
     left.pattern === right.pattern &&
     left.action === right.action
+  );
+}
+
+function matchesNativePermissionEcho(actual: unknown, expected: PermissionRuleset): boolean {
+  return (
+    Array.isArray(actual) &&
+    actual.length === expected.length &&
+    actual.every(
+      (rule, index) =>
+        typeof rule === "object" &&
+        rule !== null &&
+        permissionRuleEquals(rule as PermissionRuleset[number], expected[index]!),
+    )
   );
 }
 
@@ -735,7 +759,7 @@ export function openCodeChildPermissionRules(
     (childRule) =>
       !inheritedRules.some((inheritedRule) => permissionRuleEquals(childRule, inheritedRule)),
   );
-  return [...parentRules, ...childSpecificRules];
+  return withoutNativeTaskOverrides([...parentRules, ...childSpecificRules]);
 }
 
 /**
@@ -1061,6 +1085,40 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               }),
             ),
           );
+
+        // The V2 SDK's session.update returns Session (HTTP 200), including
+        // the persisted permission array. Require the exact accepted policy
+        // before ANY prompt, slash command or compaction can start. A resolved
+        // transport promise or {error} without a matching echo is not authority.
+        const applyNativeTaskHold = (
+          sessionId: string,
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+        ) =>
+          Effect.gen(function* () {
+            const rules = openCodePermissionRules(runtimePolicy);
+            const response = yield* sdkCall(
+              "session.update",
+              { sessionID: sessionId, permission: rules },
+              (signal) =>
+                client.session.update({ sessionID: sessionId, permission: rules }, { signal }),
+            ).pipe(Effect.timeout("10 seconds"));
+            if (response.data == null) {
+              return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "session.update",
+                detail: "OpenCode did not acknowledge the mandatory task-deny policy.",
+              });
+            }
+            const updated = response.data;
+            if (
+              updated.id !== sessionId ||
+              !matchesNativePermissionEcho(updated.permission, rules)
+            ) {
+              return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "session.update",
+                detail: "OpenCode did not acknowledge the exact mandatory native task-deny policy.",
+              });
+            }
+          });
 
         const abortDescendants = (rootId: string) =>
           Effect.gen(function* () {
@@ -1407,19 +1465,37 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               () => client.session.get({ sessionID: childSessionId }),
             );
             const nativeChildSession = unwrapData("session.get", childSessionResponse);
+            // Child-specific rules must not override the mandatory root deny,
+            // even if the SDK merges inherited permission arrays.
             const childPermission = openCodeChildPermissionRules(
               turn.runtimePolicy,
               nativeChildSession.permission ?? [],
             );
-            yield* sdkCall(
+            const childResponse = yield* sdkCall(
               "session.update",
               { sessionID: childSessionId, permission: childPermission },
-              () =>
-                client.session.update({
-                  sessionID: childSessionId,
-                  permission: childPermission,
-                }),
-            );
+              (signal) =>
+                client.session.update(
+                  { sessionID: childSessionId, permission: childPermission },
+                  { signal },
+                ),
+            ).pipe(Effect.timeout("10 seconds"));
+            if (childResponse.data == null) {
+              return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "session.update",
+                detail: "OpenCode child did not acknowledge mandatory task-deny permissions.",
+              });
+            }
+            const childUpdate = childResponse.data;
+            if (
+              childUpdate.id !== childSessionId ||
+              !matchesNativePermissionEcho(childUpdate.permission, childPermission)
+            ) {
+              return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "session.update",
+                detail: "OpenCode child did not acknowledge mandatory task-deny permissions.",
+              });
+            }
             threads.set(childSessionId, {
               nativeSessionId: childSessionId,
               providerThread: childProviderThread,
@@ -2930,11 +3006,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           };
         });
 
-        // Native commands wait for generation, unlike promptAsync. A user-message
-        // receipt admits the run while the scoped request continues in the background.
+        // An advertised OpenCode slash command is a native command whose
+        // template/agent/subtask metadata can change during expansion. OpenCode
+        // can execute subtask commands outside the ordinary task-tool permission
+        // check. The SDK does not offer atomic classification + execution, so
+        // do not dispatch ANY advertised native command from T3 until a trusted
+        // pre-effect contract exists. This is deliberately NOT an @-text parser
+        // or a hold on normal root text/file prompts.
         const submitPrompt = Effect.fn("OpenCode.submitPrompt")(function* (
-          state: OpenCodeThreadState,
-          turn: ActiveOpenCodeTurn,
+          _state: OpenCodeThreadState,
+          _turn: ActiveOpenCodeTurn,
           payload: Parameters<typeof client.session.promptAsync>[0] & {
             messageID: string;
             sessionID: string;
@@ -2946,81 +3027,53 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             .map((part) => part.text)
             .join("\n")
             .trim();
-          const match = text?.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/);
-          const command = match
-            ? (yield* OpenCodeRuntime.loadOpenCodeCommands(client).pipe(
-                Effect.timeout("10 seconds"),
-                Effect.orElseSucceed(() => []),
-              )).find((entry) => entry.name === match[1])
-            : undefined;
-          if (!command) {
-            return yield* sdkCall("session.promptAsync", payload, (signal) =>
-              client.session.promptAsync(payload, {
-                signal: AbortSignal.any([signal, abortController.signal]),
-              }),
-            ).pipe(Effect.asVoid);
+          const slash = text?.match(/^\/([^\s/]+)(?:\s+[\s\S]*)?$/);
+          if (slash) {
+            // Read the full SDK inventory, not loadOpenCodeCommands: that
+            // presentation helper discards subtask/agent/template fields.
+            // The inventory is a negative-only classification: even a benign
+            // entry is NOT proof it stays benign until native execution.
+            const response = yield* sdkCall("command.list", {}, (signal) =>
+              client.command.list(undefined, { signal }),
+            ).pipe(Effect.timeout("10 seconds"));
+            if (!Array.isArray(response.data)) {
+              return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "command.list",
+                detail: "OpenCode native slash command inventory is unavailable; prompt held.",
+              });
+            }
+            const names = new Set<string>();
+            for (const entry of response.data) {
+              const name = entry?.name;
+              if (
+                typeof name !== "string" ||
+                name.length === 0 ||
+                name.trim() !== name ||
+                names.has(name)
+              ) {
+                return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                  operation: "command.list",
+                  detail: "OpenCode native slash command inventory is ambiguous; prompt held.",
+                });
+              }
+              names.add(name);
+            }
+            if (names.has(slash[1]!)) {
+              return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "session.command",
+                detail:
+                  "OpenCode advertised native slash command dispatch is unsupported while native subtask expansion cannot be ruled out.",
+              });
+            }
           }
-          const receipt = Deferred.makeUnsafe<void>();
-          commandReceipts.set(payload.messageID, receipt);
-          const controllers =
-            commandControllers.get(payload.sessionID) ?? new Set<AbortController>();
-          controllers.add(abortController);
-          commandControllers.set(payload.sessionID, controllers);
-          const generation = turn.admissionGeneration;
-          const commandPayload = {
-            sessionID: payload.sessionID,
-            messageID: payload.messageID,
-            command: command.name,
-            arguments: match?.[2] ?? "",
-            ...(payload.model
-              ? { model: `${payload.model.providerID}/${payload.model.modelID}` }
-              : {}),
-            ...(payload.agent ? { agent: payload.agent } : {}),
-            ...(payload.variant ? { variant: payload.variant } : {}),
-            parts: payload.parts?.filter((part) => part.type === "file") ?? [],
-          };
-          const request = yield* sdkCall("session.command", commandPayload, (signal) =>
-            client.session.command(commandPayload, {
+          // Unadvertised slash text remains plain text; the adapter does not
+          // generate AgentPartInput/SubtaskPartInput or send session.command.
+          return yield* sdkCall("session.promptAsync", payload, (signal) =>
+            client.session.promptAsync(payload, {
               signal: AbortSignal.any([signal, abortController.signal]),
             }),
-          ).pipe(
-            Effect.asVoid,
-            Effect.tapError((cause) =>
-              abortController.signal.aborted ||
-              turn.finalized ||
-              turn.admissionGeneration !== generation
-                ? Effect.void
-                : finalizeTurn(state, turn, "failed", {
-                    failure: makeProviderFailure({ cause, class: "provider_error" }),
-                  }),
-            ),
-            Effect.ensuring(
-              Effect.sync(() => {
-                commandReceipts.delete(payload.messageID);
-                controllers.delete(abortController);
-                if (controllers.size === 0) commandControllers.delete(payload.sessionID);
-              }),
-            ),
-            Effect.forkIn(scope),
-          );
-          yield* Effect.raceFirst(Fiber.join(request), Deferred.await(receipt)).pipe(
-            Effect.timeout("10 seconds"),
-            Effect.catchTags({
-              TimeoutError: (cause) => {
-                const error = new OpenCodeRuntime.OpenCodeRuntimeError({
-                  operation: "session.command",
-                  detail: "OpenCode command admission did not complete within 10 seconds.",
-                  cause,
-                });
-                abortController.abort();
-                return finalizeTurn(state, turn, "failed", {
-                  failure: makeProviderFailure({ cause: error, class: "provider_error" }),
-                }).pipe(Effect.andThen(Effect.fail(error)));
-              },
-            }),
-          );
+          ).pipe(Effect.asVoid);
         });
-
         const runtimeSession: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: options.instanceId,
           driver: OPENCODE_PROVIDER,
@@ -3141,6 +3194,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   `OpenCode model '${turnInput.modelSelection.model}' must use provider/model format`,
                 );
               }
+              // Reassert on EVERY turn, including resumed sessions and those
+              // returned from a fork/rollback. Failure must precede all
+              // turn registration, provider status changes, and native prompt.
+              yield* applyNativeTaskHold(sessionId, turnInput.runtimePolicy);
               const isCompaction =
                 turnInput.message.text.trim() === "/compact" &&
                 turnInput.message.attachments.length === 0;
@@ -3360,6 +3417,19 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 ...(text.length === 0 ? [] : [{ type: "text" as const, text }]),
                 ...files,
               ];
+              yield* applyNativeTaskHold(sessionId, turn.runtimePolicy);
+              // The awaited update allows interruption/settlement to race with
+              // this steer. Never revive a turn while preparing a prompt.
+              if (
+                state.activeTurn !== turn ||
+                turn.interrupted ||
+                turn.finalized ||
+                nativeStreamFailure !== null
+              ) {
+                return yield* protocolError(
+                  "OpenCode turn became inactive before prompt admission",
+                );
+              }
               turn.admissionGeneration = state.nextAdmissionGeneration++;
               turn.admissionMessageId = yield* makeOpenCodeMessageId(messageIdClock);
               turn.admissionPending = true;
@@ -3602,12 +3672,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   return yield* protocolError(
                     "OpenCode did not preserve the requested rewind boundary.",
                   );
-                yield* sdkCall("session.update", { sessionID: fork.id }, () =>
-                  client.session.update({
-                    sessionID: fork.id,
-                    permission: openCodePermissionRules(input.runtimePolicy),
-                  }),
-                );
+                yield* applyNativeTaskHold(fork.id, input.runtimePolicy);
                 retainedThread = {
                   ...rollbackInput.providerThread,
                   nativeThreadRef: providerRef(fork.id),
@@ -3669,6 +3734,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   }),
               );
               const nativeSession = unwrapData("session.fork", response);
+              // A native fork inherits its source's old rules until updated;
+              // do not register or return it as usable before an ACK.
+              yield* applyNativeTaskHold(nativeSession.id, input.runtimePolicy);
               const forkedAt = yield* DateTime.now;
               const providerThread = makeProviderThread({
                 idAllocator,

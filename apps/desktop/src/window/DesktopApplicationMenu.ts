@@ -12,6 +12,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
+import { reviewPendingNativeSpawn } from "../app/DesktopOpenRigApprovalHost.ts";
 
 export class DesktopApplicationMenuActionError extends Schema.TaggedError<DesktopApplicationMenuActionError>()(
   "DesktopApplicationMenuActionError",
@@ -141,6 +142,19 @@ export const make = Effect.gen(function* () {
     const settingsClick = () => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));
     };
+    const reviewApprovalsClick = () => {
+      runMenuEffect(
+        "review-native-spawn-approvals",
+        Effect.gen(function* () {
+          const dialog = yield* ElectronDialog.ElectronDialog;
+          yield* Effect.tryPromise(() =>
+            reviewPendingNativeSpawn((options) =>
+              runPromise(dialog.showMessageBox({ ...options, type: "question", noLink: true })),
+            ),
+          );
+        }),
+      );
+    };
     // Chromium already pastes as plain text for this chord, so the accelerator
     // needs nothing from the menu: the composer and the terminal each arm
     // themselves from the same keydown. Routing it through the renderer anyway
@@ -193,6 +207,7 @@ export const make = Effect.gen(function* () {
       {
         label: "File",
         submenu: [
+          { label: "Review native session approvals...", click: reviewApprovalsClick },
           ...(environment.platform === "darwin"
             ? []
             : [

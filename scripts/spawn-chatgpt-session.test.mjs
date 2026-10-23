@@ -31,6 +31,22 @@ NodeTest.test("script validates title and message without connecting", () => {
   NodeAssert.equal(parseArguments(["--help"]), null);
   NodeAssert.throws(() => parseArguments(["--title", "Work A"]), /message/);
   NodeAssert.throws(() => parseArguments(["--message", "Anything"]), /title/);
+  NodeAssert.throws(
+    () => parseArguments(["--title", "Child", "--message", "Run tests", "--require-parent"]),
+    /explicit --parent-session-id/,
+  );
+  NodeAssert.equal(
+    parseArguments([
+      "--title",
+      "Child",
+      "--message",
+      "Run tests",
+      "--require-parent",
+      "--parent-session-id",
+      "980c626b-ac62-4a98-b421-2458b6f19312",
+    ]).requireParent,
+    true,
+  );
 });
 
 NodeTest.test("the OMCP/CLI spawn request carries explicit parent UUID only when supplied", () => {
@@ -108,6 +124,97 @@ NodeTest.test(
       });
     } finally {
       server.close();
+    }
+  },
+);
+
+NodeTest.test(
+  "real spawn CLI IPC payload makes absent source provenance visible to the receiver",
+  async () => {
+    const address = `\\\\.\\pipe\\t3code-spawn-lineage-${process.pid}`;
+    const persisted = [{ id: "parent", title: "Manager" }];
+    const observed = [];
+    const server = NodeNet.createServer((socket) => {
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        if (!buffer.includes("\n")) return;
+        const request = JSON.parse(buffer.slice(0, buffer.indexOf("\n")));
+        observed.push(request);
+        const parent = request.parentSessionId
+          ? persisted.find((entry) => entry.id === request.parentSessionId)
+          : null;
+        const ok = !request.parentSessionId || !!parent;
+        if (ok)
+          persisted.push({
+            id: `created-${persisted.length}`,
+            title: request.title,
+            ...(parent ? { parentSessionId: parent.id } : {}),
+          });
+        socket.end(
+          JSON.stringify({
+            version: 1,
+            requestId: request.requestId,
+            ok,
+            ...(ok
+              ? {
+                  sessionId: persisted.at(-1).id,
+                  parentSessionId: parent?.id ?? null,
+                  messageSent: true,
+                }
+              : { code: "invalid-request", message: "Unknown parent" }),
+          }) + "\n",
+        );
+      });
+    });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(address, resolve);
+    });
+    try {
+      const mkRequest = (title, parentSessionId) =>
+        createChatGPTSpawnRequest(
+          parseArguments([
+            "--title",
+            title,
+            "--message",
+            "Implement",
+            ...(parentSessionId
+              ? ["--require-parent", "--parent-session-id", parentSessionId]
+              : []),
+          ]),
+          `request-${title}`,
+        );
+      // This is the observed OMCP failure mode: a child *intent* but no
+      // caller identity on the spawn request. T3 must not guess from activity.
+      const orphan = await sendAppControlRequest(address, mkRequest("No caller"), 2_000);
+      NodeAssert.equal(orphan.parentSessionId, null);
+      NodeAssert.equal(persisted.at(-1).parentSessionId, undefined);
+      // With explicit provenance the same real socket path persists two levels.
+      const child = await sendAppControlRequest(address, mkRequest("Child", "parent"), 2_000);
+      const grandchild = await sendAppControlRequest(
+        address,
+        mkRequest("Grandchild", child.sessionId),
+        2_000,
+      );
+      NodeAssert.equal(child.parentSessionId, "parent");
+      NodeAssert.equal(grandchild.parentSessionId, child.sessionId);
+      NodeAssert.equal(
+        persisted.find((entry) => entry.id === grandchild.sessionId).parentSessionId,
+        child.sessionId,
+      );
+      NodeAssert.equal(observed[0].parentSessionId, undefined);
+      NodeAssert.equal(observed[1].parentSessionId, "parent");
+      NodeAssert.equal(observed[2].parentSessionId, child.sessionId);
+      const invalid = await sendAppControlRequest(
+        address,
+        mkRequest("Bad parent", "missing"),
+        2_000,
+      );
+      NodeAssert.equal(invalid.ok, false);
+      NodeAssert.equal(persisted.length, 4);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
     }
   },
 );

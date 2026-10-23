@@ -1,6 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { CircleIcon, GlobeIcon } from "lucide-react";
+import { CircleIcon, GlobeIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBrowserSurfaceStore } from "../../browser/browserSurfaceStore";
@@ -21,6 +21,7 @@ import {
 } from "../../chatGPTBrowserSessions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { readThreadPreviewState, useThreadPreviewState } from "../../previewStateStore";
+import { chatGPTRecoveryProblem, type ChatGPTRecoveryProblem } from "./chatGPTConversationRecovery";
 import {
   CHATGPT_ACTIVITY_EXPRESSION,
   CHATGPT_RECENT_ACTIVITY_MS,
@@ -41,6 +42,7 @@ export function useChatGPTBrowserSessionActivity(
   age: ChatGPTActivityAge;
   label: string;
   lastWorkingAt: number;
+  recoveryProblem: ChatGPTRecoveryProblem | null;
 } {
   const threadRef = useMemo(
     () => chatGPTBrowserThreadRef(environmentId, sessionId),
@@ -246,11 +248,29 @@ export function useChatGPTBrowserSessionActivity(
                 : age === "invalid"
                   ? `ChatGPT page unavailable${reason ? `: ${reason}` : ""}`
                   : `ChatGPT status unknown${reason ? `: ${reason}` : ""}`;
-  return { age, label, lastWorkingAt };
+  const recoveryProblem =
+    !unloaded && result.tabId === runtimeTabId
+      ? chatGPTRecoveryProblem(activity === "invalid" ? `invalid: ${reason ?? ""}` : activity)
+      : null;
+  return { age, label, lastWorkingAt, recoveryProblem };
 }
 
 /** Shared status glyph. Its containing button is also the drag handle. */
-export function ChatGPTBrowserSessionActivityIcon({ age }: { readonly age: ChatGPTActivityAge }) {
+export function ChatGPTBrowserSessionActivityIcon({
+  age,
+  recovering = false,
+}: {
+  readonly age: ChatGPTActivityAge;
+  readonly recovering?: boolean;
+}) {
+  if (recovering)
+    return (
+      <LoaderCircleIcon
+        aria-hidden
+        className="size-4 animate-spin motion-reduce:animate-none"
+        style={{ animationDuration: "3s" }}
+      />
+    );
   return age === "unknown" ? (
     <GlobeIcon aria-hidden className="size-4" />
   ) : (

@@ -25,12 +25,15 @@ export function parseArguments(args) {
     messageFile: "",
     parentSessionId: "",
     project: "",
+    requireParent: false,
     dryRun: false,
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--dry-run") {
       options.dryRun = true;
+    } else if (arg === "--require-parent") {
+      options.requireParent = true;
     } else if (
       arg === "--title" ||
       arg === "--message" ||
@@ -60,6 +63,13 @@ export function parseArguments(args) {
     options.message = NodeFS.readFileSync(NodePath.resolve(options.messageFile), "utf8");
   if (!options.message.trim())
     throw new Error("A nonempty --message or --message-file is required.");
+  // The named pipe cannot identify the calling ChatGPT guest. Agents creating
+  // actual child sessions should opt into fail-closed mode rather than silently
+  // opening a root when their tool transport failed to carry provenance.
+  if (options.requireParent && !options.parentSessionId.trim())
+    throw new Error(
+      "--require-parent needs an explicit --parent-session-id (T3 browser UUID). The desktop pipe cannot infer the caller.",
+    );
   return options;
 }
 
@@ -128,7 +138,7 @@ export async function main(args = process.argv.slice(2)) {
   const options = parseArguments(args);
   if (options === null) {
     process.stdout.write(
-      "Usage: node scripts/spawn-chatgpt-session.mjs --title NAME (--message TEXT | --message-file PATH) [--home PATH] [--dry-run]\n",
+      "Usage: node scripts/spawn-chatgpt-session.mjs --title NAME (--message TEXT | --message-file PATH) [--parent-session-id T3_BROWSER_UUID] [--require-parent] [--project NAME] [--home PATH] [--dry-run]\n",
     );
     return;
   }

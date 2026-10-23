@@ -365,6 +365,20 @@ export const resolveServerConfig = (
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
     const desktopBrowserFd = bootstrap?.desktopBrowserFd;
     const desktopBrowserControlFd = bootstrap?.desktopBrowserControlFd;
+    // Only a complete private 8/9 pair is exposed, never partial bootstrap
+    // claims or a credential/permission; nothing starts a channel by default.
+    const privateFdsValid =
+      bootstrap?.desktopPrivateAuthorityOutputFd === 8 &&
+      bootstrap?.desktopPrivateAuthorityInputFd === 9 &&
+      [
+        bootstrap?.desktopTelemetryFd,
+        bootstrap?.desktopTelemetryControlFd,
+        bootstrap?.desktopBrowserFd,
+        bootstrap?.desktopBrowserControlFd,
+      ].every((fd) => fd !== 8 && fd !== 9) &&
+      mode === "desktop";
+    const desktopPrivateAuthorityOutputFd = privateFdsValid ? 8 : undefined;
+    const desktopPrivateAuthorityInputFd = privateFdsValid ? 9 : undefined;
     const resourceMonitorPath = bootstrap?.resourceMonitorPath;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
@@ -474,6 +488,12 @@ export const resolveServerConfig = (
       desktopTelemetryControlFd,
       desktopBrowserFd,
       desktopBrowserControlFd,
+      ...(desktopPrivateAuthorityOutputFd === undefined
+        ? {}
+        : {
+            desktopPrivateAuthorityOutputFd,
+            desktopPrivateAuthorityInputFd,
+          }),
       resourceMonitorPath,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,

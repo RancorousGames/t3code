@@ -2,6 +2,8 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   CHATGPT_LOAD_FAILURE_EXPRESSION,
+  chatGPTRecoveryProblem,
+  RECOVERY_ORANGE_GRACE_MS,
   RECOVERY_GLOBAL_MS,
   RECOVERY_PER_SESSION_MS,
   RECOVERY_SCAN_MS,
@@ -56,6 +58,26 @@ describe("ChatGPT conversation failure detection", () => {
       "<main><div><h2>Could not load this ChatGPT conversation</h2><button>Retry</button></div>" +
       '<button data-testid="stop-button">Stop</button></main>';
     expect(hasChatGPTLoadFailure()).toBe(false);
+  });
+});
+
+describe("recoverable ChatGPT activity", () => {
+  it("queues only the dedicated load failure and both orange status notices", () => {
+    expect(chatGPTRecoveryProblem("invalid: Could not load this ChatGPT conversation")).toBe(
+      "load-failure",
+    );
+    expect(chatGPTRecoveryProblem("interrupted")).toBe("interrupted");
+    expect(chatGPTRecoveryProblem("delivery-timeout")).toBe("delivery-timeout");
+    for (const state of [
+      "working",
+      "idle",
+      "invalid: the ChatGPT composer is unavailable",
+      "invalid: this page is not on ChatGPT",
+      "invalid: unrelated message",
+    ]) {
+      expect(chatGPTRecoveryProblem(state)).toBeNull();
+    }
+    expect(RECOVERY_ORANGE_GRACE_MS).toBe(60_000);
   });
 });
 

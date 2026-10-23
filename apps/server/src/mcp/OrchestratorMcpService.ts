@@ -81,6 +81,7 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { NATIVE_SPAWN_APPROVAL_HOLD_CONSTRAINT } from "../orchestration-v2/NativeSpawnPolicy.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -123,6 +124,14 @@ type TerminalTaskStatus = Extract<
 >;
 
 export interface OrchestratorMcpServiceShape {
+  /** Read-only provider preflight shared by native-create planning and delegation.
+   * A resolved candidate is never a spawn approval or an execution permit.
+   */
+  readonly resolveTargetCandidate: (
+    parent: Pick<OrchestrationV2ThreadProjection, "thread">,
+    target: OrchestratorMcpTarget | undefined,
+    skipProjectEnablementFilter?: boolean,
+  ) => Effect.Effect<ResolvedTarget, OrchestratorMcpFailure>;
   readonly capabilities: (
     scope: McpInvocationScope,
   ) => Effect.Effect<OrchestratorMcpCapabilitiesResult, OrchestratorMcpFailure>;
@@ -198,6 +207,15 @@ const isThreadManagementError = Schema.is(ThreadManagementService.ThreadManageme
 function failure(code: OrchestratorMcpFailure["code"], message: string): OrchestratorMcpFailure {
   return new OrchestratorMcpFailure({ code, message });
 }
+
+// Remove this hold only when create_threads consumes a trusted, durable one-use
+// decision before dispatch. Until then even codex:gpt-6-luna is blocked here.
+const nativeCreateHold: Effect.Effect<void, OrchestratorMcpFailure> = Effect.fail(
+  failure(
+    "capability_denied",
+    "create_threads is disabled until authenticated, single-use human spawn approval is available.",
+  ),
+);
 
 function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   if (!isThreadManagementError(error)) return failure("orchestration_error", errorMessage(error));
@@ -1315,6 +1333,38 @@ const make = Effect.gen(function* () {
       };
     });
 
+  /** Resolve the actual registry/adapters/project candidate without execution. */
+  const resolveTargetCandidate: OrchestratorMcpServiceShape["resolveTargetCandidate"] = (
+    parent,
+    target,
+    skipProjectEnablementFilter = false,
+  ) =>
+    Effect.gen(function* () {
+      const providers = yield* loadProviders;
+      const resolved = yield* resolveTargetRechecking({
+        parent,
+        target,
+        providers,
+        skipProjectEnablementFilter,
+      });
+      // Driver-only selection already filters disabled candidates. Explicit
+      // targets and inherited defaults need the same read-only project check;
+      // an already accepted command can only replay its existing receipt.
+      if (
+        !skipProjectEnablementFilter &&
+        !(yield* threadManagement.isProviderInstanceEnabledForProject({
+          projectId: parent.thread.projectId,
+          instanceId: resolved.modelSelection.instanceId,
+        }))
+      ) {
+        return yield* failure(
+          "invalid_request",
+          `Provider instance ${resolved.modelSelection.instanceId} is disabled for this project.`,
+        );
+      }
+      return resolved;
+    });
+
   const requestKey = (clientRequestId: string | undefined): Effect.Effect<string> =>
     clientRequestId === undefined
       ? crypto.randomUUIDv4.pipe(Effect.orDie)
@@ -1611,6 +1661,7 @@ const make = Effect.gen(function* () {
     });
 
   return OrchestratorMcpService.of({
+    resolveTargetCandidate,
     scheduleTask: (scope, input) =>
       Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
@@ -1933,9 +1984,11 @@ const make = Effect.gen(function* () {
               provider.supportedRuntimeModes.length === 0
                 ? {}
                 : { runtimeModes: [...provider.supportedRuntimeModes] }),
-              canRunChildTask: constraints.length === 0,
-              canRunCrossProviderChildTask: constraints.length === 0,
-              constraints: [...constraints],
+              // Catalog readiness is not spawn authority. While the private
+              // verifier is absent, no provider is executable as a new child.
+              canRunChildTask: false,
+              canRunCrossProviderChildTask: false,
+              constraints: [...constraints, NATIVE_SPAWN_APPROVAL_HOLD_CONSTRAINT],
             };
           }),
           features: {
@@ -1952,6 +2005,8 @@ const make = Effect.gen(function* () {
       }),
     delegateTask: (callerScope, input) =>
       Effect.gen(function* () {
+        // No trusted one-use spawn decision exists yet. Reject before any delegated_task.request dispatch.
+        yield* nativeCreateHold;
         const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
         const parentRun = parent.runs
           .filter(ThreadManagementService.isActiveRun)
@@ -1966,7 +2021,6 @@ const make = Effect.gen(function* () {
             "Delegated tasks require an active run owned by this MCP provider session.",
           );
         }
-        const providers = yield* loadProviders;
         // Computed before resolving the target so a retry of an already
         // accepted delegation can be recognized: dispatching under the same
         // command id only replays the recorded result, so candidate
@@ -1978,12 +2032,11 @@ const make = Effect.gen(function* () {
           operation: "delegate-task",
         });
         const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
-        const target = yield* resolveTargetRechecking({
+        const target = yield* resolveTargetCandidate(
           parent,
-          target: input.target,
-          providers,
-          skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
-        });
+          input.target,
+          isRetryOfAcceptedDelegation,
+        );
         const runtimeMode = yield* resolveRuntimeMode(
           parent.thread.runtimeMode,
           input.runtimeMode,
@@ -2245,6 +2298,7 @@ const make = Effect.gen(function* () {
       }),
     createThreads: (callerScope, input) =>
       Effect.gen(function* () {
+        yield* nativeCreateHold;
         const { scope, parent } = yield* loadThreadCaller(callerScope, "create_threads");
         const parentRun = ThreadManagementService.latestActiveRun(parent);
         if (
@@ -2258,17 +2312,12 @@ const make = Effect.gen(function* () {
           );
         }
         const parentNodeId = parentRun.rootNodeId;
-        const providers = yield* loadProviders;
         const key = yield* requestKey(input.clientRequestId);
         const created = yield* Effect.forEach(
           input.threads,
           (request, index) =>
             Effect.gen(function* () {
-              const target = yield* resolveTargetRechecking({
-                parent,
-                target: request.target,
-                providers,
-              });
+              const target = yield* resolveTargetCandidate(parent, request.target);
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
                 request.runtimeMode,

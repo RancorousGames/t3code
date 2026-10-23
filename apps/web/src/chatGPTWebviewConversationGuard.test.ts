@@ -143,6 +143,22 @@ describe("ChatGPT guarded guest composer submission", () => {
     expect(fixture.button.clicks).toBe(0);
   });
 
+  it("checks empty composer atomically in SAME guest JavaScript turn as edit", async () => {
+    const fixture = fakeGuest(`https://chatgpt.com/c/${expectedConversationId}`);
+    fixture.editor.value = "draft typed after prior async policy await";
+    await expect(chatGPTWebviewAutomation.type(runtimeId, {
+      selector: "#prompt-textarea", text: "incoming policy", clear: true,
+      expectedConversationId, requireEmptyComposer: true,
+    })).rejects.toThrow(/existing draft/);
+    expect(fixture.editor.value).toBe("draft typed after prior async policy await");
+    fixture.editor.value = "";
+    await chatGPTWebviewAutomation.type(runtimeId, {
+      selector: "#prompt-textarea", text: "incoming policy", clear: true,
+      expectedConversationId, requireEmptyComposer: true,
+    });
+    expect(fixture.editor.value).toBe("incoming policy");
+  });
+
   it("refuses editor mutations after navigation and allows matching conversation typing", async () => {
     const fixture = fakeGuest(`https://chatgpt.com/c/${expectedConversationId}`);
     fixture.editor.value = "original draft";

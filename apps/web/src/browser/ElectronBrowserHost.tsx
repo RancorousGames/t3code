@@ -34,6 +34,37 @@ import { useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { rendersServerTabNatively } from "./previewRuntime";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
+export function shouldOpenChatGPTLinkInDefaultBrowser(
+  threadId: string,
+  source: string | null,
+  target: string,
+): boolean {
+  if (!threadId.startsWith("t3-browser-session:") || !source) return false;
+  try {
+    const from = new URL(source);
+    const to = new URL(target);
+    if (
+      !["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(from.hostname.toLowerCase())
+    )
+      return false;
+    if (!["http:", "https:"].includes(from.protocol) || !["http:", "https:"].includes(to.protocol))
+      return false;
+    return ![
+      "chatgpt.com",
+      "www.chatgpt.com",
+      "chat.openai.com",
+      "auth.openai.com",
+      "auth0.openai.com",
+      "accounts.google.com",
+      "login.microsoftonline.com",
+      "appleid.apple.com",
+      "challenges.cloudflare.com",
+    ].includes(to.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export function ElectronBrowserHost() {
   const { resolvedTheme } = useTheme();
   const previewByThreadKey = useActivePreviewSessions();
@@ -123,7 +154,17 @@ export function ElectronBrowserHost() {
     return preview.onOpenLink(({ tabId, url, background }) => {
       const source = sessionByRuntimeTabId.current.get(tabId);
       if (!source) return;
-      // The new tab keeps the source tab's profile so its cookies carry over.
+      if (
+        shouldOpenChatGPTLinkInDefaultBrowser(
+          source.threadRef.threadId,
+          source.snapshot.navStatus._tag === "Idle" ? null : source.snapshot.navStatus.url,
+          url,
+        )
+      ) {
+        void window.desktopBridge?.openExternal(url).catch(() => undefined);
+        return;
+      }
+      // Internal and authentication links retain the source tab's profile/cookies.
       void openUrlInPreview({
         threadRef: source.threadRef,
         url,

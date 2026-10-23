@@ -1,0 +1,29 @@
+{
+  "name": "@t3tools/mori-desktop",
+  "version": "0.5.0",
+  "private": true,
+  "description": "Independent desktop distribution of Monku no Mori",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test project-store.test.cjs public-sheet.test.cjs google-workspace.test.cjs codex-translation.test.cjs",
+    "dist:win": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.6"
+  },
+  "build": {
+    "appId": "games.rancorous.monkunomori",
+    "productName": "Monku no Mori",
+    "directories": { "output": "../../release/mori" },
+    "files": ["main.cjs", "preload.cjs", "project-store.cjs", "public-sheet.cjs", "google-workspace.cjs", "codex-translation.cjs", "package.json"],
+    "extraResources": [
+      { "from": "../mori-web/dist", "to": "renderer" },
+      { "from": "private/google-oauth-client.json", "to": "google-oauth-client.json" }
+    ],
+    "win": { "target": ["nsis"] },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
+    "publish": null
+  }
+}

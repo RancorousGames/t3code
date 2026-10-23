@@ -211,6 +211,106 @@ function makeClaudeTestTurnInput(input: {
 }
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
+  it.each([false, true])(
+    "always removes native child tools BEFORE SDK execution (resume=%s), including full access and no prompt",
+    (resume) => {
+      for (const permissionMode of ["default", "bypassPermissions", "dontAsk", "plan"] as const) {
+        const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          nativeThreadId: "no-native-children",
+          resume,
+          cwd: "/workspace",
+          permissionMode,
+          // Caller-specified additional restrictions must be retained.
+          disallowedTools: ["Bash"],
+          allowedTools: ["Agent", "Task", "Workflow"],
+        });
+        assert.deepEqual(options.disallowedTools, ["Agent", "Task", "Workflow", "Bash"]);
+        assert.isTrue(options.disallowedTools!.includes("Agent"));
+        assert.isTrue(options.disallowedTools!.includes("Task"));
+        assert.isTrue(options.disallowedTools!.includes("Workflow"));
+        assert.isTrue(ClaudeAdapterV2.claudeNativeChildToolDenied("Agent"));
+        assert.isTrue(ClaudeAdapterV2.claudeNativeChildToolDenied("Task"));
+        assert.isTrue(ClaudeAdapterV2.claudeNativeChildToolDenied("Workflow"));
+        assert.include(options.settings, {
+          disableWorkflows: true,
+          enableWorkflows: false,
+          workflowKeywordTriggerEnabled: false,
+        });
+        assert.isFalse(ClaudeAdapterV2.claudeNativeChildToolDenied("Read"));
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "protects high-precedence typed workflow settings from caller overrides (resume=%s)",
+    (resume) => {
+      const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+        modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+        nativeThreadId: "policy-workflow-settings",
+        resume,
+        cwd: "/workspace",
+        sdkSettings: {
+          disableWorkflows: false,
+          enableWorkflows: true,
+          workflowKeywordTriggerEnabled: true,
+          cleanupPeriodDays: 45,
+        },
+        permissionMode: "bypassPermissions",
+        allowedTools: ["Agent", "Task", "Workflow", "Read"],
+      });
+      assert.deepEqual(options.disallowedTools, ["Agent", "Task", "Workflow"]);
+      assert.include(options.settings, {
+        disableWorkflows: true,
+        enableWorkflows: false,
+        workflowKeywordTriggerEnabled: false,
+        cleanupPeriodDays: 45,
+      });
+      assert.equal(options.permissionMode, "bypassPermissions");
+      assert.isTrue(options.allowedTools?.includes("Read"));
+    },
+  );
+
+  it.each([
+    { sdkSettings: "/tmp/injected-user-settings.json" },
+    { settings: { ...DEFAULT_CLAUDE_SETTINGS, launchArgs: "--settings /tmp/unsafe.json" } },
+    { settings: { ...DEFAULT_CLAUDE_SETTINGS, launchArgs: "--enable-workflows" } },
+    {
+      settings: {
+        ...DEFAULT_CLAUDE_SETTINGS,
+        launchArgs: "--workflow-keyword-trigger-enabled true",
+      },
+    },
+  ])(
+    "rejects higher-priority workflow configuration overrides before native query creation %#",
+    (override) => {
+      assert.throws(
+        () =>
+          ClaudeAdapterV2.makeClaudeQueryOptions({
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            nativeThreadId: "workflow-overrides-disallowed",
+            resume: false,
+            cwd: "/workspace",
+            ...override,
+          }),
+        /native-child workflow policy cannot be enforced/,
+      );
+    },
+  );
+
+  it("keys every query on the mandatory child-deny policy revision", () => {
+    const policy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
+      ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: "/workspace",
+      }),
+    );
+    const key = ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(policy, {});
+    assert.include(key, ClaudeAdapterV2.CLAUDE_NATIVE_CHILD_DENY_POLICY_REVISION);
+    for (const tool of ClaudeAdapterV2.CLAUDE_NATIVE_CHILD_DENIED_TOOLS) assert.include(key, tool);
+  });
+
   it.each([false, true])("requests thinking summaries with resume=%s", (resume) => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
@@ -1114,6 +1214,91 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
   );
 });
 
+describe("ClaudeAdapterV2 native child-deny fail-closed SDK opening", () => {
+  it.effect.each(["sdk-exclusion-rejected", "settings-override-unsafe"] as const)(
+    "never offers a root prompt when mandatory child protection is %s",
+    (mode) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-native-child-deny-rejected-",
+          });
+          let opens = 0;
+          let offers = 0;
+          const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+            instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            settings:
+              mode === "settings-override-unsafe"
+                ? { ...DEFAULT_CLAUDE_SETTINGS, launchArgs: "--settings /tmp/unsafe.json" }
+                : DEFAULT_CLAUDE_SETTINGS,
+            environment: {},
+            attachmentsDir,
+            fileSystem,
+            path: yield* Path.Path,
+            crypto: yield* Crypto.Crypto,
+            idAllocator: yield* IdAllocator.IdAllocatorV2,
+            queryRunner: {
+              allocateSessionId: Effect.succeed("native-thread-child-deny-rejected"),
+              open: (input) => {
+                opens++;
+                assert.deepEqual(input.options.disallowedTools, ["Agent", "Task", "Workflow"]);
+                return Effect.fail(
+                  new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
+                    method: "open",
+                    cause: "SDK rejected mandatory disallowedTools",
+                  }),
+                );
+              },
+              forkSession: () => Effect.die("unused"),
+              subagentLaunchToolUseId: () => Effect.succeed(null),
+              assertComplete: Effect.void,
+            },
+          });
+          const threadId = ThreadId.make("thread-claude-native-child-deny-rejected");
+          const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: "/workspace",
+          });
+          const runtime = yield* adapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make(
+              "provider-session-claude-native-child-deny-rejected",
+            ),
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy,
+          });
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy,
+          });
+          const failed = yield* Effect.exit(
+            runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId,
+                providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-native-child-deny-rejected"),
+                text: "Continue normally.",
+                attachments: [],
+                runtimePolicy,
+              }),
+            ),
+          );
+          assert.isTrue(Exit.isFailure(failed));
+          assert.equal(opens, mode === "sdk-exclusion-rejected" ? 1 : 0);
+          assert.equal(offers, 0, "no root prompt after unsupported native child protections");
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+});
+
 describe("ClaudeAdapterV2 approval cancellation", () => {
   it.effect("observes an approval signal that was already aborted", () =>
     Effect.gen(function* () {
@@ -1345,6 +1530,25 @@ describe("ClaudeAdapterV2 resume compaction", () => {
         assert.isFunction(callback);
         const canUseTool = openedOptions?.canUseTool;
         assert.isFunction(canUseTool);
+        assert.deepEqual(openedOptions?.disallowedTools, ["Agent", "Task", "Workflow"]);
+        for (const toolName of ["Agent", "Task", "Workflow"]) {
+          const childDecision = yield* Effect.promise(() =>
+            canUseTool!(
+              toolName,
+              { description: "Attempt child" },
+              {
+                signal: new AbortController().signal,
+                toolUseID: `native-child-block-${toolName}`,
+                requestId: `native-child-block-${toolName}`,
+              },
+            ),
+          );
+          assert.deepEqual(childDecision, {
+            behavior: "deny",
+            message: "Native child execution unavailable pending approval.",
+            toolUseID: `native-child-block-${toolName}`,
+          });
+        }
         const ordinaryToolResult = yield* Effect.promise(() =>
           canUseTool!(
             "Bash",

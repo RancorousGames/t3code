@@ -61,6 +61,7 @@ import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { parseSafeExternalUrl } from "../electron/ElectronShell.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import { MENU_ACTION_CHANNEL, PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
@@ -435,6 +436,67 @@ type OpenLinkListener = (event: DesktopPreviewOpenLinkEvent) => Effect.Effect<vo
  * and not in a window spawned by a third-party page in the preview.
  */
 const POPUP_PROTOCOLS = new Set(["http:", "https:"]);
+const CHATGPT_PAGE_HOSTS = new Set(["chatgpt.com", "www.chatgpt.com", "chat.openai.com"]);
+const CHATGPT_AUTH_HOSTS = new Set([
+  "auth.openai.com",
+  "auth0.openai.com",
+  "accounts.google.com",
+  "login.microsoftonline.com",
+  "appleid.apple.com",
+  "challenges.cloudflare.com",
+]);
+
+/** Only actual T3 ChatGPT guest tabs may externalize an explicitly activated web link.
+ * Same-tab navigations without a recent native mouse/keyboard gesture can be
+ * authentication redirects or scripted page behavior; leave those in the guest. */
+export function shouldExternalizeChatGPTLink(input: {
+  readonly runtimeTabId: string;
+  readonly sourceUrl: string;
+  readonly targetUrl: string;
+  readonly userActivated: boolean;
+}): boolean {
+  if (!input.userActivated) return false;
+  try {
+    const parts: unknown = JSON.parse(input.runtimeTabId);
+    if (
+      !Array.isArray(parts) ||
+      typeof parts[1] !== "string" ||
+      !parts[1].startsWith("t3-browser-session:")
+    )
+      return false;
+    const source = new URL(input.sourceUrl);
+    const target = new URL(input.targetUrl);
+    if (
+      !CHATGPT_PAGE_HOSTS.has(source.hostname.toLowerCase()) ||
+      !POPUP_PROTOCOLS.has(source.protocol) ||
+      !POPUP_PROTOCOLS.has(target.protocol)
+    )
+      return false;
+    const hostname = target.hostname.toLowerCase();
+    return !CHATGPT_PAGE_HOSTS.has(hostname) && !CHATGPT_AUTH_HOSTS.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** A hosted ChatGPT page cannot navigate into a local file or script URL.
+ * Downloads via HTTP(S)/blob and approved OAuth deep-link permission remain separate. */
+function isUnsafeChatGPTGuestTarget(tabId: string, sourceUrl: string, targetUrl: string): boolean {
+  try {
+    const parts: unknown = JSON.parse(tabId);
+    if (
+      !Array.isArray(parts) ||
+      typeof parts[1] !== "string" ||
+      !parts[1].startsWith("t3-browser-session:")
+    )
+      return false;
+    const source = new URL(sourceUrl);
+    if (!CHATGPT_PAGE_HOSTS.has(source.hostname.toLowerCase())) return false;
+    return ["file:", "data:", "javascript:"].includes(new URL(targetUrl).protocol);
+  } catch {
+    return false;
+  }
+}
 
 const isPopupUrl = (rawUrl: string): boolean => {
   try {
@@ -1535,7 +1597,41 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         syncMenuShortcuts(window.webContents, input);
       });
     };
+    let lastDirectGestureAt = -Infinity;
+    const beforeMouse = (_event: Electron.Event, mouse: Electron.MouseInputEvent): void => {
+      if (mouse.type === "mouseUp") lastDirectGestureAt = performance.now();
+    };
+    const willNavigate = (
+      event: Electron.Event<Electron.WebContentsWillNavigateEventParams>,
+    ): void => {
+      if (event.isMainFrame && isUnsafeChatGPTGuestTarget(tabId, wc.getURL(), event.url)) {
+        event.preventDefault();
+        return;
+      }
+      if (
+        event.isMainFrame &&
+        shouldExternalizeChatGPTLink({
+          runtimeTabId: tabId,
+          sourceUrl: wc.getURL(),
+          targetUrl: event.url,
+          userActivated: performance.now() - lastDirectGestureAt < 1_250,
+        })
+      ) {
+        const safeUrl = parseSafeExternalUrl(event.url);
+        if (Option.isNone(safeUrl)) return;
+        event.preventDefault();
+        void shell.openExternal(safeUrl.value).catch(() => undefined);
+        lastDirectGestureAt = -Infinity;
+      }
+    };
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
+      if (
+        input.type === "keyDown" &&
+        !input.isAutoRepeat &&
+        !input.isComposing &&
+        input.key === "Enter"
+      )
+        lastDirectGestureAt = performance.now();
       // Guest WebContents receive keyboard input instead of the host renderer
       // while ChatGPT has focus. Prevent Electron's native Window menu from
       // interpreting Ctrl/Cmd+W as closing the entire T3 Code window.
@@ -1617,6 +1713,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       attempt({ operation: "detachListeners", tabId, webContentsId: wc.id }, () => {
         cancelFaviconCapture();
         wc.off("did-start-navigation", navigationStarted);
+        wc.off("will-navigate", willNavigate);
+        wc.off("before-mouse-event", beforeMouse);
         wc.off("did-navigate", syncNavigation);
         wc.off("did-navigate-in-page", syncInPageNavigation);
         wc.off("page-title-updated", sync);
@@ -1640,6 +1738,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         // Other preview input, including CDP keys, belongs to the page.
         wc.setIgnoreMenuShortcuts(true);
         wc.on("did-start-navigation", navigationStarted);
+        wc.on("will-navigate", willNavigate);
+        wc.on("before-mouse-event", beforeMouse);
         wc.on("did-navigate", syncNavigation);
         wc.on("did-navigate-in-page", syncInPageNavigation);
         wc.on("page-title-updated", sync);
@@ -1655,11 +1755,26 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         detachPasskeys = passkeys.attachGuest(wc);
         wc.setWindowOpenHandler((details) => {
           const action = previewWindowOpenAction(details);
+          if (isUnsafeChatGPTGuestTarget(tabId, wc.getURL(), details.url))
+            return { action: "deny" };
           if (action === "popup") {
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
           }
           if (action === "deny") return { action: "deny" };
           if (action === "new-tab") {
+            if (
+              shouldExternalizeChatGPTLink({
+                runtimeTabId: tabId,
+                sourceUrl: wc.getURL(),
+                targetUrl: details.url,
+                userActivated: true,
+              })
+            ) {
+              const safeUrl = parseSafeExternalUrl(details.url);
+              if (Option.isSome(safeUrl))
+                void shell.openExternal(safeUrl.value).catch(() => undefined);
+              return { action: "deny" };
+            }
             runFork(
               emitOpenLink({
                 tabId,

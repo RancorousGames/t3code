@@ -1160,6 +1160,186 @@ export const DesktopOpenRigSessionSchema = Schema.Struct({
 });
 export type DesktopOpenRigSession = typeof DesktopOpenRigSessionSchema.Type;
 
+/** OpenRig owns the many-to-one seat/session ledger. T3 displays it but never infers ownership. */
+export const DesktopOpenRigManagedSessionSchema = Schema.Struct({
+  id: Schema.String,
+  seatId: Schema.String,
+  operationId: Schema.String,
+  mode: Schema.Union([Schema.Literal("native"), Schema.Literal("chatgpt"), Schema.Literal("adopt")]),
+  status: Schema.Union([Schema.Literal("pending"), Schema.Literal("active"), Schema.Literal("unavailable"), Schema.Literal("indeterminate"), Schema.Literal("stopped"), Schema.Literal("detached")]),
+  primary: Schema.Boolean,
+  target: Schema.NullOr(DesktopOpenRigSessionTargetSchema),
+  targetKey: Schema.NullOr(Schema.String),
+  projectId: Schema.NullOr(Schema.String),
+  environmentId: Schema.NullOr(Schema.String),
+  threadId: Schema.NullOr(Schema.String),
+  conversationId: Schema.NullOr(Schema.String),
+  attachedTabUuid: Schema.NullOr(Schema.String),
+  parentSeatId: Schema.NullOr(Schema.String),
+  parentManagedSessionId: Schema.NullOr(Schema.String),
+  provenance: Schema.Unknown,
+  intent: Schema.Unknown,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  error: Schema.NullOr(Schema.String),
+  observed: Schema.Unknown,
+  modelCompletionVerified: Schema.Boolean,
+  title: Schema.optional(Schema.String),
+  provider: Schema.optional(Schema.NullOr(Schema.String)),
+  lastActivityAt: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Read-only native recovery evidence. Never proves the bootstrap ran or authorizes a retry. */
+  recoveryEvidence: Schema.optional(Schema.NullOr(Schema.Struct({
+    threadFound: Schema.Boolean,
+    exactEnvironmentAndProvider: Schema.Boolean,
+    initialMessageAcknowledged: Schema.Boolean,
+    safeToRetryLaunch: Schema.Literal(false),
+    reconciliationRequired: Schema.Boolean,
+  }))),
+});
+export type DesktopOpenRigManagedSession = typeof DesktopOpenRigManagedSessionSchema.Type;
+
+export const DesktopOpenRigSeatSessionsSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  seatId: Schema.String,
+  primarySessionId: Schema.NullOr(Schema.String),
+  sessions: Schema.Array(DesktopOpenRigManagedSessionSchema),
+  legacyBinding: Schema.Unknown,
+  legacyAutoImported: Schema.Literal(false),
+  pendingRecoveryCount: Schema.Number,
+  launchPolicy: Schema.Struct({
+    explicitOperationIdRequired: Schema.Literal(true),
+    duplicateOperationRetrySafe: Schema.Literal(false),
+    automaticUnknownRetry: Schema.Literal(false),
+    implicitAdoption: Schema.Literal(false),
+  }),
+});
+export type DesktopOpenRigSeatSessions = typeof DesktopOpenRigSeatSessionsSchema.Type;
+
+/** Operator-approved, exact T3 provider catalog profile. Never derived from the current editor tab. */
+export const DesktopOpenRigRuntimeModeSchema = Schema.Literals([
+  "approval-required", "auto-accept-edits", "auto", "full-access",
+]);
+export const DesktopOpenRigExecutionProfileRecordSchema = Schema.Struct({
+  seatId: Schema.String,
+  environmentId: Schema.String,
+  workspaceRoot: Schema.String,
+  runtime: Schema.Literals(["codex", "claude"]),
+  providerInstanceId: Schema.String,
+  model: Schema.String,
+  runtimeMode: DesktopOpenRigRuntimeModeSchema,
+  provenance: Schema.Literal("operator-explicit-t3-provider-catalog"),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type DesktopOpenRigExecutionProfileRecord = typeof DesktopOpenRigExecutionProfileRecordSchema.Type;
+const DesktopOpenRigRigSpecExecutionSchema = Schema.Struct({
+  runtime: Schema.optional(Schema.NullOr(Schema.String)),
+  cwd: Schema.NullOr(Schema.String),
+  workspace: Schema.NullOr(Schema.String),
+  model: Schema.NullOr(Schema.String),
+  providerInstanceId: Schema.NullOr(Schema.String),
+  runtimeMode: Schema.NullOr(Schema.String),
+  environmentId: Schema.NullOr(Schema.String),
+});
+export const DesktopOpenRigExecutionProfileSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  seatId: Schema.String,
+  profile: Schema.NullOr(DesktopOpenRigExecutionProfileRecordSchema),
+  rigSpec: DesktopOpenRigRigSpecExecutionSchema,
+  effective: Schema.Union([DesktopOpenRigExecutionProfileRecordSchema, DesktopOpenRigRigSpecExecutionSchema]),
+  nativeLaunchReady: Schema.Boolean,
+  missing: Schema.Array(Schema.String),
+  legacySessionsAutoAdopted: Schema.Literal(false),
+  requiresOperatorApproval: Schema.Boolean,
+  providerSelectionAuthority: Schema.Literal("T3 exact live provider catalog"),
+  overwriteRigSpec: Schema.Literal(false),
+});
+export type DesktopOpenRigExecutionProfile = typeof DesktopOpenRigExecutionProfileSchema.Type;
+export const DesktopOpenRigConfigureExecutionProfileInputSchema = Schema.Struct({
+  seatId: Schema.String,
+  workspaceRoot: Schema.String,
+  providerInstanceId: Schema.String,
+  model: Schema.String,
+  runtimeMode: DesktopOpenRigRuntimeModeSchema,
+  environmentId: Schema.optional(Schema.String),
+});
+export type DesktopOpenRigConfigureExecutionProfileInput =
+  typeof DesktopOpenRigConfigureExecutionProfileInputSchema.Type;
+
+/** Idempotency/correlation identity is supplied once by the operator, never regenerated on retry. */
+export const DesktopOpenRigLaunchInputSchema = Schema.Struct({
+  seatId: Schema.String,
+  operationId: Schema.String,
+  kind: Schema.optional(Schema.Union([Schema.Literal("native"), Schema.Literal("chatgpt")])),
+  initialPrompt: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  workspaceRoot: Schema.optional(Schema.String),
+  parentSeatId: Schema.optional(Schema.String),
+  parentManagedSessionId: Schema.optional(Schema.String),
+});
+export type DesktopOpenRigLaunchInput = typeof DesktopOpenRigLaunchInputSchema.Type;
+
+export const DesktopOpenRigAdoptInputSchema = Schema.Struct({
+  seatId: Schema.String,
+  operationId: Schema.String,
+  target: DesktopOpenRigSessionTargetSchema,
+});
+export type DesktopOpenRigAdoptInput = typeof DesktopOpenRigAdoptInputSchema.Type;
+
+export const DesktopOpenRigSessionActionInputSchema = Schema.Struct({
+  seatId: Schema.String,
+  sessionId: Schema.String,
+});
+export type DesktopOpenRigSessionActionInput = typeof DesktopOpenRigSessionActionInputSchema.Type;
+
+/** Only the exact current primary managed ChatGPT browser can receive lifecycle actions. */
+export const DesktopOpenRigManagedBrowserLifecycleInputSchema = Schema.Union([
+  Schema.Struct({
+    seatId: Schema.String,
+    sessionId: Schema.String,
+    action: Schema.Literals(["suspend", "resume", "recover"]),
+  }),
+  Schema.Struct({
+    seatId: Schema.String,
+    sessionId: Schema.String,
+    action: Schema.Literal("stop"),
+    confirm: Schema.Literal("close-local-t3-session"),
+  }),
+]);
+export type DesktopOpenRigManagedBrowserLifecycleInput =
+  typeof DesktopOpenRigManagedBrowserLifecycleInputSchema.Type;
+
+/** OpenRig's positive receipt is distinct from model completion or cloud deletion. */
+export const DesktopOpenRigManagedBrowserLifecycleResultSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  seatId: Schema.String,
+  managedSessionId: Schema.String,
+  primarySessionId: Schema.NullOr(Schema.String),
+  browserSessionId: Schema.String,
+  conversationId: Schema.String,
+  action: Schema.Literals(["suspend", "resume", "stop", "recover"]),
+  effect: Schema.Literals([
+    "t3_archived_local_browser_unmounted_no_model_completion_claim",
+    "t3_archive_restored_reattachment_on_render",
+    "safe_saved_conversation_navigation_requested_not_verified_loaded",
+    "local_t3_session_closed_not_chatgpt_cloud_deleted",
+  ]),
+  providerAcknowledged: Schema.Literal(true),
+  modelCompletionVerified: Schema.Literal(false),
+  managedStatus: Schema.Literals(["active", "detached"]),
+  managedPrimaryUnchanged: Schema.Boolean,
+  source: Schema.Literal("t3-existing-desktop-session-control"),
+  receipt: Schema.Unknown,
+});
+export type DesktopOpenRigManagedBrowserLifecycleResult =
+  typeof DesktopOpenRigManagedBrowserLifecycleResultSchema.Type;
+
+export const DesktopOpenRigPrimaryInputSchema = Schema.Struct({
+  seatId: Schema.String,
+  sessionId: Schema.String,
+});
+export type DesktopOpenRigPrimaryInput = typeof DesktopOpenRigPrimaryInputSchema.Type;
+
 export const DesktopOpenRigBindInputSchema = Schema.Struct({
   id: Schema.String,
   sessionId: Schema.optional(Schema.String),
@@ -1172,6 +1352,290 @@ export const DesktopOpenRigSendInputSchema = Schema.Struct({
   message: Schema.String,
 });
 export type DesktopOpenRigSendInput = typeof DesktopOpenRigSendInputSchema.Type;
+
+/** Read-only RigSpec seat hierarchy (delegates_to / spawned_by edges). Never inferred from sessions. */
+export const DesktopOpenRigSeatNodeSchema = Schema.Struct({
+  id: Schema.String,
+  rigId: Schema.String,
+  rigName: Schema.String,
+  name: Schema.String,
+  logicalId: Schema.String,
+  role: Schema.NullOr(Schema.String),
+  parentIds: Schema.Array(Schema.String),
+  childIds: Schema.Array(Schema.String),
+});
+export type DesktopOpenRigSeatNode = typeof DesktopOpenRigSeatNodeSchema.Type;
+/** Preserve whether discovery came from bare RigSpec or the full managed-ledger join. */
+export const DesktopOpenRigSeatTopologySchema = Schema.Struct({
+  source: Schema.Literals(["openrig-rigspec", "openrig-rigspec-and-managed-ledger"]),
+  seats: Schema.Array(DesktopOpenRigSeatNodeSchema),
+});
+export type DesktopOpenRigSeatTopology = typeof DesktopOpenRigSeatTopologySchema.Type;
+
+/** Persisted seat status reports. The author is never transport-verified. */
+export const DesktopOpenRigSeatReportSchema = Schema.Struct({
+  reportId: Schema.String,
+  status: Schema.Literals(["working", "blocked", "completed", "failed"]),
+  summary: Schema.String,
+  progress: Schema.NullOr(Schema.Number),
+  blockedOn: Schema.Array(Schema.String),
+  timestamp: Schema.String,
+  eventSeq: Schema.Number,
+  authorVerified: Schema.Literal(false),
+});
+export type DesktopOpenRigSeatReport = typeof DesktopOpenRigSeatReportSchema.Type;
+export const DesktopOpenRigSeatReportsSchema = Schema.Struct({
+  seatId: Schema.String,
+  reports: Schema.Array(DesktopOpenRigSeatReportSchema),
+});
+export type DesktopOpenRigSeatReports = typeof DesktopOpenRigSeatReportsSchema.Type;
+
+/** Canonical queue read projection; never inferred from browser/session health or delivery receipts. */
+export const DesktopOpenRigAgentTaskSchema = Schema.Struct({
+  qitemId: Schema.String,
+  summary: Schema.NullOr(Schema.String),
+  state: Schema.String,
+  sourceSession: Schema.String,
+  destinationSession: Schema.String,
+  handedOffFrom: Schema.NullOr(Schema.String),
+  handedOffTo: Schema.NullOr(Schema.String),
+  chainOfRecord: Schema.NullOr(Schema.Array(Schema.String)),
+  evidenceRef: Schema.NullOr(Schema.String),
+  closureReason: Schema.NullOr(Schema.String),
+  closureTarget: Schema.NullOr(Schema.String),
+  resolution: Schema.NullOr(Schema.String),
+  claimedAt: Schema.NullOr(Schema.String),
+  tsCreated: Schema.String,
+  tsUpdated: Schema.String,
+  lastNudgeAttempt: Schema.NullOr(Schema.String),
+  lastNudgeResult: Schema.NullOr(Schema.String),
+  lastTransition: Schema.NullOr(Schema.Struct({
+    transitionId: Schema.Number,
+    ts: Schema.String,
+    state: Schema.String,
+    actorSession: Schema.String,
+    transitionNote: Schema.NullOr(Schema.String),
+    closureReason: Schema.NullOr(Schema.String),
+    closureTarget: Schema.NullOr(Schema.String),
+  })),
+});
+export type DesktopOpenRigAgentTask = typeof DesktopOpenRigAgentTaskSchema.Type;
+export const DesktopOpenRigAgentTasksSchema = Schema.Union([
+  Schema.Struct({
+    schema: Schema.Literal("openrig-t3-agent-tasks/v1"),
+    available: Schema.Literal(true),
+    agent: Schema.Struct({
+      agentId: Schema.String,
+      rigId: Schema.String,
+      rigName: Schema.String,
+      canonicalSession: Schema.String,
+    }),
+    limit: Schema.Number,
+    tasks: Schema.Array(DesktopOpenRigAgentTaskSchema),
+    hasMore: Schema.Boolean,
+  }),
+  Schema.Struct({
+    schema: Schema.Literal("openrig-t3-agent-tasks/v1"),
+    available: Schema.Literal(false),
+    error: Schema.Literals([
+      "limit_must_be_1_to_100", "agent_not_found",
+      "ambiguous_canonical_seat", "canonical_task_read_model_unavailable",
+    ]),
+  }),
+]);
+export type DesktopOpenRigAgentTasks = typeof DesktopOpenRigAgentTasksSchema.Type;
+
+/** C05 optional, read-only coordination attached to ONE already-authorized browser send. */
+export const DesktopOpenRigPolicyIntakeInputSchema = Schema.Struct({
+  browserSessionId: Schema.String,
+  conversationId: Schema.String,
+});
+export type DesktopOpenRigPolicyIntakeInput = typeof DesktopOpenRigPolicyIntakeInputSchema.Type;
+
+export const DesktopOpenRigPolicyItemSchema = Schema.Struct({
+  qitemId: Schema.String,
+  summary: Schema.NullOr(Schema.String),
+  body: Schema.String,
+  sourceSession: Schema.String,
+  destinationSession: Schema.String,
+  state: Schema.Literal("pending"),
+  priority: Schema.Literal("routine"),
+  tags: Schema.Array(Schema.String),
+  expiresAt: Schema.NullOr(Schema.String),
+  claimedAt: Schema.Null,
+  tsCreated: Schema.String,
+  tsUpdated: Schema.String,
+  lastTransition: Schema.NullOr(Schema.Struct({
+    transitionId: Schema.Number,
+    ts: Schema.String,
+    state: Schema.String,
+    actorSession: Schema.String,
+    transitionNote: Schema.NullOr(Schema.String),
+    closureReason: Schema.NullOr(Schema.String),
+    closureTarget: Schema.NullOr(Schema.String),
+  })),
+});
+export type DesktopOpenRigPolicyItem = typeof DesktopOpenRigPolicyItemSchema.Type;
+
+export const DesktopOpenRigPolicyPageSchema = Schema.Struct({
+  schema: Schema.Literal("openrig-t3-policy-intake/v1"),
+  available: Schema.Literal(true),
+  view: Schema.Literal("policy"),
+  agent: Schema.Struct({
+    agentId: Schema.String, rigId: Schema.String, rigName: Schema.String, canonicalSession: Schema.String,
+  }),
+  selector: Schema.Struct({
+    state: Schema.Literal("pending"), priority: Schema.Literal("routine"),
+    tag: Schema.Literal("coordination:policy"), unclaimed: Schema.Literal(true),
+  }),
+  expirySemantics: Schema.Literal("metadata_only_not_enforced"),
+  deliverySemantics: Schema.Literal("read_only_not_offered_to_model_or_acknowledged"),
+  limit: Schema.Literal(25),
+  policies: Schema.Array(DesktopOpenRigPolicyItemSchema),
+  hasMore: Schema.Boolean,
+  nextCursor: Schema.NullOr(Schema.String),
+});
+export type DesktopOpenRigPolicyPage = typeof DesktopOpenRigPolicyPageSchema.Type;
+
+export const DesktopOpenRigPolicyIntakeResultSchema = Schema.Union([
+  Schema.Struct({
+    schema: Schema.Literal("t3-c05-browser-optional/v1"),
+    status: Schema.Literal("ready"),
+    agentId: Schema.String,
+    managedSessionId: Schema.String,
+    browserSessionId: Schema.String,
+    conversationId: Schema.String,
+    canonicalSession: Schema.String,
+    policies: Schema.Array(DesktopOpenRigPolicyItemSchema),
+  }),
+  Schema.Struct({
+    schema: Schema.Literal("t3-c05-browser-optional/v1"),
+    status: Schema.Literal("deferred"),
+    reason: Schema.String,
+  }),
+]);
+export type DesktopOpenRigPolicyIntakeResult = typeof DesktopOpenRigPolicyIntakeResultSchema.Type;
+
+/** Canonical, read-only OpenRig native-spawn approval projection.
+ * Rendering it NEVER gives the renderer approval authority. */
+export const DesktopOpenRigNativeApprovalSchema = Schema.Struct({
+  id: Schema.String,
+  operationId: Schema.String,
+  descriptorSha256: Schema.String,
+  stateVersion: Schema.Number,
+  status: Schema.Literals([
+    "requested", "pending_approval", "approved", "denied", "expired",
+    "reserved_for_execution", "launched", "indeterminate",
+  ]),
+  requestedAt: Schema.String,
+  expiresAt: Schema.String,
+  target: Schema.Struct({
+    environmentId: Schema.String,
+    providerInstanceId: Schema.String,
+    driver: Schema.String,
+    modelSlug: Schema.String,
+    modelOptions: Schema.NullOr(Schema.Array(Schema.Struct({
+      id: Schema.String, value: Schema.Union([Schema.String, Schema.Boolean]),
+    }))),
+    reasoningEffort: Schema.NullOr(Schema.String),
+    runtimeMode: Schema.String,
+    projectId: Schema.NullOr(Schema.String),
+    workspaceRoot: Schema.String,
+    resolvedExecutionPath: Schema.NullOr(Schema.String),
+  }),
+  requester: Schema.Struct({
+    verified: Schema.Boolean,
+    callerSeatId: Schema.NullOr(Schema.String),
+    sourceThreadId: Schema.NullOr(Schema.String),
+    parentThreadId: Schema.NullOr(Schema.String),
+  }),
+  task: Schema.Struct({
+    title: Schema.String, preview: Schema.String, promptSha256: Schema.String,
+  }),
+  decisionWriteAvailable: Schema.Literal(false),
+  estimatedCostUsd: Schema.Null,
+});
+export type DesktopOpenRigNativeApproval = typeof DesktopOpenRigNativeApprovalSchema.Type;
+
+export const DesktopOpenRigNativeApprovalPageSchema = Schema.Struct({
+  source: Schema.Literal("openrig-canonical-sqlite"),
+  address: Schema.Literal("human@kernel"),
+  items: Schema.Array(DesktopOpenRigNativeApprovalSchema),
+  count: Schema.Number,
+  truncated: Schema.Boolean,
+  nextCursor: Schema.NullOr(Schema.Struct({ requestedAt: Schema.String, id: Schema.String })),
+  decisionWriteAvailable: Schema.Literal(false),
+  executionReserveAvailable: Schema.Literal(false),
+  note: Schema.String,
+});
+export type DesktopOpenRigNativeApprovalPage = typeof DesktopOpenRigNativeApprovalPageSchema.Type;
+
+/** Native review is MAIN-controlled. Renderer supplies only the operation lookup ID;
+ * this outcome comes from the canonical authority, never a renderer choice. */
+export const DesktopOpenRigNativeReviewResultSchema = Schema.Struct({
+  outcome: Schema.Literals(["recorded", "cancelled", "verification-unavailable"]),
+  item: Schema.NullOr(DesktopOpenRigNativeApprovalSchema),
+});
+export type DesktopOpenRigNativeReviewResult = typeof DesktopOpenRigNativeReviewResultSchema.Type;
+
+/** Read-only human-directed messages from OpenRig's queue and mailbox, not a read-receipt store. */
+export const DesktopOpenRigInboxItemSchema = Schema.Struct({
+  id: Schema.String,
+  sender: Schema.String,
+  subject: Schema.String,
+  body: Schema.String,
+  createdAt: Schema.String,
+  state: Schema.String,
+  requiresAction: Schema.Boolean,
+  sourceType: Schema.Literals(["queue", "mailbox", "human_gate"]),
+  /** Optional validated agent-authored form/media envelope; legacy senders use an openrig-form fence in body. */
+  rich: Schema.optional(Schema.Unknown),
+  humanForm: Schema.optional(Schema.Unknown),
+  humanAnswers: Schema.optional(Schema.Unknown),
+  humanQuestions: Schema.optional(Schema.Unknown),
+  recipient: Schema.optional(Schema.String),
+  humanIntent: Schema.optional(Schema.NullOr(Schema.Literals(["decision", "update"]))),
+});
+export type DesktopOpenRigInboxItem = typeof DesktopOpenRigInboxItemSchema.Type;
+export const DesktopOpenRigInboxSchema = Schema.Struct({
+  available: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  address: Schema.String,
+  addresses: Schema.Array(Schema.Struct({ address: Schema.String, label: Schema.String })),
+  items: Schema.Array(DesktopOpenRigInboxItemSchema),
+  pendingCount: Schema.NullOr(Schema.Number),
+  count: Schema.Number,
+  truncated: Schema.Boolean,
+});
+export type DesktopOpenRigInbox = typeof DesktopOpenRigInboxSchema.Type;
+
+/** A response is accepted only after the durable OpenRig reply endpoint confirms it. */
+export const DesktopOpenRigHumanResponseInputSchema = Schema.Struct({
+  version: Schema.Literal(2),
+  destination: Schema.String,
+  qitemId: Schema.String,
+  answers: Schema.Array(
+    Schema.Struct({
+      questionId: Schema.String,
+      value: Schema.Union([Schema.String, Schema.Number, Schema.Array(Schema.String)]),
+    }),
+  ),
+});
+export type DesktopOpenRigHumanResponseInput = typeof DesktopOpenRigHumanResponseInputSchema.Type;
+export const DesktopOpenRigHumanResponseResultSchema = Schema.Struct({
+  version: Schema.Literal(2),
+  qitemId: Schema.String,
+  actor: Schema.Literal("human@kernel"),
+  acceptedIntoQueue: Schema.Boolean,
+  status: Schema.Literals(["recorded", "idempotent"]),
+  complete: Schema.Boolean,
+  answeredCount: Schema.Number,
+  remainingQuestionIds: Schema.Array(Schema.String),
+  replyQitemId: Schema.NullOr(Schema.String),
+  delivery: Schema.Literals(["queued", "verified", "indeterminate", "failed", "not-applicable"]),
+  deliveredToAgent: Schema.Boolean,
+});
+export type DesktopOpenRigHumanResponseResult = typeof DesktopOpenRigHumanResponseResultSchema.Type;
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
@@ -1200,7 +1664,32 @@ export interface DesktopBridge {
   setClientSettings: (settings: ClientSettings) => Promise<void>;
   /** Only available in desktop builds with the local OpenRig integration. */
   listOpenRigAgents?: () => Promise<readonly DesktopOpenRigAgent[]>;
+  listPendingOpenRigNativeApprovals?: () => Promise<DesktopOpenRigNativeApprovalPage>;
+  getOpenRigNativeApproval?: (operationId: string) => Promise<DesktopOpenRigNativeApproval>;
+  /** Opens an OS-native review; renderer supplies lookup ID only, never choice or proof. */
+  requestOpenRigNativeReview?: (operationId: string) => Promise<DesktopOpenRigNativeReviewResult>;
+  readOpenRigOperatorInbox?: (address: string) => Promise<DesktopOpenRigInbox>;
+  /** Runs the locally installed AISpeak preview (max 20 spoken words). */
+  speakOpenRigPreview?: (text: string) => Promise<void>;
+  submitOpenRigHumanResponse?: (
+    input: DesktopOpenRigHumanResponseInput,
+  ) => Promise<DesktopOpenRigHumanResponseResult>;
   listOpenRigSessions?: () => Promise<readonly DesktopOpenRigSession[]>;
+  listOpenRigManagedSessions?: (seatId: string) => Promise<DesktopOpenRigSeatSessions>;
+  discoverOpenRigSeats?: () => Promise<DesktopOpenRigSeatTopology>;
+  readOpenRigSeatReports?: (seatId: string) => Promise<DesktopOpenRigSeatReports>;
+  readOpenRigAgentTasks?: (agentId: string) => Promise<DesktopOpenRigAgentTasks>;
+  readOpenRigPolicyForBrowserSend?: (input: DesktopOpenRigPolicyIntakeInput) => Promise<DesktopOpenRigPolicyIntakeResult>;
+  readOpenRigExecutionProfile?: (seatId: string) => Promise<DesktopOpenRigExecutionProfile>;
+  configureOpenRigExecutionProfile?: (input: DesktopOpenRigConfigureExecutionProfileInput) => Promise<DesktopOpenRigExecutionProfile>;
+  startOpenRigManagedSession?: (input: DesktopOpenRigLaunchInput) => Promise<DesktopOpenRigSeatSessions>;
+  selectOpenRigPrimarySession?: (input: DesktopOpenRigPrimaryInput) => Promise<DesktopOpenRigSeatSessions>;
+  adoptOpenRigManagedSession?: (input: DesktopOpenRigAdoptInput) => Promise<DesktopOpenRigSeatSessions>;
+  reconcileOpenRigChatGPTManagedSession?: (input: DesktopOpenRigSessionActionInput) => Promise<DesktopOpenRigSeatSessions>;
+  detachOpenRigManagedSession?: (input: DesktopOpenRigSessionActionInput) => Promise<DesktopOpenRigSeatSessions>;
+  runOpenRigManagedBrowserLifecycle?: (
+    input: DesktopOpenRigManagedBrowserLifecycleInput,
+  ) => Promise<DesktopOpenRigManagedBrowserLifecycleResult>;
   bindOpenRigAgent?: (input: DesktopOpenRigBindInput) => Promise<void>;
   unbindOpenRigAgent?: (id: string) => Promise<void>;
   sendOpenRigAgentMessage?: (input: DesktopOpenRigSendInput) => Promise<void>;

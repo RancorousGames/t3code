@@ -12,6 +12,10 @@ export interface ChatGPTSidebarSession {
   readonly depth: number;
   readonly childCount: number;
 }
+export interface ChatGPTPermanentProject {
+  readonly key: string;
+  readonly title: string;
+}
 export interface ChatGPTSidebarGroup {
   readonly key: string | null;
   readonly title: string | null;
@@ -48,30 +52,20 @@ const labeledExamples = learned.training as ReadonlyArray<{
   readonly project: string;
 }>;
 
-/** User-verified, exact-session metadata is applied only when not already set.
- * This does not mutate Chromium storage or affect any unrelated session. */
+/**
+ * Offline training labels can help with project grouping, but are global to
+ * the build rather than scoped to the current T3 environment. Never revive a
+ * parent from that fixture: a similarly copied session ID in another environment
+ * is not proof of an agent spawn relationship. Only persisted per-environment
+ * parentSessionId metadata (or explicit user attachment) may establish lineage.
+ */
 export function applyConfirmedChatGPTSessionMetadata(
   sessions: readonly BrowserSession[],
 ): BrowserSession[] {
-  const ids = new Set(sessions.map((session) => session.id));
   return sessions.map((session) => {
     const confirmed = corrections[session.id];
-    if (!confirmed) return session;
-    const parentSessionId =
-      session.parentSessionId === undefined &&
-      confirmed.parentSessionId &&
-      ids.has(confirmed.parentSessionId) &&
-      confirmed.parentSessionId !== session.id
-        ? confirmed.parentSessionId
-        : session.parentSessionId;
-    const project = session.project ?? confirmed.project;
-    return parentSessionId === session.parentSessionId && project === session.project
-      ? session
-      : {
-          ...session,
-          ...(parentSessionId !== undefined ? { parentSessionId } : {}),
-          ...(project ? { project } : {}),
-        };
+    if (!confirmed?.project || session.project !== undefined) return session;
+    return { ...session, project: confirmed.project };
   });
 }
 
@@ -189,11 +183,11 @@ function discoverNameGroups(
   return groups;
 }
 
-/** Never guess a parent ID from similar titles. Verified exact relationships
- * from the review fixture and explicitly supplied metadata are respected. */
+/** Never guess a parent ID from titles or offline training fixtures. */
 export function groupChatGPTSessions(
   sessions: readonly BrowserSession[],
   projects: readonly ChatGPTGroupingProject[],
+  permanentProjects: readonly ChatGPTPermanentProject[] = [],
 ): ChatGPTSidebarGroup[] {
   const enriched = applyConfirmedChatGPTSessionMetadata(sessions);
   const nameGroups = discoverNameGroups(enriched, projects);
@@ -205,12 +199,25 @@ export function groupChatGPTSessions(
   const assignOwn = (session: BrowserSession): Assignment | null => {
     const hint = session.project?.trim();
     if (hint?.toLowerCase() === "other") return null;
+    // A user-permanent project wins over transient name grouping when the
+    // title truly matches. Explicit session.project metadata is never changed.
+    const permanentMatch = (text: string) => permanentProjects.find((project) => {
+      const parts = tokens(project.title);
+      const words = tokens(text);
+      return parts.length > 0 && (parts.length > 1
+        ? words.some((_, index) => parts.every((word, offset) => words[index + offset] === word))
+        : parts[0]!.length >= 4 && words.includes(parts[0]!));
+    });
     if (hint) {
+      const pinned = permanentProjects.find((project) => readable(project.title).toLowerCase() === readable(hint).toLowerCase());
+      if (pinned) return { key: pinned.key, title: pinned.title };
       const project = matchRegisteredProject(hint, projects);
       return project
         ? { key: `project:${project.id}`, title: project.title }
         : { key: `hint:${hint.toLowerCase()}`, title: readable(hint) };
     }
+    const pinned = permanentMatch(session.title);
+    if (pinned) return { key: pinned.key, title: pinned.title };
     const direct = matchRegisteredProject(session.title, projects);
     const strong = direct && nameScore(session.title, direct) >= 20;
     const name = [...nameGroups].find(([, candidate]) => candidate.ids.has(session.id));
@@ -248,7 +255,7 @@ export function groupChatGPTSessions(
   }
   // A single session does not need a project header.
   for (const [key, group] of groupMap) {
-    if (group.sessions.length > 1) continue;
+    if (group.sessions.length > 1 || permanentProjects.some((project) => project.key === key)) continue;
     ungrouped.push(...group.sessions);
     groupMap.delete(key);
   }
@@ -279,7 +286,15 @@ export function groupChatGPTSessions(
     members.forEach((session) => walk(session, 0)); // Cycles/orphans remain visible.
     return rows;
   };
-  const groups: ChatGPTSidebarGroup[] = [...groupMap].map(([key, group]) => ({
+  // Permanent headers survive even when their last session closes and always
+  // precede inferred groups. Persisting them is explicit user intent.
+  for (const project of permanentProjects) {
+    if (!groupMap.has(project.key)) groupMap.set(project.key, { title: project.title, sessions: [] });
+  }
+  const ordered = [...groupMap].sort(([a], [b]) =>
+    Number(permanentProjects.some((project) => project.key === b)) -
+    Number(permanentProjects.some((project) => project.key === a)));
+  const groups: ChatGPTSidebarGroup[] = ordered.map(([key, group]) => ({
     key,
     title: group.title,
     rows: flatten(group.sessions),
@@ -300,6 +315,7 @@ export type ChatGPTSessionSortActivity = {
     | "delivery-timeout"
     | "invalid"
     | "unknown"
+    | "unloaded"
     | "inactive";
   readonly lastWorkingAt: number;
 };
@@ -308,12 +324,14 @@ export function layoutChatGPTSessions(
   projects: readonly ChatGPTGroupingProject[],
   sortMode: ChatGPTSessionSortMode,
   activityById: Readonly<Record<string, ChatGPTSessionSortActivity>>,
+  permanentProjects: readonly ChatGPTPermanentProject[] = [],
 ): ChatGPTSidebarGroup[] {
-  if (sortMode === "started") return groupChatGPTSessions(sessions, projects);
+  if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects);
   const rank: Record<ChatGPTSessionSortActivity["age"], number> = {
     working: 0,
     recent: 1,
     inactive: 2,
+    unloaded: 2,
     unknown: 2,
     interrupted: 3,
     "delivery-timeout": 3,
@@ -363,7 +381,9 @@ export function layoutChatGPTSessions(
     .sort(
       (a, b) =>
         a.priority - b.priority ||
-        (a.priority <= 1 ? b.latest - a.latest : 0) ||
+        // Working heartbeats must not move the rows while the user reads or clicks.
+        // Other statuses retain activity ordering within their status tier.
+        (a.priority !== 0 ? b.latest - a.latest : 0) ||
         (order.get(a.rootId) ?? 0) - (order.get(b.rootId) ?? 0),
     );
   const emitTree = (bucket: (typeof buckets)[number]): ChatGPTSidebarSession[] => {
@@ -396,6 +416,7 @@ export function layoutChatGPTSessions(
   const idleGroups = groupChatGPTSessions(
     idle.flatMap((bucket) => bucket.members),
     projects,
+    permanentProjects,
   );
   priorityGroups.push(...idleGroups);
   const errors = buckets.filter((bucket) => bucket.priority >= 3);

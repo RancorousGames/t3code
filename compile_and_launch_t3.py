@@ -11,6 +11,7 @@ from datetime import datetime
 import hashlib
 import json
 import os
+import math
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ import sys
 import time
 
 from t3_build_freshness import build_is_current
+from compile_t3 import staged_build_is_current
 
 EXE_NAME = "T3 Code (Custom).exe"
 GRACE_SECONDS = 20
@@ -177,31 +179,128 @@ def session_backup(root: Path) -> Path:
     return backup
 
 
+def restart_countdown(seconds: int = 5) -> bool:
+    """Cancelable topmost desktop notification. Closing or Escape means cancel.
+
+    Run after compilation, before signaling ANY application window. If the GUI
+    cannot display, fail closed instead of silently restarting someone's T3.
+    """
+    import tkinter as tk
+
+    window = tk.Tk()
+    try:
+        window.title("T3 Code restart")
+        window.attributes("-topmost", True)
+        window.resizable(False, False)
+        window.configure(bg="#1c2029")
+        width, height = 360, 115
+        window.geometry(f"{width}x{height}+"
+                        f"{max(0, window.winfo_screenwidth() - width - 25)}+"
+                        f"{max(0, window.winfo_screenheight() - height - 65)}")
+        label = tk.Label(window, fg="#f7f7f9", bg="#1c2029",
+                         font=("Segoe UI", 12, "bold"))
+        label.pack(pady=(14, 6))
+        description = tk.Label(window, text="New build ready. Current T3 stays open until countdown ends.",
+                               fg="#c0c4d0", bg="#1c2029", font=("Segoe UI", 8))
+        description.pack()
+        confirmed = False
+        active = True
+        deadline = time.monotonic() + seconds
+
+        def cancel(_event=None):
+            nonlocal active
+            active = False
+            window.quit()
+
+        def tick():
+            nonlocal confirmed
+            if not active:
+                return
+            remaining = max(0, math.ceil(deadline - time.monotonic()))
+            if remaining == 0:
+                confirmed = True
+                window.quit()
+                return
+            label.configure(text=f"Restarting T3 in {remaining}...")
+            window.after(100, tick)
+
+        tk.Button(window, text="Cancel restart", command=cancel,
+                  font=("Segoe UI", 9), padx=15).pack(pady=9)
+        window.protocol("WM_DELETE_WINDOW", cancel)
+        window.bind("<Escape>", cancel)
+        window.after(0, tick)
+        window.mainloop()
+        return confirmed
+    finally:
+        window.destroy()
+
+
+def _acquire_worker_lock():
+    """A single Windows kernel mutex prevents two detached restart workers."""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    handle = kernel32.CreateMutexW(None, True, "Local\\T3CodeCustomBuildAndRestart")
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        raise RuntimeError("A T3 build-and-restart worker is already running.")
+    return handle
+
+
 def main(*, force_build: bool = False, restart_only: bool = False) -> None:
     if os.name != "nt":
         raise RuntimeError("This helper runs on Windows only.")
     root = Path(__file__).resolve().parent
     current = build_is_current(root)
     if restart_only and not current:
-        raise RuntimeError("Compiled T3 is stale or missing. Build before restart.")
+        raise RuntimeError("Compiled T3 output missing. Build before restart.")
     needs_build = force_build or not current
-    print("Rebuilding changed source." if needs_build else "Build unchanged; fast restart without compilation.", flush=True)
+    print("Building requested T3 outputs." if needs_build else "Compiled outputs present; fast restart without compilation.", flush=True)
+    # The old application and all its windows remain open throughout compilation
+    # and runtime preparation. Nothing below may close T3 on an incomplete build.
+    if needs_build:
+        if force_build or not staged_build_is_current(root):
+            subprocess.run(
+                [sys.executable, str(root / "compile_t3.py"), "--stage-only"],
+                cwd=root, check=True,
+            )
+        else:
+            print("Previously staged build still matches compiled outputs; reusing it.", flush=True)
+        if not staged_build_is_current(root):
+            raise RuntimeError("Staged bundle output changed; leaving running T3 untouched.")
+    else:
+        if not build_is_current(root):
+            raise RuntimeError("Compiled outputs changed; leaving running T3 untouched.")
+
+    running = bool(running_custom_processes(root))
+    if running:
+        print("New build ready. Showing cancelable 5-second restart notification.", flush=True)
+        if not restart_countdown():
+            print("Restart canceled; current T3 remains open.", flush=True)
+            return
+
+    # Verify staged compiled outputs immediately before any close.
+    if needs_build and not staged_build_is_current(root):
+        raise RuntimeError("Staged bundle output changed during countdown; leaving T3 running.")
+    if not needs_build and not build_is_current(root):
+        raise RuntimeError("Compiled build changed during countdown; leaving T3 running.")
     was_running = stop_custom_app(root)
     try:
         backup = session_backup(root)
-        print(f"Verified session backup before rebuilding: {backup}", flush=True)
+        print(f"Verified session backup before activating new build: {backup}", flush=True)
         if needs_build:
             subprocess.run(
-                [sys.executable, str(root / "compile_t3.py"), "--build-only"],
-                cwd=root,
-                check=True,
+                [sys.executable, str(root / "compile_t3.py"), "--activate-staged"],
+                cwd=root, check=True,
             )
     except (OSError, RuntimeError, subprocess.CalledProcessError):
         # If backup or compilation fails, keep the session profile and bring
         # back the previous launcher rather than leaving the user without T3.
         if was_running:
             print(
-                "Build failed; attempting to reopen the previous T3 Code executable.",
+                "Activation/backup failed; attempting to reopen the previous T3 Code executable.",
                 file=sys.stderr, flush=True,
             )
             subprocess.run(
@@ -239,8 +338,8 @@ def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_o
     print(
         f"Independent T3 build-and-restart worker started (PID {child.pid}).\n"
         f"Build status log: {log_path}\n"
-        "The worker automatically closes T3, backs up ChatGPT session metadata, "
-        "builds and relaunches it.",
+        "The worker builds and verifies while T3 remains open, shows a 5-second "
+        "cancelable notification, then backs up and rapidly relaunches it.",
         flush=True,
     )
 
@@ -256,7 +355,7 @@ if __name__ == "__main__":
         modes.add_argument("--force-build", action="store_true",
                            help="Rebuild all bundles before restarting")
         modes.add_argument("--restart-only", action="store_true",
-                           help="Restart only if all compiled outputs match current source")
+                           help="Restart only if required compiled outputs exist")
         args = parser.parse_args()
         root = Path(__file__).resolve().parent
         if args.dry_run:
@@ -267,10 +366,15 @@ if __name__ == "__main__":
                 raise RuntimeError("Vite+ build runner missing.")
             print("Preflight OK: session storage, build runner, restart script.")
         elif args.worker:
-            main(force_build=args.force_build, restart_only=args.restart_only)
+            mutex = _acquire_worker_lock()
+            try:
+                main(force_build=args.force_build, restart_only=args.restart_only)
+            finally:
+                ctypes.windll.kernel32.ReleaseMutex(mutex)
+                ctypes.windll.kernel32.CloseHandle(mutex)
         else:
             if args.restart_only and not build_is_current(root):
-                raise RuntimeError("Compiled T3 is stale or missing. Run the default command to rebuild first.")
+                raise RuntimeError("Compiled T3 output missing. Run the default command to rebuild first.")
             spawn_independent_worker(root, force_build=args.force_build,
                                      restart_only=args.restart_only)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:

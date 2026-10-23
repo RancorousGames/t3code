@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { BrowserSession, type BrowserSession as Session } from "./chatGPTBrowserSessions";
+import {
+  BrowserSession,
+  chatGPTBrowserSessionsKey,
+  reorderChatGPTSessions,
+  setChatGPTSessionHidden,
+  type BrowserSession as Session,
+} from "./chatGPTBrowserSessions";
 import { chatGPTParentIndex, resolveExplicitChatGPTParent } from "./chatGPTSessionLineage";
 import {
   groupChatGPTSessions,
@@ -105,6 +111,59 @@ describe("defensive grouping against inconsistent persisted parents", () => {
     const child = { id: childId, title: "Child", parentSessionId: parentId };
     expect(rows([child])).toContainEqual([childId, 0]);
     expect(rows([{ ...parent, hidden: false }, child])).toContainEqual([childId, 1]);
+  });
+
+  it("preserves a three-level subtree through reordering, reload and archived-parent restoration", () => {
+    const grandchildId = "a44b8e44-3df6-4846-b0fb-2a5588cd73f0";
+    const root: Session = { id: parentId, title: "Manager", project: "Wartribes" };
+    const child: Session = {
+      id: childId,
+      title: "Builder",
+      project: "t3code",
+      parentSessionId: parentId,
+    };
+    const grandchild: Session = {
+      id: grandchildId,
+      title: "Reviewer",
+      parentSessionId: childId,
+    };
+    const other: Session = { id: "other", title: "Unrelated active tab" };
+    const reshuffled = reorderChatGPTSessions([grandchild, other, child, root], root.id, other.id);
+    const codec = Schema.fromJsonString(Schema.Array(BrowserSession));
+    const hydrated = Schema.decodeSync(codec)(Schema.encodeSync(codec)(reshuffled));
+    for (const mode of ["started", "activity"] as const) {
+      const tree = layoutChatGPTSessions(hydrated, projects, mode, {
+        [grandchildId]: { age: "working", lastWorkingAt: 300 },
+        [root.id]: { age: "inactive", lastWorkingAt: 0 },
+        [child.id]: { age: "invalid", lastWorkingAt: 1 },
+        [other.id]: { age: "working", lastWorkingAt: 100 },
+      }).flatMap((group) => group.rows.map(({ session, depth }) => [session.id, depth]));
+      const rootAt = tree.findIndex(([id]) => id === root.id);
+      expect(tree.slice(rootAt, rootAt + 3)).toEqual([
+        [root.id, 0],
+        [child.id, 1],
+        [grandchildId, 2],
+      ]);
+    }
+    const hidden = setChatGPTSessionHidden(hydrated, root.id, true);
+    expect(hidden.find((entry) => entry.id === child.id)?.parentSessionId).toBe(root.id);
+    const restored = setChatGPTSessionHidden(hidden, root.id, false);
+    expect(rows(restored)).toContainEqual([childId, 1]);
+    expect(chatGPTParentIndex(restored).get(grandchildId)).toBe(childId);
+  });
+
+  it("does not mix parent metadata from a different persisted environment", () => {
+    const environmentA = "server-a" as Parameters<typeof chatGPTBrowserSessionsKey>[0];
+    const environmentB = "server-b" as Parameters<typeof chatGPTBrowserSessionsKey>[0];
+    expect(chatGPTBrowserSessionsKey(environmentA)).not.toBe(
+      chatGPTBrowserSessionsKey(environmentB),
+    );
+    const root: Session = { id: parentId, title: "A's manager" };
+    const child: Session = { id: childId, title: "A's worker", parentSessionId: parentId };
+    const unrelated: Session = { id: childId, title: "B's unrelated worker" };
+    expect(rows([root, child])).toContainEqual([childId, 1]);
+    expect(chatGPTParentIndex([unrelated]).get(childId)).toBeNull();
+    expect(rows([unrelated])).toContainEqual([childId, 0]);
   });
 
   it("does not silently resurrect a user-detached parent from historic confirmed metadata", () => {

@@ -109,6 +109,7 @@ import {
   ChatGPTBrowserSidebarEntry,
 } from "./sidebar/ChatGPTBrowserSidebarEntry";
 import { OpenRigAgentsSidebarEntry } from "./sidebar/OpenRigAgentsSidebarEntry";
+import { OpenRigOperatorInbox } from "./sidebar/OpenRigOperatorInbox";
 
 import { useRightPanelStore } from "../rightPanelStore";
 import {
@@ -5253,6 +5254,7 @@ export default function Sidebar() {
         }
       >
         <SidebarGroup className="flex-1" role="presentation">
+          <OpenRigOperatorInbox />
           <ChatGPTBrowserSidebarEntry showCreateAction={false} />
           <OpenRigAgentsSidebarEntry />
           {isSearchingThreads ? (

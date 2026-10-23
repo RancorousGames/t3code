@@ -10,10 +10,10 @@ export async function controlSessions(
   input,
   { home = NodePath.resolve(import.meta.dirname, "../.t3"), exchange = sendAppControlRequest } = {},
 ) {
-  const allowed = ["list", "read", "send", "reload", "complete", "wait"];
+  const allowed = ["list", "read", "send", "reload", "complete", "archive", "restore", "change_state", "wait"];
   if (input?.action === "wait") return waitForChatGPTSessions(input, { home, exchange });
   if (!input || !allowed.includes(input.action))
-    throw new Error("action must be list, read, send, reload, complete or wait.");
+    throw new Error("action must be list, read, send, reload, complete, archive, restore, change_state or wait.");
   if (
     input.which !== undefined &&
     (input.action !== "list" ||
@@ -23,7 +23,14 @@ export async function controlSessions(
       "which applies only to list and must be visible, recent, working, blocked or all.",
     );
   if (input.action !== "list" && !(typeof input.sessionId === "string" && input.sessionId.trim()))
-    throw new Error("sessionId is required for read, send, reload and complete.");
+    throw new Error("sessionId is required for read, send, reload, complete, archive, restore and change_state.");
+  if (input.includeHidden !== undefined &&
+      (input.action !== "list" || typeof input.includeHidden !== "boolean"))
+    throw new Error("includeHidden is a boolean applying only to list.");
+  if (input.action === "change_state" ?
+      !["hidden", "unhidden", "closed"].includes(input.state) :
+      input.state !== undefined)
+    throw new Error("state=hidden|unhidden|closed is required only for change_state.");
   if (input.action === "send" && !(typeof input.message === "string" && input.message.trim()))
     throw new Error("Nonempty message required for send.");
   if (
@@ -43,12 +50,31 @@ export async function controlSessions(
       "expectedConversationId is a canonical lowercase /c/<uuid> ID for read or send.",
     );
   }
+  if (input.managerSessionId !== undefined)
+    throw new Error("managerSessionId is not an authenticated authorization token.");
+  if (
+    input.managerDecision !== undefined &&
+    (input.action !== "archive" || typeof input.managerDecision !== "boolean")
+  )
+    throw new Error("managerDecision is a boolean supported only for archive.");
+  if (
+    input.reason !== undefined &&
+    (input.action !== "archive" ||
+      typeof input.reason !== "string" ||
+      !input.reason.trim() ||
+      input.reason.length > 500 ||
+      input.managerDecision !== true)
+  )
+    throw new Error("reason requires archive managerDecision=true and 1..500 characters.");
+  if (input.action === "archive" && input.managerDecision === true && !input.reason?.trim())
+    throw new Error("managerDecision requires a nonempty reason.");
   const request = {
     version: 1,
     requestId: NodeCrypto.randomUUID(),
     type: "chatgpt.sessions",
     action: input.action,
-    ...(input.action === "list" ? { which: input.which ?? "visible" } : {}),
+    ...(input.action === "list" ? { which: input.which ?? "visible", includeHidden: input.includeHidden === true } : {}),
+    ...(input.action === "change_state" ? { state: input.state } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.from ? { from: input.from } : {}),
     ...(input.count !== undefined ? { count: input.count } : {}),
@@ -59,6 +85,8 @@ export async function controlSessions(
       ? { expectedConversationId: input.expectedConversationId }
       : {}),
     ...(input.force !== undefined ? { force: input.force } : {}),
+    ...(input.managerDecision !== undefined ? { managerDecision: input.managerDecision } : {}),
+    ...(input.reason !== undefined ? { reason: input.reason.trim() } : {}),
   };
   if (Buffer.byteLength(JSON.stringify(request), "utf8") + 1 > 64 * 1024)
     throw new Error("Request exceeds the 64 KiB desktop limit.");
@@ -96,6 +124,16 @@ export async function controlSessions(
     throw new Error(
       "T3 Code did not return session data. Rebuild and restart the updated desktop app.",
     );
+  if (
+    ["archive", "restore", "change_state"].includes(input.action) &&
+    (response.data?.sessionId !== input.sessionId ||
+      response.data?.persisted !== true ||
+      response.data?.acknowledged !== true ||
+      response.data?.action !== input.action ||
+      (input.action === "change_state" && response.data?.state !== input.state))
+  ) {
+    throw new Error(`Desktop has not confirmed persisted ${input.action}; no success assumed.`);
+  }
   if (
     input.expectedConversationId !== undefined &&
     (response.data?.conversationGuardValidated !== true ||

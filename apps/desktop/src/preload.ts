@@ -119,7 +119,44 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
   listOpenRigAgents: () => ipcRenderer.invoke(IpcChannels.OPENRIG_LIST_AGENTS_CHANNEL),
+  listPendingOpenRigNativeApprovals: () =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_NATIVE_APPROVAL_PENDING_CHANNEL),
+  getOpenRigNativeApproval: (operationId) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_NATIVE_APPROVAL_GET_CHANNEL, operationId),
+  requestOpenRigNativeReview: (operationId) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_NATIVE_APPROVAL_REVIEW_CHANNEL, operationId),
+  readOpenRigOperatorInbox: (address) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_OPERATOR_INBOX_CHANNEL, address),
+  speakOpenRigPreview: (text) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_SPEAK_PREVIEW_CHANNEL, text),
+  submitOpenRigHumanResponse: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_HUMAN_RESPONSE_CHANNEL, input),
   listOpenRigSessions: () => ipcRenderer.invoke(IpcChannels.OPENRIG_LIST_SESSIONS_CHANNEL),
+  listOpenRigManagedSessions: (seatId) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_MANAGED_SESSIONS_CHANNEL, seatId),
+  discoverOpenRigSeats: () => ipcRenderer.invoke(IpcChannels.OPENRIG_DISCOVER_SEATS_CHANNEL),
+  readOpenRigSeatReports: (seatId) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_SEAT_REPORTS_CHANNEL, seatId),
+  readOpenRigAgentTasks: (agentId) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_AGENT_TASKS_CHANNEL, agentId),
+  readOpenRigPolicyForBrowserSend: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_POLICY_BROWSER_SEND_CHANNEL, input),
+  readOpenRigExecutionProfile: (seatId) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_READ_EXECUTION_PROFILE_CHANNEL, seatId),
+  configureOpenRigExecutionProfile: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_CONFIGURE_EXECUTION_PROFILE_CHANNEL, input),
+  startOpenRigManagedSession: (seatId) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_START_MANAGED_SESSION_CHANNEL, seatId),
+  selectOpenRigPrimarySession: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_SELECT_PRIMARY_CHANNEL, input),
+  adoptOpenRigManagedSession: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_ADOPT_MANAGED_CHANNEL, input),
+  reconcileOpenRigChatGPTManagedSession: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_RECONCILE_MANAGED_CHANNEL, input),
+  detachOpenRigManagedSession: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_DETACH_MANAGED_CHANNEL, input),
+  runOpenRigManagedBrowserLifecycle: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_MANAGED_BROWSER_LIFECYCLE_CHANNEL, input),
   bindOpenRigAgent: (input) => ipcRenderer.invoke(IpcChannels.OPENRIG_BIND_AGENT_CHANNEL, input),
   unbindOpenRigAgent: (id) => ipcRenderer.invoke(IpcChannels.OPENRIG_UNBIND_AGENT_CHANNEL, id),
   sendOpenRigAgentMessage: (input) =>

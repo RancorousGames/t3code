@@ -1310,7 +1310,17 @@ export class CodexAppServerClientFactory extends Context.Service<
  * Codex 0.152 made the `update_plan` checklist tool opt-in; T3 renders it as the
  * todo list. Codex layers these above the user's and project's `config.toml`.
  */
-export const CODEX_THREAD_CONFIG = { "tools.update_plan.enabled": true } as const;
+/**
+ * Interim provider-native child hold. Applied to start, resume, fork and
+ * rollback-resume through codexThreadRuntimeParams, including existing/custom
+ * Codex instances. This is an app-server config request, not evidence that a
+ * particular native binary has acknowledged/enforced the feature flags.
+ */
+export const CODEX_THREAD_CONFIG = {
+  "tools.update_plan.enabled": true,
+  "features.multi_agent": false,
+  "features.multi_agent_v2": false,
+} as const;
 
 export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;

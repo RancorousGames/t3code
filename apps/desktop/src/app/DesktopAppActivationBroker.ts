@@ -49,6 +49,17 @@ export class DesktopAppActivationBroker {
   }
 
   request(request: DesktopAppActivationRequest): Promise<DesktopAppActivationResponse> {
+    // The generic pipe authenticates neither an operator nor a catalog model.
+    // Refuse before focus, queueing or renderer-side project/thread effects.
+    if (request.type === "t3.threads" && request.action === "create") {
+      return Promise.resolve(
+        failure(
+          request.requestId,
+          "invalid-request",
+          "Native creation requires an authenticated one-use spawn approval; the approval authority is unavailable.",
+        ),
+      );
+    }
     if (this.#closed) {
       return Promise.resolve(
         failure(request.requestId, "renderer-unavailable", "T3 Code is shutting down."),
@@ -71,7 +82,7 @@ export class DesktopAppActivationBroker {
             ),
           );
         },
-        request.type === "chatgpt.spawn" || request.type === "chatgpt.sessions"
+        request.type === "chatgpt.spawn" || request.type === "chatgpt.sessions" || request.type === "openrig.human_inbox"
           ? this.#chatGPTRequestTimeoutMs
           : this.#requestTimeoutMs,
       );
@@ -86,7 +97,7 @@ export class DesktopAppActivationBroker {
     // Agent-spawn requests must not steal focus from the user's current T3
     // thread (or a different application). The already-running renderer can
     // create and drive ChatGPT's browser tab without activating the window.
-    if (request.type !== "chatgpt.spawn" && request.type !== "chatgpt.sessions") this.#activate();
+    if (request.type !== "chatgpt.spawn" && request.type !== "chatgpt.sessions" && request.type !== "openrig.human_inbox") this.#activate();
     this.#flush();
     return response;
   }

@@ -29,6 +29,10 @@ import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+import type {
+  InactiveDualWindowsProcessWitness,
+  InactiveWindowsBackendProcessWitnessSeam,
+} from "../electron/DesktopBackendProcessWitness.ts";
 
 const decodeDesktopBackendBootstrap = Schema.decodeEffect(
   Schema.fromJsonString(DesktopBackendBootstrap),
@@ -137,6 +141,7 @@ interface MakeInstanceInput {
     DesktopTelemetryPublisher.DesktopTelemetryPublisher["Service"]
   >;
   readonly pruneRuntimes?: (distro: string | null, runtimeId: string) => Effect.Effect<void>;
+  readonly inactiveWindowsProcessWitness?: InactiveWindowsBackendProcessWitnessSeam;
 }
 
 // Helper that constructs a primary backend instance using the factory
@@ -187,10 +192,382 @@ function makeTestInstance(input: MakeInstanceInput) {
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
+    ...(input.inactiveWindowsProcessWitness
+      ? { inactiveWindowsProcessWitness: input.inactiveWindowsProcessWitness }
+      : {}),
   });
 
   return instance.pipe(Effect.provide(layerServices));
 }
+
+/** Synthetic source/pipe capabilities; no real Windows HANDLE or host is created. */
+function makeInactiveDualLegFixture(
+  options: Partial<
+    Parameters<typeof DesktopBackendManager.createInactiveMainDualLegIssuer>[0]
+  > = {},
+) {
+  const serverPipe = Symbol("server-owned-pipe");
+  const hostPipe = Symbol("host-owned-pipe");
+  const processLaunch = {
+    expectedExecutablePath: "C:\\\\Apps\\\\T3.exe",
+    entryPath: "C:\\\\T3\\\\server.mjs",
+    entrySha256: "a".repeat(64),
+    args: ["C:\\\\T3\\\\server.mjs", "--bootstrap-fd", "3"],
+    cwd: "C:\\\\T3",
+    electronRunAsNode: true as const,
+    capturedBeforeSpawn: true as const,
+  };
+  const backend = {
+    pid: 4242,
+    processCreationFiletimeTicks: "116444736000123456",
+    creationFileTimeHex: "019db1ded53f0940",
+    createdAtEpochMs: 12_345,
+    osExecutablePath: "C:\\\\Apps\\\\T3.exe",
+    launch: processLaunch,
+  };
+  const host = {
+    ...backend,
+    pid: 5252,
+    launch: {
+      ...processLaunch,
+      entryPath: "C:\\\\T3\\\\host.mjs",
+      entrySha256: "b".repeat(64),
+    },
+  };
+  const state = {
+    processAlive: true,
+    serverAlive: true,
+    hostAlive: true,
+    serverPipe,
+    hostPipe,
+    serverPid: 4242,
+    hostPid: 5252,
+    backend,
+    host,
+    wall: 20_000,
+    monotonic: 50_000,
+    serverAckReady: true,
+    hostAckReady: true,
+    overrideServerAck: null as Uint8Array | null,
+    overrideHostAck: null as Uint8Array | null,
+  };
+  const events: string[] = [];
+  const bytes = (value: Record<string, unknown>) =>
+    new TextEncoder().encode(JSON.stringify(value) + "\n");
+  const processes: InactiveDualWindowsProcessWitness = {
+    readCurrent: () => {
+      events.push("process-check");
+      return state.processAlive ? { backend: { ...state.backend }, host: { ...state.host } } : null;
+    },
+    revoke: () => {
+      state.processAlive = false;
+      events.push("process-revoked");
+    },
+  };
+  const serverLeg: DesktopBackendManager.InactiveMainOwnedPrivateLeg = {
+    readOwnedCurrent: () => {
+      events.push("server-pipe-check");
+      return state.serverAlive
+        ? {
+            pipeIdentity: state.serverPipe,
+            processId: state.serverPid,
+            channelIncarnationId: "server-inc",
+          }
+        : null;
+    },
+    consumeOneUseAckBytes: () => {
+      events.push("server-ack");
+      if (!state.serverAckReady) return null;
+      state.serverAckReady = false;
+      return (
+        state.overrideServerAck ??
+        bytes({
+          type: "challenge_ack",
+          version: 1,
+          mainRunId: "main-run",
+          serverGenerationId: "server-gen",
+          serverChannelIncarnationId: "server-inc",
+          challengeId: "server-challenge",
+          nonce: "s".repeat(32),
+        })
+      );
+    },
+  };
+  const hostLeg: DesktopBackendManager.InactiveMainOwnedPrivateLeg = {
+    readOwnedCurrent: () => {
+      events.push("host-pipe-check");
+      return state.hostAlive
+        ? {
+            pipeIdentity: state.hostPipe,
+            processId: state.hostPid,
+            channelIncarnationId: "host-inc",
+          }
+        : null;
+    },
+    consumeOneUseAckBytes: () => {
+      events.push("host-ack");
+      if (!state.hostAckReady) return null;
+      state.hostAckReady = false;
+      return (
+        state.overrideHostAck ??
+        bytes({
+          type: "host_challenge_ack",
+          version: 1,
+          role: "provider-only",
+          mainRunId: "main-run",
+          serverInstanceId: "server-instance",
+          serverGenerationId: "server-gen",
+          serverChannelIncarnationId: "server-inc",
+          hostChannelIncarnationId: "host-inc",
+          serverHandshakeChallengeId: "server-challenge",
+          challengeId: "host-challenge",
+          nonce: "h".repeat(32),
+        })
+      );
+    },
+  };
+  const issuer = DesktopBackendManager.createInactiveMainDualLegIssuer({
+    processes,
+    serverLeg,
+    hostLeg,
+    mainRunId: "main-run",
+    serverInstanceId: "server-instance",
+    serverGenerationId: "server-gen",
+    leaseId: "lease-id",
+    serverChannelIncarnationId: "server-inc",
+    hostChannelIncarnationId: "host-inc",
+    serverChallengeId: "server-challenge",
+    serverNonce: "s".repeat(32),
+    hostChallengeId: "host-challenge",
+    hostNonce: "h".repeat(32),
+    earlierRetirementCutoffEpochMs: null,
+    clock: {
+      epochMs: () => {
+        events.push("wall-clock");
+        return state.wall;
+      },
+      monotonicMs: () => {
+        events.push("monotonic-clock");
+        return state.monotonic;
+      },
+    },
+    ...options,
+  });
+  return { issuer, state, events, bytes };
+}
+
+describe("inactive W2-B MAIN dual-handshake issuer fixture", () => {
+  it("requires independently retained processes/pipes and both ACKs before sampling birth", () => {
+    const f = makeInactiveDualLegFixture();
+    assert.isNull(f.issuer.readInactiveEvidence());
+    assert.deepEqual(f.events, []);
+    assert.isTrue(f.issuer.begin());
+    const firstClock = f.events.indexOf("wall-clock");
+    assert.isAbove(firstClock, f.events.indexOf("server-ack"));
+    assert.isAbove(firstClock, f.events.indexOf("host-ack"));
+    assert.isTrue(f.events.slice(0, firstClock).filter((x) => x === "process-check").length >= 2);
+    const v = f.issuer.readInactiveEvidence();
+    assert.equal(v?.notEnrolled, true);
+    assert.equal(v?.serverHandshakeChallengeId, "server-challenge");
+    assert.equal(v?.hostHandshakeChallengeId, "host-challenge");
+    assert.equal(v?.backend.pid, 4242);
+    assert.equal(v?.host.pid, 5252);
+    assert.equal(v?.host.launch.entrySha256, "b".repeat(64));
+    assert.equal(v?.leaseBirthEpochMs, 20_000);
+    assert.equal(v?.leaseExpiresAtEpochMs, 320_000);
+    assert.equal(v?.leaseElapsedMonotonicMs, 0);
+    assert.isFrozen(v);
+    assert.isFalse(f.issuer.begin(), "one-use cannot create a second lease");
+    assert.isTrue(f.issuer.revoked);
+    assert.isNull(f.issuer.readInactiveEvidence());
+  });
+
+  it("rejects missing/foreign process or pipe before any ACK/birth", () => {
+    for (const fault of [
+      "process-exit",
+      "server-pipe",
+      "host-pipe",
+      "same-pipe",
+      "foreign-server-pid",
+      "foreign-host-pid",
+    ] as const) {
+      const f = makeInactiveDualLegFixture();
+      if (fault === "process-exit") f.state.processAlive = false;
+      if (fault === "server-pipe") f.state.serverAlive = false;
+      if (fault === "host-pipe") f.state.hostAlive = false;
+      if (fault === "same-pipe") f.state.hostPipe = f.state.serverPipe;
+      if (fault === "foreign-server-pid") f.state.serverPid = 5252;
+      if (fault === "foreign-host-pid") f.state.hostPid = 4242;
+      assert.isFalse(f.issuer.begin(), fault);
+      assert.isTrue(f.issuer.revoked, fault);
+      assert.isNull(f.issuer.readInactiveEvidence(), fault);
+      assert.isFalse(f.events.includes("wall-clock"), fault);
+    }
+  });
+
+  it("rejects server-only ACK, mismatched challenge, hostRole alias and wrong provider role", () => {
+    for (const fault of [
+      "no-server",
+      "no-host",
+      "wrong-role",
+      "hostRole",
+      "wrong-server-challenge",
+      "reused-host-challenge",
+    ] as const) {
+      const f = makeInactiveDualLegFixture();
+      if (fault === "no-server") f.state.serverAckReady = false;
+      if (fault === "no-host") f.state.hostAckReady = false;
+      if (fault !== "no-server" && fault !== "no-host") {
+        const ack: Record<string, unknown> = {
+          type: "host_challenge_ack",
+          version: 1,
+          role: "provider-only",
+          mainRunId: "main-run",
+          serverInstanceId: "server-instance",
+          serverGenerationId: "server-gen",
+          serverChannelIncarnationId: "server-inc",
+          hostChannelIncarnationId: "host-inc",
+          serverHandshakeChallengeId: "server-challenge",
+          challengeId: "host-challenge",
+          nonce: "h".repeat(32),
+        };
+        if (fault === "wrong-role") ack.role = "operator";
+        if (fault === "hostRole") {
+          delete ack.role;
+          ack.hostRole = "provider-only";
+        }
+        if (fault === "wrong-server-challenge") ack.serverHandshakeChallengeId = "stale";
+        if (fault === "reused-host-challenge") ack.challengeId = "server-challenge";
+        f.state.overrideHostAck = f.bytes(ack);
+      }
+      assert.isFalse(f.issuer.begin(), fault);
+      assert.isTrue(f.issuer.revoked, fault);
+      assert.isNull(f.issuer.readInactiveEvidence(), fault);
+    }
+  });
+
+  it("fails closed on malformed, oversize, coalesced and noncanonical private host ACKs", () => {
+    const encoder = new TextEncoder();
+    const valid = {
+      type: "host_challenge_ack",
+      version: 1,
+      role: "provider-only",
+      mainRunId: "main-run",
+      serverInstanceId: "server-instance",
+      serverGenerationId: "server-gen",
+      serverChannelIncarnationId: "server-inc",
+      hostChannelIncarnationId: "host-inc",
+      serverHandshakeChallengeId: "server-challenge",
+      challengeId: "host-challenge",
+      nonce: "h".repeat(32),
+    };
+    const canonical = JSON.stringify(valid);
+    for (const raw of [
+      encoder.encode(canonical + "\r\n"),
+      encoder.encode(canonical + "\n" + canonical + "\n"),
+      encoder.encode(canonical.slice(0, -1) + ', "role":"provider-only"}\n'),
+      encoder.encode(canonical.slice(0, -1) + ',"role":"provider-only"}\n'),
+      encoder.encode(canonical.slice(0, -1) + ',"unexpected":1}\n'),
+      encoder.encode(" ".repeat(2049) + "\n"),
+      new Uint8Array([0xff, 0x0a]),
+      encoder.encode(canonical),
+    ]) {
+      const f = makeInactiveDualLegFixture();
+      f.state.overrideHostAck = raw;
+      assert.isFalse(f.issuer.begin());
+      assert.isTrue(f.issuer.revoked);
+      assert.isNull(f.issuer.readInactiveEvidence());
+    }
+  });
+
+  it("pins an immutable earlier cutoff and enforces both 300000ms expiry clocks", () => {
+    const earlier = makeInactiveDualLegFixture({ earlierRetirementCutoffEpochMs: 20_150 });
+    assert.isTrue(earlier.issuer.begin());
+    assert.equal(earlier.issuer.readInactiveEvidence()?.leaseExpiresAtEpochMs, 20_150);
+    earlier.state.wall += 149;
+    earlier.state.monotonic += 149;
+    assert.equal(earlier.issuer.readInactiveEvidence()?.leaseElapsedMonotonicMs, 149);
+    earlier.state.monotonic += 1;
+    assert.isNull(earlier.issuer.readInactiveEvidence());
+    assert.isTrue(earlier.issuer.revoked);
+    const max = makeInactiveDualLegFixture();
+    assert.isTrue(max.issuer.begin());
+    max.state.monotonic += 299_999;
+    assert.equal(max.issuer.readInactiveEvidence()?.leaseElapsedMonotonicMs, 299_999);
+    max.state.monotonic += 1;
+    assert.isNull(max.issuer.readInactiveEvidence());
+    const wall = makeInactiveDualLegFixture();
+    assert.isTrue(wall.issuer.begin());
+    wall.state.wall += 300_000;
+    assert.isNull(wall.issuer.readInactiveEvidence());
+    assert.isTrue(wall.issuer.revoked);
+  });
+
+  it("rejects invalid immutable cutoff and birth clock overflow", () => {
+    for (const cutoff of [-1, 0, 20_000, 19_999, Number.MAX_SAFE_INTEGER + 1]) {
+      const f = makeInactiveDualLegFixture({ earlierRetirementCutoffEpochMs: cutoff });
+      assert.isFalse(f.issuer.begin(), String(cutoff));
+      assert.isTrue(f.issuer.revoked);
+    }
+    const overflow = makeInactiveDualLegFixture({
+      clock: { epochMs: () => Number.MAX_SAFE_INTEGER - 1, monotonicMs: () => 10 },
+    });
+    assert.isFalse(overflow.issuer.begin());
+  });
+
+  it("irrevocably revokes after clock regression, EOF, OS exit, pipe or raw ticks drift", () => {
+    for (const fault of [
+      "wall-rollback",
+      "monotonic-rollback",
+      "host-exit",
+      "server-EOF",
+      "host-EOF",
+      "host-pipe-change",
+      "backend-raw-same-ms",
+      "host-raw-same-ms",
+      "host-entry-change",
+      "host-image-change",
+      "host-entrypath-change",
+    ] as const) {
+      const f = makeInactiveDualLegFixture();
+      assert.isTrue(f.issuer.begin(), fault);
+      assert.isNotNull(f.issuer.readInactiveEvidence());
+      if (fault === "wall-rollback") f.state.wall -= 1;
+      if (fault === "monotonic-rollback") f.state.monotonic -= 1;
+      if (fault === "host-exit") f.state.processAlive = false;
+      if (fault === "server-EOF") f.state.serverAlive = false;
+      if (fault === "host-EOF") f.state.hostAlive = false;
+      if (fault === "host-pipe-change") f.state.hostPipe = Symbol("new-pipe");
+      if (fault === "backend-raw-same-ms")
+        f.state.backend.processCreationFiletimeTicks = "116444736000123457";
+      if (fault === "host-raw-same-ms")
+        f.state.host.processCreationFiletimeTicks = "116444736000123457";
+      if (fault === "host-entry-change")
+        f.state.host.launch = {
+          ...f.state.host.launch,
+          entrySha256: "f".repeat(64),
+        };
+      if (fault === "host-image-change") f.state.host.osExecutablePath = "C:\\Other\\host.exe";
+      if (fault === "host-entrypath-change")
+        f.state.host.launch = {
+          ...f.state.host.launch,
+          entryPath: "C:\\Untrusted\\host.mjs",
+        };
+      assert.isNull(f.issuer.readInactiveEvidence(), fault);
+      assert.isTrue(f.issuer.revoked, fault);
+      assert.isNull(f.issuer.readInactiveEvidence(), fault);
+    }
+  });
+
+  it("is unmounted by production defaults and never spawns a child by itself", () => {
+    const f = makeInactiveDualLegFixture();
+    assert.isNull(f.issuer.readInactiveEvidence());
+    assert.deepEqual(f.events, []);
+    assert.isUndefined(
+      (baseConfig as unknown as Record<string, unknown>).inactiveMainDualLegIssuer,
+    );
+  });
+});
 
 describe("DesktopBackendManager", () => {
   it.effect("spawns the backend with fd3 bootstrap and fd4 telemetry", () =>
@@ -274,6 +651,154 @@ describe("DesktopBackendManager", () => {
         );
       }),
     ),
+  );
+
+  it.effect("W2-A: only an explicitly paired synthetic fd8 output/fd9 input reaches child", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let command: ChildProcess.Command | undefined;
+        const acceptedLine = yield* Deferred.make<string>();
+        const exit = yield* Deferred.make<void>();
+        const layer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make((value) =>
+            Effect.sync(() => {
+              command = value;
+              return makeProcess({
+                getOutputFd: (fd) =>
+                  fd === 8 ? Stream.make(Buffer.from('{"type":"challenge_ack"}\n')) : Stream.empty,
+                exitCode: Deferred.await(exit).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              });
+            }),
+          ),
+        );
+        const result = DesktopBackendManager.runBackendProcess({
+          ...baseConfig,
+          captureOutput: false,
+          bootstrap: {
+            ...baseConfig.bootstrap,
+            desktopPrivateAuthorityOutputFd: 8,
+            desktopPrivateAuthorityInputFd: 9,
+            desktopTelemetryFd: 4,
+            desktopTelemetryControlFd: 5,
+            desktopBrowserFd: 6,
+            desktopBrowserControlFd: 7,
+          },
+          desktopTelemetryStream: Stream.empty,
+          desktopBrowserStream: Stream.empty,
+          onDesktopBrowserCommand: () => Effect.void,
+          inactiveMainToServerStream: Stream.make(Buffer.from('{"type":"challenge"}\n')),
+          onInactiveServerLine: (line) => Deferred.succeed(acceptedLine, line).pipe(Effect.asVoid),
+        }).pipe(Effect.provide(Layer.merge(layer, layerHealthyHttpClient)), Effect.forkScoped);
+        const fiber = yield* result;
+        assert.equal(yield* Deferred.await(acceptedLine), '{"type":"challenge_ack"}');
+        assert.isDefined(command);
+        if (command._tag !== "StandardCommand") return assert.fail("expected standard child");
+        assert.equal(command.options.additionalFds?.fd8?.type, "output");
+        assert.equal(command.options.additionalFds?.fd9?.type, "input");
+        for (const index of [3, 4, 5, 6, 7]) {
+          assert.notEqual(command.options.additionalFds?.[`fd${index}`]?.type, undefined);
+        }
+        yield* Deferred.succeed(exit, void 0);
+        yield* Fiber.join(fiber);
+      }),
+    ),
+  );
+
+  it("W2-A MAIN challenge ACK is one-use, exact-correlated, and never authorizes a host", () => {
+    const base = {
+      mainRunId: "main-run-1",
+      serverGenerationId: "generation-1",
+      serverChannelIncarnationId: "server-channel-1",
+      challengeId: "challenge-1",
+      nonce: "X".repeat(43),
+      begunAtMs: 1000,
+      now: () => 1000,
+    };
+    const gate = DesktopBackendManager.makeInactiveMainChallengeGate(base);
+    assert.isTrue(gate.challengeLine.endsWith("\\n"));
+    const ack = {
+      type: "challenge_ack",
+      version: 1,
+      mainRunId: base.mainRunId,
+      serverGenerationId: base.serverGenerationId,
+      serverChannelIncarnationId: base.serverChannelIncarnationId,
+      challengeId: base.challengeId,
+      nonce: base.nonce,
+    };
+    assert.isTrue(gate.acceptAckLine(JSON.stringify(ack)));
+    assert.isTrue(gate.acknowledged);
+    assert.isFalse(gate.acceptAckLine(JSON.stringify(ack)));
+    assert.isTrue(gate.revoked);
+    for (const wrong of [
+      { ...ack, mainRunId: "other" },
+      { ...ack, serverGenerationId: "other" },
+      { ...ack, nonce: "N".repeat(43) },
+      { ...ack, extra: true },
+    ]) {
+      const attempt = DesktopBackendManager.makeInactiveMainChallengeGate(base);
+      assert.isFalse(attempt.acceptAckLine(JSON.stringify(wrong)));
+      assert.isTrue(attempt.revoked);
+    }
+    const expired = DesktopBackendManager.makeInactiveMainChallengeGate({
+      ...base,
+      now: () => 6000,
+    });
+    assert.isFalse(expired.acceptAckLine(JSON.stringify(ack)));
+    assert.isTrue(expired.revoked);
+    const closed = DesktopBackendManager.makeInactiveMainChallengeGate(base);
+    closed.close();
+    assert.isFalse(closed.acceptAckLine(JSON.stringify(ack)));
+  });
+
+  it.effect("W2-A: missing pair, callbacks or WSL refuses before spawn", () =>
+    Effect.gen(function* () {
+      let spawned = 0;
+      const layer = Layer.merge(
+        Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => {
+            spawned++;
+            return Effect.succeed(makeProcess());
+          }),
+        ),
+        layerHealthyHttpClient,
+      );
+      const invalid: Array<DesktopBackendManager.DesktopBackendStartConfig> = [
+        {
+          ...baseConfig,
+          bootstrap: {
+            ...baseConfig.bootstrap,
+            desktopPrivateAuthorityOutputFd: 8,
+            desktopPrivateAuthorityInputFd: 9,
+          },
+        },
+        {
+          ...baseConfig,
+          runningDistro: "Ubuntu",
+          bootstrap: {
+            ...baseConfig.bootstrap,
+            desktopPrivateAuthorityOutputFd: 8,
+            desktopPrivateAuthorityInputFd: 9,
+          },
+        },
+        {
+          ...baseConfig,
+          bootstrap: {
+            ...baseConfig.bootstrap,
+            desktopPrivateAuthorityOutputFd: 8,
+          },
+        },
+      ];
+      for (const config of invalid) {
+        const error = yield* DesktopBackendManager.runBackendProcess({
+          ...config,
+          desktopTelemetryStream: Stream.empty,
+        }).pipe(Effect.flip, Effect.scoped, Effect.provide(layer));
+        assert.equal(error._tag, "BackendProcessBootstrapEncodeError");
+      }
+      assert.equal(spawned, 0);
+    }),
   );
 
   it.effect("preserves the readiness timeout cause and process context", () =>
@@ -1503,6 +2028,146 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.size(starts), 0);
         assert.equal((yield* instance.snapshot).desiredRunning, false);
       }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect(
+    "inactive Windows MAIN witness is injected only, retains raw identity, and revokes on stop",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const ready = yield* Deferred.make<void>();
+          const exited = yield* Deferred.make<void>();
+          const launch = {
+            expectedExecutablePath: "C:\\Apps\\t3.exe",
+            entryPath: "C:\\Server\\bin.mjs",
+            entrySha256: "a".repeat(64),
+            args: ["C:\\Server\\bin.mjs", "--bootstrap-fd", "3"],
+            cwd: "C:\\Server",
+            electronRunAsNode: true as const,
+            capturedBeforeSpawn: true as const,
+          };
+          let prepareCount = 0;
+          let observeCount = 0;
+          let revoked = 0;
+          const seam: InactiveWindowsBackendProcessWitnessSeam = {
+            prepareLaunch: async (input) => {
+              prepareCount++;
+              assert.equal(input.entryPath, launch.entryPath);
+              return launch;
+            },
+            observeStarted: async ({ pid, runId, launch: startedLaunch }) => {
+              observeCount++;
+              assert.equal(pid, 123);
+              assert.equal(runId, 1);
+              assert.equal(startedLaunch, launch);
+              let closed = false;
+              return {
+                readCurrent: () =>
+                  closed
+                    ? null
+                    : {
+                        pid,
+                        processCreationFiletimeTicks: "133700000000000009",
+                        creationFileTimeHex: "01db1cbb9a101109",
+                        createdAtEpochMs: 1_725_526_400_000,
+                        osExecutablePath: "C:\\Apps\\t3.exe",
+                        launch,
+                      },
+                revoke: () => {
+                  if (!closed) {
+                    closed = true;
+                    revoked++;
+                  }
+                },
+              };
+            },
+          };
+          const instance = yield* makeTestInstance({
+            config: {
+              ...baseConfig,
+              executablePath: launch.expectedExecutablePath,
+              entryPath: launch.entryPath,
+              cwd: launch.cwd,
+              args: [...launch.args],
+            },
+            inactiveWindowsProcessWitness: seam,
+            spawnerLayer: Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make(() =>
+                Effect.gen(function* () {
+                  const scope = yield* Scope.Scope;
+                  yield* Scope.addFinalizer(
+                    scope,
+                    Deferred.succeed(exited, void 0).pipe(Effect.asVoid),
+                  );
+                  return makeProcess({
+                    exitCode: Deferred.await(exited).pipe(
+                      Effect.as(ChildProcessSpawner.ExitCode(0)),
+                    ),
+                  });
+                }),
+              ),
+            ),
+            onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+          });
+          // No W1 observer is called on construction, before child spawn.
+          assert.equal(prepareCount, 0);
+          assert.isNull(yield* instance.inactiveWindowsWitnessSnapshot!);
+          yield* instance.start;
+          yield* Deferred.await(ready);
+          const current = yield* instance.inactiveWindowsWitnessSnapshot!;
+          assert.equal(prepareCount, 1);
+          assert.equal(observeCount, 1);
+          assert.equal(current?.processCreationFiletimeTicks, "133700000000000009");
+          assert.equal(current?.launch.entrySha256, "a".repeat(64));
+          yield* instance.stop();
+          assert.isNull(yield* instance.inactiveWindowsWitnessSnapshot!);
+          assert.equal(revoked, 1);
+          yield* Deferred.succeed(exited, undefined);
+        }),
+      ),
+  );
+
+  it.effect("inactive witness rejects WSL without spawning, and remains absent by default", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let spawned = 0;
+        let prepared = 0;
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => {
+            spawned++;
+            return Effect.succeed(makeProcess());
+          }),
+        );
+        const seam: InactiveWindowsBackendProcessWitnessSeam = {
+          prepareLaunch: async () => {
+            prepared++;
+            throw new Error("should reject WSL before provenance");
+          },
+          observeStarted: async () => {
+            throw new Error("should never run");
+          },
+        };
+        const unsupported = yield* makeTestInstance({
+          config: { ...baseConfig, runningDistro: "Ubuntu", bootstrapDelivery: "stdin" },
+          inactiveWindowsProcessWitness: seam,
+          spawnerLayer,
+        });
+        yield* unsupported.start;
+        assert.equal(spawned, 0);
+        assert.equal(prepared, 0);
+        assert.isFalse((yield* unsupported.snapshot).desiredRunning);
+        assert.isNull(yield* unsupported.inactiveWindowsWitnessSnapshot!);
+        const normal = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => Effect.succeed(makeProcess({ exitCode: Effect.never }))),
+          ),
+        });
+        assert.isNull(yield* normal.inactiveWindowsWitnessSnapshot!);
+      }),
     ),
   );
 

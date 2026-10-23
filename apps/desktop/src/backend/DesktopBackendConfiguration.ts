@@ -544,6 +544,41 @@ const buildObservabilityFragment = (observabilitySettings: BackendObservabilityS
   }),
 });
 
+/**
+ * W2-A INACTIVE opt-in only. Production resolvePrimary NEVER includes these
+ * FDs. A later MAIN-attested writer must provide a separate source/host grant.
+ */
+export function withInactivePrivateAuthorityFds(
+  config: DesktopBackendManager.DesktopBackendStartConfig,
+): DesktopBackendManager.DesktopBackendStartConfig | null {
+  if (
+    config.bootstrapDelivery !== "fd3" ||
+    config.runningDistro !== undefined ||
+    config.env.ELECTRON_RUN_AS_NODE !== "1" ||
+    config.bootstrap.mode !== "desktop" ||
+    config.bootstrap.desktopPrivateAuthorityInputFd !== undefined ||
+    config.bootstrap.desktopPrivateAuthorityOutputFd !== undefined
+  )
+    return null;
+  const existing = [
+    3,
+    config.bootstrap.desktopTelemetryFd,
+    config.bootstrap.desktopTelemetryControlFd,
+    config.bootstrap.desktopBrowserFd,
+    config.bootstrap.desktopBrowserControlFd,
+  ].filter((fd): fd is number => fd !== undefined);
+  if (new Set(existing).size !== existing.length || existing.includes(8) || existing.includes(9))
+    return null;
+  return {
+    ...config,
+    bootstrap: {
+      ...config.bootstrap,
+      desktopPrivateAuthorityOutputFd: 8,
+      desktopPrivateAuthorityInputFd: 9,
+    },
+  };
+}
+
 const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolvePrimary")(
   function* (
     input: SharedBootstrapInput & {

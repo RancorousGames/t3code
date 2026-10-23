@@ -10,12 +10,13 @@ import struct
 import subprocess
 import sys
 
-from t3_build_freshness import source_fingerprint, remember_build
+from t3_build_freshness import BUILD_OUTPUTS
 
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 CUSTOM_EXE_NAME = "T3 Code (Custom).exe"
 RUNTIME_RELATIVE = Path(".electron-runtime") / "windows-custom"
+STAGE_MARKER = Path(".t3") / "staged-source-build.json"
 
 
 def resolve_node(root: Path, pnpm: str) -> Path:
@@ -59,6 +60,7 @@ def custom_app_running(root: Path) -> bool:
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
         text=True,
+        check=True,
         creationflags=CREATE_NO_WINDOW,
     )
     return runtime in result.stdout.lower()
@@ -125,6 +127,7 @@ const desktopDir = path.join(root, "apps", "desktop");
 process.env.T3CODE_SOURCE_CHECKOUT = "1";
 process.env.T3CODE_HOME = path.join(root, ".t3");
 process.env.T3CODE_DISABLE_AUTO_UPDATE = "1";
+process.env.OPENRIG_T3_BRIDGE_MODE = "maintenance-no-phase1-autostart";
 process.env.T3CODE_DESKTOP_APP_USER_MODEL_ID = "com.t3tools.t3code.custom";
 delete process.env.ELECTRON_RUN_AS_NODE;
 delete process.env.VITE_DEV_SERVER_URL;
@@ -231,13 +234,92 @@ def embed_icon(exe_path: Path, ico_path: Path) -> None:
             raise ctypes.WinError(ctypes.get_last_error())
 
 
-def main(*, artifacts_only: bool = False) -> None:
+def _expected_runtime_marker(source_exe: Path, icon_path: Path) -> dict:
+    return {
+        "source": str(source_exe.parent),
+        "electron_exe_size": source_exe.stat().st_size,
+        "electron_exe_mtime_ns": source_exe.stat().st_mtime_ns,
+        "icon_mtime_ns": icon_path.stat().st_mtime_ns,
+    }
+
+
+def _bundle_paths():
+    # Electron executable/stub are separately staged until after the old app closes.
+    return tuple(path for path in BUILD_OUTPUTS
+                 if not str(path).startswith(str(RUNTIME_RELATIVE)))
+
+
+def _bundle_snapshot(root: Path) -> dict:
+    return {
+        str(path): [ (root / path).stat().st_size, (root / path).stat().st_mtime_ns ]
+        for path in _bundle_paths()
+    }
+
+
+def _bundles_present(root: Path) -> bool:
+    return all((root / path).is_file() for path in _bundle_paths())
+
+
+def staged_build_is_current(root: Path) -> bool:
+    try:
+        stage = json.loads((root / STAGE_MARKER).read_text(encoding="utf-8"))
+        if not (_bundles_present(root) and stage.get("bundles") == _bundle_snapshot(root)):
+            return False
+        runtime = root / RUNTIME_RELATIVE
+        if stage.get("runtime_swap") is True:
+            staged = runtime.with_name("windows-custom-next")
+            return (staged / CUSTOM_EXE_NAME).is_file() and (
+                staged / "resources" / "app" / "index.cjs").is_file()
+        return (stage.get("runtime_swap") is False
+                and (runtime / CUSTOM_EXE_NAME).is_file()
+                and (runtime / "resources" / "app" / "index.cjs").is_file())
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def activate_staged_build(root: Path) -> None:
+    """Only filesystem activation happens after T3 exits. Never compile here."""
+    if custom_app_running(root):
+        raise RuntimeError("Cannot activate a staged build while T3 is running.")
+    if not staged_build_is_current(root):
+        raise RuntimeError("Staged build/output mismatch; refusing activation.")
+    stage = json.loads((root / STAGE_MARKER).read_text(encoding="utf-8"))
+    runtime = root / RUNTIME_RELATIVE
+    if stage["runtime_swap"]:
+        staged = runtime.with_name("windows-custom-next")
+        previous = runtime.with_name("windows-custom-previous")
+        if previous.exists():
+            shutil.rmtree(previous)
+        if runtime.exists():
+            runtime.rename(previous)
+        try:
+            staged.rename(runtime)
+        except OSError:
+            if previous.exists() and not runtime.exists():
+                previous.rename(runtime)
+            raise
+    if not _bundles_present(root):
+        raise RuntimeError("Compiled bundles disappeared before activation.")
+    marker = root / ".t3" / "compiled-source-build.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({
+        "custom_exe": str(runtime / CUSTOM_EXE_NAME),
+        "desktop_main": str(root / "apps" / "desktop" / "dist-electron" / "boot.cjs"),
+    }, indent=2) + "\n", encoding="utf-8")
+    (root / STAGE_MARKER).unlink()
+    print("Staged build activated without compiling after shutdown.", flush=True)
+
+
+def main(*, artifacts_only: bool = False, stage_only: bool = False) -> None:
     if os.name != "nt":
         raise RuntimeError("This build helper is intended for Windows.")
 
     root = Path(__file__).resolve().parent
-    if custom_app_running(root) and not artifacts_only:
+    if custom_app_running(root) and not (artifacts_only or stage_only):
         raise RuntimeError("Close T3 Code (Custom) before updating its executable.")
+    if stage_only:
+        # An old manifest must never validate if compilation fails halfway.
+        (root / STAGE_MARKER).unlink(missing_ok=True)
 
     pnpm = shutil.which("pnpm.cmd")
     if not pnpm:
@@ -248,8 +330,6 @@ def main(*, artifacts_only: bool = False) -> None:
     env["PATH"] = str(node.parent) + os.pathsep + env.get("PATH", "")
     env.pop("ELECTRON_RUN_AS_NODE", None)
 
-    # Capture before compilation: changes racing the build must not be marked fresh.
-    source_before_build = source_fingerprint(root)
     print("Building T3 Code checkout...", flush=True)
     # Invoke the workspace build runner directly: pnpm 11 may attempt an
     # unrelated monorepo reinstall (and fail on a mobile package patch) before
@@ -265,15 +345,44 @@ def main(*, artifacts_only: bool = False) -> None:
         check=True,
     )
 
+    if stage_only:
+        if not _bundles_present(root):
+            raise RuntimeError("Compiled output missing during staging; old T3 remains running.")
+        source_exe = electron_binary(root, node)
+        icon_path = root / "assets" / "dev" / "blueprint-windows.ico"
+        if not icon_path.is_file():
+            raise RuntimeError(f"Development icon not found: {icon_path}")
+        runtime = root / RUNTIME_RELATIVE
+        next_runtime = runtime.with_name("windows-custom-next")
+        try:
+            existing_marker = json.loads(
+                (runtime / "source-runtime.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            existing_marker = None
+        needs_swap = (existing_marker != _expected_runtime_marker(source_exe, icon_path)
+                      or not (runtime / CUSTOM_EXE_NAME).is_file()
+                      or not (runtime / "resources/app/index.cjs").is_file())
+        if needs_swap:
+            if next_runtime.exists():
+                shutil.rmtree(next_runtime)
+            copy_runtime(source_exe, next_runtime, icon_path)
+            write_app_stub(root, next_runtime)
+        marker = root / STAGE_MARKER
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({
+            "runtime_swap": needs_swap,
+            "bundles": _bundle_snapshot(root),
+        }, indent=2) + "\n", encoding="utf-8")
+        if not staged_build_is_current(root):
+            marker.unlink(missing_ok=True)
+            raise RuntimeError("Staged build verification failed.")
+        print("New T3 bundles/runtime staged and verified; previous app still running.", flush=True)
+        return
+
     if artifacts_only:
-        if source_fingerprint(root) == source_before_build:
-            # The executable and stub do not change for ordinary source edits:
-            # compile in parallel with the running app, then restart in seconds.
-            remember_build(root, source_before_build)
-            print("Precompiled source artifacts verified for fast restart.", flush=True)
-        else:
-            print("Source changed during build; retry staging before restart.", flush=True)
-            raise RuntimeError("Source changed during precompilation.")
+        if not _bundles_present(root):
+            raise RuntimeError("Compiled output missing after build.")
+        print("Compiled artifacts ready for fast restart.", flush=True)
         return
 
     source_exe = electron_binary(root, node)
@@ -317,11 +426,6 @@ def main(*, artifacts_only: bool = False) -> None:
         encoding="utf-8",
     )
 
-    if source_fingerprint(root) == source_before_build:
-        remember_build(root, source_before_build)
-        print("Recorded source fingerprint for subsequent fast restarts.", flush=True)
-    else:
-        print("Source changed during compilation; next restart must rebuild.", flush=True)
     print()
     print(f"Compiled successfully: {custom_exe}")
     print("The restart worker will relaunch T3 Code automatically.")
@@ -333,6 +437,10 @@ if __name__ == "__main__":
             main()
         elif sys.argv[1:] == ["--artifacts-only"]:
             main(artifacts_only=True)
+        elif sys.argv[1:] == ["--stage-only"]:
+            main(stage_only=True)
+        elif sys.argv[1:] == ["--activate-staged"]:
+            activate_staged_build(Path(__file__).resolve().parent)
         elif len(sys.argv) == 1:
             # Never terminate the very T3 instance that is hosting this build
             # command: the coordinator detaches before closing the window.
@@ -342,7 +450,7 @@ if __name__ == "__main__":
                 check=True,
             )
         else:
-            raise RuntimeError("Usage: compile_t3.py [--build-only|--artifacts-only]")
+            raise RuntimeError("Usage: compile_t3.py [--build-only|--artifacts-only|--stage-only|--activate-staged]")
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Build failed: {error}", file=sys.stderr)
         sys.exit(1)

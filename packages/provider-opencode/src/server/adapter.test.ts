@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
 import {
+  ChatAttachmentId,
   CheckpointId,
   NodeId,
   ProjectId,
@@ -148,6 +149,9 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
   suffix: string,
   nativeSessionId: string,
   client: object,
+  policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy = runtimePolicy("full-access", {
+    cwd: "/workspace",
+  }),
 ) {
   const instanceId = ProviderInstanceId.make(`opencode-${suffix}`);
   const threadId = ThreadId.make(`thread-opencode-${suffix}`);
@@ -156,7 +160,20 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
     model: "anthropic/claude-sonnet",
     options: [],
   };
-  const policy = runtimePolicy("full-access", { cwd: "/workspace" });
+  // Legacy fake clients now acknowledge the mandatory session permission
+  // update. Failure-path tests supply their own update implementation.
+  const session = (client as { readonly session?: Record<string, unknown> }).session ?? {};
+  const fakeClient = {
+    ...client,
+    session: {
+      ...session,
+      update:
+        session.update ??
+        (async ({ sessionID, permission }: { sessionID: string; permission: unknown }) => ({
+          data: { id: sessionID, permission },
+        })),
+    },
+  };
   const adapter = yield* makeOpenCodeAdapterV2({
     instanceId,
     settings: OPEN_CODE_TEST_SETTINGS,
@@ -164,7 +181,7 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
   }).pipe(
     Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
       connectToOpenCodeServer: () => Effect.succeed({ url: "http://test.invalid", external: true }),
-      createOpenCodeSdkClient: () => client,
+      createOpenCodeSdkClient: () => fakeClient,
     } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"]),
     Effect.provideService(ProviderHost.ProviderHost, {
       paths: { cwd: "/workspace" },
@@ -194,8 +211,8 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
         title: suffix,
         providerInstanceId: modelSelection.instanceId,
         modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
+        runtimeMode: policy.runtimeMode,
+        interactionMode: policy.interactionMode,
         branch: null,
         worktreePath: null,
         activeProviderThreadId: providerThread.id,
@@ -241,6 +258,348 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
 });
 
 describe("OpenCodeAdapterV2", () => {
+  it("pins the native task deny at both ends in every runtime/approval/sandbox mode", () => {
+    const policies = [
+      runtimePolicy("approval-required"),
+      runtimePolicy("auto-accept-edits"),
+      runtimePolicy("full-access"),
+      runtimePolicy("full-access", { approvalPolicy: "never" }),
+      runtimePolicy("full-access", {
+        approvalPolicy: "never",
+        sandboxPolicy: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false },
+      }),
+      runtimePolicy("auto-accept-edits", {
+        approvalPolicy: "never",
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: ["/workspace"],
+          networkAccess: true,
+        },
+      }),
+    ];
+    for (const policy of policies) {
+      const rules = openCodePermissionRules(policy);
+      const deny = { permission: "task", pattern: "*", action: "deny" };
+      assert.deepEqual(rules[0], deny);
+      assert.deepEqual(rules.at(-1), deny);
+      assert.equal(permissionAction(rules, "task"), "deny");
+      assert.isFalse(rules.some((rule) => rule.permission === "task" && rule.action !== "deny"));
+      // Native-first/native-last wildcard selection both find the task deny.
+      assert.equal(
+        rules.find((rule) => rule.permission === "task" || rule.permission === "*")?.action,
+        "deny",
+      );
+      assert.equal(
+        rules.findLast((rule) => rule.permission === "task" || rule.permission === "*")?.action,
+        "deny",
+      );
+    }
+    const regularFullAccess = openCodePermissionRules(runtimePolicy("full-access"));
+    assert.equal(permissionAction(regularFullAccess, "bash"), "allow");
+    assert.equal(permissionAction(regularFullAccess, "read"), "allow");
+  });
+
+  it.effect.each(["approval-required", "auto-accept-edits", "full-access", "read-only"] as const)(
+    "installs the task deny at create and before prompt in %s mode without holding the root",
+    (mode) =>
+      Effect.gen(function* () {
+        const policy =
+          mode === "read-only"
+            ? runtimePolicy("full-access", {
+                approvalPolicy: "never",
+                sandboxPolicy: {
+                  type: "readOnly",
+                  access: { type: "fullAccess" },
+                  networkAccess: false,
+                },
+              })
+            : runtimePolicy(mode, { cwd: "/workspace" });
+        const calls: string[] = [];
+        const nativeEvents = asyncEventStream();
+        const harness = yield* makeOpenCodeRuntimeHarness(
+          `task-policy-${mode}`,
+          "root",
+          {
+            event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+            session: {
+              create: async ({
+                permission,
+              }: {
+                permission: ReturnType<typeof openCodePermissionRules>;
+              }) => {
+                calls.push("create");
+                assert.deepEqual(permission.at(-1), {
+                  permission: "task",
+                  pattern: "*",
+                  action: "deny",
+                });
+                assert.equal(
+                  permissionAction(permission, "edit"),
+                  mode === "read-only"
+                    ? "deny"
+                    : mode === "full-access" || mode === "auto-accept-edits"
+                      ? "allow"
+                      : "ask",
+                );
+                return { data: { id: "root", time: { created: 1, updated: 1 } } };
+              },
+              update: async ({
+                sessionID,
+                permission,
+              }: {
+                sessionID: string;
+                permission: ReturnType<typeof openCodePermissionRules>;
+              }) => {
+                calls.push("update");
+                assert.deepEqual(permission[0], {
+                  permission: "task",
+                  pattern: "*",
+                  action: "deny",
+                });
+                assert.deepEqual(permission.at(-1), {
+                  permission: "task",
+                  pattern: "*",
+                  action: "deny",
+                });
+                return { data: { id: sessionID, permission } };
+              },
+              promptAsync: async () => {
+                calls.push("root-prompt");
+                return { data: true };
+              },
+            },
+          },
+          policy,
+        );
+        yield* harness.startTurn();
+        assert.deepEqual(calls, ["create", "update", "root-prompt"]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect.each(["new", "resumed", "forked"] as const)(
+    "acknowledges the exact native task-deny policy before %s root prompt",
+    (mode) =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const nativeEvents = asyncEventStream();
+        const harness = yield* makeOpenCodeRuntimeHarness(`task-hold-${mode}`, "root", {
+          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+          session: {
+            create: async ({
+              permission,
+            }: {
+              permission: ReturnType<typeof openCodePermissionRules>;
+            }) => {
+              calls.push("create");
+              assert.equal(permissionAction(permission, "task"), "deny");
+              return { data: { id: "root", time: { created: 1, updated: 1 } } };
+            },
+            get: async ({ sessionID }: { sessionID: string }) => ({
+              data: { id: sessionID, time: { created: 1, updated: 1 } },
+            }),
+            fork: async () => {
+              calls.push("fork");
+              return { data: { id: "forked", time: { created: 1, updated: 1 } } };
+            },
+            update: async ({
+              sessionID,
+              permission,
+            }: {
+              sessionID: string;
+              permission: ReturnType<typeof openCodePermissionRules>;
+            }) => {
+              calls.push(`update:${sessionID}`);
+              assert.deepEqual(permission[0], { permission: "task", pattern: "*", action: "deny" });
+              assert.deepEqual(permission.at(-1), {
+                permission: "task",
+                pattern: "*",
+                action: "deny",
+              });
+              return { data: { id: sessionID, permission } };
+            },
+            promptAsync: async ({ sessionID }: { sessionID: string }) => {
+              calls.push(`prompt:${sessionID}`);
+              return { data: true };
+            },
+          },
+        });
+        let target = harness.providerThread;
+        if (mode === "resumed") {
+          yield* harness.runtime.resumeThread({ providerThread: target });
+          calls.push("resumed");
+        } else if (mode === "forked") {
+          target = yield* harness.runtime.forkThread({
+            sourceProviderThread: target,
+            targetThreadId: harness.threadId,
+          });
+        }
+        yield* harness.startTurn("ordinary root prompt", target);
+        assert.deepEqual(
+          calls,
+          mode === "new"
+            ? ["create", "update:root", "prompt:root"]
+            : mode === "resumed"
+              ? ["create", "resumed", "update:root", "prompt:root"]
+              : ["create", "fork", "update:forked", "update:forked", "prompt:forked"],
+        );
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect.each(
+    (["new", "resumed"] as const).flatMap((mode) =>
+      (
+        [
+          "rejected",
+          "missing-data",
+          "wrong-session",
+          "dropped-policy",
+          "mismatched-policy",
+        ] as const
+      ).map((failure) => ({ mode, failure })),
+    ),
+  )("never sends a $mode prompt if native session.update is $failure", ({ mode, failure }) =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const nativeEvents = asyncEventStream();
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        `task-hold-fails-${mode}-${failure}`,
+        "root",
+        {
+          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+          session: {
+            create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+            get: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+            update: async ({
+              sessionID,
+              permission,
+            }: {
+              sessionID: string;
+              permission: ReturnType<typeof openCodePermissionRules>;
+            }) => {
+              calls.push("update");
+              if (failure === "rejected") throw new Error("policy not supported");
+              if (failure === "missing-data") return { error: { name: "BadRequest" } };
+              if (failure === "wrong-session") return { data: { id: "other", permission } };
+              if (failure === "dropped-policy") return { data: { id: sessionID } };
+              return { data: { id: sessionID, permission: permission.slice(0, -1) } };
+            },
+            promptAsync: async () => {
+              calls.push("PROMPT_DISPATCH_FORBIDDEN");
+              return { data: true };
+            },
+          },
+        },
+      );
+      if (mode === "resumed")
+        yield* harness.runtime.resumeThread({
+          providerThread: harness.providerThread,
+        });
+      const error = yield* harness.startTurn().pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterTurnStartError");
+      assert.deepEqual(calls, ["update"]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect.each(["fork", "rollback"] as const)(
+    "does not return a reusable %s native session if the task-deny update fails",
+    (kind) =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const nativeEvents = asyncEventStream();
+        const harness = yield* makeOpenCodeRuntimeHarness(`task-hold-${kind}-rejected`, "root", {
+          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+          session: {
+            create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+            messages: async ({ sessionID }: { sessionID: string }) => ({
+              data:
+                sessionID === "root"
+                  ? [{ info: { id: "first-user", role: "user", time: { created: 1 } }, parts: [] }]
+                  : [],
+            }),
+            fork: async () => {
+              calls.push("fork");
+              return { data: { id: "untrusted-fork", time: { created: 1, updated: 1 } } };
+            },
+            update: async () => {
+              calls.push("update");
+              throw new Error("Native policy update rejected");
+            },
+            promptAsync: async () => {
+              calls.push("PROMPT_FORBIDDEN");
+              return { data: true };
+            },
+          },
+        });
+        if (kind === "fork") {
+          const error = yield* harness.runtime
+            .forkThread({
+              sourceProviderThread: harness.providerThread,
+              targetThreadId: harness.threadId,
+            })
+            .pipe(Effect.flip);
+          assert.equal(error._tag, "ProviderAdapterForkThreadError");
+        } else {
+          const error = yield* harness.runtime
+            .rollbackThread({
+              providerThread: harness.providerThread,
+              target: {
+                type: "thread_start",
+                checkpointId: CheckpointId.make("hold-rollback"),
+                appRunOrdinal: 0,
+              },
+              providerThreadTurns: [],
+            })
+            .pipe(Effect.flip);
+          assert.equal(error._tag, "ProviderAdapterRollbackThreadError");
+        }
+        assert.deepEqual(calls, ["fork", "update"]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect("expires an unacknowledged native policy update without dispatching a prompt", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const entered = promiseGate<void>();
+      const nativeEvents = asyncEventStream();
+      const harness = yield* makeOpenCodeRuntimeHarness("task-hold-update-timeout", "root", {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+          update: async () => {
+            calls.push("update");
+            entered.resolve();
+            return new Promise<never>(() => {});
+          },
+          promptAsync: async () => {
+            calls.push("PROMPT_FORBIDDEN");
+            return { data: true };
+          },
+        },
+      });
+      const start = yield* harness.startTurn().pipe(Effect.exit, Effect.forkScoped);
+      yield* Effect.promise(() => entered.promise);
+      yield* TestClock.adjust("11 seconds");
+      const result = yield* Fiber.join(start);
+      assert.isTrue(Exit.isFailure(result));
+      assert.deepEqual(calls, ["update"]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it.effect.each(["completed", "failed", "unresolved", "unavailable", "reconnect"] as const)(
     "normalizes OpenCode step usage for %s turns",
     (ending) =>
@@ -748,7 +1107,13 @@ describe("OpenCodeAdapterV2", () => {
           get: async () => ({
             data: { id: child, parentID: root, permission: [], time: { created: 2, updated: 2 } },
           }),
-          update: async () => ({ data: { id: child, parentID: root } }),
+          update: async ({
+            sessionID,
+            permission,
+          }: {
+            sessionID: string;
+            permission: ReturnType<typeof openCodePermissionRules>;
+          }) => ({ data: { id: sessionID, parentID: root, permission } }),
           promptAsync: async (input: { messageID: string }) => {
             promptId = input.messageID;
             return { data: true };
@@ -1177,71 +1542,384 @@ describe("OpenCodeAdapterV2", () => {
     ),
   );
 
-  it.effect("admits a native command on its user receipt before generation completes", () =>
+  it.effect.each(["full-access", "approval-required", "auto-accept-edits"] as const)(
+    "holds advertised native slash commands before session.command in %s, preserving other root turns",
+    (mode) =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const nativeEvents = asyncEventStream();
+        const sessionId = `command-hold-${mode}`;
+        const harness = yield* makeOpenCodeRuntimeHarness(
+          sessionId,
+          sessionId,
+          {
+            event: {
+              subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+                options.signal?.addEventListener("abort", () => nativeEvents.close(), {
+                  once: true,
+                });
+                return { stream: nativeEvents.stream };
+              },
+            },
+            command: {
+              list: async () => {
+                calls.push("list");
+                return {
+                  data: [{ name: "review", subtask: true, agent: "explore", template: "do work" }],
+                };
+              },
+            },
+            session: {
+              create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+              update: async ({
+                sessionID,
+                permission,
+              }: {
+                sessionID: string;
+                permission: unknown;
+              }) => {
+                calls.push("policy-update");
+                return { data: { id: sessionID, permission } };
+              },
+              command: async () => {
+                calls.push("NATIVE_CHILD_DISPATCH_FORBIDDEN");
+                return { data: true };
+              },
+              promptAsync: async () => {
+                calls.push("ROOT_PROMPT_FORBIDDEN");
+                return { data: true };
+              },
+            },
+          },
+          runtimePolicy(mode),
+        );
+        const exit = yield* harness.startTurn("/review staged changes").pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(exit));
+        assert.deepEqual(calls, ["policy-update", "list"]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect.each([
+    { kind: "advertised-subtask", result: { data: [{ name: "review", subtask: true }] } },
+    { kind: "advertised-benign", result: { data: [{ name: "review", subtask: false }] } },
+    { kind: "advertised-incomplete", result: { data: [{ name: "review" }] } },
+    { kind: "advertised-agent", result: { data: [{ name: "review", agent: "explore" }] } },
+    { kind: "duplicate-native-name", result: { data: [{ name: "review" }, { name: "review" }] } },
+    { kind: "malformed-native-name", result: { data: [{ name: null }] } },
+    { kind: "missing-native-list", result: { data: undefined } },
+  ] as const)("holds $kind before any command or root prompt", ({ kind, result }) =>
     Effect.gen(function* () {
+      const calls: string[] = [];
       const nativeEvents = asyncEventStream();
-      const release = promiseGate<void>();
-      const calls = yield* Queue.unbounded<{
-        messageID: string;
-        command: string;
-        arguments: string;
-        model: string;
-      }>();
-      let promptCalls = 0;
-      const sessionId = "native-command";
-      const harness = yield* makeOpenCodeRuntimeHarness("native-command", sessionId, {
+      const harness = yield* makeOpenCodeRuntimeHarness(`hold-${kind}`, "native-hold", {
         event: {
           subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
             options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
             return { stream: nativeEvents.stream };
           },
         },
-        command: { list: async () => ({ data: [{ name: "review" }] }) },
+        command: {
+          list: async () => {
+            calls.push("list");
+            return result;
+          },
+        },
         session: {
-          create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
-          command: async (input: {
-            messageID: string;
-            command: string;
-            arguments: string;
-            model: string;
-          }) => {
-            Queue.offerUnsafe(calls, input);
-            await release.promise;
+          create: async () => ({ data: { id: "native-hold", time: { created: 1, updated: 1 } } }),
+          command: async () => {
+            calls.push("NATIVE_CHILD_DISPATCH_FORBIDDEN");
             return { data: true };
           },
           promptAsync: async () => {
-            promptCalls++;
+            calls.push("ROOT_PROMPT_FORBIDDEN");
             return { data: true };
           },
         },
       });
-      const start = yield* harness.startTurn("/review staged changes").pipe(Effect.forkScoped);
-      const call = yield* Queue.take(calls);
-      assert.equal(call.command, "review");
-      assert.equal(call.arguments, "staged changes");
-      assert.equal(call.model, "anthropic/claude-sonnet");
-      yield* Effect.promise(() =>
-        nativeEvents.push({
-          type: "message.updated",
-          properties: {
-            sessionID: sessionId,
-            info: {
-              id: call.messageID,
-              sessionID: sessionId,
-              role: "user",
-              time: { created: DateTime.toEpochMillis(harness.now) },
-            },
-          },
-        }),
-      );
-      yield* Fiber.join(start);
-      assert.equal(promptCalls, 0);
-      release.resolve();
+      const exit = yield* harness.startTurn("/review check it").pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(exit));
+      assert.deepEqual(calls, ["list"]);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
     ),
   );
+
+  it.effect("preserves native slash hold after resuming an existing root session", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const nativeEvents = asyncEventStream();
+      const sessionId = "resume-command-hold";
+      const harness = yield* makeOpenCodeRuntimeHarness(sessionId, sessionId, {
+        event: {
+          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+            return { stream: nativeEvents.stream };
+          },
+        },
+        command: {
+          list: async () => {
+            calls.push("list");
+            return { data: [{ name: "review", subtask: true }] };
+          },
+        },
+        session: {
+          create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+          get: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+          update: async ({ sessionID, permission }: { sessionID: string; permission: unknown }) => {
+            calls.push("update");
+            return { data: { id: sessionID, permission } };
+          },
+          command: async () => {
+            calls.push("FORBIDDEN_NATIVE_CHILD_COMMAND");
+            return { data: true };
+          },
+          promptAsync: async () => {
+            calls.push("FORBIDDEN_NATIVE_CHILD_PROMPT");
+            return { data: true };
+          },
+        },
+      });
+      yield* harness.runtime.resumeThread({ providerThread: harness.providerThread });
+      assert.isTrue(Exit.isFailure(yield* harness.startTurn("/review once").pipe(Effect.exit)));
+      assert.deepEqual(calls, ["update", "list"]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect(
+    "holds advertised native slash steering without invalidating an ordinary active root",
+    () =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const nativeEvents = asyncEventStream();
+        const sessionId = "steer-command-hold";
+        const harness = yield* makeOpenCodeRuntimeHarness(sessionId, sessionId, {
+          event: {
+            subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+              options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+              return { stream: nativeEvents.stream };
+            },
+          },
+          command: {
+            list: async () => {
+              calls.push("list");
+              return { data: [{ name: "review", subtask: false }] };
+            },
+          },
+          session: {
+            create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+            get: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+            messages: async () => ({ data: [] }),
+            promptAsync: async ({ parts }: { parts: Array<{ type: string; text?: string }> }) => {
+              calls.push(`prompt:${parts[0]?.text}`);
+              return { data: true };
+            },
+            command: async () => {
+              calls.push("FORBIDDEN_NATIVE_CHILD_COMMAND");
+              return { data: true };
+            },
+          },
+        });
+        yield* harness.startTurn("ordinary root message");
+        const snapshot = yield* harness.runtime.readThreadSnapshot({
+          providerThread: harness.providerThread,
+        });
+        const active = snapshot.providerTurns.at(-1);
+        assert.isDefined(active);
+        const outcome = yield* harness.runtime
+          .steerTurn({
+            threadId: harness.threadId,
+            runId: harness.runId,
+            providerThread: harness.providerThread,
+            providerTurnId: active!.id,
+            message: {
+              messageId: MessageId.make("message-opencode-steer-hold"),
+              text: "/review unsafe steer",
+              attachments: [],
+              createdBy: "user",
+              creationSource: "web",
+            },
+          })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(outcome));
+        assert.deepEqual(calls, ["prompt:ordinary root message", "list"]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect("fails closed on native command inventory transport rejection", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const nativeEvents = asyncEventStream();
+      const harness = yield* makeOpenCodeRuntimeHarness("list-error-hold", "list-error-hold", {
+        event: {
+          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+            return { stream: nativeEvents.stream };
+          },
+        },
+        command: {
+          list: async () => {
+            calls.push("list");
+            throw new Error("native list unavailable");
+          },
+        },
+        session: {
+          create: async () => ({
+            data: { id: "list-error-hold", time: { created: 1, updated: 1 } },
+          }),
+          command: async () => {
+            calls.push("FORBIDDEN_NATIVE_CHILD_COMMAND");
+            return { data: true };
+          },
+          promptAsync: async () => {
+            calls.push("FORBIDDEN_UNKNOWN_SLASH_PROMPT");
+            return { data: true };
+          },
+        },
+      });
+      assert.isTrue(Exit.isFailure(yield* harness.startTurn("/review").pipe(Effect.exit)));
+      assert.deepEqual(calls, ["list"]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect(
+    "never dispatches a native command even if advertised metadata changes during classification",
+    () =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const nativeEvents = asyncEventStream();
+        const entry = { name: "review", subtask: false, agent: "build" };
+        const harness = yield* makeOpenCodeRuntimeHarness(
+          "race-command-hold",
+          "race-command-hold",
+          {
+            event: {
+              subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+                options.signal?.addEventListener("abort", () => nativeEvents.close(), {
+                  once: true,
+                });
+                return { stream: nativeEvents.stream };
+              },
+            },
+            command: {
+              list: async () => {
+                calls.push("list");
+                queueMicrotask(() => {
+                  entry.subtask = true;
+                  entry.agent = "explore";
+                });
+                return { data: [entry] };
+              },
+            },
+            session: {
+              create: async () => ({
+                data: { id: "race-command-hold", time: { created: 1, updated: 1 } },
+              }),
+              command: async () => {
+                calls.push("FORBIDDEN_NATIVE_CHILD_COMMAND");
+                return { data: true };
+              },
+              promptAsync: async () => {
+                calls.push("FORBIDDEN_ADVERTISED_SLASH_PROMPT");
+                return { data: true };
+              },
+            },
+          },
+        );
+        assert.isTrue(Exit.isFailure(yield* harness.startTurn("/review").pipe(Effect.exit)));
+        assert.equal(entry.subtask, true);
+        assert.deepEqual(calls, ["list"]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect.each([
+    "ordinary root message",
+    "Quote the /review command without executing it",
+    "Literal @explore agent mention stays ordinary text",
+  ])("preserves root text/file-only SDK parts for %s", (message) =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const nativeEvents = asyncEventStream();
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        "ordinary-root-syntax",
+        "ordinary-root-syntax",
+        {
+          event: {
+            subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+              options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+              return { stream: nativeEvents.stream };
+            },
+          },
+          command: {
+            list: async () => {
+              calls.push("UNEXPECTED_SLASH_LOOKUP");
+              return { data: [{ name: "review", subtask: true }] };
+            },
+          },
+          session: {
+            create: async () => ({
+              data: { id: "ordinary-root-syntax", time: { created: 1, updated: 1 } },
+            }),
+            promptAsync: async ({ parts }: { parts: Array<{ type: string; text?: string }> }) => {
+              calls.push("prompt");
+              assert.deepEqual(parts, [{ type: "text", text: message }]);
+              assert.isFalse(
+                parts.some((part) => part.type === "agent" || part.type === "subtask"),
+              );
+              return { data: true };
+            },
+            command: async () => {
+              calls.push("FORBIDDEN_NATIVE_CHILD_COMMAND");
+              return { data: true };
+            },
+          },
+        },
+      );
+      yield* harness.startTurn(message);
+      assert.deepEqual(calls, ["prompt"]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it("keeps native file attachments as file parts without constructing agent or subtask parts", () => {
+    const parts = OpenCodeRuntime.toOpenCodeFileParts({
+      attachments: [
+        {
+          type: "file",
+          id: ChatAttachmentId.make("attachment-opencode-safe-file"),
+          name: "brief.txt",
+          mimeType: "text/plain",
+          sizeBytes: 42,
+        },
+      ],
+      resolveAttachmentPath: () => "D:/workspace/brief.txt",
+    });
+    assert.equal(parts.length, 1);
+    assert.equal(parts[0]?.type, "file");
+    assert.equal(parts[0]?.mime, "text/plain");
+    assert.isTrue(parts[0]?.url.startsWith("file:///"));
+    assert.deepEqual(
+      parts.map((part) => part.type),
+      ["file"],
+    );
+  });
 
   it.effect("sends unadvertised slash commands as ordinary prompts", () =>
     Effect.gen(function* () {
@@ -1490,6 +2168,13 @@ describe("OpenCodeAdapterV2", () => {
           get: async () => ({
             data: { id: "native-opencode-race", time: { created: 1, updated: 1 } },
           }),
+          update: async ({
+            sessionID,
+            permission,
+          }: {
+            sessionID: string;
+            permission: ReturnType<typeof openCodePermissionRules>;
+          }) => ({ data: { id: sessionID, permission } }),
           promptAsync: async (
             input: { readonly messageID?: string },
             options?: { readonly signal?: AbortSignal },
@@ -1801,6 +2486,13 @@ describe("OpenCodeAdapterV2", () => {
           get: async () => ({
             data: { id: "native-opencode-initial-stop", time: { created: 1, updated: 1 } },
           }),
+          update: async ({
+            sessionID,
+            permission,
+          }: {
+            sessionID: string;
+            permission: ReturnType<typeof openCodePermissionRules>;
+          }) => ({ data: { id: sessionID, permission } }),
           promptAsync: async (_input: unknown, options?: { readonly signal?: AbortSignal }) => {
             promptStarted.resolve();
             await new Promise<void>((_resolve, reject) => {
@@ -2692,12 +3384,16 @@ describe("OpenCodeAdapterV2", () => {
 
   it("preserves OpenCode's recursion guard on task-created child sessions", () => {
     const childRules = openCodeChildPermissionRules(runtimePolicy("full-access"), [
-      { permission: "task", pattern: "*", action: "deny" },
+      { permission: "task", pattern: "*", action: "allow" },
+      { permission: "task", pattern: "research", action: "ask" },
     ]);
 
     assert.equal(permissionAction(childRules, "read"), "allow");
     assert.equal(permissionAction(childRules, "bash"), "allow");
     assert.equal(permissionAction(childRules, "task"), "deny");
+    assert.equal(childRules[0]?.permission, "task");
+    assert.deepEqual(childRules.at(-1), { permission: "task", pattern: "*", action: "deny" });
+    assert.isFalse(childRules.some((rule) => rule.permission === "task" && rule.action !== "deny"));
 
     const approvalRequiredPolicy = runtimePolicy("approval-required");
     const parentRules = openCodePermissionRules(approvalRequiredPolicy);
@@ -2755,9 +3451,9 @@ it.effect.each([false, true])(
             calls.push("fork");
             return { data: { id: forkId, time: { created: 1, updated: 2 } } };
           },
-          update: async () => {
+          update: async ({ sessionID, permission }: { sessionID: string; permission: unknown }) => {
             calls.push("permissions");
-            return { data: {} };
+            return { data: { id: sessionID, permission } };
           },
           revert: async () => {
             throw new Error("Native revert would change workspace files");

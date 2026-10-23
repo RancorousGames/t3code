@@ -6,6 +6,7 @@ import {
   expiredHiddenSessionIds,
   isChatGPTConversationUrl,
   reorderChatGPTSessions,
+  setChatGPTSessionArchived,
   setChatGPTSessionHidden,
 } from "./chatGPTBrowserSessions";
 
@@ -81,6 +82,33 @@ describe("ChatGPT sidebar ordering", () => {
     ];
     expect(expiredHiddenSessionIds(candidates, now)).toEqual(["expired"]);
     expect(expiredHiddenSessionIds(candidates, now - 1)).toEqual([]);
+  });
+
+  it("retains archived identity and conversation URL indefinitely, including after manual restore", () => {
+    const now = Date.now();
+    const url = "https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const archive = {
+      archivedAt: new Date(now - 365 * 86400000).toISOString(),
+      conversationUrl: url,
+      basis: "completion" as const,
+    };
+    const stored = setChatGPTSessionArchived(sessions, "a", archive);
+    const archived = stored.find((s) => s.id === "a");
+    expect(archived).toMatchObject({ id: "a", title: "First", hidden: true, archive });
+    expect(expiredHiddenSessionIds(stored, now + 365 * 86400000)).not.toContain("a");
+    expect(setChatGPTSessionArchived(stored, "a", archive)).toEqual(stored);
+    const restored = setChatGPTSessionHidden(stored, "a", false);
+    const original = restored.find((s) => s.id === "a");
+    expect(original).toMatchObject({ id: "a", title: "First", hidden: false });
+    expect(original?.archive?.conversationUrl).toBe(url);
+    expect(original?.archive?.restoredAt).toBeTruthy();
+    expect(expiredHiddenSessionIds(restored, now + 365 * 86400000)).not.toContain("a");
+    expect(setChatGPTSessionHidden(restored, "a", false)).toEqual(restored);
+    // A later ordinary UI hide is not silently promoted to a permanent archive.
+    const hiddenAgain = setChatGPTSessionHidden(restored, "a", true);
+    expect(expiredHiddenSessionIds(hiddenAgain, now + CHATGPT_HIDDEN_EXPIRY_MS + 10_000)).toContain(
+      "a",
+    );
   });
 
   it("preserves order for redundant visibility updates and missing IDs", () => {

@@ -222,6 +222,61 @@ describe("previewWindowOpenAction", () => {
   });
 });
 
+describe("ChatGPT clicked outbound link routing", () => {
+  const runtimeTabId = '["local","t3-browser-session:worker","epoch","tab"]';
+  const check = (
+    targetUrl: string,
+    userActivated = true,
+    sourceUrl = "https://chatgpt.com/c/123",
+  ) =>
+    PreviewManager.shouldExternalizeChatGPTLink({
+      runtimeTabId,
+      sourceUrl,
+      targetUrl,
+      userActivated,
+    });
+
+  it("externalizes only an explicitly activated HTTP(S) link from a real ChatGPT guest", () => {
+    expect(check("https://example.com/article")).toBe(true);
+    expect(check("http://github.com/issues/42")).toBe(true);
+    expect(check("https://example.com/article", false)).toBe(false);
+    expect(check("https://example.com/article", true, "https://example.com/")).toBe(false);
+    expect(
+      PreviewManager.shouldExternalizeChatGPTLink({
+        runtimeTabId: "ordinary-preview",
+        sourceUrl: "https://chatgpt.com/c/123",
+        targetUrl: "https://example.com",
+        userActivated: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves internal conversations and known OAuth/sign-in routes in the guest", () => {
+    for (const url of [
+      "https://chatgpt.com/c/another",
+      "https://www.chatgpt.com/",
+      "https://chat.openai.com/c/another",
+      "https://auth.openai.com/authorize",
+      "https://accounts.google.com/o/oauth2/auth",
+      "https://login.microsoftonline.com/common/oauth2",
+      "https://appleid.apple.com/auth/authorize",
+    ])
+      expect(check(url)).toBe(false);
+  });
+
+  it("never externalizes unsafe, local-file, or malformed destinations", () => {
+    for (const url of [
+      "javascript:alert(1)",
+      "data:text/plain,hello",
+      "file:///C:/secret.txt",
+      "vscode://open",
+      "not-a-url",
+      "about:blank",
+    ])
+      expect(check(url)).toBe(false);
+  });
+});
+
 const {
   browserWindowConstructor,
   clipboardItemConstructor,
@@ -231,6 +286,7 @@ const {
   mkdir,
   previewSession,
   showItemInFolder,
+  openExternal,
   webviewSend,
   writeFile,
   writeClipboard,
@@ -246,6 +302,7 @@ const {
   mkdir: vi.fn((_path: string) => undefined),
   previewSession: { on: vi.fn() },
   showItemInFolder: vi.fn(),
+  openExternal: vi.fn(async (_url: string) => undefined),
   webviewSend: vi.fn(),
   writeFile: vi.fn((_path: string, _data: Uint8Array) => undefined),
   writeClipboard: vi.fn(async () => undefined),
@@ -266,6 +323,7 @@ vi.mock("electron", () => ({
   },
   shell: {
     showItemInFolder,
+    openExternal,
   },
   session: {
     fromPartition: vi.fn(),
@@ -612,6 +670,7 @@ describe("PreviewManager", () => {
     previewSession.on.mockClear();
     writeFile.mockClear();
     showItemInFolder.mockClear();
+    openExternal.mockClear();
     clipboardItemConstructor.mockClear();
     writeClipboard.mockClear();
     createFromPath.mockClear();
@@ -650,6 +709,61 @@ describe("PreviewManager", () => {
         ]);
       }),
     ),
+  );
+
+  effectIt.effect(
+    "prevents real clicked ChatGPT outbound navigation without intercepting redirects or login",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const preview = makeFaviconWebContents({ url: "https://chatgpt.com/c/real" });
+          fromId.mockReturnValue(preview.webContents);
+          const id = '["local","t3-browser-session:worker","epoch","tab"]';
+          yield* manager.createTab(id);
+          yield* manager.registerWebview(id, 42);
+          const beforeMouse = preview.listeners.get("before-mouse-event")!;
+          const willNavigate = preview.listeners.get("will-navigate")!;
+          const cancelled = vi.fn();
+          const navigation = (url: string, isMainFrame = true) =>
+            willNavigate({ url, isMainFrame, preventDefault: cancelled } as never);
+          // Direct site navigation without a native click is not a user-intended outbound link.
+          navigation("https://example.com/redirect");
+          expect(cancelled).not.toHaveBeenCalled();
+          expect(openExternal).not.toHaveBeenCalled();
+          beforeMouse({} as never, { type: "mouseUp" } as never);
+          navigation("https://example.com/article");
+          expect(cancelled).toHaveBeenCalledTimes(1);
+          expect(openExternal).toHaveBeenCalledExactlyOnceWith("https://example.com/article");
+
+          beforeMouse({} as never, { type: "mouseUp" } as never);
+          navigation("https://accounts.google.com/o/oauth2/auth");
+          navigation("https://chatgpt.com/c/next");
+          expect(cancelled).toHaveBeenCalledTimes(1);
+          navigation("file:///C:/private.txt");
+          expect(cancelled).toHaveBeenCalledTimes(2);
+          expect(openExternal).toHaveBeenCalledTimes(1);
+
+          const handler = (preview.webContents as Electron.WebContents)
+            .setWindowOpenHandler as ReturnType<typeof vi.fn>;
+          const open = handler.mock.lastCall?.[0] as (
+            details: Partial<Electron.HandlerDetails>,
+          ) => { action: string };
+          expect(open({ url: "https://docs.example.com/", disposition: "foreground-tab" })).toEqual(
+            { action: "deny" },
+          );
+          expect(openExternal).toHaveBeenCalledWith("https://docs.example.com/");
+          expect(open({ url: "file:///C:/private.txt", disposition: "foreground-tab" })).toEqual({
+            action: "deny",
+          });
+          expect(openExternal).toHaveBeenCalledTimes(2);
+          // OAuth popups still get their hardened BrowserWindow.
+          expect(
+            open({ url: "https://accounts.google.com/o/oauth2/auth", disposition: "new-window" })
+              .action,
+          ).toBe("allow");
+          expect(preview.loadURL).not.toHaveBeenCalled();
+        }),
+      ),
   );
 
   effectIt.effect(
