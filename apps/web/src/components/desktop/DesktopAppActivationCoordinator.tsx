@@ -5,6 +5,7 @@ import {
   ThreadId,
   T3_AGENT_PROVIDER_VERSION,
   type AgentProviderV1Session,
+  type AgentProviderV1DesktopWork,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
@@ -28,7 +29,12 @@ import {
   readThreadPreviewState,
 } from "../../previewStateStore";
 import { previewEnvironment } from "../../state/preview";
-import { inspectBrowserSession, runChatGPTSessionControl } from "../../chatGPTSessionControl";
+import {
+  inspectBrowserSession,
+  isLoadedChatGPTBrowserGuest,
+  runChatGPTSessionControl,
+} from "../../chatGPTSessionControl";
+import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
 import { resolveChatGPTSessionAddress } from "../../chatGPTConversationRouting";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { runOpenRigHumanInboxControl } from "../../openRigHumanInboxControl";
@@ -1165,6 +1171,9 @@ export function DesktopAppActivationCoordinator() {
           const nav = preview.snapshot?.navStatus;
           const conversationId =
             !entry.hidden && nav?._tag === "Success" ? chatGPTConversationIdFromUrl(nav.url) : null;
+          // Mount capability does not imply idle. The receiver still validates
+          // the actual guest URL and activity before reading or sending.
+          const loaded = !!conversationId && isLoadedChatGPTBrowserGuest(environmentId, entry);
           return {
             ref: { provider: "t3", id: entry.id },
             kind: "t3/chatgpt",
@@ -1175,14 +1184,14 @@ export function DesktopAppActivationCoordinator() {
               ? { parent: { provider: "t3", id: entry.parentSessionId } }
               : {}),
             state: {
-              reachability: entry.hidden ? "Unreachable" : "Unknown",
+              reachability: entry.hidden ? "Unreachable" : loaded ? "Reachable" : "Unknown",
               activity: "Unknown",
               confidence: "Unknown",
               elsewhere: null,
               observedAt,
             },
-            capabilities: [],
-            deliveryModes: [],
+            capabilities: loaded ? ["ReadHistory", "Submit"] : [],
+            deliveryModes: loaded ? ["WhenIdle"] : [],
           };
         },
       );
@@ -1205,6 +1214,56 @@ export function DesktopAppActivationCoordinator() {
     return () => {
       stopped = true;
       window.clearInterval(interval);
+    };
+  }, [activation, ready, primaryEnvironment?.environmentId, publishAgentProvider]);
+
+  useEffect(() => {
+    if (!ready || primaryEnvironment === null || activation === undefined) return;
+    const environmentId = primaryEnvironment.environmentId;
+    let stopped = false;
+    // The server issues a single-shot work item to exactly one authenticated
+    // desktop publisher. Polling does not inspect or wake a guest on its own.
+    const loop = async () => {
+      while (!stopped) {
+        try {
+          const pulled = await publishAgentProvider({
+            environmentId,
+            input: {
+              apiVersion: T3_AGENT_PROVIDER_VERSION,
+              requestId: globalThis.crypto.randomUUID(),
+              method: "desktop.sessions.next",
+              params: { environmentId },
+            },
+          });
+          if (stopped) return;
+          const response =
+            pulled._tag === "Success" && pulled.value.ok
+              ? (pulled.value.data as { work?: AgentProviderV1DesktopWork | null })
+              : null;
+          const work = response?.work;
+          if (work && work.environmentId === environmentId) {
+            const result = await executeAgentProviderBrowserWork(environmentId, work);
+            // Never re-execute a work item following failed acknowledgement.
+            await publishAgentProvider({
+              environmentId,
+              input: {
+                apiVersion: T3_AGENT_PROVIDER_VERSION,
+                requestId: globalThis.crypto.randomUUID(),
+                method: "desktop.sessions.result",
+                params: { environmentId, jobId: work.jobId, result },
+              },
+            });
+            continue;
+          }
+        } catch {
+          // A disconnected desktop must not attempt a guest action.
+        }
+        if (!stopped) await new Promise<void>((resolve) => window.setTimeout(resolve, 1500));
+      }
+    };
+    void loop();
+    return () => {
+      stopped = true;
     };
   }, [activation, ready, primaryEnvironment?.environmentId, publishAgentProvider]);
 

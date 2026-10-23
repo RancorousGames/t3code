@@ -113,6 +113,8 @@ export type AgentProviderV1HistoryItem = typeof AgentProviderV1HistoryItem.Type;
 export const AgentProviderV1HistoryRequest = Schema.Struct({
   session: AgentProviderV1SessionRef,
   expectedEnvironmentId: OpaqueId,
+  // Browser reads require this exact /c/ identity; native reads must omit it.
+  expectedConversation: Schema.optional(Schema.NullOr(OpaqueId)),
   cursor: Schema.optional(Schema.NullOr(OpaqueId)),
 });
 export type AgentProviderV1HistoryRequest = typeof AgentProviderV1HistoryRequest.Type;
@@ -125,13 +127,39 @@ export const AgentProviderV1HistoryPage = Schema.Struct({
   warning: Schema.optional(Schema.NullOr(Schema.String)),
   snapshotSequence: Schema.optional(Schema.Number),
 });
+export type AgentProviderV1HistoryPage = typeof AgentProviderV1HistoryPage.Type;
 
 // Desktop publishes a bounded, non-DOM local-session catalog over its own
-// authenticated environment connection. No agent send authority is delegated.
+// authenticated environment connection. Publication alone authorizes no send.
 export const AgentProviderV1DesktopSnapshot = Schema.Struct({
   environmentId: OpaqueId,
   sessions: Schema.Array(AgentProviderV1Session),
 });
+
+// Authenticated desktop publisher pulls one single-shot work item at a time.
+// This is an ephemeral renderer bridge, not a durable queue or idempotency key.
+export const AgentProviderV1DesktopWork = Schema.Struct({
+  jobId: OpaqueId,
+  environmentId: OpaqueId,
+  browserSessionId: OpaqueId,
+  expectedConversationId: OpaqueId,
+  action: Schema.Literals(["history", "submit"]),
+  text: Schema.optional(Schema.String),
+});
+export type AgentProviderV1DesktopWork = typeof AgentProviderV1DesktopWork.Type;
+export const AgentProviderV1DesktopWorkResult = Schema.Struct({
+  environmentId: OpaqueId,
+  jobId: OpaqueId,
+  result: Schema.Union([
+    Schema.Struct({ ok: Schema.Literal(true), data: Schema.Unknown }),
+    Schema.Struct({
+      ok: Schema.Literal(false),
+      code: Schema.Literals(["Busy", "ConversationChanged", "Unavailable", "InvalidInput"]),
+      message: Schema.String,
+    }),
+  ]),
+});
+export type AgentProviderV1DesktopWorkResult = typeof AgentProviderV1DesktopWorkResult.Type;
 
 export const AgentProviderV1SessionPage = Schema.Struct({
   items: Schema.Array(AgentProviderV1Session),
@@ -224,6 +252,8 @@ export const AgentProviderV1Method = Schema.Literals([
   "sessions.queue.edit",
   "sessions.interrupt",
   "desktop.sessions.publish",
+  "desktop.sessions.next",
+  "desktop.sessions.result",
   "sessions.respond",
   "sessions.settings.get",
   "sessions.settings.update",

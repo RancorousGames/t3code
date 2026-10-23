@@ -171,6 +171,22 @@ function guestFor(environmentId: EnvironmentId, sessionId: string) {
   };
 }
 
+/** Provider v1 only touches already mounted, awake guests; never hydrates tabs. */
+export function isLoadedChatGPTBrowserGuest(
+  environmentId: EnvironmentId,
+  entry: BrowserSession,
+): boolean {
+  if (entry.hidden) return false;
+  const guest = guestFor(environmentId, entry.id);
+  return (
+    !!guest.runtimeId &&
+    !!guest.webview &&
+    guest.nav?._tag === "Success" &&
+    !guest.loading &&
+    !isChatGPTGuestHibernated(guest.runtimeId)
+  );
+}
+
 const GUEST_WAKE_TIMEOUT_MS = 45_000;
 
 /** Reloads a hibernated guest and waits until its composer can be inspected. */
@@ -421,6 +437,8 @@ export async function runChatGPTSessionControl(input: {
   message?: string | undefined;
   senderSessionId?: string | undefined;
   expectedConversationId?: string | undefined;
+  /** Provider bridge only: refuse hibernated/unmounted guests instead of waking them. */
+  neverWake?: boolean | undefined;
   force?: boolean | undefined;
   managerDecision?: boolean | undefined;
   reason?: string | undefined;
@@ -534,7 +552,14 @@ export async function runChatGPTSessionControl(input: {
       return unknown("private_backup_failed");
     }
   }
-  if (!entry.hidden && action !== "restore") await ensureGuestAwake(environmentId, entry.id);
+  if (!entry.hidden && action !== "restore") {
+    if (input.neverWake) {
+      if (!isLoadedChatGPTBrowserGuest(environmentId, entry))
+        throw new Error("ChatGPT guest is hibernated, unmounted or loading; not waking it.");
+    } else {
+      await ensureGuestAwake(environmentId, entry.id);
+    }
+  }
   if (action === "restore") {
     if (
       !entry.archive ||

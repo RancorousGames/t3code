@@ -1,5 +1,7 @@
 import {
   AgentProviderV1DesktopSnapshot,
+  AgentProviderV1DesktopWorkResult,
+  AgentProviderV1HistoryPage,
   AgentProviderV1HistoryRequest,
   AgentProviderV1Submit,
   T3_AGENT_PROVIDER_VERSION,
@@ -11,6 +13,9 @@ import {
   publishDesktopCatalog,
   readDesktopCatalog,
   disconnectDesktopCatalog,
+  dispatchBrowserWork,
+  takeDesktopWork,
+  finishDesktopWork,
 } from "./agentProviderBridge.ts";
 import {
   rawNativeThreadId,
@@ -1874,7 +1879,9 @@ const layerWsRpc = (
                 | "Unavailable"
                 | "NotFound"
                 | "Conflict"
-                | "TimeoutUnknown",
+                | "TimeoutUnknown"
+                | "Busy"
+                | "ConversationChanged",
               message: string,
             ) => ({
               apiVersion: T3_AGENT_PROVIDER_VERSION,
@@ -1926,8 +1933,12 @@ const layerWsRpc = (
                     session.ref.id.startsWith("thread:") ||
                     session.source.rawThreadId !== undefined ||
                     session.ref.provider !== "t3" ||
-                    session.capabilities.length !== 0 ||
-                    session.deliveryModes.length !== 0,
+                    session.capabilities.some(
+                      (capability) => capability !== "ReadHistory" && capability !== "Submit",
+                    ) ||
+                    session.deliveryModes.some((mode) => mode !== "WhenIdle") ||
+                    session.deliveryModes.includes("WhenIdle") !==
+                      session.capabilities.includes("Submit"),
                 )
               ) {
                 return error(
@@ -1937,6 +1948,51 @@ const layerWsRpc = (
               }
               publishDesktopCatalog(providerDesktopConnectionId, environmentId, snapshot.sessions);
               return reply({ published: snapshot.sessions.length });
+            }
+            if (request.method === "desktop.sessions.next") {
+              if (clientOrigin.surface !== "desktop")
+                return error(
+                  "Unsupported",
+                  "Only an authenticated desktop publisher can pull browser work.",
+                );
+              const params = request.params;
+              if (
+                !params ||
+                typeof params !== "object" ||
+                !("environmentId" in params) ||
+                params.environmentId !== environmentId
+              )
+                return error("EnvironmentChanged", "Desktop work environment does not match.");
+              const work = yield* Effect.promise(() =>
+                takeDesktopWork(providerDesktopConnectionId, environmentId),
+              );
+              return reply({ work });
+            }
+            if (request.method === "desktop.sessions.result") {
+              if (clientOrigin.surface !== "desktop")
+                return error(
+                  "Unsupported",
+                  "Only an authenticated desktop publisher can answer browser work.",
+                );
+              const decoded = yield* Effect.result(
+                Schema.decodeUnknownEffect(AgentProviderV1DesktopWorkResult)(request.params),
+              );
+              if (Result.isFailure(decoded))
+                return error("InvalidInput", "Malformed desktop work result.");
+              const { environmentId: workEnvironment, jobId, result } = decoded.success;
+              if (workEnvironment !== environmentId)
+                return error(
+                  "EnvironmentChanged",
+                  "Desktop work result belongs to another environment.",
+                );
+              return reply({
+                recorded: finishDesktopWork(
+                  providerDesktopConnectionId,
+                  environmentId,
+                  jobId,
+                  result,
+                ),
+              });
             }
             if (request.method === "sessions.list") {
               const native = yield* Effect.result(
@@ -2020,10 +2076,114 @@ const layerWsRpc = (
               }
               const rawId = rawNativeThreadId(input.session);
               if (rawId === null) {
-                return error(
-                  "Unsupported",
-                  "Only exact native t3/thread references are supported.",
+                // T3 browser IDs are never inferred from /c/ conversation UUIDs.
+                const browserSessionId = input.session.id;
+                if (
+                  input.session.provider !== "t3" ||
+                  !browserSessionId ||
+                  browserSessionId.startsWith("thread:")
+                )
+                  return error("Unsupported", "Unknown native or browser session reference.");
+                if (input.expectedEnvironmentId !== environmentId)
+                  return error(
+                    "EnvironmentChanged",
+                    "Expected browser environment does not match.",
+                  );
+                const expected = input.expectedConversation;
+                if (
+                  typeof expected !== "string" ||
+                  !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expected)
+                )
+                  return error(
+                    "InvalidInput",
+                    "Browser operation requires a canonical expectedConversation UUID.",
+                  );
+                if (
+                  !isSubmit &&
+                  (input as typeof AgentProviderV1HistoryRequest.Type).cursor != null
+                )
+                  return error("Unsupported", "Browser DOM history cannot resume from a cursor.");
+                let message: string | undefined;
+                if (isSubmit) {
+                  const submit = input as typeof AgentProviderV1Submit.Type;
+                  const text = nativeTextContent(submit.content);
+                  if (submit.delivery !== "WhenIdle" || text === null)
+                    return error(
+                      "Unsupported",
+                      "Browser submit requires WhenIdle with one nonempty text part.",
+                    );
+                  if (text.length > 30_000)
+                    return error("InvalidInput", "Browser prompt exceeds 30,000 characters.");
+                  message = text;
+                }
+                const result = yield* Effect.promise(() =>
+                  dispatchBrowserWork(
+                    environmentId,
+                    browserSessionId,
+                    expected,
+                    isSubmit ? "submit" : "history",
+                    message,
+                  ),
                 );
+                if (result === null) {
+                  if (!isSubmit)
+                    return error(
+                      "Unavailable",
+                      "Browser desktop owner unavailable or read timed out.",
+                    );
+                  return reply({
+                    operationId: request.requestId,
+                    clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
+                    state: "Unknown",
+                    session: input.session,
+                    observedAt: DateTime.formatIso(yield* DateTime.now),
+                    receiptBasis: "browser_handoff_timeout;send_may_have_happened;do_not_retry",
+                  });
+                }
+                if (!result.ok) return error(result.code, result.message);
+                if (!isSubmit) {
+                  const validated = yield* Effect.result(
+                    Schema.decodeUnknownEffect(AgentProviderV1HistoryPage)(result.data),
+                  );
+                  return Result.isFailure(validated)
+                    ? error(
+                        "Unavailable",
+                        "Desktop browser returned an invalid partial history page.",
+                      )
+                    : reply(validated.success);
+                }
+                const receipt = result.data;
+                if (
+                  !receipt ||
+                  typeof receipt !== "object" ||
+                  !("verifiedConversationId" in receipt) ||
+                  receipt.verifiedConversationId !== expected ||
+                  !("delivery" in receipt) ||
+                  (receipt.delivery !== "user_turn_observed" && receipt.delivery !== "unknown")
+                )
+                  return reply({
+                    operationId: request.requestId,
+                    clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
+                    state: "Unknown",
+                    session: input.session,
+                    observedAt: DateTime.formatIso(yield* DateTime.now),
+                    receiptBasis: "browser_receipt_unverifiable;do_not_retry",
+                  });
+                const delivered =
+                  receipt.delivery === "user_turn_observed" &&
+                  "messageSent" in receipt &&
+                  receipt.messageSent === true;
+                return reply({
+                  operationId: request.requestId,
+                  clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
+                  state: delivered ? "Delivered" : "Unknown",
+                  ...(delivered ? { confirmedStage: "Delivered" as const } : {}),
+                  session: input.session,
+                  observedAt: DateTime.formatIso(yield* DateTime.now),
+                  receiptBasis: delivered
+                    ? "observed_matching_user_dom_turn;not_assistant_completion"
+                    : "browser_send_attempt_uncertain;do_not_retry",
+                });
               }
               if (
                 input.expectedEnvironmentId === undefined ||
