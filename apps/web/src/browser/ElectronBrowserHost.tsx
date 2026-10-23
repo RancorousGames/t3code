@@ -1,69 +1,28 @@
 "use client";
 
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
-import { AuthPreviewOperateScope, FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
+import { FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 import { isElectron } from "~/env";
-import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { useActivePreviewSessions } from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
-import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
-import {
-  chatGPTGuestHydrationLimiter,
-  shouldStaggerChatGPTGuest,
-} from "./chatGPTGuestHydrationLimiter";
-import {
-  isChatGPTGuestWoken,
-  selectChatGPTGuestHibernated,
-  useChatGPTGuestHibernation,
-  wakeChatGPTGuest,
-} from "./chatGPTGuestHibernation";
-import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
-import { HostedBrowserWebview } from "./HostedBrowserWebview";
+import { AuthorizedBrowserWebview } from "./ChatGPTGuestWebviewGate";
+import { shouldOpenChatGPTLinkInDefaultBrowser } from "./chatGPTExternalLinkRouting";
 import { openUrlInPreview } from "./openFileInPreview";
-import { useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { rendersServerTabNatively } from "./previewRuntime";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
-export function shouldOpenChatGPTLinkInDefaultBrowser(
-  threadId: string,
-  source: string | null,
-  target: string,
-): boolean {
-  if (!threadId.startsWith("t3-browser-session:") || !source) return false;
-  try {
-    const from = new URL(source);
-    const to = new URL(target);
-    if (
-      !["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(from.hostname.toLowerCase())
-    )
-      return false;
-    if (!["http:", "https:"].includes(from.protocol) || !["http:", "https:"].includes(to.protocol))
-      return false;
-    return ![
-      "chatgpt.com",
-      "www.chatgpt.com",
-      "chat.openai.com",
-      "auth.openai.com",
-      "auth0.openai.com",
-      "accounts.google.com",
-      "login.microsoftonline.com",
-      "appleid.apple.com",
-      "challenges.cloudflare.com",
-    ].includes(to.hostname.toLowerCase());
-  } catch {
-    return false;
-  }
-}
+// Retain the prior public import path for clients of this host predicate.
+export { shouldOpenChatGPTLinkInDefaultBrowser } from "./chatGPTExternalLinkRouting";
 
 export function ElectronBrowserHost() {
   const { resolvedTheme } = useTheme();
@@ -205,63 +164,4 @@ export function ElectronBrowserHost() {
       })}
     </div>
   );
-}
-
-function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {
-  const canOperatePreview = useEnvironmentScope(
-    props.threadRef.environmentId,
-    AuthPreviewOperateScope,
-  );
-  const profileId = useTabProfileId(props.profileId);
-  const selected = useBrowserSurfaceStore(
-    (state) => state.byTabId[props.runtimeTabId]?.visible === true,
-  );
-  const hibernated = useChatGPTGuestHibernation((state) =>
-    selectChatGPTGuestHibernated(state, props.runtimeTabId),
-  );
-  const woken = useChatGPTGuestHibernation((state) =>
-    isChatGPTGuestWoken(state, props.runtimeTabId),
-  );
-  const stagger = shouldStaggerChatGPTGuest(props.threadRef.threadId, props.initialUrl) && !woken;
-  const [guestMayAttach, setGuestMayAttach] = useState(!stagger);
-
-  useEffect(() => {
-    if (hibernated && selected) wakeChatGPTGuest(props.runtimeTabId);
-  }, [hibernated, selected, props.runtimeTabId]);
-
-  useEffect(() => {
-    if (!stagger || !canOperatePreview || hibernated) return;
-    const controller = new AbortController();
-    void chatGPTGuestHydrationLimiter
-      .request(props.runtimeTabId, controller.signal)
-      .then((allowed) => {
-        if (allowed && !controller.signal.aborted) setGuestMayAttach(true);
-      });
-    return () => controller.abort();
-  }, [stagger, canOperatePreview, hibernated, props.runtimeTabId]);
-
-  useEffect(() => {
-    if (stagger && selected) chatGPTGuestHydrationLimiter.prioritize(props.runtimeTabId);
-  }, [stagger, selected, props.runtimeTabId]);
-
-  return canOperatePreview && (guestMayAttach || !stagger) && !hibernated ? (
-    <HostedBrowserWebview {...props} profileId={profileId} />
-  ) : null;
-}
-
-/**
- * Agent `preview_open` normally carries the profile clients reported (see
- * BrowserProfileReporter). An agent tab opened before any client reported has
- * none, so it falls back to the configured default here. It is latched once
- * settings load: Electron fixes the partition when the guest attaches, so a
- * later settings change must not move a live tab.
- */
-function useTabProfileId(profileId: string | undefined): string | undefined {
-  const hydrated = useClientSettingsHydrated();
-  const defaultProfileId = useBrowserDefaults().profileId;
-  const [fallback, setFallback] = useState<string | undefined>(undefined);
-  if (profileId === undefined && hydrated && fallback === undefined) {
-    setFallback(defaultProfileId);
-  }
-  return profileId ?? fallback;
 }
