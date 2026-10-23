@@ -729,7 +729,7 @@ export function DesktopAppActivationCoordinator() {
                   }
                 }
                 clearThreadPreviewState(threadRef);
-                flushSync(() => removeSession(confirmation.sessionId));
+                flushSync(() => removeSession(confirmation.sessionId, "desktop-IPC-request"));
                 removeLocalStorageItem(
                   chatGPTBrowserLastUrlKey(environmentId, confirmation.sessionId),
                 );

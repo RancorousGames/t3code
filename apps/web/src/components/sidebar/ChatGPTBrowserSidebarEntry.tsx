@@ -33,6 +33,7 @@ import {
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserThreadRef,
   useChatGPTBrowserSessions,
+  type ChatGPTSessionRemovalSource,
 } from "../../chatGPTBrowserSessions";
 import { isElectron } from "../../env";
 import {
@@ -441,7 +442,7 @@ export function ChatGPTBrowserSidebarEntry({
   const closingRef = useRef<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  const closeSession = async (sessionId: string) => {
+  const closeSession = async (sessionId: string, source: ChatGPTSessionRemovalSource) => {
     if (!environmentId || closingRef.current !== null) return;
     closingRef.current = sessionId;
     setClosingId(sessionId);
@@ -459,7 +460,7 @@ export function ChatGPTBrowserSidebarEntry({
         ),
       );
       if (results.some((result) => result._tag === "Failure")) return;
-      removeSession(sessionId);
+      removeSession(sessionId, source);
       removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId));
       removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, sessionId));
       if (activeSessionId === sessionId) {
@@ -489,7 +490,7 @@ export function ChatGPTBrowserSidebarEntry({
       !visibleSessions.some((session) => session.id === activeSessionId)
     )
       return;
-    void closeSession(activeSessionId);
+    void closeSession(activeSessionId, "desktop-menu-action");
   });
 
   useEffect(() => {
@@ -982,7 +983,7 @@ export function ChatGPTBrowserSidebarEntry({
                               variant="ghost-muted"
                               aria-label={`Close ${session.title}`}
                               disabled={closingId !== null}
-                              onClick={() => void closeSession(session.id)}
+                              onClick={() => void closeSession(session.id, "sidebar-user-action")}
                             >
                               <XIcon aria-hidden />
                             </Button>
