@@ -59,7 +59,9 @@ import * as Schema from "effect/Schema";
 import * as IpcChannels from "../channels.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import {
-  getNativeSpawnApproval, listPendingNativeSpawnApprovals, reviewNativeSpawnOperation,
+  getNativeSpawnApproval,
+  listPendingNativeSpawnApprovals,
+  reviewNativeSpawnOperation,
 } from "../../app/DesktopOpenRigApprovalHost.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import { ensureLocalOpenRigBridge } from "./OpenRigBridgeLifecycle.ts";
@@ -152,13 +154,21 @@ async function bridgeRequest(
           : LIST_TIMEOUT_MS,
     ),
   });
-  if (!response.ok && !(allowUnavailable && response.status === 503) &&
-      !acceptedErrorStatuses.includes(response.status)) {
+  if (
+    !response.ok &&
+    !(allowUnavailable && response.status === 503) &&
+    !acceptedErrorStatuses.includes(response.status)
+  ) {
     // Surface the backend's actionable reason (missing seat, stale thread,
     // duplicate binding) instead of presenting every failure as a generic 503.
-    const errorBody = await response.clone().json().catch(() => null) as unknown;
+    const errorBody = (await response
+      .clone()
+      .json()
+      .catch(() => null)) as unknown;
     const detail = record(errorBody)?.error;
-    throw new Error(`OpenRig bridge HTTP ${response.status}${typeof detail === "string" ? ": " + detail.slice(0, 300) : ""}.`);
+    throw new Error(
+      `OpenRig bridge HTTP ${response.status}${typeof detail === "string" ? ": " + detail.slice(0, 300) : ""}.`,
+    );
   }
   return response;
 }
@@ -174,16 +184,27 @@ export function assertOpenRigSendAcknowledged(value: unknown): void {
   const target = record(receipt?.target);
   const result = record(receipt?.result);
   if (target?.kind === "t3-thread") {
-    if (result?.messageSent === true && typeof result.messageId === "string" &&
-      result.messageId.length > 0 && result.threadId === target.threadId &&
-      result.environmentId === target.environmentId) return;
+    if (
+      result?.messageSent === true &&
+      typeof result.messageId === "string" &&
+      result.messageId.length > 0 &&
+      result.threadId === target.threadId &&
+      result.environmentId === target.environmentId
+    )
+      return;
   } else if (target?.kind === "chatgpt-conversation") {
-    if (result?.messageSent === true && result.conversationGuardValidated === true &&
-      result.verifiedConversationId === target.conversationId) return;
+    if (
+      result?.messageSent === true &&
+      result.conversationGuardValidated === true &&
+      result.verifiedConversationId === target.conversationId
+    )
+      return;
   }
   // Managed delivery never falls back to a legacy browser UUID, even if an
   // older bridge returns HTTP 200 and claims it dispatched a message.
-  throw new Error("OpenRig did not return a matching T3 delivery acknowledgement; outcome unknown. Do not retry blindly.");
+  throw new Error(
+    "OpenRig did not return a matching T3 delivery acknowledgement; outcome unknown. Do not retry blindly.",
+  );
 }
 
 export async function sendOpenRigMessage(
@@ -191,16 +212,26 @@ export async function sendOpenRigMessage(
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   if (!id.trim() || id.length > 512 || !message.trim() || message.length > 8_000) {
-    throw new Error("Invalid OpenRig message.");
+    throw new Error("OpenRig message not sent: invalid seat or message.");
   }
   // Older OpenRig versions still have a legacy /binding fallback when no
   // managed primary exists. Refuse to make any POST in that state, even if a
   // renderer mistakenly exposes a send action for a legacy-bound seat.
-  const ledger = await fetchOpenRigManagedSessions(id, fetchImpl);
+  let ledger: DesktopOpenRigSeatSessions;
+  try {
+    ledger = await fetchOpenRigManagedSessions(id, fetchImpl);
+  } catch (error) {
+    // This read precedes the POST. An unavailable/malformed ledger is a
+    // definite no-send, unlike a failed or timed-out POST.
+    throw new Error(
+      "OpenRig message not sent: could not verify managed primary: " +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
   const primary = ledger.sessions.find((session) => session.id === ledger.primarySessionId);
   const expected = primary?.status === "active" ? primary.target : null;
   if (!expected || expected.kind === "legacy-browser")
-    throw new Error("OpenRig seat has no routable active managed primary; no message was sent.");
+    throw new Error("OpenRig message not sent: seat has no routable active managed primary.");
   const response = await bridgeRequest(
     `/agents/${encodeURIComponent(id)}/send`,
     { method: "POST", payload: { message } },
@@ -209,11 +240,16 @@ export async function sendOpenRigMessage(
   const acknowledgement = (await response.json()) as unknown;
   assertOpenRigSendAcknowledged(acknowledgement);
   const actual = record(record(acknowledgement)?.target);
-  if (!actual || actual.kind !== expected.kind ||
+  if (
+    !actual ||
+    actual.kind !== expected.kind ||
     (expected.kind === "t3-thread" &&
       (actual.environmentId !== expected.environmentId || actual.threadId !== expected.threadId)) ||
-    (expected.kind === "chatgpt-conversation" && actual.conversationId !== expected.conversationId))
-    throw new Error("OpenRig delivery target diverged from the managed primary; outcome unknown. Do not retry blindly.");
+    (expected.kind === "chatgpt-conversation" && actual.conversationId !== expected.conversationId)
+  )
+    throw new Error(
+      "OpenRig delivery target diverged from the managed primary; outcome unknown. Do not retry blindly.",
+    );
 }
 
 function decodeSessionTarget(value: unknown): DesktopOpenRigSessionTarget {
@@ -267,7 +303,10 @@ export async function fetchOpenRigSessions(fetchImpl: typeof fetch = fetch) {
 }
 
 /** Read OpenRig's ledger as-is, without inferring ownership from T3 tabs or title matches. */
-export function decodeOpenRigManagedSessions(payload: unknown, seatId: string): DesktopOpenRigSeatSessions {
+export function decodeOpenRigManagedSessions(
+  payload: unknown,
+  seatId: string,
+): DesktopOpenRigSeatSessions {
   const value = record(payload);
   if (value?.seatId !== seatId || !Array.isArray(value.sessions) || value.sessions.length > 1_000)
     throw new Error("Invalid OpenRig managed session ledger or seat mismatch.");
@@ -302,9 +341,11 @@ export function decodeOpenRigSeatTopology(payload: unknown): DesktopOpenRigSeatT
   const body = record(payload);
   // The full daemon includes its managed ledger in RigSpec discovery provenance.
   // Both published source labels still carry exactly the same authoritative seat shape.
-  if ((body?.source !== "openrig-rigspec" &&
-      body?.source !== "openrig-rigspec-and-managed-ledger") ||
-      !Array.isArray(body.seats) || body.seats.length > 1_000)
+  if (
+    (body?.source !== "openrig-rigspec" && body?.source !== "openrig-rigspec-and-managed-ledger") ||
+    !Array.isArray(body.seats) ||
+    body.seats.length > 1_000
+  )
     throw new Error("Invalid OpenRig seat topology response.");
   return {
     source: body.source as DesktopOpenRigSeatTopology["source"],
@@ -312,7 +353,8 @@ export function decodeOpenRigSeatTopology(payload: unknown): DesktopOpenRigSeatT
       const seat = record(entry);
       const parentIds = stringArray(seat?.parentIds);
       const childIds = stringArray(seat?.childIds);
-      if (!seat || !parentIds || !childIds) throw new Error("Invalid OpenRig seat topology response.");
+      if (!seat || !parentIds || !childIds)
+        throw new Error("Invalid OpenRig seat topology response.");
       return {
         id: requiredString(seat.id),
         rigId: requiredString(seat.rigId),
@@ -329,7 +371,10 @@ export function decodeOpenRigSeatTopology(payload: unknown): DesktopOpenRigSeatT
 
 const REPORT_STATUSES = new Set(["working", "blocked", "completed", "failed"]);
 /** Seat reports are author-unverified; any other claim is rejected. */
-export function decodeOpenRigSeatReports(payload: unknown, seatId: string): DesktopOpenRigSeatReports {
+export function decodeOpenRigSeatReports(
+  payload: unknown,
+  seatId: string,
+): DesktopOpenRigSeatReports {
   const body = record(payload);
   if (body?.seatId !== seatId || !Array.isArray(body.reports) || body.reports.length > 100)
     throw new Error("Invalid OpenRig seat reports response.");
@@ -338,10 +383,19 @@ export function decodeOpenRigSeatReports(payload: unknown, seatId: string): Desk
     reports: body.reports.map((entry: unknown) => {
       const report = record(entry);
       const blockedOn = stringArray(report?.blockedOn ?? []);
-      if (!report || typeof report.status !== "string" || !REPORT_STATUSES.has(report.status) ||
-        typeof report.summary !== "string" || typeof report.timestamp !== "string" ||
-        typeof report.eventSeq !== "number" || report.authorVerified !== false || !blockedOn ||
-        (report.progress !== null && report.progress !== undefined && typeof report.progress !== "number"))
+      if (
+        !report ||
+        typeof report.status !== "string" ||
+        !REPORT_STATUSES.has(report.status) ||
+        typeof report.summary !== "string" ||
+        typeof report.timestamp !== "string" ||
+        typeof report.eventSeq !== "number" ||
+        report.authorVerified !== false ||
+        !blockedOn ||
+        (report.progress !== null &&
+          report.progress !== undefined &&
+          typeof report.progress !== "number")
+      )
         throw new Error("Invalid OpenRig seat report.");
       return {
         reportId: requiredString(report.reportId),
@@ -357,7 +411,9 @@ export function decodeOpenRigSeatReports(payload: unknown, seatId: string): Desk
   };
 }
 
-export async function fetchOpenRigSeatTopology(fetchImpl: typeof fetch = fetch): Promise<DesktopOpenRigSeatTopology> {
+export async function fetchOpenRigSeatTopology(
+  fetchImpl: typeof fetch = fetch,
+): Promise<DesktopOpenRigSeatTopology> {
   const response = await bridgeRequest("/coordination/discover", { method: "GET" }, fetchImpl);
   return decodeOpenRigSeatTopology((await response.json()) as unknown);
 }
@@ -367,7 +423,11 @@ export async function fetchOpenRigSeatReports(
   fetchImpl: typeof fetch = fetch,
 ): Promise<DesktopOpenRigSeatReports> {
   const id = assertSeatId(seatId);
-  const response = await bridgeRequest(`/coordination/reports/${id}?limit=20`, { method: "GET" }, fetchImpl);
+  const response = await bridgeRequest(
+    `/coordination/reports/${id}?limit=20`,
+    { method: "GET" },
+    fetchImpl,
+  );
   return decodeOpenRigSeatReports((await response.json()) as unknown, seatId);
 }
 
@@ -376,15 +436,22 @@ export async function fetchOpenRigAgentTasks(
   agentId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DesktopOpenRigAgentTasks> {
-  if (!agentId || agentId !== agentId.trim() || agentId.length > 512 ||
-      /[\\?#%\s]/.test(agentId) ||
-      agentId.split("/").some(segment => segment === "." || segment === "..") ||
-      [...agentId].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
+  if (
+    !agentId ||
+    agentId !== agentId.trim() ||
+    agentId.length > 512 ||
+    /[\\?#%\s]/.test(agentId) ||
+    agentId.split("/").some((segment) => segment === "." || segment === "..") ||
+    [...agentId].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+  ) {
     throw new Error("Invalid OpenRig agent node ID.");
   }
   const response = await bridgeRequest(
     `/agents/${encodeURIComponent(agentId)}/tasks?limit=25`,
-    { method: "GET" }, fetchImpl, false, [400, 404, 409, 503],
+    { method: "GET" },
+    fetchImpl,
+    false,
+    [400, 404, 409, 503],
   );
   const payload = (await response.json()) as unknown;
   let decoded: DesktopOpenRigAgentTasks;
@@ -394,9 +461,13 @@ export async function fetchOpenRigAgentTasks(
     throw new Error("Invalid OpenRig canonical task projection response.");
   }
   if (response.ok) {
-    if (!decoded.available || decoded.agent.agentId !== agentId ||
-        decoded.limit !== 25 || decoded.tasks.length > 25 ||
-        decoded.tasks.some(task => task.destinationSession !== decoded.agent.canonicalSession)) {
+    if (
+      !decoded.available ||
+      decoded.agent.agentId !== agentId ||
+      decoded.limit !== 25 ||
+      decoded.tasks.length > 25 ||
+      decoded.tasks.some((task) => task.destinationSession !== decoded.agent.canonicalSession)
+    ) {
       throw new Error("OpenRig canonical task projection identity or payload mismatch.");
     }
   } else {
@@ -419,10 +490,15 @@ export async function readOpenRigPolicyForBrowserSend(
   input: DesktopOpenRigPolicyIntakeInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DesktopOpenRigPolicyIntakeResult> {
-  const deferred = (reason: string): DesktopOpenRigPolicyIntakeResult =>
-    ({ schema: "t3-c05-browser-optional/v1", status: "deferred", reason });
-  if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(input.browserSessionId) ||
-      !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(input.conversationId))
+  const deferred = (reason: string): DesktopOpenRigPolicyIntakeResult => ({
+    schema: "t3-c05-browser-optional/v1",
+    status: "deferred",
+    reason,
+  });
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(input.browserSessionId) ||
+    !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(input.conversationId)
+  )
     return deferred("invalid_exact_browser_identity");
 
   const noStartGet = async (path: string): Promise<unknown> => {
@@ -433,47 +509,65 @@ export async function readOpenRigPolicyForBrowserSend(
         Accept: "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      cache: "no-store", redirect: "error", signal: AbortSignal.timeout(4_000),
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(4_000),
     });
     if (!response.ok) throw new Error(`policy_http_${response.status}`);
     const raw = await response.text();
     if (raw.length > 150_000) throw new Error("policy_page_oversized");
-    try { return JSON.parse(raw) as unknown; }
-    catch { throw new Error("policy_malformed_json"); }
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      throw new Error("policy_malformed_json");
+    }
   };
   try {
     const topology = decodeOpenRigSeatTopology(await noStartGet("/coordination/discover"));
     if (topology.source !== "openrig-rigspec-and-managed-ledger")
       return deferred("full_daemon_topology_unavailable");
-    const managers = topology.seats.filter(seat =>
-      (seat.role === "global-manager" || seat.role === "project-manager") && seat.logicalId);
+    const managers = topology.seats.filter(
+      (seat) =>
+        (seat.role === "global-manager" || seat.role === "project-manager") && seat.logicalId,
+    );
     if (managers.length === 0 || managers.length > 100)
       return deferred("manager_topology_unavailable");
     // Parallel bounded reads: optional intake must not delay a legitimate send
     // by serially waiting on unrelated manager seats.
-    const ledgers = await Promise.all(managers.map(async seat => ({
-      seat,
-      ledger: decodeOpenRigManagedSessions(
-        await noStartGet(`/agents/${assertSeatId(seat.id)}/sessions`), seat.id),
-    })));
-    const matches: Array<{ seat: typeof managers[number]; primary: DesktopOpenRigSeatSessions["sessions"][number] }> = [];
+    const ledgers = await Promise.all(
+      managers.map(async (seat) => ({
+        seat,
+        ledger: decodeOpenRigManagedSessions(
+          await noStartGet(`/agents/${assertSeatId(seat.id)}/sessions`),
+          seat.id,
+        ),
+      })),
+    );
+    const matches: Array<{
+      seat: (typeof managers)[number];
+      primary: DesktopOpenRigSeatSessions["sessions"][number];
+    }> = [];
     for (const { seat, ledger } of ledgers) {
-      const primary = ledger.sessions.find(item => item.id === ledger.primarySessionId);
-      if (primary?.primary && primary.status === "active" &&
-          (primary.mode === "chatgpt" || primary.mode === "adopt") &&
-          primary.attachedTabUuid === input.browserSessionId &&
-          primary.conversationId === input.conversationId &&
-          primary.target?.kind === "chatgpt-conversation" &&
-          primary.target.conversationId === input.conversationId &&
-          (!primary.target.preferredBrowserSessionId ||
-            primary.target.preferredBrowserSessionId === input.browserSessionId))
+      const primary = ledger.sessions.find((item) => item.id === ledger.primarySessionId);
+      if (
+        primary?.primary &&
+        primary.status === "active" &&
+        (primary.mode === "chatgpt" || primary.mode === "adopt") &&
+        primary.attachedTabUuid === input.browserSessionId &&
+        primary.conversationId === input.conversationId &&
+        primary.target?.kind === "chatgpt-conversation" &&
+        primary.target.conversationId === input.conversationId &&
+        (!primary.target.preferredBrowserSessionId ||
+          primary.target.preferredBrowserSessionId === input.browserSessionId)
+      )
         matches.push({ seat, primary });
     }
     if (matches.length !== 1) return deferred("managed_primary_not_unique_or_not_active");
     const { seat, primary } = matches[0]!;
-    const member = seat.logicalId.includes(".") &&
-      seat.logicalId.indexOf(".") < seat.logicalId.length - 1
-      ? seat.logicalId.replace(".", "-") : seat.logicalId;
+    const member =
+      seat.logicalId.includes(".") && seat.logicalId.indexOf(".") < seat.logicalId.length - 1
+        ? seat.logicalId.replace(".", "-")
+        : seat.logicalId;
     const canonicalSession = `${member}@${seat.rigName}`;
     const all: DesktopOpenRigPolicyItem[] = [];
     const seen = new Set<string>();
@@ -483,16 +577,27 @@ export async function readOpenRigPolicyForBrowserSend(
     let contextBytes = 0;
     do {
       if (++pages > 12) return deferred("policy_too_many_pages");
-      const page = decodeOpenRigPolicyPage(await noStartGet(
-        `/agents/${assertSeatId(seat.id)}/tasks?view=policy&limit=25` +
-        (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "")));
-      if (page.agent.agentId !== seat.id || page.agent.rigId !== seat.rigId ||
-          page.agent.rigName !== seat.rigName ||
-          page.agent.canonicalSession !== canonicalSession ||
-          page.policies.length > 25 ||
-          page.policies.some(policy => !policy.qitemId || policy.destinationSession !== canonicalSession ||
+      const page = decodeOpenRigPolicyPage(
+        await noStartGet(
+          `/agents/${assertSeatId(seat.id)}/tasks?view=policy&limit=25` +
+            (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""),
+        ),
+      );
+      if (
+        page.agent.agentId !== seat.id ||
+        page.agent.rigId !== seat.rigId ||
+        page.agent.rigName !== seat.rigName ||
+        page.agent.canonicalSession !== canonicalSession ||
+        page.policies.length > 25 ||
+        page.policies.some(
+          (policy) =>
+            !policy.qitemId ||
+            policy.destinationSession !== canonicalSession ||
             policy.tags.indexOf("coordination:policy") === -1 ||
-            policy.body.length === 0 || policy.body.length > 100_000))
+            policy.body.length === 0 ||
+            policy.body.length > 100_000,
+        )
+      )
         return deferred("policy_page_identity_or_content_mismatch");
       for (const policy of page.policies) {
         if (!seen.has(policy.qitemId)) {
@@ -502,9 +607,11 @@ export async function readOpenRigPolicyForBrowserSend(
           if (contextBytes > 96_000) return deferred("policy_context_oversized");
         }
       }
-      if (page.hasMore !== (page.nextCursor !== null) ||
-          (page.hasMore && (page.policies.length === 0 || !page.nextCursor ||
-            cursors.has(page.nextCursor))))
+      if (
+        page.hasMore !== (page.nextCursor !== null) ||
+        (page.hasMore &&
+          (page.policies.length === 0 || !page.nextCursor || cursors.has(page.nextCursor)))
+      )
         return deferred("policy_partial_or_cursor_loop");
       cursor = page.nextCursor;
       if (cursor) cursors.add(cursor);
@@ -512,25 +619,38 @@ export async function readOpenRigPolicyForBrowserSend(
     // A page fetch is not an atomic snapshot of the ledger. Recheck the
     // authoritative primary before returning any optional context.
     const afterTopology = decodeOpenRigSeatTopology(await noStartGet("/coordination/discover"));
-    const currentSeat = afterTopology.seats.filter(item => item.id === seat.id);
+    const currentSeat = afterTopology.seats.filter((item) => item.id === seat.id);
     const after = decodeOpenRigManagedSessions(
-      await noStartGet(`/agents/${assertSeatId(seat.id)}/sessions`), seat.id);
-    const currentPrimary = after.sessions.find(item => item.id === after.primarySessionId);
-    if (afterTopology.source !== topology.source || currentSeat.length !== 1 ||
-        JSON.stringify(currentSeat[0]) !== JSON.stringify(seat) ||
-        !currentPrimary || currentPrimary.id !== primary.id ||
-        JSON.stringify(currentPrimary) !== JSON.stringify(primary))
+      await noStartGet(`/agents/${assertSeatId(seat.id)}/sessions`),
+      seat.id,
+    );
+    const currentPrimary = after.sessions.find((item) => item.id === after.primarySessionId);
+    if (
+      afterTopology.source !== topology.source ||
+      currentSeat.length !== 1 ||
+      JSON.stringify(currentSeat[0]) !== JSON.stringify(seat) ||
+      !currentPrimary ||
+      currentPrimary.id !== primary.id ||
+      JSON.stringify(currentPrimary) !== JSON.stringify(primary)
+    )
       return deferred("managed_primary_changed_during_policy_read");
     return {
-      schema: "t3-c05-browser-optional/v1", status: "ready", agentId: seat.id,
-      managedSessionId: primary.id, browserSessionId: input.browserSessionId,
-      conversationId: input.conversationId, canonicalSession, policies: all,
+      schema: "t3-c05-browser-optional/v1",
+      status: "ready",
+      agentId: seat.id,
+      managedSessionId: primary.id,
+      browserSessionId: input.browserSessionId,
+      conversationId: input.conversationId,
+      canonicalSession,
+      policies: all,
     };
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     return deferred(
       /^policy_http_\d+$|^policy_(?:page_oversized|malformed_json)$/.test(detail)
-        ? detail : "policy_offline_or_invalid_response");
+        ? detail
+        : "policy_offline_or_invalid_response",
+    );
   }
 }
 
@@ -538,7 +658,7 @@ export const readOpenRigPolicyForBrowserSendIpc = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.OPENRIG_POLICY_BROWSER_SEND_CHANNEL,
   payload: DesktopOpenRigPolicyIntakeInputSchema,
   result: DesktopOpenRigPolicyIntakeResultSchema,
-  handler: input => Effect.tryPromise(() => readOpenRigPolicyForBrowserSend(input)),
+  handler: (input) => Effect.tryPromise(() => readOpenRigPolicyForBrowserSend(input)),
 });
 
 export async function fetchOpenRigManagedSessions(
@@ -558,7 +678,11 @@ export async function fetchOpenRigExecutionProfile(
   fetchImpl: typeof fetch = fetch,
 ): Promise<DesktopOpenRigExecutionProfile> {
   const id = assertSeatId(seatId);
-  const response = await bridgeRequest(`/agents/${id}/execution-profile`, { method: "GET" }, fetchImpl);
+  const response = await bridgeRequest(
+    `/agents/${id}/execution-profile`,
+    { method: "GET" },
+    fetchImpl,
+  );
   const result = decodeExecutionProfile((await response.json()) as unknown);
   if (result.seatId !== seatId || (result.profile !== null && result.profile.seatId !== seatId))
     throw new Error("OpenRig returned an execution profile for the wrong seat.");
@@ -567,8 +691,14 @@ export async function fetchOpenRigExecutionProfile(
 
 /** Persist ONLY explicitly operator-entered, catalog-validated native execution settings. */
 export async function configureOpenRigSeatExecutionProfile(
-  { seatId, workspaceRoot, providerInstanceId, model, runtimeMode, environmentId }:
-    DesktopOpenRigConfigureExecutionProfileInput,
+  {
+    seatId,
+    workspaceRoot,
+    providerInstanceId,
+    model,
+    runtimeMode,
+    environmentId,
+  }: DesktopOpenRigConfigureExecutionProfileInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DesktopOpenRigExecutionProfile> {
   const id = assertSeatId(seatId);
@@ -577,39 +707,67 @@ export async function configureOpenRigSeatExecutionProfile(
   const slug = model.trim();
   const environment = environmentId?.trim();
   if (!/^[A-Za-z]:\\/u.test(root) || root.length > 1024 || /[\r\n\0]/u.test(root))
-    throw new Error("Workspace root must be an existing absolute Windows drive path, e.g. D:\\Project.");
+    throw new Error(
+      "Workspace root must be an existing absolute Windows drive path, e.g. D:\\Project.",
+    );
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(instance))
-    throw new Error("Choose an exact T3 provider instance ID from the live catalog (not the driver name).");
+    throw new Error(
+      "Choose an exact T3 provider instance ID from the live catalog (not the driver name).",
+    );
   if (!slug || slug.length > 256 || model !== slug)
-    throw new Error("Enter the exact nonempty T3 provider catalog model slug (max 256 characters).");
+    throw new Error(
+      "Enter the exact nonempty T3 provider catalog model slug (max 256 characters).",
+    );
   if (!["approval-required", "auto-accept-edits", "auto", "full-access"].includes(runtimeMode))
     throw new Error("Select an explicit T3 runtime approval mode.");
   if (environmentId !== undefined && (!environment || environment.length > 256))
     throw new Error("Environment ID, if supplied, must be an exact nonempty T3 environment ID.");
-  const payload = { workspaceRoot: root, providerInstanceId: instance,
-    model: slug, runtimeMode, ...(environment ? { environmentId: environment } : {}) };
-  const response = await bridgeRequest(`/agents/${id}/execution-profile`,
-    { method: "PUT", payload }, fetchImpl);
+  const payload = {
+    workspaceRoot: root,
+    providerInstanceId: instance,
+    model: slug,
+    runtimeMode,
+    ...(environment ? { environmentId: environment } : {}),
+  };
+  const response = await bridgeRequest(
+    `/agents/${id}/execution-profile`,
+    { method: "PUT", payload },
+    fetchImpl,
+  );
   const receipt = record((await response.json()) as unknown);
   const saved = record(receipt?.profile);
-  if (receipt?.version !== 1 || receipt.seatId !== seatId ||
-    receipt.overwriteRigSpec !== false || receipt.legacySessionsAutoAdopted !== false ||
-    saved?.seatId !== seatId || saved.workspaceRoot !== root ||
-    saved.providerInstanceId !== instance || saved.model !== slug ||
+  if (
+    receipt?.version !== 1 ||
+    receipt.seatId !== seatId ||
+    receipt.overwriteRigSpec !== false ||
+    receipt.legacySessionsAutoAdopted !== false ||
+    saved?.seatId !== seatId ||
+    saved.workspaceRoot !== root ||
+    saved.providerInstanceId !== instance ||
+    saved.model !== slug ||
     saved.runtimeMode !== runtimeMode ||
     saved.provenance !== "operator-explicit-t3-provider-catalog" ||
-    typeof saved.environmentId !== "string" || !saved.environmentId ||
-    (environment !== undefined && saved.environmentId !== environment))
-    throw new Error("OpenRig did not confirm the exact provider-catalog execution profile; inspect GET before resubmitting.");
+    typeof saved.environmentId !== "string" ||
+    !saved.environmentId ||
+    (environment !== undefined && saved.environmentId !== environment)
+  )
+    throw new Error(
+      "OpenRig did not confirm the exact provider-catalog execution profile; inspect GET before resubmitting.",
+    );
   const profile = await fetchOpenRigExecutionProfile(seatId, fetchImpl);
-  if (!profile.profile || JSON.stringify({
-    workspaceRoot: profile.profile.workspaceRoot,
-    providerInstanceId: profile.profile.providerInstanceId,
-    model: profile.profile.model,
-    runtimeMode: profile.profile.runtimeMode,
-    environmentId: profile.profile.environmentId,
-  }) !== JSON.stringify({ ...payload, environmentId: saved.environmentId }))
-    throw new Error("OpenRig did not confirm persisted execution settings on GET; inspect before editing again.");
+  if (
+    !profile.profile ||
+    JSON.stringify({
+      workspaceRoot: profile.profile.workspaceRoot,
+      providerInstanceId: profile.profile.providerInstanceId,
+      model: profile.profile.model,
+      runtimeMode: profile.profile.runtimeMode,
+      environmentId: profile.profile.environmentId,
+    }) !== JSON.stringify({ ...payload, environmentId: saved.environmentId })
+  )
+    throw new Error(
+      "OpenRig did not confirm persisted execution settings on GET; inspect before editing again.",
+    );
   return profile;
 }
 
@@ -618,18 +776,31 @@ export async function configureOpenRigSeatExecutionProfile(
  * A 503/timeout may mean the provider launched; inspect the ledger before any new operation.
  */
 export async function startOpenRigSeatSession(
-  { seatId, operationId, kind, workspaceRoot, title, initialPrompt, parentSeatId, parentManagedSessionId }: DesktopOpenRigLaunchInput,
+  {
+    seatId,
+    operationId,
+    kind,
+    workspaceRoot,
+    title,
+    initialPrompt,
+    parentSeatId,
+    parentManagedSessionId,
+  }: DesktopOpenRigLaunchInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DesktopOpenRigSeatSessions> {
   const id = assertSeatId(seatId);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(operationId))
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(operationId)
+  )
     throw new Error("Managed-session launch requires an operation UUID.");
   if (kind && kind !== "native" && kind !== "chatgpt") throw new Error("Invalid seat runtime.");
-  if (title !== undefined && title.length > 160 ||
-    initialPrompt !== undefined && initialPrompt.length > 28_000 ||
-    workspaceRoot !== undefined && workspaceRoot.length > 1_024 ||
-    parentSeatId !== undefined && parentSeatId.length > 512 ||
-    parentManagedSessionId !== undefined && parentManagedSessionId.length > 512)
+  if (
+    (title !== undefined && title.length > 160) ||
+    (initialPrompt !== undefined && initialPrompt.length > 28_000) ||
+    (workspaceRoot !== undefined && workspaceRoot.length > 1_024) ||
+    (parentSeatId !== undefined && parentSeatId.length > 512) ||
+    (parentManagedSessionId !== undefined && parentManagedSessionId.length > 512)
+  )
     throw new Error("Managed-session launch options exceed limits.");
   if (parentManagedSessionId?.trim() && !parentSeatId?.trim())
     throw new Error("A parent managed session requires its exact parent OpenRig seat ID.");
@@ -640,43 +811,71 @@ export async function startOpenRigSeatSession(
     ...(title?.trim() ? { title: title.trim() } : {}),
     ...(initialPrompt?.trim() ? { initialPrompt: initialPrompt.trim() } : {}),
     ...(parentSeatId?.trim() ? { parentSeatId: parentSeatId.trim() } : {}),
-    ...(parentManagedSessionId?.trim() ? { parentManagedSessionId: parentManagedSessionId.trim() } : {}),
+    ...(parentManagedSessionId?.trim()
+      ? { parentManagedSessionId: parentManagedSessionId.trim() }
+      : {}),
   };
   // OpenRig alone validates exact RigSpec provider, catalog model, environment,
   // workspace and parent relation. T3 must never open an unpersisted draft.
-  const response = await bridgeRequest(`/agents/${id}/sessions`, { method: "POST", payload }, fetchImpl);
+  const response = await bridgeRequest(
+    `/agents/${id}/sessions`,
+    { method: "POST", payload },
+    fetchImpl,
+  );
   const receipt = record((await response.json()) as unknown);
   const launched = record(receipt?.session);
   const dispatch = record(receipt?.initialDispatch);
   const launchMode = launched?.mode;
   const nativeIntent = record(launched?.intent);
-  const nativeReceiptVerified = launchMode !== "native" ||
-    (launched?.threadId === operationId && typeof launched.projectId === "string" &&
-      launched.projectId.length > 0 && typeof dispatch?.messageId === "string" &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(dispatch.messageId) &&
+  const nativeReceiptVerified =
+    launchMode !== "native" ||
+    (launched?.threadId === operationId &&
+      typeof launched.projectId === "string" &&
+      launched.projectId.length > 0 &&
+      typeof dispatch?.messageId === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        dispatch.messageId,
+      ) &&
       dispatch.messageId === nativeIntent?.initialMessageId &&
       typeof nativeIntent?.providerInstanceId === "string" &&
       typeof nativeIntent?.environmentId === "string" &&
       typeof nativeIntent?.runtimeMode === "string");
-  if (response.status !== 201 || receipt?.version !== 1 || receipt.seatId !== seatId ||
-    launched?.operationId !== operationId || launched?.seatId !== seatId ||
+  if (
+    response.status !== 201 ||
+    receipt?.version !== 1 ||
+    receipt.seatId !== seatId ||
+    launched?.operationId !== operationId ||
+    launched?.seatId !== seatId ||
     (launchMode !== "native" && launchMode !== "chatgpt") ||
     (kind !== undefined && launchMode !== kind) ||
     (launched?.status !== "active" && launched?.status !== "pending") ||
-    receipt.retrySafe !== false || dispatch?.state !== "transport_accepted" ||
-    dispatch.modelCompletionVerified !== false || !nativeReceiptVerified) {
-    throw new Error("OpenRig did not prove exact persisted launch and bootstrap transport acceptance; inspect the ledger before retrying.");
+    receipt.retrySafe !== false ||
+    dispatch?.state !== "transport_accepted" ||
+    dispatch.modelCompletionVerified !== false ||
+    !nativeReceiptVerified
+  ) {
+    throw new Error(
+      "OpenRig did not prove exact persisted launch and bootstrap transport acceptance; inspect the ledger before retrying.",
+    );
   }
   const after = await fetchOpenRigManagedSessions(seatId, fetchImpl);
-  if (!after.sessions.some((session) =>
-    session.operationId === operationId && session.id === record(receipt.session)?.id)) {
-    throw new Error("OpenRig did not confirm a matching managed launch; inspect the ledger before retrying.");
+  if (
+    !after.sessions.some(
+      (session) =>
+        session.operationId === operationId && session.id === record(receipt.session)?.id,
+    )
+  ) {
+    throw new Error(
+      "OpenRig did not confirm a matching managed launch; inspect the ledger before retrying.",
+    );
   }
   return after;
 }
 
 function assertOperationId(operationId: string): string {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(operationId))
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(operationId)
+  )
     throw new Error("Managed session action requires an operation UUID.");
   return operationId;
 }
@@ -690,17 +889,29 @@ export async function adoptOpenRigSeatSession(
   assertOperationId(operationId);
   const normalized = decodeSessionTarget(target);
   if (normalized.kind === "legacy-browser")
-    throw new Error("A browser tab ID alone is not a durable conversation; choose a verified provider conversation.");
-  const response = await bridgeRequest(`/agents/${id}/sessions/adopt`,
-    { method: "POST", payload: { operationId, target: normalized } }, fetchImpl);
+    throw new Error(
+      "A browser tab ID alone is not a durable conversation; choose a verified provider conversation.",
+    );
+  const response = await bridgeRequest(
+    `/agents/${id}/sessions/adopt`,
+    { method: "POST", payload: { operationId, target: normalized } },
+    fetchImpl,
+  );
   const receipt = record((await response.json()) as unknown);
-  if (receipt?.version !== 1 || receipt.seatId !== seatId ||
+  if (
+    receipt?.version !== 1 ||
+    receipt.seatId !== seatId ||
     record(receipt.session)?.operationId !== operationId ||
     record(receipt.session)?.seatId !== seatId ||
-    record(receipt.session)?.mode !== "adopt")
+    record(receipt.session)?.mode !== "adopt"
+  )
     throw new Error("OpenRig did not confirm adoption; inspect the ledger before retrying.");
   const after = await fetchOpenRigManagedSessions(seatId, fetchImpl);
-  if (!after.sessions.some(s => s.id === record(receipt.session)?.id && s.operationId === operationId))
+  if (
+    !after.sessions.some(
+      (s) => s.id === record(receipt.session)?.id && s.operationId === operationId,
+    )
+  )
     throw new Error("OpenRig managed adoption is not in its ledger; inspect before retrying.");
   return after;
 }
@@ -712,17 +923,31 @@ export async function reconcileOpenRigChatGPTSeatSession(
   const id = assertSeatId(seatId);
   if (!sessionId.trim() || sessionId.length > 512) throw new Error("Invalid managed session ID.");
   const before = await fetchOpenRigManagedSessions(seatId, fetchImpl);
-  if (!before.sessions.some(s => s.id === sessionId && s.mode === "chatgpt" && s.status === "pending"))
+  if (
+    !before.sessions.some(
+      (s) => s.id === sessionId && s.mode === "chatgpt" && s.status === "pending",
+    )
+  )
     throw new Error("No pending owned ChatGPT conversation to reconcile.");
   const response = await bridgeRequest(
     `/agents/${id}/sessions/${encodeURIComponent(sessionId)}/reconcile-chatgpt`,
-    { method: "POST", payload: {} }, fetchImpl);
+    { method: "POST", payload: {} },
+    fetchImpl,
+  );
   const receipt = record((await response.json()) as unknown);
-  if (receipt?.version !== 1 || receipt.seatId !== seatId || record(receipt.session)?.id !== sessionId)
+  if (
+    receipt?.version !== 1 ||
+    receipt.seatId !== seatId ||
+    record(receipt.session)?.id !== sessionId
+  )
     throw new Error("OpenRig did not acknowledge ChatGPT reconciliation.");
   const after = await fetchOpenRigManagedSessions(seatId, fetchImpl);
-  if (!after.sessions.some(s => s.id === sessionId && s.status === "active" &&
-    s.target?.kind === "chatgpt-conversation"))
+  if (
+    !after.sessions.some(
+      (s) =>
+        s.id === sessionId && s.status === "active" && s.target?.kind === "chatgpt-conversation",
+    )
+  )
     throw new Error("ChatGPT conversation URL still unverified; do not relaunch.");
   return after;
 }
@@ -734,18 +959,23 @@ export async function detachOpenRigSeatSession(
   const id = assertSeatId(seatId);
   if (!sessionId.trim() || sessionId.length > 512) throw new Error("Invalid managed session ID.");
   const before = await fetchOpenRigManagedSessions(seatId, fetchImpl);
-  if (!before.sessions.some(s => s.id === sessionId && s.status !== "detached"))
+  if (!before.sessions.some((s) => s.id === sessionId && s.status !== "detached"))
     throw new Error("No attached session owned by this OpenRig seat.");
   const response = await bridgeRequest(
     `/agents/${id}/sessions/${encodeURIComponent(sessionId)}`,
-    { method: "DELETE" }, fetchImpl);
+    { method: "DELETE" },
+    fetchImpl,
+  );
   const receipt = record((await response.json()) as unknown);
-  if (receipt?.version !== 1 || receipt.seatId !== seatId ||
+  if (
+    receipt?.version !== 1 ||
+    receipt.seatId !== seatId ||
     record(receipt.session)?.id !== sessionId ||
-    record(receipt.session)?.status !== "detached")
+    record(receipt.session)?.status !== "detached"
+  )
     throw new Error("OpenRig did not confirm detachment.");
   const after = await fetchOpenRigManagedSessions(seatId, fetchImpl);
-  if (!after.sessions.some(s => s.id === sessionId && s.status === "detached"))
+  if (!after.sessions.some((s) => s.id === sessionId && s.status === "detached"))
     throw new Error("OpenRig did not persist the detached session history.");
   return after;
 }
@@ -757,31 +987,47 @@ const lifecycleEffects = {
   stop: "local_t3_session_closed_not_chatgpt_cloud_deleted",
   recover: "safe_saved_conversation_navigation_requested_not_verified_loaded",
 } as const;
-const decodeManagedBrowserLifecycle = Schema.decodeUnknownSync(DesktopOpenRigManagedBrowserLifecycleResultSchema);
+const decodeManagedBrowserLifecycle = Schema.decodeUnknownSync(
+  DesktopOpenRigManagedBrowserLifecycleResultSchema,
+);
 
 export async function runOpenRigSeatBrowserLifecycle(
   input: DesktopOpenRigManagedBrowserLifecycleInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DesktopOpenRigManagedBrowserLifecycleResult> {
   const fields = record(input);
-  if (!fields || Object.keys(fields).some(key => !["seatId", "sessionId", "action", "confirm"].includes(key)) ||
-      typeof fields.seatId !== "string" || typeof fields.sessionId !== "string" ||
-      !Object.hasOwn(lifecycleEffects, String(fields.action)) ||
-      (fields.action === "stop" ? fields.confirm !== "close-local-t3-session" :
-        Object.hasOwn(fields, "confirm")))
+  if (
+    !fields ||
+    Object.keys(fields).some(
+      (key) => !["seatId", "sessionId", "action", "confirm"].includes(key),
+    ) ||
+    typeof fields.seatId !== "string" ||
+    typeof fields.sessionId !== "string" ||
+    !Object.hasOwn(lifecycleEffects, String(fields.action)) ||
+    (fields.action === "stop"
+      ? fields.confirm !== "close-local-t3-session"
+      : Object.hasOwn(fields, "confirm"))
+  )
     throw new Error("Invalid managed browser lifecycle action or stop-only confirmation.");
   const { seatId, sessionId, action } = input;
   const id = assertSeatId(seatId);
   if (sessionId !== sessionId.trim() || !sessionId || sessionId.length > 512)
     throw new Error("Invalid managed session ID.");
   const before = await fetchOpenRigManagedSessions(seatId, fetchImpl);
-  const matches = before.sessions.filter(session => session.id === sessionId);
+  const matches = before.sessions.filter((session) => session.id === sessionId);
   const current = matches[0];
-  if (matches.length !== 1 || before.primarySessionId !== sessionId ||
-      !current || current.seatId !== seatId || !current.primary ||
-      (current.mode !== "chatgpt" && current.mode !== "adopt") || current.status !== "active" ||
-      current.target?.kind !== "chatgpt-conversation" ||
-      !current.attachedTabUuid || current.conversationId !== current.target.conversationId)
+  if (
+    matches.length !== 1 ||
+    before.primarySessionId !== sessionId ||
+    !current ||
+    current.seatId !== seatId ||
+    !current.primary ||
+    (current.mode !== "chatgpt" && current.mode !== "adopt") ||
+    current.status !== "active" ||
+    current.target?.kind !== "chatgpt-conversation" ||
+    !current.attachedTabUuid ||
+    current.conversationId !== current.target.conversationId
+  )
     throw new Error("Lifecycle requires the exact active primary managed ChatGPT conversation.");
   const browserId = current.attachedTabUuid;
   const conversationId = current.target.conversationId;
@@ -789,53 +1035,75 @@ export async function runOpenRigSeatBrowserLifecycle(
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(conversationId))
     throw new Error("Managed ChatGPT conversation identity is not canonical.");
   // No raw renderer URL, user-controlled header, browser token, or actor claim.
-  const payload = action === "stop"
-    ? { action, confirm: "close-local-t3-session" }
-    : { action };
+  const payload = action === "stop" ? { action, confirm: "close-local-t3-session" } : { action };
   const response = await bridgeRequest(
     `/agents/${id}/sessions/${encodeURIComponent(sessionId)}/lifecycle`,
-    { method: "POST", payload }, fetchImpl,
+    { method: "POST", payload },
+    fetchImpl,
   );
   let result: DesktopOpenRigManagedBrowserLifecycleResult;
   try {
     result = decodeManagedBrowserLifecycle((await response.json()) as unknown);
   } catch {
-    throw new Error("OpenRig lifecycle receipt malformed; outcome unconfirmed. Inspect the exact browser and ledger; do not retry.");
+    throw new Error(
+      "OpenRig lifecycle receipt malformed; outcome unconfirmed. Inspect the exact browser and ledger; do not retry.",
+    );
   }
   const receipt = record(result.receipt);
   const closing = action === "stop";
   const validControl = closing
-    ? receipt?.action === "change_state" && receipt.state === "closed" &&
-      receipt.persisted === true && receipt.acknowledged === true &&
-      receipt.closed === true && receipt.scope === "local-t3-session"
+    ? receipt?.action === "change_state" &&
+      receipt.state === "closed" &&
+      receipt.persisted === true &&
+      receipt.acknowledged === true &&
+      receipt.closed === true &&
+      receipt.scope === "local-t3-session"
     : action === "recover"
-      ? receipt?.requestedNavigation === true && expectedUrl.test(String(receipt.recoveredUrl ?? ""))
+      ? receipt?.requestedNavigation === true &&
+        expectedUrl.test(String(receipt.recoveredUrl ?? ""))
       : receipt?.action === (action === "suspend" ? "archive" : "restore") &&
-        receipt.acknowledged === true && receipt.persisted === true &&
+        receipt.acknowledged === true &&
+        receipt.persisted === true &&
         (action === "suspend"
           ? expectedUrl.test(String(record(receipt.archive)?.conversationUrl ?? ""))
           : receipt.restored === true && expectedUrl.test(String(receipt.conversationUrl ?? "")));
-  if (result.seatId !== seatId || result.managedSessionId !== sessionId ||
-      result.browserSessionId !== browserId || result.conversationId !== conversationId ||
-      result.action !== action || result.effect !== lifecycleEffects[action] ||
-      !receipt || receipt.sessionId !== browserId || !validControl ||
-      (closing
-        ? result.primarySessionId !== null || result.managedStatus !== "detached" ||
-          result.managedPrimaryUnchanged !== false
-        : result.primarySessionId !== sessionId || result.managedStatus !== "active" ||
-          result.managedPrimaryUnchanged !== true))
-    throw new Error("OpenRig lifecycle receipt mismatches selected session or T3 control; outcome unconfirmed. Inspect before retrying.");
+  if (
+    result.seatId !== seatId ||
+    result.managedSessionId !== sessionId ||
+    result.browserSessionId !== browserId ||
+    result.conversationId !== conversationId ||
+    result.action !== action ||
+    result.effect !== lifecycleEffects[action] ||
+    !receipt ||
+    receipt.sessionId !== browserId ||
+    !validControl ||
+    (closing
+      ? result.primarySessionId !== null ||
+        result.managedStatus !== "detached" ||
+        result.managedPrimaryUnchanged !== false
+      : result.primarySessionId !== sessionId ||
+        result.managedStatus !== "active" ||
+        result.managedPrimaryUnchanged !== true)
+  )
+    throw new Error(
+      "OpenRig lifecycle receipt mismatches selected session or T3 control; outcome unconfirmed. Inspect before retrying.",
+    );
   // Read after positive provider receipt. A failed readback cannot turn it into an
   // optimistic success, particularly after a locally closed browser but failed detach.
   const after = await fetchOpenRigManagedSessions(seatId, fetchImpl);
-  const persisted = after.sessions.find(s => s.id === sessionId);
-  if (closing
-    ? after.primarySessionId === sessionId || persisted?.status !== "detached"
-    : after.primarySessionId !== sessionId || persisted?.status !== "active" ||
-      persisted.attachedTabUuid !== browserId ||
-      persisted.target?.kind !== "chatgpt-conversation" ||
-      persisted.target.conversationId !== conversationId)
-    throw new Error("OpenRig ledger has not confirmed lifecycle state; inspect browser and ledger, do not retry.");
+  const persisted = after.sessions.find((s) => s.id === sessionId);
+  if (
+    closing
+      ? after.primarySessionId === sessionId || persisted?.status !== "detached"
+      : after.primarySessionId !== sessionId ||
+        persisted?.status !== "active" ||
+        persisted.attachedTabUuid !== browserId ||
+        persisted.target?.kind !== "chatgpt-conversation" ||
+        persisted.target.conversationId !== conversationId
+  )
+    throw new Error(
+      "OpenRig ledger has not confirmed lifecycle state; inspect browser and ledger, do not retry.",
+    );
   return result;
 }
 
@@ -854,10 +1122,13 @@ export async function selectOpenRigSeatPrimary(
     fetchImpl,
   );
   const receipt = record((await response.json()) as unknown);
-  if (receipt?.version !== 1 || receipt.seatId !== seatId ||
+  if (
+    receipt?.version !== 1 ||
+    receipt.seatId !== seatId ||
     receipt.primarySessionId !== sessionId ||
     record(receipt.session)?.id !== sessionId ||
-    record(receipt.session)?.seatId !== seatId)
+    record(receipt.session)?.seatId !== seatId
+  )
     throw new Error("OpenRig did not acknowledge the requested primary.");
   const after = await fetchOpenRigManagedSessions(seatId, fetchImpl);
   if (after.primarySessionId !== sessionId)
@@ -884,8 +1155,10 @@ export async function bindOpenRigSeat(
     const binding = record(receipt?.binding);
     const assignedTarget = record(binding?.target);
     // A successful HTTP response with no persisted target is not a binding.
-    if (binding?.nodeId !== input.id ||
-        JSON.stringify(assignedTarget) !== JSON.stringify(normalized)) {
+    if (
+      binding?.nodeId !== input.id ||
+      JSON.stringify(assignedTarget) !== JSON.stringify(normalized)
+    ) {
       throw new Error("OpenRig did not confirm the requested seat-to-conversation binding.");
     }
     return;
@@ -905,7 +1178,11 @@ export async function bindOpenRigSeat(
 
 export async function unbindOpenRigSeat(id: string, fetchImpl: typeof fetch = fetch) {
   if (!id.trim()) throw new Error("Seat ID required.");
-  const response = await bridgeRequest(`/agents/${encodeURIComponent(id)}/bind`, { method: "DELETE" }, fetchImpl);
+  const response = await bridgeRequest(
+    `/agents/${encodeURIComponent(id)}/bind`,
+    { method: "DELETE" },
+    fetchImpl,
+  );
   const receipt = record((await response.json()) as unknown);
   if (typeof receipt?.unbound !== "boolean") {
     throw new Error("OpenRig did not confirm the seat was detached.");
@@ -1170,18 +1447,20 @@ export const listPendingOpenRigNativeApprovals = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.OPENRIG_NATIVE_APPROVAL_PENDING_CHANNEL,
   payload: Schema.Void,
   result: DesktopOpenRigNativeApprovalPageSchema,
-  handler: () => Effect.tryPromise(() => listPendingNativeSpawnApprovals()).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(DesktopOpenRigNativeApprovalPageSchema)),
-  ),
+  handler: () =>
+    Effect.tryPromise(() => listPendingNativeSpawnApprovals()).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(DesktopOpenRigNativeApprovalPageSchema)),
+    ),
 });
 
 export const getOpenRigNativeApproval = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.OPENRIG_NATIVE_APPROVAL_GET_CHANNEL,
   payload: Schema.String,
   result: DesktopOpenRigNativeApprovalSchema,
-  handler: (operationId) => Effect.tryPromise(() => getNativeSpawnApproval(operationId)).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(DesktopOpenRigNativeApprovalSchema)),
-  ),
+  handler: (operationId) =>
+    Effect.tryPromise(() => getNativeSpawnApproval(operationId)).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(DesktopOpenRigNativeApprovalSchema)),
+    ),
 });
 
 /** The only renderer-controlled field is the opaque lookup key. MAIN presents
@@ -1193,14 +1472,18 @@ export const requestOpenRigNativeReview = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.OPENRIG_NATIVE_APPROVAL_REVIEW_CHANNEL,
   payload: Schema.String,
   result: DesktopOpenRigNativeReviewResultSchema,
-  handler: (operationId) => Effect.gen(function* () {
-    const dialog = yield* ElectronDialog.ElectronDialog;
-    const context = yield* Effect.context<ElectronDialog.ElectronDialog>();
-    const runPromise = Effect.runPromiseWith(context);
-    const result = yield* Effect.tryPromise(() => reviewNativeSpawnOperation(operationId, (options) =>
-      runPromise(dialog.showMessageBox({ ...options, type: "question", noLink: true }))));
-    return yield* decodeNativeReview(result);
-  }),
+  handler: (operationId) =>
+    Effect.gen(function* () {
+      const dialog = yield* ElectronDialog.ElectronDialog;
+      const context = yield* Effect.context<ElectronDialog.ElectronDialog>();
+      const runPromise = Effect.runPromiseWith(context);
+      const result = yield* Effect.tryPromise(() =>
+        reviewNativeSpawnOperation(operationId, (options) =>
+          runPromise(dialog.showMessageBox({ ...options, type: "question", noLink: true })),
+        ),
+      );
+      return yield* decodeNativeReview(result);
+    }),
 });
 
 export const listOpenRigAgents = DesktopIpc.makeIpcMethod({
