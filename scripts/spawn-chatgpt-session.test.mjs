@@ -325,8 +325,10 @@ NodeTest.test(
   "lost renderer acknowledgement reconciles a single exact request id without respawning",
   async () => {
     const calls = [];
-    const exchange = async (_address, request) => {
+    const timeouts = [];
+    const exchange = async (_address, request, timeoutMs) => {
       calls.push(request);
+      timeouts.push(timeoutMs);
       return {
         ok: true,
         data: {
@@ -347,6 +349,7 @@ NodeTest.test(
     NodeAssert.equal(result.promptDelivery, "unknown");
     NodeAssert.equal(result.messageSent, false);
     NodeAssert.equal(calls.length, 1);
+    NodeAssert.deepEqual(timeouts, [20_000]);
     NodeAssert.equal(calls[0].type, "chatgpt.sessions");
     NodeAssert.equal(calls[0].action, "list");
     NodeAssert.equal(calls[0].which, "all");
