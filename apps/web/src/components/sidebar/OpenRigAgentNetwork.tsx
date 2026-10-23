@@ -1,13 +1,14 @@
 import type { DesktopOpenRigAgent, DesktopOpenRigSeatTopology } from "@t3tools/contracts";
 import { ChevronDownIcon, ChevronRightIcon, NetworkIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useThreadShells } from "../../state/entities";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { OpenRigFloatingWindow, type FloatingSize } from "./OpenRigFloatingWindow";
 import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
-import { SEAT_STATUS_DOT, explanation, formatTimestamp, seatStatusTone } from "./openRigAgentPresentation";
+import { OpenRigAgentGraph } from "./OpenRigAgentGraph";
+import { SEAT_STATUS_BADGE, explanation, formatTimestamp, seatStatusTone } from "./openRigAgentPresentation";
 import {
   isCostlyModel,
   parseCostlyPatterns,
@@ -20,8 +21,8 @@ import {
   sessionMatches,
   type LedgerResult,
   type NetworkFilter,
+  type NetworkSeat,
   type NetworkSession,
-  type TreeRow,
 } from "./openRigNetwork";
 
 const GEOMETRY_KEY = "t3code:openrig-agent-network-geometry:v1";
@@ -103,19 +104,20 @@ export function OpenRigAgentNetwork({
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [showUnattributed, setShowUnattributed] = useState(false);
   const [unattributedLimit, setUnattributedLimit] = useState(UNATTRIBUTED_PAGE);
-  const [focusIndex, setFocusIndex] = useState(0);
-  const treeRef = useRef<HTMLDivElement>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const network = useMemo(
     () => buildAgentNetwork({ agents, topology, ledgers, threads, costlyPatterns }),
     [agents, topology, ledgers, threads, costlyPatterns],
   );
   const filter: NetworkFilter = { query, activeOnly, costlyOnly, rigId, model, costlyPatterns };
-  const expanded = useMemo(
-    () => new Set([...network.seats.keys()].filter((id) => !collapsed.has(id))),
-    [network, collapsed],
+  // The graph collapses subtrees itself, so every seat is expanded for the model.
+  const allSeats = useMemo(() => new Set(network.seats.keys()), [network]);
+  const rows = useMemo(
+    () => flattenAgentTree(network, allSeats, { query, activeOnly, costlyOnly, rigId, model, costlyPatterns }),
+    [network, allSeats, query, activeOnly, costlyOnly, rigId, model, costlyPatterns],
   );
-  const rows = flattenAgentTree(network, expanded, filter);
+  const selectedSeat = selectedId ? (network.seats.get(selectedId) ?? null) : null;
   const unattributed = network.unattributed.filter((session) => sessionMatches(session, filter));
   const rigs = useMemo(
     () => [...new Map(topology?.seats.map((seat) => [seat.rigId, seat.rigName || seat.rigId]) ?? []).entries()],
@@ -129,27 +131,6 @@ export function OpenRigAgentNetwork({
       else next.add(id);
       return next;
     });
-  const treeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const row = rows[focusIndex];
-    let next = focusIndex;
-    if (event.key === "ArrowDown") next = Math.min(rows.length - 1, focusIndex + 1);
-    else if (event.key === "ArrowUp") next = Math.max(0, focusIndex - 1);
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = rows.length - 1;
-    else if (row?.kind === "seat" && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
-      event.preventDefault();
-      toggle(row.seat.id, event.key === "ArrowRight");
-      return;
-    } else if (event.key === "Enter" && row) {
-      event.preventDefault();
-      const seatId = row.kind === "seat" ? row.seat.id : row.session.seatId;
-      if (seatId) onOpenAgent(seatId);
-      return;
-    } else return;
-    event.preventDefault();
-    setFocusIndex(next);
-    treeRef.current?.querySelectorAll<HTMLElement>('[role="treeitem"]')[next]?.focus();
-  };
 
   return (
     <OpenRigFloatingWindow
@@ -244,47 +225,31 @@ export function OpenRigAgentNetwork({
               )}
             </div>
           )}
-          <div className={`grid min-h-0 flex-1 ${compact ? "grid-cols-1 overflow-y-auto" : "grid-cols-[minmax(0,1fr)_minmax(260px,320px)]"}`}>
-            <div className={`min-h-0 ${compact ? "" : "overflow-y-auto overscroll-contain"}`}>
-              <div
-                ref={treeRef}
-                role="tree"
-                aria-label="OpenRig seats and their sessions"
-                className="p-2"
-                onKeyDown={treeKeyDown}
-              >
-                {rows.length === 0 && (
-                  <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-                    {network.seats.size === 0 ? "No OpenRig seats reported." : "No seats or sessions match these filters."}
-                  </p>
-                )}
-                {rows.map((row, index) => (
-                  <TreeItem
-                    key={row.key}
-                    row={row}
-                    index={index}
-                    focused={index === Math.min(focusIndex, rows.length - 1)}
-                    seatName={(id) => network.seats.get(id)?.name ?? id}
-                    costlyPatterns={costlyPatterns}
-                    onFocus={() => setFocusIndex(index)}
-                    onToggle={(id) => toggle(id)}
-                    onOpenAgent={onOpenAgent}
-                  />
-                ))}
-              </div>
-              <section aria-label="Unattributed T3 threads" className="m-2 rounded-xl border border-dashed border-border">
+          <div className={`grid min-h-0 flex-1 ${compact ? "grid-cols-1 overflow-y-auto" : "grid-cols-[minmax(0,1fr)_minmax(270px,330px)]"}`}>
+            <div className={`flex min-h-0 flex-col ${compact ? "h-[min(560px,70vh)] shrink-0" : ""}`}>
+              <OpenRigAgentGraph
+                network={network}
+                rows={rows}
+                collapsed={collapsed}
+                selectedId={selectedId}
+                emptyText={network.seats.size === 0 ? "No OpenRig seats reported." : "No seats or sessions match these filters."}
+                onToggle={toggle}
+                onSelect={setSelectedId}
+                onOpenAgent={onOpenAgent}
+              />
+              <section aria-label="Unattributed T3 threads" className="shrink-0 border-t border-dashed border-border">
                 <button
                   type="button"
                   aria-expanded={showUnattributed}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium"
+                  className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-medium hover:bg-muted/30"
                   onClick={() => setShowUnattributed((value) => !value)}
                 >
                   {showUnattributed ? <ChevronDownIcon className="size-3.5" aria-hidden /> : <ChevronRightIcon className="size-3.5" aria-hidden />}
                   Unattributed T3 threads ({unattributed.length})
-                  <span className="font-normal text-muted-foreground">· not owned by any loaded OpenRig seat ledger</span>
+                  <span className="truncate font-normal text-muted-foreground">· not owned by any loaded OpenRig seat ledger</span>
                 </button>
                 {showUnattributed && (
-                  <ul className="space-y-0.5 border-t border-dashed border-border p-2">
+                  <ul className="max-h-56 space-y-0.5 overflow-y-auto overscroll-contain border-t border-dashed border-border p-2">
                     {unattributed.slice(0, unattributedLimit).map((session) => (
                       <SessionLine key={session.key} session={session} seatName={(id) => network.seats.get(id)?.name ?? id}
                         costlyPatterns={costlyPatterns} onOpenAgent={onOpenAgent} />
@@ -301,6 +266,14 @@ export function OpenRigAgentNetwork({
               </section>
             </div>
             <aside className={`min-h-0 space-y-3 overflow-y-auto p-3 text-xs ${compact ? "border-t border-border" : "border-l border-border bg-muted/10"}`}>
+              <SeatDetails
+                seat={selectedSeat}
+                seatName={(id) => network.seats.get(id)?.name ?? id}
+                costlyPatterns={costlyPatterns}
+                onSelect={setSelectedId}
+                onClear={() => setSelectedId(null)}
+                onOpenAgent={onOpenAgent}
+              />
               <section aria-label="Spawn approvals">
                 <h3 className="mb-1 text-2xs font-semibold tracking-wide text-muted-foreground uppercase">Spawn approvals</h3>
                 <OpenRigCanonicalSpawnApprovals seatId={null}
@@ -381,72 +354,73 @@ export function OpenRigAgentNetwork({
   );
 }
 
-function TreeItem({
-  row, index, focused, seatName, costlyPatterns, onFocus, onToggle, onOpenAgent,
-}: {
-  row: TreeRow;
-  index: number;
-  focused: boolean;
+/** Everything a graph node abbreviates: identity, real links, ledger state and every owned session. */
+function SeatDetails({ seat, seatName, costlyPatterns, onSelect, onClear, onOpenAgent }: {
+  seat: NetworkSeat | null;
   seatName: (id: string) => string;
   costlyPatterns: readonly string[];
-  onFocus: () => void;
-  onToggle: (id: string) => void;
+  onSelect: (id: string) => void;
+  onClear: () => void;
   onOpenAgent: (seatId: string) => void;
 }) {
-  const indent = { paddingLeft: `${row.depth * 18 + 6}px` };
-  if (row.kind === "session")
+  if (!seat)
     return (
-      <div role="treeitem" aria-level={row.depth + 1} aria-selected={false} tabIndex={focused ? 0 : -1}
-        data-index={index} onFocus={onFocus} style={indent} className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-        <SessionLine session={row.session} seatName={seatName} costlyPatterns={costlyPatterns} onOpenAgent={onOpenAgent} />
+      <p className="rounded-xl border border-dashed border-border px-3 py-2.5 text-2xs text-muted-foreground">
+        Select a seat in the graph to see its links and sessions. Double-click or press Enter to open its workspace.
+      </p>
+    );
+  const links = (label: string, ids: readonly string[]) =>
+    ids.length > 0 && (
+      <div className="flex flex-wrap items-center gap-1">
+        <span className="text-3xs text-muted-foreground">{label}</span>
+        {ids.map((id) => (
+          <button key={id} type="button" className="rounded-md border border-border px-1.5 py-px text-3xs hover:bg-muted" onClick={() => onSelect(id)}>
+            {seatName(id)}
+          </button>
+        ))}
       </div>
     );
-  const { seat } = row;
   return (
-    <div
-      role="treeitem"
-      aria-level={row.depth + 1}
-      aria-expanded={row.expandable ? row.expanded : undefined}
-      aria-selected={false}
-      aria-label={`Seat ${seat.name}`}
-      tabIndex={focused ? 0 : -1}
-      data-index={index}
-      onFocus={onFocus}
-      style={indent}
-      className="flex min-w-0 items-center gap-2 rounded-md py-1.5 pr-2 outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-    >
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label={row.expanded ? `Collapse ${seat.name}` : `Expand ${seat.name}`}
-        className={`rounded p-0.5 text-muted-foreground ${row.expandable ? "" : "invisible"}`}
-        onClick={() => onToggle(seat.id)}
-      >
-        {row.expanded ? <ChevronDownIcon className="size-3.5" aria-hidden /> : <ChevronRightIcon className="size-3.5" aria-hidden />}
-      </button>
-      <span className={`size-2 shrink-0 rounded-full ${SEAT_STATUS_DOT[seatStatusTone(seat.status ?? "unknown")]}`} aria-hidden />
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-          <span className="truncate text-xs font-semibold">{seat.name}</span>
-          {seat.role && <span className="text-2xs text-muted-foreground">{seat.role.replaceAll("-", " ")}</span>}
-          <span className="text-2xs text-muted-foreground">{seat.status ?? "not in agent list"}</span>
-          {seat.rigName && <span className="text-3xs text-muted-foreground">· {seat.rigName}</span>}
-        </span>
-        <span className="block truncate text-3xs text-muted-foreground">
-          {seat.task ? `Task: ${seat.task}` : "No task reported"}
-          {` · ${row.sessionCount} session${row.sessionCount === 1 ? "" : "s"}`}
-          {row.alsoUnder.length > 0 && ` · also delegated by ${row.alsoUnder.map(seatName).join(", ")}`}
-          {!seat.inTopology && " · not in RigSpec topology"}
-          {seat.ledger === "failed" && ` · ledger unreadable: ${seat.ledgerError}`}
-        </span>
-      </span>
-      <Button size="xs" variant="ghost-muted" tabIndex={-1} onClick={() => onOpenAgent(seat.id)}>Workspace</Button>
-    </div>
+    <section aria-label={`Seat ${seat.name} details`} className="space-y-2 rounded-xl border border-border bg-card p-3 shadow-xs">
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-sm font-semibold">{seat.name}</h3>
+          <p className="truncate text-3xs text-muted-foreground">
+            {[seat.role?.replaceAll("-", " "), seat.rigName, seat.id !== seat.name ? seat.id : null].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+        <Badge variant={SEAT_STATUS_BADGE[seatStatusTone(seat.status ?? "unknown")]} size="sm">{seat.status ?? "not in agent list"}</Badge>
+        <Button size="icon-xs" variant="ghost-muted" aria-label="Clear seat selection" onClick={onClear}>
+          <XIcon aria-hidden />
+        </Button>
+      </div>
+      <p className="text-2xs">{seat.task ? `Task: ${seat.task}` : <span className="text-muted-foreground italic">No task reported</span>}</p>
+      {links("Delegated by", seat.parentIds)}
+      {links("Delegates to", seat.childIds)}
+      {!seat.inTopology && <p className="text-3xs text-muted-foreground">Not in RigSpec topology; no parent is known or guessed.</p>}
+      {seat.ledger === "failed" && <p className="text-3xs text-warning-foreground">Ledger unreadable: {seat.ledgerError}</p>}
+      <Button size="xs" variant="outline" className="w-full" onClick={() => onOpenAgent(seat.id)}>Open workspace</Button>
+      <div>
+        <h4 className="mb-1 text-3xs font-semibold tracking-wide text-muted-foreground uppercase">Sessions ({seat.sessions.length})</h4>
+        {seat.sessions.length === 0 ? (
+          <p className="text-2xs text-muted-foreground italic">{seat.ledger === "loaded" ? "No managed sessions." : "Ledger not loaded."}</p>
+        ) : (
+          <ul className="-mx-2 space-y-0.5">
+            {seat.sessions.map((session) => (
+              <li key={session.key}>
+                <SessionLine session={session} seatName={seatName} costlyPatterns={costlyPatterns} onOpenAgent={onOpenAgent} hideWorkspace />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 
-function SessionLine({ session, seatName, costlyPatterns, onOpenAgent }: {
+function SessionLine({ session, seatName, costlyPatterns, onOpenAgent, hideWorkspace }: {
   session: NetworkSession;
+  hideWorkspace?: boolean;
   seatName: (id: string) => string;
   costlyPatterns: readonly string[];
   onOpenAgent: (seatId: string) => void;
@@ -476,7 +450,7 @@ function SessionLine({ session, seatName, costlyPatterns, onOpenAgent }: {
         </span>
         {lineage.length > 0 && <span className="block text-3xs text-muted-foreground">{lineage.join(" · ")}</span>}
       </span>
-      {session.seatId && (
+      {session.seatId && !hideWorkspace && (
         <Button size="xs" variant="ghost-muted" tabIndex={-1} onClick={() => onOpenAgent(session.seatId!)}>Workspace</Button>
       )}
       {session.href && (
