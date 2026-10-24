@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { inspectChatGPTPage, isSafeEmptyChatGPTHomepage } from "./chatGPTSessionDom";
 import { hasChatGPTLoadFailure } from "./components/sidebar/chatGPTConversationRecovery";
 import {
+  hasUncertainChatGPTSend,
   matchesSessionWhich,
   reloadRequiresForce,
   runChatGPTSessionControl,
@@ -537,6 +538,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
         reconciled: true,
       });
       expect(fixture.presses).toBe(1);
+      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(false);
     } finally {
       fixture.guest.remove();
     }
@@ -618,6 +620,8 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
           message: "Pending private fixture",
         }),
       ).toMatchObject({ sendAttempted: true, delivery: "unknown" });
+      // Empty guest composers must not auto-hibernate while an UNKNOWN send is pending.
+      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
       fixture.setComposerDraft("Unsent Unicode 🌲");
       const snapshot = (await runChatGPTSessionControl({
         ...command,
@@ -642,6 +646,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
         }),
       ).toMatchObject({ sendAttempted: true, delivery: "unknown" });
       expect(fixture.presses).toBe(1);
+      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
     } finally {
       fixture.guest.remove();
     }

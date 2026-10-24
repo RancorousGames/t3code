@@ -15,6 +15,7 @@ import {
 } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import { hasVerifiedEmptyChatGPTComposer } from "../../chatGPTDraftInspection";
+import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import {
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserThreadRef,
@@ -199,13 +200,16 @@ export function useChatGPTBrowserSessionActivity(
         if (
           !disposed &&
           provenEmpty &&
+          !hasUncertainChatGPTSend(environmentId, sessionId) &&
           useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible !== true
         ) {
           hibernateChatGPTGuest(runtimeTabId);
           next = "idle";
           reason = null;
         } else if (!disposed) {
-          reason = "Guest kept loaded: composer draft is nonempty or could not be verified empty.";
+          reason = hasUncertainChatGPTSend(environmentId, sessionId)
+            ? "Guest kept loaded: an earlier ChatGPT send has no verified delivery receipt."
+            : "Guest kept loaded: composer draft is nonempty or could not be verified empty.";
         }
       }
       if (next === "working") {
