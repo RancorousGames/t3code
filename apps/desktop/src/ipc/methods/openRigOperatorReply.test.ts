@@ -1,5 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Cross-check canonical OpenRig SHA-256 receipt fixtures.
 import { createHash } from "node:crypto";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   postOpenRigOperatorReply,
@@ -59,8 +62,10 @@ const inbox = {
 const queue = (handler: (url: string, init: RequestInit) => Response | Promise<Response>) =>
   vi.fn(handler) as unknown as typeof fetch;
 
+const privateTestHomes: string[] = [];
 afterEach(() => {
   vi.unstubAllEnvs();
+  for (const dir of privateTestHomes.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("canonical MAIN-only operator reply transport", () => {
@@ -69,6 +74,7 @@ describe("canonical MAIN-only operator reply transport", () => {
       expect(url).toContain("/human-inbox?");
       return Response.json({ ...inbox, replyWriteAvailable: false });
     });
+    vi.stubEnv("OPENRIG_T3_HUMAN_ANSWER_TOKEN", ""); // explicitly disable disk fallback
     expect(await postOpenRigOperatorReply(input, requests)).toMatchObject({ outcome: "not_sent" });
     expect(vi.mocked(requests)).not.toHaveBeenCalled();
     vi.stubEnv("OPENRIG_T3_HUMAN_ANSWER_TOKEN", "test-token-with-at-least-24-characters");
@@ -83,6 +89,47 @@ describe("canonical MAIN-only operator reply transport", () => {
     );
     expect(await postOpenRigOperatorReply(input, wrong)).toMatchObject({ outcome: "not_sent" });
     expect(vi.mocked(wrong)).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports direct desktop launch with the pre-provisioned private token file and bearer-free loopback daemon", async () => {
+    const home = mkdtempSync(join(tmpdir(), "t3-reply-main-only-"));
+    privateTestHomes.push(home);
+    const fileDir = join(home, ".openrig", "operator-tokens");
+    mkdirSync(fileDir, { recursive: true });
+    const testToken = "unit-test-existing-private-answer-token-123456789";
+    writeFileSync(join(fileDir, "t3-human-answer-token.txt"), testToken, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("OPENRIG_T3_HUMAN_ANSWER_TOKEN", undefined);
+    vi.stubEnv("OPENRIG_AUTH_BEARER_TOKEN", "");
+    let writes = 0;
+    const requests = queue((url, req) => {
+      if (url.includes("destination=")) return Response.json(inbox);
+      const headers = req.headers as Record<string, string>;
+      expect(headers["x-openrig-human-answer-token"]).toBe(testToken);
+      expect(headers.Authorization).toBeUndefined();
+      expect(headers["x-openrig-human-intent"]).toBe("t3-desktop-ipc");
+      if (req.method === "POST") {
+        writes++;
+        return Response.json(receipt);
+      }
+      throw new Error("unexpected method");
+    });
+    expect(await postOpenRigOperatorReply(input, requests)).toMatchObject({
+      outcome: "accepted",
+      replyQitemId,
+      recipient: input.expectedRecipient,
+    });
+    expect(writes).toBe(1);
+    // A blank explicit token must never silently pick up credentials from disk.
+    vi.stubEnv("OPENRIG_T3_HUMAN_ANSWER_TOKEN", "");
+    const absent = queue(() => {
+      throw Error("Not supposed to send");
+    });
+    expect(await postOpenRigOperatorReply(input, absent)).toMatchObject({ outcome: "not_sent" });
+    expect(absent).not.toHaveBeenCalled();
   });
 
   it("POSTs only canonical body and headers, verifies hash, qitem, exact recipient and durable receipt", async () => {
