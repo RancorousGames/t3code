@@ -777,7 +777,11 @@ export async function runChatGPTSessionControl(input: {
       }
       if (delivered) uncertainChatGPTSends.delete(receiptKey);
       sendReceipt = { delivery: delivered ? "user_turn_observed" : "unknown", sendAttempted: true };
-    } else if (pending) uncertainChatGPTSends.delete(receiptKey);
+    } else if (pending) {
+      // A new URL does not prove that the old user message was delivered.
+      // Retain the unrelated pending receipt until explicit reconciliation.
+      sendReceipt = { delivery: "unknown", sendAttempted: true };
+    }
     if (input.expectedConversationId !== undefined) {
       const verifiedConversationId = requireExpectedChatGPTConversation(
         input.expectedConversationId,
@@ -951,8 +955,10 @@ export async function runChatGPTSessionControl(input: {
     const receiptKey = sendReceiptKey(environmentId, entry.id);
     const unresolved = uncertainChatGPTSends.get(receiptKey);
     if (unresolved && unresolved.url !== before.observedGuestUrl)
-      uncertainChatGPTSends.delete(receiptKey);
-    else if (unresolved && unresolved.original === prepared.text) {
+      throw new Error(
+        "UNKNOWN send belongs to a previous conversation; preserve and reconcile before sending.",
+      );
+    if (unresolved && unresolved.original === prepared.text) {
       const attached = guestFor(environmentId, entry.id);
       if (attached.runtimeId) {
         try {
