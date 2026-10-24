@@ -88,6 +88,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
 > = {
   "/settings/general": Settings2Icon,
   "/settings/diagnostics": WrenchIcon,
+  "/settings/omniwork": Settings2Icon,
   "/settings/appearance": PaletteIcon,
   "/settings/chat": MessageSquareTextIcon,
   "/settings/diffs": FileDiffIcon,

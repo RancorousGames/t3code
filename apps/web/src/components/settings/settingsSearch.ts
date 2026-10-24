@@ -19,6 +19,7 @@ export type SettingsPath =
   | "/settings/projects"
   | "/settings/general"
   | "/settings/diagnostics"
+  | "/settings/omniwork"
   | "/settings/appearance"
   | "/settings/chat"
   | "/settings/diffs"
@@ -88,6 +89,7 @@ export interface SettingsSearchAvailability {
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diagnostics": "Diagnostics",
   "/settings/projects": "Projects",
+  "/settings/omniwork": "Omniwork",
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/chat": "Chat",
@@ -216,6 +218,14 @@ const SOURCE_CONTROL_HOST_TERMS = sourceControlClients.definitions
   .join(" ");
 
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "omniwork-chatgpt-unloading",
+    title: "ChatGPT session unloading",
+    to: "/settings/omniwork",
+    searchTerms: [
+      "Omniwork retention hibernate idle aggression never conservative balanced aggressive memory managers",
+    ],
+  },
   {
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
@@ -1191,6 +1201,7 @@ const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id,
 
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
   "/settings/diagnostics": "environment",
+  "/settings/omniwork": null,
   "/settings/projects": "project",
   "/settings/general": null,
   "/settings/appearance": null,

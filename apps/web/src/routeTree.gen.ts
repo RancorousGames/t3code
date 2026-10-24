@@ -16,11 +16,14 @@ import { Route as ConnectAgentRouteImport } from './routes/connect-agent'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as SettingsOmniworkRouteImport } from './routes/settings.omniwork'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ChatUsageRouteImport } from './routes/_chat.usage'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
+import { Route as ChatBrowserRouteImport } from './routes/_chat.browser'
+import { Route as ChatBrowserIndexRouteImport } from './routes/_chat.browser.index'
 import { Route as ChatSettingsWorktreesRouteImport } from './routes/_chat.settings.worktrees'
 import { Route as ChatSettingsThreadsRouteImport } from './routes/_chat.settings.threads'
 import { Route as ChatSettingsStorageRouteImport } from './routes/_chat.settings.storage'
@@ -48,6 +51,7 @@ import { Route as ChatSettingsAppearanceRouteImport } from './routes/_chat.setti
 import { Route as ChatSettingsAccessRouteImport } from './routes/_chat.settings.access'
 import { Route as ChatSettingsAboutRouteImport } from './routes/_chat.settings.about'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
+import { Route as ChatBrowserBrowserSessionIdRouteImport } from './routes/_chat.browser.$browserSessionId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
 const WelcomeRoute = WelcomeRouteImport.update({
@@ -84,6 +88,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ChatRoute,
 } as any)
+const SettingsOmniworkRoute = SettingsOmniworkRouteImport.update({
+  id: '/settings/omniwork',
+  path: '/settings/omniwork',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   id: '/projects/$projectKey',
   path: '/projects/$projectKey',
@@ -108,6 +117,16 @@ const ChatNewRoute = ChatNewRouteImport.update({
   id: '/new',
   path: '/new',
   getParentRoute: () => ChatRoute,
+} as any)
+const ChatBrowserRoute = ChatBrowserRouteImport.update({
+  id: '/browser',
+  path: '/browser',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatBrowserIndexRoute = ChatBrowserIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ChatBrowserRoute,
 } as any)
 const ChatSettingsWorktreesRoute = ChatSettingsWorktreesRouteImport.update({
   id: '/worktrees',
@@ -248,6 +267,12 @@ const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   path: '/draft/$draftId',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatBrowserBrowserSessionIdRoute =
+  ChatBrowserBrowserSessionIdRouteImport.update({
+    id: '/$browserSessionId',
+    path: '/$browserSessionId',
+    getParentRoute: () => ChatBrowserRoute,
+  } as any)
 const ChatEnvironmentIdThreadIdRoute =
   ChatEnvironmentIdThreadIdRouteImport.update({
     id: '/$environmentId/$threadId',
@@ -262,12 +287,15 @@ export interface FileRoutesByFullPath {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/browser': typeof ChatBrowserRouteWithChildren
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
   '/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/omniwork': typeof SettingsOmniworkRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/browser/$browserSessionId': typeof ChatBrowserBrowserSessionIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/about': typeof ChatSettingsAboutRoute
   '/settings/access': typeof ChatSettingsAccessRoute
@@ -295,6 +323,7 @@ export interface FileRoutesByFullPath {
   '/settings/storage': typeof ChatSettingsStorageRoute
   '/settings/threads': typeof ChatSettingsThreadsRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
+  '/browser/': typeof ChatBrowserIndexRoute
 }
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
@@ -307,8 +336,10 @@ export interface FileRoutesByTo {
   '/settings': typeof ChatSettingsRouteWithChildren
   '/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/omniwork': typeof SettingsOmniworkRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/browser/$browserSessionId': typeof ChatBrowserBrowserSessionIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/about': typeof ChatSettingsAboutRoute
   '/settings/access': typeof ChatSettingsAccessRoute
@@ -336,6 +367,7 @@ export interface FileRoutesByTo {
   '/settings/storage': typeof ChatSettingsStorageRoute
   '/settings/threads': typeof ChatSettingsThreadsRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
+  '/browser': typeof ChatBrowserIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -345,13 +377,16 @@ export interface FileRoutesById {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/_chat/browser': typeof ChatBrowserRouteWithChildren
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
   '/_chat/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/omniwork': typeof SettingsOmniworkRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/_chat/browser/$browserSessionId': typeof ChatBrowserBrowserSessionIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/_chat/settings/about': typeof ChatSettingsAboutRoute
   '/_chat/settings/access': typeof ChatSettingsAccessRoute
@@ -379,6 +414,7 @@ export interface FileRoutesById {
   '/_chat/settings/storage': typeof ChatSettingsStorageRoute
   '/_chat/settings/threads': typeof ChatSettingsThreadsRoute
   '/_chat/settings/worktrees': typeof ChatSettingsWorktreesRoute
+  '/_chat/browser/': typeof ChatBrowserIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -389,12 +425,15 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/browser'
     | '/new'
     | '/pull-requests'
     | '/settings'
     | '/usage'
     | '/projects/$projectKey'
+    | '/settings/omniwork'
     | '/$environmentId/$threadId'
+    | '/browser/$browserSessionId'
     | '/draft/$draftId'
     | '/settings/about'
     | '/settings/access'
@@ -422,6 +461,7 @@ export interface FileRouteTypes {
     | '/settings/storage'
     | '/settings/threads'
     | '/settings/worktrees'
+    | '/browser/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect'
@@ -434,8 +474,10 @@ export interface FileRouteTypes {
     | '/settings'
     | '/usage'
     | '/projects/$projectKey'
+    | '/settings/omniwork'
     | '/'
     | '/$environmentId/$threadId'
+    | '/browser/$browserSessionId'
     | '/draft/$draftId'
     | '/settings/about'
     | '/settings/access'
@@ -463,6 +505,7 @@ export interface FileRouteTypes {
     | '/settings/storage'
     | '/settings/threads'
     | '/settings/worktrees'
+    | '/browser'
   id:
     | '__root__'
     | '/_chat'
@@ -471,13 +514,16 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/_chat/browser'
     | '/_chat/new'
     | '/_chat/pull-requests'
     | '/_chat/settings'
     | '/_chat/usage'
     | '/projects/$projectKey'
+    | '/settings/omniwork'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
+    | '/_chat/browser/$browserSessionId'
     | '/_chat/draft/$draftId'
     | '/_chat/settings/about'
     | '/_chat/settings/access'
@@ -505,6 +551,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/storage'
     | '/_chat/settings/threads'
     | '/_chat/settings/worktrees'
+    | '/_chat/browser/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -515,6 +562,7 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   WelcomeRoute: typeof WelcomeRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  SettingsOmniworkRoute: typeof SettingsOmniworkRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -568,6 +616,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/settings/omniwork': {
+      id: '/settings/omniwork'
+      path: '/settings/omniwork'
+      fullPath: '/settings/omniwork'
+      preLoaderRoute: typeof SettingsOmniworkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$projectKey': {
       id: '/projects/$projectKey'
       path: '/projects/$projectKey'
@@ -602,6 +657,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/new'
       preLoaderRoute: typeof ChatNewRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/_chat/browser': {
+      id: '/_chat/browser'
+      path: '/browser'
+      fullPath: '/browser'
+      preLoaderRoute: typeof ChatBrowserRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/browser/': {
+      id: '/_chat/browser/'
+      path: '/'
+      fullPath: '/browser/'
+      preLoaderRoute: typeof ChatBrowserIndexRouteImport
+      parentRoute: typeof ChatBrowserRoute
     }
     '/_chat/settings/worktrees': {
       id: '/_chat/settings/worktrees'
@@ -792,6 +861,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatDraftDraftIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/browser/$browserSessionId': {
+      id: '/_chat/browser/$browserSessionId'
+      path: '/$browserSessionId'
+      fullPath: '/browser/$browserSessionId'
+      preLoaderRoute: typeof ChatBrowserBrowserSessionIdRouteImport
+      parentRoute: typeof ChatBrowserRoute
+    }
     '/_chat/$environmentId/$threadId': {
       id: '/_chat/$environmentId/$threadId'
       path: '/$environmentId/$threadId'
@@ -801,6 +877,20 @@ declare module '@tanstack/react-router' {
     }
   }
 }
+
+interface ChatBrowserRouteChildren {
+  ChatBrowserBrowserSessionIdRoute: typeof ChatBrowserBrowserSessionIdRoute
+  ChatBrowserIndexRoute: typeof ChatBrowserIndexRoute
+}
+
+const ChatBrowserRouteChildren: ChatBrowserRouteChildren = {
+  ChatBrowserBrowserSessionIdRoute: ChatBrowserBrowserSessionIdRoute,
+  ChatBrowserIndexRoute: ChatBrowserIndexRoute,
+}
+
+const ChatBrowserRouteWithChildren = ChatBrowserRoute._addFileChildren(
+  ChatBrowserRouteChildren,
+)
 
 interface ChatSettingsRouteChildren {
   ChatSettingsAboutRoute: typeof ChatSettingsAboutRoute
@@ -865,6 +955,7 @@ const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(
 )
 
 interface ChatRouteChildren {
+  ChatBrowserRoute: typeof ChatBrowserRouteWithChildren
   ChatNewRoute: typeof ChatNewRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatSettingsRoute: typeof ChatSettingsRouteWithChildren
@@ -875,6 +966,7 @@ interface ChatRouteChildren {
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
+  ChatBrowserRoute: ChatBrowserRouteWithChildren,
   ChatNewRoute: ChatNewRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatSettingsRoute: ChatSettingsRouteWithChildren,
@@ -894,6 +986,7 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   WelcomeRoute: WelcomeRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  SettingsOmniworkRoute: SettingsOmniworkRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

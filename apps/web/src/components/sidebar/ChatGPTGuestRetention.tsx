@@ -14,6 +14,7 @@ import {
   useChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
 import { isElectron } from "../../env";
+import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
 import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import { readChatGPTRecoveryState } from "../../chatGPTRecoveryDiagnostics";
@@ -44,6 +45,7 @@ export function ChatGPTGuestRetention() {
   const managerIds = useOpenRigManagerChatGPTSessions(environmentId);
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
   const touchedAt = useChatGPTGuestHibernation((state) => state.touchedAt);
+  const unloadProfile = useOmniworkPreferences((state) => state.unloadProfile);
   const [now, setNow] = useState(Date.now);
 
   useEffect(() => {
@@ -85,17 +87,14 @@ export function ChatGPTGuestRetention() {
         // A corrupt cache is not authoritative.
       }
     }
-    const openSessions = sessions.filter(
-      (session) => !session.hidden && !(session.snoozedUntil && session.snoozedUntil > now),
-    );
     const parents = new Set(
       sessions.map((session) => session.parentSessionId).filter((id): id is string => !!id),
     );
     const protectedKeys = new Set<string>();
-    const candidates = openSessions.map((session) => {
+    const candidates = sessions.flatMap((session) => {
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
-      if (
+      const important =
         activeSessionId === session.id ||
         !!session.borderColor ||
         protectedManagers?.has(session.id) ||
@@ -106,22 +105,31 @@ export function ChatGPTGuestRetention() {
           chatGPTBrowserLastWorkingKey(environmentId, session.id),
           Schema.Number,
         ) ?? 0) >
-          now - 60_000
+          now - 60_000;
+      if (important) protectedKeys.add(key);
+      // Hidden/snoozed ordinary sessions can be unloaded, but neither state
+      // revokes manager, active, UNKNOWN-send or recovery protection.
+      if (
+        unloadProfile !== "never" &&
+        !important &&
+        (session.hidden || (session.snoozedUntil && session.snoozedUntil > now))
       )
-        protectedKeys.add(key);
-      return {
-        key,
-        lastUsedAt: Math.max(
-          touchedAt[key] ?? 0,
-          getLocalStorageItem(
-            chatGPTBrowserLastWorkingKey(environmentId, session.id),
-            Schema.Number,
-          ) ?? 0,
-        ),
-      };
+        return [];
+      return [
+        {
+          key,
+          lastUsedAt: Math.max(
+            touchedAt[key] ?? 0,
+            getLocalStorageItem(
+              chatGPTBrowserLastWorkingKey(environmentId, session.id),
+              Schema.Number,
+            ) ?? 0,
+          ),
+        },
+      ];
     });
     return recentChatGPTGuestKeys(candidates, protectedKeys);
-  }, [activeSessionId, environmentId, managerIds, sessions, touchedAt, now]);
+  }, [activeSessionId, environmentId, managerIds, sessions, touchedAt, now, unloadProfile]);
 
   useEffect(() => retainChatGPTGuests(retainedKeys), [retainedKeys]);
   return null;
