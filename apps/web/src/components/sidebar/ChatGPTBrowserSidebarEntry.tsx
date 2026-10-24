@@ -673,7 +673,9 @@ export function ChatGPTBrowserSidebarEntry({
             <Button
               size="icon-xs"
               variant="ghost-muted"
-              aria-label={sectionCollapsed ? "Expand ChatGPT sessions" : "Collapse ChatGPT sessions"}
+              aria-label={
+                sectionCollapsed ? "Expand ChatGPT sessions" : "Collapse ChatGPT sessions"
+              }
               title={sectionCollapsed ? "Expand ChatGPT sessions" : "Collapse ChatGPT sessions"}
               aria-expanded={!sectionCollapsed}
               onClick={() => setSectionCollapsed((current) => !current)}
@@ -744,6 +746,9 @@ export function ChatGPTBrowserSidebarEntry({
       <ChatGPTBrowserRecoveryCoordinator
         environmentId={environmentId}
         onPhaseChange={onRecoveryPhaseChange}
+        redIds={visibleSessions
+          .filter((session) => !isSnoozed(session) && activities[session.id]?.age === "invalid")
+          .map((session) => session.id)}
         wakeupIds={visibleSessions
           .filter(
             (session) =>
@@ -869,10 +874,10 @@ export function ChatGPTBrowserSidebarEntry({
                     >
                       {(sortable, activity) => {
                         const recoveryEligible =
-                          !session.hidden &&
-                          !isSnoozed(session) &&
-                          activity.age !== "unloaded" &&
-                          !readChatGPTRecoveryState(environmentId, session.id).escalationReason;
+                          !session.hidden && !isSnoozed(session) && activity.age !== "unloaded";
+                        const recoveryBlocked =
+                          readChatGPTRecoveryState(environmentId, session.id).escalationReason !==
+                          null;
                         const recoveryPhase =
                           recoveryEligible &&
                           !["working", "recent", "inactive"].includes(activity.age)
@@ -886,21 +891,24 @@ export function ChatGPTBrowserSidebarEntry({
                           activity.label ===
                             "ChatGPT page unavailable: the ChatGPT composer is unavailable";
                         const queued =
-                          recoveryEligible && (activity.recoveryProblem !== null || waitingForPage);
+                          recoveryEligible &&
+                          (activity.age === "invalid" || activity.recoveryProblem !== null);
                         const recoveryLabel =
-                          recoveryPhase === "refreshing"
-                            ? "Refreshing ChatGPT conversation to recover it"
-                            : recoveryPhase === "checking"
-                              ? "Confirming a recoverable ChatGPT error"
-                              : recoveryPhase === "queued"
-                                ? "Confirmed ChatGPT error; queued for automatic recovery"
-                                : queued
-                                  ? waitingForPage
-                                    ? "Checking unavailable ChatGPT page for automatic recovery"
-                                    : activity.recoveryProblem === "interrupted"
-                                      ? "Queued for automatic recovery if the connection stays interrupted"
-                                      : "Queued for automatic recovery; waiting for its turn or retry cooldown"
-                                  : null;
+                          queued && recoveryBlocked
+                            ? "Marked for recovery; waiting for safe retry or human review"
+                            : recoveryPhase === "refreshing"
+                              ? "Refreshing ChatGPT conversation to recover it"
+                              : recoveryPhase === "checking"
+                                ? "Confirming a recoverable ChatGPT error"
+                                : recoveryPhase === "queued"
+                                  ? "Confirmed ChatGPT error; queued for automatic recovery"
+                                  : queued
+                                    ? waitingForPage
+                                      ? "Checking unavailable ChatGPT page for automatic recovery"
+                                      : activity.recoveryProblem === "interrupted"
+                                        ? "Queued for automatic recovery if the connection stays interrupted"
+                                        : "Queued for automatic recovery; waiting for its turn or retry cooldown"
+                                    : null;
                         const isVerifiedManager =
                           verifiedManagerSessionIds?.has(session.id) === true;
                         const projectTitle = projectTitles.get(session.id);

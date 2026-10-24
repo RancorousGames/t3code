@@ -348,17 +348,21 @@ export function ChatGPTBrowserRecoveryCoordinator({
   sessionIds,
   deferredIds = NO_DEFERRED_IDS,
   wakeupIds = NO_DEFERRED_IDS,
+  redIds = NO_DEFERRED_IDS,
   onPhaseChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly sessionIds: readonly string[];
   readonly deferredIds?: readonly string[];
   readonly wakeupIds?: readonly string[];
+  /** All visible red sessions stay in the recovery queue, even while their guest cannot be inspected. */
+  readonly redIds?: readonly string[];
   readonly onPhaseChange?: (sessionId: string, phase: ChatGPTRecoveryPhase | null) => void;
 }) {
   const currentSessionIds = useEffectEvent(() => sessionIds);
   const currentDeferredIds = useEffectEvent(() => deferredIds);
   const currentWakeupIds = useEffectEvent(() => wakeupIds);
+  const currentRedIds = useEffectEvent(() => redIds);
   const reportPhase = useEffectEvent((sessionId: string, phase: ChatGPTRecoveryPhase | null) =>
     onPhaseChange?.(sessionId, phase),
   );
@@ -418,6 +422,9 @@ export function ChatGPTBrowserRecoveryCoordinator({
         for (const sessionId of candidates) {
           if (disposed) return;
           if (!currentSessionIds().includes(sessionId)) continue;
+          // Missing/composer-less guests may have no inspectable DOM. Do not silently
+          // drop red sessions from recovery just because the probe fails.
+          if (currentRedIds().includes(sessionId)) phase(sessionId, "queued");
 
           const threadRef = chatGPTBrowserThreadRef(envId, sessionId);
           const state = readThreadPreviewState(threadRef);
@@ -425,7 +432,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
           if (!tabId || !state.serverEpoch) {
             if (persistent.red[sessionId])
               recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "preview-not-ready");
-            phase(sessionId, null);
+            if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
             continue;
           }
           const nav = state.sessions[tabId]?.navStatus;
@@ -441,7 +448,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 "saved_conversation_url_lost",
                 Date.now(),
               );
-            phase(sessionId, null);
+            if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
             continue;
           }
 
@@ -452,7 +459,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
           if (!webview) {
             if (persistent.red[sessionId])
               recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "guest-not-attached");
-            phase(sessionId, null);
+            if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
             continue;
           }
 
@@ -639,7 +646,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 "conversation_identity_changed",
                 Date.now(),
               );
-              phase(sessionId, null);
+              if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
               continue;
             }
             if (snapshot.permanentReason) {
@@ -651,13 +658,25 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 snapshot.permanentReason,
                 Date.now(),
               );
-              phase(sessionId, null);
+              if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
               continue;
+            }
+            // An earlier failed health probe is not permanent. Once this exact
+            // conversation is inspectable again, allow bounded red-only refresh;
+            // never replay an ambiguous Continue/Send or ignore a nonempty draft.
+            if (
+              problem === "load-failure" &&
+              persistent.escalation[sessionId]?.reason === "guest_url_or_health_unverifiable" &&
+              (snapshot.draftEmpty === true ||
+                (snapshot.draftEmpty === null && snapshot.stopVisible === false))
+            ) {
+              delete persistent.escalation[sessionId];
+              saveBoundedState(envId, persistent);
             }
             if (persistent.escalation[sessionId]) {
               recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "human-review-required");
-              // A permanent/ambiguous case remains held until a human reconciles it.
-              phase(sessionId, null);
+              // A permanent/ambiguous case remains held, but is still visibly queued when red.
+              if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
               continue;
             }
 

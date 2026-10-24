@@ -52,7 +52,8 @@ export const CHATGPT_LOAD_FAILURE_EXPRESSION = `(${hasChatGPTLoadFailure.toStrin
 export type ChatGPTRecoveryProblem = "load-failure" | "interrupted" | "delivery-timeout";
 
 export function chatGPTRecoveryProblem(activity: string): ChatGPTRecoveryProblem | null {
-  if (activity === "invalid: Could not load this ChatGPT conversation") return "load-failure";
+  // Every red/invalid ChatGPT guest is a recovery candidate, not just the error panel.
+  if (activity.startsWith("invalid: ")) return "load-failure";
   if (activity === "interrupted" || activity === "delivery-timeout") return activity;
   return null;
 }
