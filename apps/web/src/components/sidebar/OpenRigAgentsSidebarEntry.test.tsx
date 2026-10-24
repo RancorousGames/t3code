@@ -144,6 +144,41 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("OpenRig connection recovery", () => {
+  it("keeps the last confirmed seat visible, marks it stale, and reconnects on visibility", async () => {
+    let onVisible: (() => void) | undefined;
+    const intervalDurations: number[] = [];
+    Object.assign(document, {
+      addEventListener: (type: string, handler: () => void) => {
+        if (type === "visibilitychange") onVisible = handler;
+      },
+    });
+    Object.assign(window, {
+      setInterval: (callback: () => void, delay: number) => {
+        intervalDurations.push(delay);
+        return globalThis.setInterval(callback, delay);
+      },
+    });
+    await mount();
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain("Reconnecting");
+    list.mockRejectedValueOnce(new Error("transient desktop IPC failure"));
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Refresh OpenRig agents" }).props.onClick();
+    });
+    const offline = JSON.stringify(renderer!.toJSON());
+    expect(offline).toContain("Reconnecting");
+    expect(offline).toContain("last confirmed seat details");
+    expect(offline).toContain("Open workspace for OpenRig agent Builder");
+    expect(intervalDurations).toContain(5_000);
+
+    await act(async () => { onVisible?.(); });
+    const recovered = JSON.stringify(renderer!.toJSON());
+    expect(recovered).not.toContain("last confirmed seat details");
+    expect(recovered).not.toContain("Reconnecting");
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("canonical Work tab task status", () => {
   const canonicalNode = {
     id: agent.id, rigId: "rig-1", rigName: "sample", name: agent.name,

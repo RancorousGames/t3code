@@ -1,25 +1,22 @@
-// @effect-diagnostics nodeBuiltinImport:off -- narrow opt-in Windows service adapter.
+// @effect-diagnostics nodeBuiltinImport:off -- fixed local Windows daemon startup adapter.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
 
 const HEALTH_URL = "http://127.0.0.1:7433/healthz";
-// The default is the operator's Windows checkout; on other machines a
-// nonexisting checkout fails closed rather than starting a generic daemon.
 const ROOT = process.env.OPENRIG_T3_BRIDGE_ROOT ?? String.raw`D:\SSDProjects\Tools\OpenRig`;
-// Select this mode explicitly in the desktop launch environment BEFORE startup.
-// Unset OPENRIG_T3_BRIDGE_MODE (or set 'auto') and restart T3 to restore fallback.
+
+// The historical maintenance flag forbids a reduced Phase-1 server. Both modes
+// now start ONLY the installed canonical daemon, never a source/tsx fallback.
 export function bridgeStartupMode(value: string | undefined): "auto" | "maintenance-no-phase1-autostart" {
   if (value === undefined || value === "" || value === "auto") return "auto";
   if (value === "maintenance-no-phase1-autostart") return value;
   throw new Error("Invalid OPENRIG_T3_BRIDGE_MODE; use 'auto' or 'maintenance-no-phase1-autostart'.");
 }
 
-let ownedChild: NodeChildProcess.ChildProcess | null = null;
 let starting: Promise<void> | null = null;
-let shutdownRegistered = false;
+let launcher: NodeChildProcess.ChildProcess | null = null;
 
 function refused(error: unknown): boolean {
   const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : null;
@@ -32,11 +29,8 @@ function refused(error: unknown): boolean {
       (entry as { code?: unknown }).code === "ECONNREFUSED");
 }
 
-/**
- * Never infer that an unresponsive occupied port is free. Only an explicit
- * TCP connection refusal permits a launch. A responding OpenRig daemon is
- * adopted without creating another process.
- */
+/** Only a definitive connection refusal authorizes startup; an occupied,
+ * unresponsive or unexpected listener must never be replaced or killed. */
 async function bridgeIdentity(fetchImpl: typeof fetch = fetch): Promise<"daemon" | "phase1" | "absent"> {
   let response: Response;
   try {
@@ -58,85 +52,67 @@ async function bridgeIdentity(fetchImpl: typeof fetch = fetch): Promise<"daemon"
   return identity?.service === "openrig-t3-phase1-bridge" ? "phase1" : "daemon";
 }
 
-/** Retain the existing default health contract for normal T3 startup. */
 export async function bridgeHealth(fetchImpl: typeof fetch = fetch): Promise<"online" | "absent"> {
   return (await bridgeIdentity(fetchImpl)) === "absent" ? "absent" : "online";
 }
 
-async function launchLocalBridge(): Promise<void> {
-  const mode = bridgeStartupMode(process.env.OPENRIG_T3_BRIDGE_MODE);
-  const health = await bridgeIdentity();
-  if (mode === "maintenance-no-phase1-autostart") {
-    // A stale Phase-1 child must not masquerade as the canonical full daemon.
-    // Observe it, but never stop it or attempt to take its port here.
-    if (health === "daemon") return;
-    if (health === "phase1") {
-      throw new Error("OpenRig unavailable: Phase-1 bridge still responds on port 7433; it is not the full daemon. Maintenance mode will not relaunch or terminate it.");
-    }
-    throw new Error("OpenRig unavailable: maintenance/no-Phase1-autostart is active; no Phase-1 bridge was launched. Set OPENRIG_T3_BRIDGE_MODE=auto (or unset it) before restarting T3 to restore fallback.");
+/** Resolve only the supported installed canonical startup script, never the
+ * old Phase-1 checkout bridge or a second independently configured database. */
+export function canonicalDaemonStartScript(root: string = ROOT): string {
+  const script = NodePath.join(root, "manage-openrig-daemon.ps1");
+  if (process.platform !== "win32" || !NodeFS.existsSync(script)) {
+    throw new Error("Canonical OpenRig daemon start script is unavailable on this host.");
   }
-  if (health !== "absent") return;
-  if (!ROOT) throw new Error("OpenRig bridge autostart is not configured on this platform.");
-  const script = NodePath.join(ROOT, "scripts", "omni", "serve-t3-bridge.mts");
-  const database = NodePath.join(
-    process.env.OPENRIG_HOME ?? NodePath.join(NodeOS.homedir(), ".openrig"),
-    "openrig.sqlite",
-  );
-  if (!NodeFS.existsSync(script) || !NodeFS.existsSync(database)) {
-    throw new Error("Local OpenRig checkout or seeded database is unavailable.");
+  const cli = NodePath.join(process.env.LOCALAPPDATA ?? "", "OpenRig", "installed", "rig", "bin", "rig.cmd");
+  if (!process.env.LOCALAPPDATA || !NodeFS.existsSync(cli)) {
+    throw new Error("Installed canonical OpenRig CLI is unavailable; Phase-1 fallback disabled.");
   }
+  return script;
+}
 
-  // One child is owned by this desktop process only. Existing listeners are
-  // adopted, never killed; child exit is observed but never blindly retried.
-  if (ownedChild && ownedChild.exitCode === null && !ownedChild.killed) {
-    throw new Error("An OpenRig startup is still pending; refusing duplicate launch.");
+async function launchCanonicalDaemon(): Promise<void> {
+  bridgeStartupMode(process.env.OPENRIG_T3_BRIDGE_MODE);
+  const health = await bridgeIdentity();
+  if (health === "daemon") return;
+  if (health === "phase1") {
+    throw new Error("Port 7433 is occupied by legacy OpenRig Phase-1; canonical daemon cannot replace it automatically.");
   }
-  const child = NodeChildProcess.spawn(
-    process.env.OPENRIG_T3_NODE_EXECUTABLE || "node",
-    ["--import", "tsx", script],
-    {
-      cwd: ROOT, stdio: ["ignore", "ignore", "pipe"], windowsHide: true, detached: false,
-      env: { ...process.env, OPENRIG_T3_DESKTOP_PARENT_PID: String(process.pid) },
-    },
-  );
-  ownedChild = child;
-  let stderr = "";
-  child.stderr?.on("data", (part: Buffer | string) => {
-    stderr = (stderr + String(part)).slice(-1200);
-  });
-  if (!shutdownRegistered) {
-    shutdownRegistered = true;
-    process.once("exit", () => ownedChild?.kill());
+  if (launcher && launcher.exitCode === null && !launcher.killed) {
+    throw new Error("Canonical OpenRig startup still pending; refusing duplicate launch.");
   }
+  const script = canonicalDaemonStartScript();
+  // The fixed operator script selects the installed CLI, canonical ~/.openrig
+  // database and required process-private tokens. It starts a detached daemon;
+  // this desktop process owns only the short-lived PowerShell launcher.
+  const child = NodeChildProcess.spawn("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    "-File", script, "-Action", "start",
+  ], { cwd: ROOT, windowsHide: true, stdio: "ignore" });
+  launcher = child;
   let launchError: Error | null = null;
-  child.once("error", error => {
-    launchError = error;
-    if (ownedChild === child) ownedChild = null;
+  child.once("error", (error) => { launchError = error; if (launcher === child) launcher = null; });
+  child.once("exit", (code) => {
+    if (code !== 0) launchError = new Error("Canonical OpenRig launcher exited with code " + String(code));
+    if (launcher === child) launcher = null;
   });
-  child.once("exit", () => {
-    if (ownedChild === child) ownedChild = null;
-  });
-  for (let attempt = 0; attempt < 36; attempt++) {
+  // The CLI can return before its daemon is accepting requests. Also handle
+  // a concurrent external start: success is the canonical listener itself.
+  for (let attempt = 0; attempt < 40; attempt++) {
     await NodeTimersPromises.setTimeout(250);
-    if (launchError) break;
     try {
-      if (await bridgeHealth() === "online") return;
-    } catch {
-      // An indeterminate/occupied listener must not trigger another spawn.
-      break;
+      const state = await bridgeIdentity();
+      if (state === "daemon") return;
+      if (state === "phase1") throw new Error("Legacy Phase-1 service occupied port 7433 during startup.");
+    } catch (error) {
+      // Non-refused failures do not license launching another daemon.
+      if (attempt > 7) throw error;
     }
-    if (child.exitCode !== null) break;
+    if (launchError) break;
   }
-  throw launchError ?? new Error(
-    stderr.trim()
-      ? "OpenRig startup failed: " + stderr.trim().slice(-300)
-      : "OpenRig bridge did not become healthy (exit code: " + String(child.exitCode) + ").",
-  );
+  throw launchError ?? new Error("Canonical OpenRig daemon did not become healthy after startup.");
 }
 
 export function ensureLocalOpenRigBridge(): Promise<void> {
-  if (!starting) {
-    starting = launchLocalBridge().finally(() => { starting = null; });
-  }
+  if (!starting) starting = launchCanonicalDaemon().finally(() => { starting = null; });
   return starting;
 }
