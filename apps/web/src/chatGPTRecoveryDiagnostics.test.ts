@@ -36,7 +36,7 @@ describe("ChatGPT recovery diagnostics", () => {
     expect(readChatGPTRecoveryEvents("env", "one")).toHaveLength(2);
   });
 
-  it("reports retry state and escalation without claiming recovery", () => {
+  it("reports retry state but ignores obsolete terminal escalation", () => {
     values.set(
       "t3code:chatgpt-browser:bounded-recovery:env",
       JSON.stringify({
@@ -55,8 +55,8 @@ describe("ChatGPT recovery diagnostics", () => {
     expect(readChatGPTRecoveryState("env", "one")).toMatchObject({
       lastAttemptAt: 1792534500000,
       retryCount: 3,
-      nextRetryAt: 1792535000000,
-      escalationReason: "guest_url_or_health_unverifiable",
+      nextRetryAt: 1792534620000,
+      escalationReason: null,
     });
     expect(readChatGPTRecoveryState("env", "other").retryCount).toBe(0);
   });

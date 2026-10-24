@@ -77,7 +77,7 @@ describe("recoverable ChatGPT activity", () => {
     ]) {
       expect(chatGPTRecoveryProblem(state)).toBeNull();
     }
-    expect(RECOVERY_ORANGE_GRACE_MS).toBe(60_000);
+    expect(RECOVERY_ORANGE_GRACE_MS).toBe(600_000);
   });
 });
 

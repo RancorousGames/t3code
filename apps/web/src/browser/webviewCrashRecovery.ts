@@ -1,6 +1,7 @@
 export const WEBVIEW_CRASH_RECOVERY_WINDOW_MS = 30_000;
-const WEBVIEW_CRASH_RECOVERY_MAX_ATTEMPTS = 3;
-const WEBVIEW_CRASH_RECOVERY_BASE_DELAY_MS = 250;
+const WEBVIEW_CRASH_RECOVERY_FAST_ATTEMPTS = 3;
+const WEBVIEW_CRASH_RECOVERY_FAST_DELAY_MS = 250;
+const WEBVIEW_CRASH_RECOVERY_PATIENT_DELAY_MS = 2 * 60_000;
 
 export interface WebviewCrashRecoveryState {
   readonly attempts: number;
@@ -25,11 +26,15 @@ export function planWebviewCrashRecovery(
     state.windowStartedAt === null ||
     now - state.windowStartedAt >= WEBVIEW_CRASH_RECOVERY_WINDOW_MS;
   const attempts = startsNewWindow ? 0 : state.attempts;
-  if (attempts >= WEBVIEW_CRASH_RECOVERY_MAX_ATTEMPTS) return null;
 
   const nextAttempts = attempts + 1;
   return {
-    delayMs: WEBVIEW_CRASH_RECOVERY_BASE_DELAY_MS * 2 ** attempts,
+    // Never abandon a crashed guest. Limit rapid crash storms without
+    // escalating or increasing the delay with each subsequent attempt.
+    delayMs:
+      attempts < WEBVIEW_CRASH_RECOVERY_FAST_ATTEMPTS
+        ? WEBVIEW_CRASH_RECOVERY_FAST_DELAY_MS
+        : WEBVIEW_CRASH_RECOVERY_PATIENT_DELAY_MS,
     state: {
       attempts: nextAttempts,
       windowStartedAt: startsNewWindow ? now : state.windowStartedAt,

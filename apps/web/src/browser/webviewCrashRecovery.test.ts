@@ -7,20 +7,14 @@ import {
 } from "./webviewCrashRecovery";
 
 describe("planWebviewCrashRecovery", () => {
-  it("backs off and stops after a bounded number of rapid crashes", () => {
-    const first = planWebviewCrashRecovery(INITIAL_WEBVIEW_CRASH_RECOVERY_STATE, 1_000);
-    expect(first).not.toBeNull();
-    expect(first?.delayMs).toBe(250);
-
-    const second = planWebviewCrashRecovery(first!.state, 1_100);
-    expect(second).not.toBeNull();
-    expect(second?.delayMs).toBe(500);
-
-    const third = planWebviewCrashRecovery(second!.state, 1_200);
-    expect(third).not.toBeNull();
-    expect(third?.delayMs).toBe(1_000);
-
-    expect(planWebviewCrashRecovery(third!.state, 1_300)).toBeNull();
+  it("retries crash recovery indefinitely at fixed delays without a storm", () => {
+    let state = INITIAL_WEBVIEW_CRASH_RECOVERY_STATE;
+    for (let attempt = 1; attempt <= 50; attempt++) {
+      const plan = planWebviewCrashRecovery(state, 1_000 + attempt * 100)!;
+      expect(plan.delayMs).toBe(attempt <= 3 ? 250 : 120_000);
+      state = plan.state;
+    }
+    expect(state.attempts).toBe(50);
   });
 
   it("allows recovery again after the crash window expires", () => {
