@@ -72,7 +72,7 @@ type OrangeStage =
   | "stop_issued"
   | "continue_issued"
   | "recovered"
-  | "needs_human";
+  | "observe_only";
 interface OrangeEpisode {
   conversationId: string;
   userTurnKey: string;
@@ -83,12 +83,13 @@ interface OrangeEpisode {
   stageAt: number;
   assistantSignature?: number;
   continuedTurnKey?: string;
+  /** Stop may have executed despite an ambiguous bridge result. Never issue it again for this turn. */
+  stopAttempted?: boolean;
   reason?: string;
 }
 interface PersistentRecovery {
   red: Record<string, { attempts: number; nextAt: number; conversationId: string }>;
   orange: Record<string, OrangeEpisode>;
-  escalation: Record<string, { reason: string; at: number; conversationId: string | null }>;
 }
 const recoveryStateKey = (environmentId: string) =>
   `t3code:chatgpt-browser:bounded-recovery:${environmentId}`;
@@ -101,11 +102,18 @@ function readBoundedState(environmentId: string): PersistentRecovery {
     const parsed = data as Partial<PersistentRecovery>;
     return {
       red: parsed.red ?? {},
-      orange: parsed.orange ?? {},
-      escalation: parsed.escalation ?? {},
+      // Legacy terminal escalation is deliberately ignored: it may not suppress retries.
+      orange: Object.fromEntries(
+        Object.entries(parsed.orange ?? {}).map(([id, episode]) => [
+          id,
+          (episode as { stage: string }).stage === "needs_human"
+            ? { ...episode, stage: "observe_only" as const, stopAttempted: true }
+            : episode,
+        ]),
+      ),
     };
   } catch {
-    return { red: {}, orange: {}, escalation: {} };
+    return { red: {}, orange: {} };
   }
 }
 function saveBoundedState(environmentId: string, state: PersistentRecovery): boolean {
@@ -117,30 +125,31 @@ function saveBoundedState(environmentId: string, state: PersistentRecovery): boo
     return false;
   }
 }
-function escalateRecovery(
+function noteRecoveryConcern(
   environmentId: string,
   state: PersistentRecovery,
   sessionId: string,
-  conversationId: string | null,
+  _conversationId: string | null,
   reason: string,
-  now: number,
+  _now: number,
 ): void {
-  if (state.escalation[sessionId]?.reason === reason) return;
-  state.escalation[sessionId] = { reason, at: now, conversationId };
+  // A diagnostic is not a terminal escalation. Keep inspecting this exact
+  // conversation; never retry an uncertain Stop/Continue on the same user turn.
   const episode = state.orange[sessionId];
-  if (episode) state.orange[sessionId] = { ...episode, stage: "needs_human", stageAt: now, reason };
-  saveBoundedState(environmentId, state);
-  recordChatGPTRecoveryEvent(environmentId, sessionId, "escalated", reason);
-  console.warn("[ChatGPT recovery] Human review needed:", { sessionId, conversationId, reason });
+  if (episode) {
+    state.orange[sessionId] = {
+      ...episode,
+      stage: episode.stage === "continue_issued" ? "continue_issued" : "observe_only",
+      stopAttempted: episode.stopAttempted || episode.stage === "stop_issued",
+      reason,
+    };
+    saveBoundedState(environmentId, state);
+  }
+  recordChatGPTRecoveryEvent(environmentId, sessionId, "diagnostic", reason);
 }
-export function nextRedRetryDelay(sessionId: string, attempts: number): number {
-  // Deterministic per-session jitter prevents synchronized restarts and survives remounts.
-  let hash = 2166136261;
-  for (const char of sessionId) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-  const jitter = 0.85 + ((hash >>> 0) % 30) / 100;
-  return Math.round(
-    Math.min(30 * 60_000, RECOVERY_PER_SESSION_MS * 2 ** Math.min(6, attempts - 1)) * jitter,
-  );
+export function nextRedRetryDelay(_sessionId: string, _attempts: number): number {
+  // Uniform fixed cadence, independent of count and persisted across remounts.
+  return RECOVERY_PER_SESSION_MS;
 }
 function assistantSignature(snapshot: RecoverySnapshot): number {
   let hash = 2166136261;
@@ -440,7 +449,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
           if (!expectedUrl) {
             lostRouteFirstSeen.delete(sessionId);
             if (persistent.orange[sessionId] || persistent.red[sessionId])
-              escalateRecovery(
+              noteRecoveryConcern(
                 envId,
                 persistent,
                 sessionId,
@@ -496,7 +505,6 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 typeof guestLocation === "string" &&
                 isChatGPTHomeUrl(guestLocation))
             ) {
-              if (persistent.escalation[sessionId]) continue;
               const first = lostRouteFirstSeen.get(sessionId);
               if (!first || first.url !== expectedUrl) {
                 lostRouteFirstSeen.set(sessionId, { url: expectedUrl, at: Date.now() });
@@ -607,7 +615,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "probe-unverifiable");
               const episode = persistent.orange[sessionId];
               if (episode && Date.now() - episode.stageAt > 2 * RECOVERY_ORANGE_GRACE_MS)
-                escalateRecovery(
+                noteRecoveryConcern(
                   envId,
                   persistent,
                   sessionId,
@@ -617,7 +625,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 );
               const red = persistent.red[sessionId];
               if (red && Date.now() > red.nextAt + 2 * RECOVERY_ORANGE_GRACE_MS)
-                escalateRecovery(
+                noteRecoveryConcern(
                   envId,
                   persistent,
                   sessionId,
@@ -638,7 +646,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
               (episode && episode.conversationId !== conversationId) ||
               (red?.conversationId && red.conversationId !== conversationId)
             ) {
-              escalateRecovery(
+              noteRecoveryConcern(
                 envId,
                 persistent,
                 sessionId,
@@ -650,7 +658,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
               continue;
             }
             if (snapshot.permanentReason) {
-              escalateRecovery(
+              noteRecoveryConcern(
                 envId,
                 persistent,
                 sessionId,
@@ -661,25 +669,6 @@ export function ChatGPTBrowserRecoveryCoordinator({
               if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
               continue;
             }
-            // An earlier failed health probe is not permanent. Once this exact
-            // conversation is inspectable again, allow bounded red-only refresh;
-            // never replay an ambiguous Continue/Send or ignore a nonempty draft.
-            if (
-              problem === "load-failure" &&
-              persistent.escalation[sessionId]?.reason === "guest_url_or_health_unverifiable" &&
-              (snapshot.draftEmpty === true ||
-                (snapshot.draftEmpty === null && snapshot.stopVisible === false))
-            ) {
-              delete persistent.escalation[sessionId];
-              saveBoundedState(envId, persistent);
-            }
-            if (persistent.escalation[sessionId]) {
-              recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "human-review-required");
-              // A permanent/ambiguous case remains held, but is still visibly queued when red.
-              if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
-              continue;
-            }
-
             if (problem === "healthy") {
               if (red) {
                 recordChatGPTRecoveryEvent(envId, sessionId, "healthy", "red-load-failure-cleared");
@@ -710,7 +699,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 !safeIdleForContinue(snapshot, episode) &&
                 Date.now() - episode.stageAt > RECOVERY_ORANGE_GRACE_MS
               ) {
-                escalateRecovery(
+                noteRecoveryConcern(
                   envId,
                   persistent,
                   sessionId,
@@ -742,7 +731,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 };
                 persistent.orange[sessionId] = stamped;
                 if (!saveBoundedState(envId, persistent)) {
-                  escalateRecovery(
+                  noteRecoveryConcern(
                     envId,
                     persistent,
                     sessionId,
@@ -757,7 +746,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                     guardedRecoveryContinueTypeExpression(conversationId, stamped),
                   )) as { result?: string } | null;
                   if (typed?.result !== "continue_typed") {
-                    escalateRecovery(
+                    noteRecoveryConcern(
                       envId,
                       persistent,
                       sessionId,
@@ -775,7 +764,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                     beforePress.snapshot.stopVisible !== false ||
                     beforePress.snapshot.permanentReason
                   ) {
-                    escalateRecovery(
+                    noteRecoveryConcern(
                       envId,
                       persistent,
                       sessionId,
@@ -791,7 +780,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                     guardedRecoveryContinueSendExpression(conversationId, stamped),
                   )) as { result?: string } | null;
                   if (dispatched?.result !== "continue_clicked")
-                    escalateRecovery(
+                    noteRecoveryConcern(
                       envId,
                       persistent,
                       sessionId,
@@ -800,7 +789,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                       Date.now(),
                     );
                 } catch (error) {
-                  escalateRecovery(
+                  noteRecoveryConcern(
                     envId,
                     persistent,
                     sessionId,
@@ -844,7 +833,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                     Date.now() - episode.stageAt > RECOVERY_ORANGE_GRACE_MS &&
                     snapshot.stopVisible === false
                   ) {
-                    escalateRecovery(
+                    noteRecoveryConcern(
                       envId,
                       persistent,
                       sessionId,
@@ -864,6 +853,14 @@ export function ChatGPTBrowserRecoveryCoordinator({
             if (problem !== "load-failure") {
               const key = snapshot.lastUserTurnKey;
               const turn = snapshot.lastUserTurn;
+              // Only a positively verified NEW user turn can rearm an episode.
+              // This also handles differing orange error labels on the same turn.
+              if (episode && key && key !== episode.userTurnKey) {
+                if (snapshot.lastUserIsRecoveryContinue !== false) continue;
+                delete persistent.orange[sessionId];
+                episode = undefined;
+                saveBoundedState(envId, persistent);
+              }
               if (!key || typeof turn !== "number") {
                 // May still be rendering; never auto-continue an unidentified turn.
                 if (!episode) {
@@ -878,7 +875,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   };
                   saveBoundedState(envId, persistent);
                 } else if (Date.now() - episode.firstSeenAt >= RECOVERY_ORANGE_GRACE_MS) {
-                  escalateRecovery(
+                  noteRecoveryConcern(
                     envId,
                     persistent,
                     sessionId,
@@ -896,29 +893,19 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 if (key === lastHandled || snapshot.lastUserIsRecoveryContinue !== false) continue;
                 episode = undefined;
               }
-              if (episode?.stage === "continue_issued" || episode?.stage === "needs_human") {
-                // Do not infer a new episode from the uncertain Continue delivery.
-                // A new red/orange symptom still needs a durable human handoff.
-                if (
-                  episode.stage === "continue_issued" &&
-                  Date.now() - episode.stageAt >= 2 * RECOVERY_ORANGE_GRACE_MS
-                )
-                  escalateRecovery(
-                    envId,
-                    persistent,
-                    sessionId,
-                    conversationId,
-                    "continue_followup_still_stuck_or_unconfirmed",
-                    Date.now(),
-                  );
+              // A Stop/Continue attempt or an unverified situation is durable
+              // for this turn. Recheck passively; never duplicate either action.
+              if (episode?.stage === "continue_issued") continue;
+              if (
+                episode?.stage === "observe_only" &&
+                (episode.stopAttempted || !episode.userTurnKey)
+              ) {
+                // Stop/Continue uncertainty is never replayed. Without an
+                // attempted mutation, a verified stuck turn can still be
+                // safely refreshed at the normal fixed cadence below.
                 continue;
               }
-              if (
-                !episode ||
-                episode.userTurnKey !== key ||
-                episode.userTurn !== turn ||
-                episode.problem !== problem
-              ) {
+              if (!episode || episode.userTurnKey !== key || episode.userTurn !== turn) {
                 episode = {
                   conversationId,
                   userTurnKey: key,
@@ -935,7 +922,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
               if (Date.now() - episode.firstSeenAt < RECOVERY_ORANGE_GRACE_MS) continue;
               if (episode.stage === "stop_issued") {
                 if (Date.now() - episode.stageAt > 2 * RECOVERY_ORANGE_GRACE_MS)
-                  escalateRecovery(
+                  noteRecoveryConcern(
                     envId,
                     persistent,
                     sessionId,
@@ -964,7 +951,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   confirmed.snapshot.stopVisible !== true
                 ) {
                   if (confirmed?.problem === "healthy") continue;
-                  escalateRecovery(
+                  noteRecoveryConcern(
                     envId,
                     persistent,
                     sessionId,
@@ -979,6 +966,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   stage: "stop_issued",
                   stageAt: Date.now(),
                   assistantSignature: assistantSignature(confirmed.snapshot),
+                  stopAttempted: true,
                 };
                 if (!saveBoundedState(envId, persistent)) continue;
                 try {
@@ -986,7 +974,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                     stopOrphanExpression(conversationId, episode),
                   )) as { result?: string } | null;
                   if (response?.result !== "stop_clicked")
-                    escalateRecovery(
+                    noteRecoveryConcern(
                       envId,
                       persistent,
                       sessionId,
@@ -995,7 +983,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                       Date.now(),
                     );
                 } catch {
-                  escalateRecovery(
+                  noteRecoveryConcern(
                     envId,
                     persistent,
                     sessionId,
@@ -1011,7 +999,12 @@ export function ChatGPTBrowserRecoveryCoordinator({
               saveBoundedState(envId, persistent);
             }
 
-            const redNextAt = problem === "load-failure" ? (red?.nextAt ?? 0) : 0;
+            // Legacy persisted exponential deadlines may be far in the future.
+            // The history timestamp is the sole per-session cooldown authority.
+            const redNextAt =
+              problem === "load-failure"
+                ? (history.bySession[sessionId] ?? 0) + RECOVERY_PER_SESSION_MS
+                : 0;
             if (
               !canAttempt ||
               Date.now() < redNextAt ||
@@ -1123,7 +1116,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   problem,
                 );
                 if (!finished && problem !== "load-failure")
-                  escalateRecovery(
+                  noteRecoveryConcern(
                     envId,
                     persistent,
                     sessionId,
@@ -1135,7 +1128,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 recordChatGPTRecoveryEvent(envId, sessionId, "refresh-failed", problem);
                 console.warn("[ChatGPT recovery] Refresh failed:", error);
                 if (problem !== "load-failure")
-                  escalateRecovery(
+                  noteRecoveryConcern(
                     envId,
                     persistent,
                     sessionId,

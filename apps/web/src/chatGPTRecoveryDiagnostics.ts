@@ -1,3 +1,5 @@
+import { RECOVERY_PER_SESSION_MS } from "./components/sidebar/chatGPTConversationRecovery";
+
 /** Bounded, content-free diagnostic history readable through T3 session control. */
 export interface ChatGPTRecoveryEvent {
   readonly at: number;
@@ -90,24 +92,24 @@ export function readChatGPTRecoveryState(environmentId: string, sessionId: strin
       state.orange && typeof state.orange === "object"
         ? (state.orange as Record<string, unknown>)[sessionId]
         : undefined;
-    const escalation =
-      state.escalation && typeof state.escalation === "object"
-        ? (state.escalation as Record<string, unknown>)[sessionId]
-        : undefined;
     const bySession =
       info.bySession && typeof info.bySession === "object"
         ? (info.bySession as Record<string, unknown>)[sessionId]
         : undefined;
     const r = red && typeof red === "object" ? (red as Record<string, unknown>) : {};
     const o = orange && typeof orange === "object" ? (orange as Record<string, unknown>) : {};
-    const e =
-      escalation && typeof escalation === "object" ? (escalation as Record<string, unknown>) : {};
     return {
       lastAttemptAt: typeof bySession === "number" ? bySession : null,
       retryCount: typeof r.attempts === "number" ? r.attempts : 0,
-      nextRetryAt: typeof r.nextAt === "number" ? r.nextAt : null,
+      nextRetryAt:
+        typeof r.nextAt === "number"
+          ? typeof bySession === "number"
+            ? bySession + RECOVERY_PER_SESSION_MS
+            : Math.min(r.nextAt, Date.now() + RECOVERY_PER_SESSION_MS)
+          : null,
       orangeStage: typeof o.stage === "string" ? o.stage : null,
-      escalationReason: typeof e.reason === "string" ? e.reason : null,
+      // A legacy escalation must never hide a recovery candidate or stop wakeup.
+      escalationReason: null,
     };
   } catch {
     return {

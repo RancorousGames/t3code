@@ -60,7 +60,7 @@ export function chatGPTRecoveryProblem(activity: string): ChatGPTRecoveryProblem
 
 // Brief interruptions often reconnect by themselves. Avoid refreshing a live
 // generation immediately on the first transient orange status.
-export const RECOVERY_ORANGE_GRACE_MS = 60_000;
+export const RECOVERY_ORANGE_GRACE_MS = 10 * 60_000;
 export const RECOVERY_REFRESH_TIMEOUT_MS = 8_000;
 export const RECOVERY_SCAN_MS = 30_000;
 export const RECOVERY_GLOBAL_MS = 30_000;

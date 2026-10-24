@@ -280,6 +280,39 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(phaseChanges).toHaveBeenLastCalledWith("comit", null);
   });
 
+  it("survives prolonged unverifiable red probes without a terminal gate", async () => {
+    let guestReadable = true;
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "invalid: Could not load this ChatGPT conversation",
+      url: guestReadable ? `https://chatgpt.com/c/${id}` : "https://chatgpt.com/c/unknown",
+    }));
+    await mount(["comit"], ["comit"], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(22_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    guestReadable = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45 * 60_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).escalation,
+    ).toBeUndefined();
+    expect(
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:recovery-log:local")!).some(
+        (event: { event: string; detail: string }) =>
+          event.event === "diagnostic" && event.detail === "guest_url_or_health_unverifiable",
+      ),
+    ).toBe(true);
+    guestReadable = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+    });
+    expect(mocks.refresh.mock.calls.length).toBeGreaterThan(1);
+    expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:comit");
+  });
+
   it("releases the temporary background painting lease without refreshing a healthy guest", async () => {
     mocks.result.mockImplementation(async (id: string) => ({
       activity: "idle",
@@ -411,7 +444,7 @@ describe("serialized ChatGPT browser recovery", () => {
       }));
       await mount(["comit"]);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(89_999);
+        await vi.advanceTimersByTimeAsync(629_999);
       });
       expect(mocks.refresh).not.toHaveBeenCalled();
       await act(async () => {
@@ -441,7 +474,7 @@ describe("serialized ChatGPT browser recovery", () => {
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(570_000);
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
   });
@@ -454,7 +487,7 @@ describe("serialized ChatGPT browser recovery", () => {
     }));
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(690_000);
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
@@ -491,7 +524,7 @@ describe("persistent orange recovery safety", () => {
     });
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(91_000);
+      await vi.advanceTimersByTimeAsync(631_000);
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
     await act(async () => {
@@ -527,7 +560,7 @@ describe("persistent orange recovery safety", () => {
     expect(mocks.press).toHaveBeenCalledTimes(1);
   });
 
-  it("never acts when the composer contains a draft; escalates after reload rather than overwriting", async () => {
+  it("never overwrites a draft and continues diagnostic-only rechecks", async () => {
     let activity = "interrupted";
     let hasDraft = false;
     mocks.result.mockImplementation(async (id: string) => ({
@@ -540,13 +573,13 @@ describe("persistent orange recovery safety", () => {
     });
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(160_000);
+      await vi.advanceTimersByTimeAsync(700_000);
     });
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
     expect(mocks.stop).not.toHaveBeenCalled();
     expect(mocks.type).not.toHaveBeenCalled();
     expect(
-      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).escalation
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).orange
         .comit.reason,
     ).toBe("orphan_stop_unavailable_or_draft_present");
   });
@@ -559,12 +592,12 @@ describe("persistent orange recovery safety", () => {
     mocks.stop.mockRejectedValue(new Error("guest detached during click"));
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(160_000);
+      await vi.advanceTimersByTimeAsync(700_000);
     });
     expect(mocks.stop).toHaveBeenCalledTimes(1);
     expect(mocks.type).not.toHaveBeenCalled();
     expect(
-      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).escalation
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).orange
         .comit.reason,
     ).toBe("stop_outcome_ambiguous");
     await act(async () => {
@@ -584,7 +617,7 @@ describe("persistent orange recovery safety", () => {
     });
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(180_000);
+      await vi.advanceTimersByTimeAsync(750_000);
     });
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
     expect(mocks.stop).not.toHaveBeenCalled();
@@ -603,12 +636,14 @@ describe("persistent orange recovery safety", () => {
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
     expect(
-      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).escalation
-        .comit.reason,
-    ).toBe("auth");
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:recovery-log:local")!).some(
+        (entry: { event: string; detail: string }) =>
+          entry.event === "diagnostic" && entry.detail === "auth",
+      ),
+    ).toBe(true);
   });
 
-  it("keeps transient red retries alive with persisted exponential cooldown, resetting on health", async () => {
+  it("keeps transient red retries alive on a fixed cadence, resetting on health", async () => {
     let activity = "invalid: Could not load this ChatGPT conversation";
     mocks.result.mockImplementation(async (id: string) => ({
       activity,
@@ -646,17 +681,50 @@ describe("orange delivery ambiguity and retry bounds", () => {
     mocks.press.mockRejectedValue(new Error("click bridge disconnected"));
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(153_000);
+      await vi.advanceTimersByTimeAsync(693_000);
     });
     expect(mocks.press).toHaveBeenCalledTimes(1);
     expect(
-      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).escalation
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).orange
         .comit.reason,
     ).toBe("continue_dispatch_ambiguous_or_failed");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300_000);
     });
     expect(mocks.press).toHaveBeenCalledTimes(1);
+  });
+
+  it("never replays an ambiguous legacy orange action after remount", async () => {
+    localStorage.setItem(
+      "t3code:chatgpt-browser:bounded-recovery:local",
+      JSON.stringify({
+        red: {},
+        orange: {
+          comit: {
+            conversationId: "comit",
+            userTurnKey: "user:comit",
+            userTurn: 0,
+            problem: "interrupted",
+            firstSeenAt: Date.now() - 3_600_000,
+            stage: "needs_human",
+            stageAt: Date.now() - 3_600_000,
+          },
+        },
+        escalation: { comit: { reason: "stop_outcome_ambiguous" } },
+      }),
+    );
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "interrupted",
+      url: `https://chatgpt.com/c/${id}`,
+    }));
+    await mount(["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25 * 60_000);
+    });
+    expect(mocks.result.mock.calls.length).toBeGreaterThan(10);
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.press).not.toHaveBeenCalled();
   });
 
   it("never reloads a guest whose live conversation ID has diverged", async () => {
@@ -673,17 +741,14 @@ describe("orange delivery ambiguity and retry bounds", () => {
     expect(mocks.type).not.toHaveBeenCalled();
   });
 
-  it("caps red retry delay but never applies a terminal attempt ceiling", () => {
+  it("uses the identical fixed red retry delay for attempt 1 and attempt 50", () => {
     const values = [
       nextRedRetryDelay("comit", 1),
-      nextRedRetryDelay("comit", 2),
-      nextRedRetryDelay("comit", 3),
+      nextRedRetryDelay("comit", 50),
+      nextRedRetryDelay("other", 50),
       nextRedRetryDelay("comit", 100_000),
     ];
-    expect(values[0]).toBeGreaterThan(0);
-    expect(values[1]).toBeGreaterThan(values[0]!);
-    expect(values[2]).toBeGreaterThan(values[1]!);
-    expect(values[3]).toBeLessThanOrEqual(35 * 60_000);
+    expect(values).toEqual([120_000, 120_000, 120_000, 120_000]);
   });
 });
 
@@ -878,7 +943,7 @@ describe("red error panel without an editor", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
-  it("resumes red recovery after a stale unverifiable-guest escalation", async () => {
+  it("ignores a legacy terminal escalation and resumes the same red conversation", async () => {
     localStorage.setItem(
       "t3code:chatgpt-browser:bounded-recovery:local",
       JSON.stringify({
@@ -905,8 +970,7 @@ describe("red error panel without an editor", () => {
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
     expect(
-      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).escalation
-        .comit,
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).escalation,
     ).toBeUndefined();
   });
 
