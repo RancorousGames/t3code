@@ -8,6 +8,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { deriveProjectIdentity } from "../../projectIdentity";
 import {
+  CHATGPT_SESSION_BORDER_COLORS,
+  chatGPTSessionBorderRingClass,
   chatGPTSidebarProjectTitles,
   isOpenRigManagerRole,
   verifiedManagerChatGPTTabIds,
@@ -82,6 +84,19 @@ const ledger = (
     automaticUnknownRetry: false,
     implicitAdoption: false,
   },
+});
+
+describe("persistent ChatGPT session border palette", () => {
+  it("maps every user-selectable color to a stable Tailwind ring and clears unknown/None selections", () => {
+    expect(CHATGPT_SESSION_BORDER_COLORS.map((entry) => entry.id)).toEqual([
+      "red", "orange", "yellow", "green", "blue", "purple", "pink",
+    ]);
+    for (const color of CHATGPT_SESSION_BORDER_COLORS) {
+      expect(chatGPTSessionBorderRingClass(color.id)).toBe(color.ring);
+    }
+    expect(chatGPTSessionBorderRingClass(undefined)).toBeNull();
+    expect(chatGPTSessionBorderRingClass("unsupported-color")).toBeNull();
+  });
 });
 
 describe("verified OpenRig manager browser markers", () => {
