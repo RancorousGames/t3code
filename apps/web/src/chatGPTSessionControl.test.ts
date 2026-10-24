@@ -7,14 +7,40 @@ import { inspectChatGPTPage, isSafeEmptyChatGPTHomepage } from "./chatGPTSession
 import { hasChatGPTLoadFailure } from "./components/sidebar/chatGPTConversationRecovery";
 import {
   hasUncertainChatGPTSend,
+  isDuplicateSafeGenericWake,
+  canReplaceGenericUnknown,
   matchesSessionWhich,
   reloadRequiresForce,
+  resetUncertainChatGPTSendsForTests,
   runChatGPTSessionControl,
 } from "./chatGPTSessionControl";
 import {
   appendUnverifiedOpenRigPolicies,
   prepareChatGPTSessionMessage,
 } from "./chatGPTSessionMessaging";
+
+const autoWake = (id: string) =>
+  "[AUTOMATED TEMPORARY OMNIHUB KEEP-AWAKE; not a human message] If you have already been assigned work that is still authorized and unfinished, please resume it and report meaningful progress or blockers. If you are blocked on a human decision, finished, or awaiting input, do not invent work; state that fact. This monitor is a temporary bootstrap to be replaced by OpenRig's canonical scheduler. [Monitor attempt: " +
+  id +
+  "]";
+
+describe("OMNI-0033 generic UNKNOWN exact-scope duplicate policy", () => {
+  const a = autoWake("00000000-0000-4000-8000-000000000001");
+  const b = autoWake("00000000-0000-4000-8000-000000000002");
+  it("allows only another distinct canonical auto wake after an identical un-enriched UNKNOWN", () => {
+    expect(isDuplicateSafeGenericWake(a)).toBe(true);
+    expect(canReplaceGenericUnknown({ original: a, text: a }, b)).toBe(true);
+    expect(canReplaceGenericUnknown({ original: a, text: a }, a)).toBe(false);
+    expect(canReplaceGenericUnknown({ original: a, text: a + "\nOpenRig policy" }, b)).toBe(false);
+  });
+  it("preserves unrelated UNKNOWN payloads and altered messages", () => {
+    expect(canReplaceGenericUnknown({ original: "Human task", text: "Human task" }, b)).toBe(false);
+    expect(canReplaceGenericUnknown({ original: a, text: a }, "Human task")).toBe(false);
+    expect(isDuplicateSafeGenericWake(a + " extra")).toBe(false);
+    expect(isDuplicateSafeGenericWake(a.replace("This monitor", "That monitor"))).toBe(false);
+    expect(canReplaceGenericUnknown(null, b)).toBe(false);
+  });
+});
 
 let dom: JSDOM;
 beforeEach(() => {
@@ -32,6 +58,7 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="prompt-textarea" contenteditable="true"></div>';
 });
 afterEach(() => {
+  resetUncertainChatGPTSendsForTests();
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();

@@ -107,6 +107,30 @@ interface PendingChatGPTSend {
   };
 }
 const uncertainChatGPTSends = new Map<string, PendingChatGPTSend>();
+/** Isolate disposable renderer fixtures; never callable in production. */
+export function resetUncertainChatGPTSendsForTests(): void {
+  if (import.meta.env.MODE !== "test") throw new Error("Test-only reset refused.");
+  uncertainChatGPTSends.clear();
+}
+// Explicitly duplicate-safe *temporary machine prompt*, not general user or
+// OpenRig policy-enriched messages. Validate the entire fixed body and UUID.
+const GENERIC_WAKE =
+  /^\[AUTOMATED TEMPORARY OMNIHUB KEEP-AWAKE; not a human message\] If you have already been assigned work that is still authorized and unfinished, please resume it and report meaningful progress or blockers\. If you are blocked on a human decision, finished, or awaiting input, do not invent work; state that fact\. This monitor is a temporary bootstrap to be replaced by OpenRig's canonical scheduler\. \[Monitor attempt: [0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\]$/;
+export function isDuplicateSafeGenericWake(message: string): boolean {
+  return GENERIC_WAKE.test(message);
+}
+export function canReplaceGenericUnknown(
+  pending: Pick<PendingChatGPTSend, "original" | "text"> | null,
+  next: string,
+): boolean {
+  return (
+    !!pending &&
+    pending.text === pending.original &&
+    isDuplicateSafeGenericWake(pending.original) &&
+    isDuplicateSafeGenericWake(next) &&
+    pending.original !== next
+  );
+}
 
 /** Synchronous, non-consuming guard: an unknown send needs its guest for reconciliation. */
 export function hasUncertainChatGPTSend(environmentId: EnvironmentId, sessionId: string): boolean {
@@ -971,6 +995,16 @@ export async function runChatGPTSessionControl(input: {
           "A matching send was previously invoked but its user turn has not been proven. No duplicate click was issued; read the session and do not blindly retry.",
       };
     }
+    // Generic keep-awake may be reattempted with a NEW UUID after an UNKNOWN,
+    // but no other unknown may be cleared/displaced by a different send.
+    const duplicateSafeReplacement =
+      !!unresolved &&
+      unresolved.url === before.observedGuestUrl &&
+      canReplaceGenericUnknown(unresolved, prepared.text);
+    if (unresolved && !duplicateSafeReplacement)
+      throw new Error(
+        "Unrelated or unverifiable UNKNOWN send remains; manual reconciliation required.",
+      );
     if (
       before.status === "working" ||
       before.status === "stuck" ||
@@ -1087,6 +1121,8 @@ export async function runChatGPTSessionControl(input: {
     ) {
       throw new Error("Session URL, generation or guest changed before typing; refusing send.");
     }
+    if ((uncertainChatGPTSends.get(receiptKey) ?? null) !== (unresolved ?? null))
+      throw new Error("Unknown-send ledger changed before typing; aborting.");
     await chatGPTWebviewAutomation.waitFor(runtimeId, {
       selector: COMPOSER_SELECTOR,
       timeoutMs: 3000,
