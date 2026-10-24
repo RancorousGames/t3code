@@ -57,6 +57,9 @@ import * as Effect from "effect/Effect";
 import * as NodeChildProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join as joinPath } from "node:path";
 import * as NodeProcess from "node:process";
 import * as NodeUtil from "node:util";
 import * as Schema from "effect/Schema";
@@ -1350,14 +1353,41 @@ function operatorReplyValid(input: DesktopOpenRigOperatorReplyInput): boolean {
   );
 }
 
+/**
+ * This private credential belongs to the desktop MAIN process, not its
+ * renderer. The custom T3 executable is also launched from a startup shortcut
+ * that bypasses compile_and_launch_t3.py, so the launcher environment cannot
+ * be the sole source of the existing locally provisioned token.
+ *
+ * An explicitly present (even blank) environment value suppresses fallback:
+ * tests and deployments can deliberately fail closed.
+ */
+function privateOperatorAnswerToken(): string | null {
+  const environmentToken = NodeProcess.env.OPENRIG_T3_HUMAN_ANSWER_TOKEN;
+  if (environmentToken !== undefined) {
+    const token = environmentToken.trim();
+    return token.length >= 24 ? token : null;
+  }
+  try {
+    const file = joinPath(homedir(), ".openrig", "operator-tokens", "t3-human-answer-token.txt");
+    const token = readFileSync(file, "utf8").trim();
+    return token.length >= 24 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
 function operatorReplyHeaders(): Record<string, string> | null {
-  const token = NodeProcess.env.OPENRIG_T3_HUMAN_ANSWER_TOKEN;
+  const token = privateOperatorAnswerToken();
+  if (!token) return null;
   const bearer = NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim();
-  if (!token || token.length < 24 || !bearer) return null;
+  // OpenRig permits bearer-free loopback calls when its daemon is configured
+  // without a bearer. The fixed endpoint is ALWAYS 127.0.0.1:7433 and the
+  // independent private human-answer token is still mandatory for writes.
   return {
     Accept: "application/json",
     "Content-Type": "application/json",
-    Authorization: `Bearer ${bearer}`,
+    ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
     "x-openrig-human-answer-token": token,
     "x-openrig-human-intent": "t3-desktop-ipc",
   };
@@ -1450,7 +1480,7 @@ export async function postOpenRigOperatorReply(
   if (!headers)
     return {
       outcome: "not_sent",
-      reason: "OpenRig operator writer token/bearer not configured in desktop MAIN.",
+      reason: "OpenRig operator reply token is not available in desktop MAIN.",
     };
   // Pre-POST authoritative read, not renderer metadata: original must still be
   // a replyable direct queue message addressed to the operator.
