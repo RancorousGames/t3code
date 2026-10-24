@@ -121,3 +121,10 @@ export function readChatGPTRecoveryState(environmentId: string, sessionId: strin
     };
   }
 }
+
+// Episode metrics deliberately require explicit verified outcomes; legacy events are not backfilled.
+export {
+  aggregateChatGPTRecoveryMetrics,
+  readChatGPTRecoveryMetrics,
+  recordChatGPTRecoveryMetric,
+} from "./chatGPTRecoveryMetrics";
