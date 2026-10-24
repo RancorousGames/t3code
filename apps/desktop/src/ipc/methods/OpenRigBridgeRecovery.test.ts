@@ -79,6 +79,20 @@ describe("canonical OpenRig recovery after a desktop connection loss", () => {
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
   });
 
+  it("waits beyond the old 10-second readiness budget for a populated canonical daemon", async () => {
+    const probe = vi
+      .fn()
+      .mockImplementationOnce(absent)
+      .mockImplementation(async () =>
+        probe.mock.calls.length <= 84 ? absent() : Response.json({ status: "ok" }),
+      );
+    vi.stubGlobal("fetch", probe);
+    const { ensureLocalOpenRigBridge } = await import("./OpenRigBridgeLifecycle.ts");
+    await expect(ensureLocalOpenRigBridge()).resolves.toBeUndefined();
+    expect(probe.mock.calls.length).toBeGreaterThan(80);
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+  });
+
   it("does not launch on a transient timeout and adopts the same daemon when it responds again", async () => {
     const probe = vi
       .fn()
