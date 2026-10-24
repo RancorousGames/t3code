@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { bridgeHealth, bridgeStartupMode, ensureLocalOpenRigBridge } from "./OpenRigBridgeLifecycle.ts";
+import { bridgeHealth, bridgeStartupMode, canonicalDaemonStartScript, ensureLocalOpenRigBridge } from "./OpenRigBridgeLifecycle.ts";
 
-describe("OpenRig Phase-1 bridge startup gate", () => {
+describe("OpenRig canonical daemon startup gate", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
-  it("retains the default fallback unless explicitly set to maintenance", () => {
+  it("validates normal and legacy maintenance modes without permitting Phase-1 fallback", () => {
     expect(bridgeStartupMode(undefined)).toBe("auto");
     expect(bridgeStartupMode("")).toBe("auto");
     expect(bridgeStartupMode("auto")).toBe("auto");
@@ -15,17 +15,8 @@ describe("OpenRig Phase-1 bridge startup gate", () => {
     expect(() => bridgeStartupMode("maintenance")).toThrow("Invalid OPENRIG_T3_BRIDGE_MODE");
   });
 
-  it("reports absent OpenRig without spawning Phase-1 in explicit maintenance mode", async () => {
-    vi.stubEnv("OPENRIG_T3_BRIDGE_MODE", "maintenance-no-phase1-autostart");
-    const refused = vi.fn(async () => {
-      throw new TypeError("fetch failed", {
-        cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }),
-      });
-    }) as typeof fetch;
-    vi.stubGlobal("fetch", refused);
-
-    await expect(ensureLocalOpenRigBridge()).rejects.toThrow("no Phase-1 bridge was launched");
-    expect(refused).toHaveBeenCalledTimes(1);
+  it("never selects a source/tsx or Phase-1 fallback when canonical installation is missing", () => {
+    expect(() => canonicalDaemonStartScript("Z:/missing/OpenRig")).toThrow("Canonical OpenRig daemon start script is unavailable");
   });
 
   it("adopts a responding full daemon without creating Phase-1 in maintenance mode", async () => {
@@ -37,14 +28,14 @@ describe("OpenRig Phase-1 bridge startup gate", () => {
     expect(responding).toHaveBeenCalledTimes(1);
   });
 
-  it("does not accept an existing Phase-1 child as the full daemon during handoff", async () => {
+  it("does not accept an existing Phase-1 child as the canonical daemon", async () => {
     vi.stubEnv("OPENRIG_T3_BRIDGE_MODE", "maintenance-no-phase1-autostart");
     const phase1 = vi.fn(async () => Response.json({
       ok: true, service: "openrig-t3-phase1-bridge", fullRigDaemon: false,
     })) as typeof fetch;
     vi.stubGlobal("fetch", phase1);
 
-    await expect(ensureLocalOpenRigBridge()).rejects.toThrow("Phase-1 bridge still responds");
+    await expect(ensureLocalOpenRigBridge()).rejects.toThrow("occupied by legacy OpenRig Phase-1");
     expect(phase1).toHaveBeenCalledTimes(1);
   });
 

@@ -66,7 +66,7 @@ export function OpenRigAgentsSidebarEntry() {
       setConnection("online");
     } catch {
       if (version !== requestVersion.current) return;
-      setAgents([]);
+      // Preserve confirmed seat rows during transient failures; they are marked stale.
       setConnection("offline");
     }
   }, []);
@@ -74,14 +74,24 @@ export function OpenRigAgentsSidebarEntry() {
   useEffect(() => {
     if (!isElectron) return;
     void refresh();
+    return () => { ++requestVersion.current; };
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!isElectron) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "hidden") void refresh();
-    }, REFRESH_INTERVAL_MS);
-    return () => {
-      ++requestVersion.current;
-      window.clearInterval(timer);
+    }, connection === "offline" ? 5_000 : REFRESH_INTERVAL_MS);
+    // Polling is paused in hidden windows; reconnect as soon as T3 is visible.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
     };
-  }, [refresh]);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refresh, connection]);
 
   const live = selectedId ? agents.find((agent) => agent.id === selectedId) ?? null : null;
   useEffect(() => {
@@ -146,7 +156,7 @@ export function OpenRigAgentsSidebarEntry() {
               {connection === "online" && <span className="font-normal">({agents.length})</span>}
             </button>
             <span className="text-2xs text-sidebar-muted-foreground" role="status">
-              {connection === "checking" ? "Checking…" : connection === "offline" ? "Offline" : ""}
+              {connection === "checking" ? "Checking…" : connection === "offline" ? "Reconnecting…" : ""}
             </span>
             <Button
               ref={networkButtonRef}
@@ -200,9 +210,9 @@ export function OpenRigAgentsSidebarEntry() {
         <OpenRigAgentWorkspace
           key={workspaceAgent.id}
           agent={workspaceAgent}
-          staleReason={live ? null : connection === "online"
-            ? `${workspaceAgent.name} is not in OpenRig's latest agent snapshot. Details below may be stale.`
-            : "OpenRig is unreachable. Showing the last known seat details."}
+          staleReason={connection !== "online"
+            ? "T3 lost its OpenRig connection. Reconnecting automatically; showing the last confirmed seat details."
+            : live ? null : `${workspaceAgent.name} is not in OpenRig's latest agent snapshot. Details below may be stale.`}
           snapshotAt={snapshotAt}
           tab={tab}
           onTabChange={setTab}
