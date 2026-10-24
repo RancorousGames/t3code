@@ -108,6 +108,11 @@ interface PendingChatGPTSend {
 }
 const uncertainChatGPTSends = new Map<string, PendingChatGPTSend>();
 
+/** Synchronous, non-consuming guard: an unknown send needs its guest for reconciliation. */
+export function hasUncertainChatGPTSend(environmentId: EnvironmentId, sessionId: string): boolean {
+  return uncertainChatGPTSends.has(sendReceiptKey(environmentId, sessionId));
+}
+
 function sendReceiptKey(environmentId: EnvironmentId, sessionId: string): string {
   return `${environmentId}:${sessionId}`;
 }
