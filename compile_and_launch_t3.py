@@ -26,6 +26,17 @@ GRACE_SECONDS = 20
 WM_CLOSE = 0x0010
 
 
+def load_private_openrig_human_answer_token() -> None:
+    """Give Electron MAIN the existing local OpenRig operator token, never renderer text."""
+    path = Path.home() / ".openrig" / "operator-tokens" / "t3-human-answer-token.txt"
+    if not path.is_file():
+        return
+    token = path.read_text(encoding="utf-8").strip()
+    if len(token) < 24:
+        raise RuntimeError("Existing OpenRig human-answer token is invalid.")
+    os.environ["OPENRIG_T3_HUMAN_ANSWER_TOKEN"] = token
+
+
 def custom_executable(root: Path) -> Path:
     return root / ".electron-runtime" / "windows-custom" / EXE_NAME
 
@@ -358,6 +369,7 @@ if __name__ == "__main__":
                            help="Restart only if required compiled outputs exist")
         args = parser.parse_args()
         root = Path(__file__).resolve().parent
+        load_private_openrig_human_answer_token()
         if args.dry_run:
             profile = Path(os.environ["APPDATA"]) / "t3code-custom"
             if not (profile / "Local Storage" / "leveldb" / "CURRENT").is_file():
