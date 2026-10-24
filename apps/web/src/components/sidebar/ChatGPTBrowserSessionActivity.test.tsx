@@ -20,7 +20,7 @@ import {
 } from "../../chatGPTBrowserSessions";
 
 const mocks = vi.hoisted(() => ({
-  execute: vi.fn<() => Promise<string>>(),
+  execute: vi.fn<(expression: string) => Promise<string>>(),
   nav: { _tag: "Success" as string, url: "https://chatgpt.com/c/1" },
   overlay: { loading: false },
 }));
@@ -108,7 +108,11 @@ afterEach(() => {
 describe("ChatGPT guest hibernation", () => {
   it("unloads a hidden, long-idle conversation and stops probing it", async () => {
     useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
-    mocks.execute.mockResolvedValue("idle");
+    mocks.execute.mockImplementation(async (expression) =>
+      expression.includes("inspectChatGPTComposer")
+        ? ({ status: "empty", url: mocks.nav.url, text: "" } as unknown as string)
+        : "idle",
+    );
     await act(async () => {
       renderer = create(<ActivityObserver />);
     });
@@ -141,6 +145,41 @@ describe("ChatGPT guest hibernation", () => {
     await act(async () => {
       renderer = create(<ActivityObserver />);
     });
+    expect(isChatGPTGuestHibernated(runtimeId)).toBe(false);
+  });
+
+  it.each(["interrupted", "delivery-timeout", "invalid: unavailable", "unknown: offline"])(
+    "never unloads an unresolved %s guest after the idle window",
+    async (activity) => {
+      useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
+      mocks.execute.mockResolvedValue(activity);
+      await act(async () => {
+        renderer = create(<ActivityObserver />);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CHATGPT_GUEST_HIBERNATE_AFTER_MS + 12_000);
+      });
+      expect(isChatGPTGuestHibernated(runtimeId)).toBe(false);
+    },
+  );
+
+  it("rechecks activity after composer probes rather than unloading a newly working guest", async () => {
+    useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
+    let activityChanged = false;
+    mocks.execute.mockImplementation(async (expression) => {
+      if (expression.includes("inspectChatGPTComposer")) {
+        activityChanged = true;
+        return { status: "empty", url: mocks.nav.url, text: "" } as unknown as string;
+      }
+      return activityChanged ? "working" : "idle";
+    });
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CHATGPT_GUEST_HIBERNATE_AFTER_MS + 6_000);
+    });
+    expect(activityChanged).toBe(true);
     expect(isChatGPTGuestHibernated(runtimeId)).toBe(false);
   });
 });

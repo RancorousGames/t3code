@@ -25,14 +25,25 @@ const stale = {
 };
 
 describe("shouldHibernateChatGPTGuest", () => {
-  it("unloads a hidden conversation that has been unused for the idle window", () => {
+  it("unloads only a positively idle, old, ordinary conversation", () => {
     expect(shouldHibernateChatGPTGuest(stale)).toBe(true);
-    expect(shouldHibernateChatGPTGuest({ ...stale, activity: "unknown" })).toBe(true);
+    // Unknown, red/load-failed, and orange activity must not be mistaken for idle.
+    for (const activity of [
+      "unknown",
+      "invalid",
+      "working",
+      "interrupted",
+      "delivery-timeout",
+      "queued",
+      "pending",
+    ])
+      expect(shouldHibernateChatGPTGuest({ ...stale, activity })).toBe(false);
   });
 
   it("keeps shown, fresh, generating and recently used guests loaded", () => {
     expect(shouldHibernateChatGPTGuest({ ...stale, visible: true })).toBe(false);
     expect(shouldHibernateChatGPTGuest({ ...stale, onConversation: false })).toBe(false);
+    expect(shouldHibernateChatGPTGuest({ ...stale, protected: true })).toBe(false);
     for (const activity of ["working", "interrupted", "delivery-timeout"])
       expect(shouldHibernateChatGPTGuest({ ...stale, activity })).toBe(false);
     expect(shouldHibernateChatGPTGuest({ ...stale, lastWorkingAt: now - 1_000 })).toBe(false);
@@ -86,6 +97,26 @@ describe("chatGPT guest hibernation store", () => {
     retainChatGPTGuests(["session-2", ...keys.slice(0, 4)]);
     expect(isChatGPTGuestHibernated("session-3")).toBe(true);
     expect(isChatGPTGuestHibernated("session-2")).toBe(false);
+  });
+
+  it("keeps priority manager, queued and pinned guests outside the ordinary recent cap", () => {
+    const candidates = Array.from({ length: 15 }, (_, i) => ({
+      key: `session-${i}`,
+      lastUsedAt: i,
+    }));
+    const protectedKeys = new Set(["session-0", "session-1", "session-2", "stale-removed"]);
+    const keys = recentChatGPTGuestKeys(candidates, protectedKeys);
+    expect(keys).toEqual([
+      "session-0",
+      "session-1",
+      "session-2",
+      "session-14",
+      "session-13",
+      "session-12",
+      "session-11",
+      "session-10",
+    ]);
+    expect(keys).not.toContain("stale-removed");
   });
 
   it("persists interaction order across app restarts and server epochs", async () => {

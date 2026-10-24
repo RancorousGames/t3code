@@ -197,9 +197,26 @@ export function useChatGPTBrowserSessionActivity(
           Array.from(document.querySelectorAll("webview")).some(
             (element) => element === attached && element.dataset.previewTab === runtimeTabId,
           );
+        // The DOM can change while the two composer checks are pending.
+        // Revalidate the actual activity and route before releasing the renderer.
+        let stillIdle = false;
+        if (provenEmpty && attached) {
+          try {
+            const latestNav = tabId
+              ? readThreadPreviewState(threadRef).sessions[tabId]?.navStatus
+              : null;
+            stillIdle =
+              (await attached.executeJavaScript(CHATGPT_ACTIVITY_EXPRESSION)) === "idle" &&
+              latestNav?._tag === "Success" &&
+              latestNav.url === latest.url;
+          } catch {
+            stillIdle = false;
+          }
+        }
         if (
           !disposed &&
           provenEmpty &&
+          stillIdle &&
           !hasUncertainChatGPTSend(environmentId, sessionId) &&
           useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible !== true
         ) {
@@ -209,7 +226,7 @@ export function useChatGPTBrowserSessionActivity(
         } else if (!disposed) {
           reason = hasUncertainChatGPTSend(environmentId, sessionId)
             ? "Guest kept loaded: an earlier ChatGPT send has no verified delivery receipt."
-            : "Guest kept loaded: composer draft is nonempty or could not be verified empty.";
+            : "Guest kept loaded: page activity, route or empty composer could not be verified.";
         }
       }
       if (next === "working") {

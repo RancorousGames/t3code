@@ -61,11 +61,17 @@ export const CHATGPT_MIN_RETAINED_GUESTS = 5;
 
 export function recentChatGPTGuestKeys(
   candidates: ReadonlyArray<{ readonly key: string; readonly lastUsedAt: number }>,
+  protectedKeys: ReadonlySet<string> = new Set(),
 ): string[] {
-  return [...candidates]
+  const keys = new Set(candidates.map(({ key }) => key));
+  // Important sessions do not compete against the five ordinary recent slots.
+  const protectedCandidates = [...protectedKeys].filter((key) => keys.has(key));
+  const ordinary = [...candidates]
+    .filter(({ key }) => !protectedKeys.has(key))
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     .slice(0, CHATGPT_MIN_RETAINED_GUESTS)
     .map(({ key }) => key);
+  return [...protectedCandidates, ...ordinary];
 }
 
 /** Retention overrides old hibernation flags without treating restoration as use. */
@@ -124,6 +130,8 @@ export function wakeChatGPTGuest(runtimeTabId: string, now = Date.now()): void {
 
 export function shouldHibernateChatGPTGuest(input: {
   readonly visible: boolean;
+  /** Important managers, sessions with children, or queued recovery remain attached. */
+  readonly protected?: boolean;
   /** Only an existing conversation can be reloaded; fresh home pages await a first prompt. */
   readonly onConversation: boolean;
   readonly activity: string;
@@ -131,14 +139,10 @@ export function shouldHibernateChatGPTGuest(input: {
   readonly touchedAt: number;
   readonly now: number;
 }): boolean {
-  if (input.visible || !input.onConversation) return false;
-  // Never unload a generating or reconnecting conversation.
-  if (
-    input.activity === "working" ||
-    input.activity === "interrupted" ||
-    input.activity === "delivery-timeout"
-  )
-    return false;
+  if (input.visible || input.protected || !input.onConversation) return false;
+  // Only a positively observed idle conversation is disposable. Unknown,
+  // invalid/red, interrupted/orange and working are not evidence of completion.
+  if (input.activity !== "idle") return false;
   const lastUsedAt = Math.max(input.lastWorkingAt || 0, input.touchedAt || 0);
   return input.now - lastUsedAt >= CHATGPT_GUEST_HIBERNATE_AFTER_MS;
 }
