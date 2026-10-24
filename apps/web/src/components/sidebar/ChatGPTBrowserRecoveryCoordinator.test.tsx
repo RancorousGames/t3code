@@ -63,7 +63,11 @@ import { useBrowserSurfaceStore } from "../../browser/browserSurfaceStore";
 let renderer: ReactTestRenderer | undefined;
 const phaseChanges = vi.fn<(id: string, phase: ChatGPTRecoveryPhase | null) => void>();
 
-async function mount(ids = ["comit", "other"], wakeupIds: readonly string[] = []) {
+async function mount(
+  ids = ["comit", "other"],
+  wakeupIds: readonly string[] = [],
+  redIds: readonly string[] = [],
+) {
   for (const id of ids) {
     const webview = document.createElement("webview");
     webview.dataset.previewTab = `runtime:${id}`;
@@ -105,6 +109,7 @@ async function mount(ids = ["comit", "other"], wakeupIds: readonly string[] = []
         environmentId={"local" as never}
         sessionIds={ids}
         wakeupIds={wakeupIds}
+        redIds={redIds}
         onPhaseChange={phaseChanges}
       />,
     );
@@ -842,5 +847,81 @@ describe("red error panel without an editor", () => {
       JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).red.comit
         .attempts,
     ).toBe(1);
+  });
+
+  it("automatically queues and refreshes a red missing-composer page", async () => {
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "invalid: the ChatGPT composer is unavailable",
+      url: `https://chatgpt.com/c/${id}`,
+      draftEmpty: null,
+      stopVisible: false,
+    }));
+    await mount(["comit"], ["comit"], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(23_000);
+    });
+    expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+  });
+
+  it("keeps an unverified red page queued without refreshing a different conversation", async () => {
+    mocks.result.mockResolvedValue({
+      activity: "invalid: the ChatGPT composer is unavailable",
+      url: "https://chatgpt.com/c/another",
+    });
+    await mount(["comit"], ["comit"], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(62_000);
+    });
+    expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
+    expect(phaseChanges).not.toHaveBeenCalledWith("comit", null);
+    expect(mocks.refresh).not.toHaveBeenCalled();
+  });
+
+  it("resumes red recovery after a stale unverifiable-guest escalation", async () => {
+    localStorage.setItem(
+      "t3code:chatgpt-browser:bounded-recovery:local",
+      JSON.stringify({
+        red: {},
+        orange: {},
+        escalation: {
+          comit: {
+            reason: "guest_url_or_health_unverifiable",
+            at: Date.now(),
+            conversationId: "comit",
+          },
+        },
+      }),
+    );
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "invalid: the ChatGPT composer is unavailable",
+      url: `https://chatgpt.com/c/${id}`,
+      draftEmpty: null,
+      stopVisible: false,
+    }));
+    await mount(["comit"], ["comit"], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(23_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+    expect(
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).escalation
+        .comit,
+    ).toBeUndefined();
+  });
+
+  it("does not refresh a red composer error when the draft is nonempty", async () => {
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "invalid: the ChatGPT composer is unavailable",
+      url: `https://chatgpt.com/c/${id}`,
+      draftEmpty: false,
+      stopVisible: false,
+    }));
+    await mount(["comit"], ["comit"], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(63_000);
+    });
+    expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
+    expect(mocks.refresh).not.toHaveBeenCalled();
   });
 });
