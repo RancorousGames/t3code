@@ -64,6 +64,7 @@ import {
   useChatGPTGuestHibernation,
 } from "../../browser/chatGPTGuestHibernation";
 import { ChatGPTGuestRetention } from "./ChatGPTGuestRetention";
+import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 
 const key = (id: string) => JSON.stringify(["env", `t3-browser-session:${id}`]);
 let renderer: ReactTestRenderer | undefined;
@@ -77,6 +78,7 @@ beforeEach(() => {
   mocks.recoveryIds.clear();
   mocks.recentWorkingIds.clear();
   mocks.sessions = Array.from({ length: 8 }, (_, i) => ({ id: `${i}` }));
+  useOmniworkPreferences.getState().setUnloadProfile("balanced");
   useChatGPTGuestHibernation.setState({
     hibernated: Object.fromEntries(mocks.sessions.map(({ id }) => [key(id), true])),
     touchedAt: Object.fromEntries(mocks.sessions.map(({ id }, i) => [key(id), i * 1_000])),
@@ -143,6 +145,29 @@ describe("ChatGPT recent guest retention", () => {
     });
     expect(isChatGPTGuestHibernated(key("0"))).toBe(false);
     expect(isChatGPTGuestHibernated(key("2"))).toBe(true);
+  });
+
+  it("never exposes a hidden verified manager or hidden UNKNOWN send to idle eviction", async () => {
+    mocks.sessions[0]!.hidden = true;
+    mocks.sessions[1]!.snoozedUntil = Date.now() + 60_000;
+    mocks.managerIds = new Set(["0"]);
+    mocks.uncertainIds.add("1");
+    await act(async () => {
+      renderer = create(<ChatGPTGuestRetention />);
+    });
+    expect(isChatGPTGuestHibernated(key("0"))).toBe(false);
+    expect(isChatGPTGuestHibernated(key("1"))).toBe(false);
+  });
+
+  it("restores all existing guests and retains them on the Never profile", async () => {
+    mocks.sessions[0]!.hidden = true;
+    mocks.sessions[1]!.snoozedUntil = Date.now() + 60_000;
+    useOmniworkPreferences.getState().setUnloadProfile("never");
+    await act(async () => {
+      renderer = create(<ChatGPTGuestRetention />);
+    });
+    for (const session of mocks.sessions)
+      expect(isChatGPTGuestHibernated(key(session.id))).toBe(false);
   });
 
   it("skips hidden and snoozed sessions and restores a session when its snooze expires", async () => {

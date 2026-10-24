@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { CHATGPT_RECENT_ACTIVITY_MS } from "../components/sidebar/chatGPTActivity";
 import { resolveStorage } from "../lib/storage";
+import { activeOmniworkUnloadPolicy } from "../omniwork/chatGPTUnloadPolicy";
 
 // Each ChatGPT guest costs its own renderer (roughly 0.4-1 GB). Sessions that
 // are not shown and have not worked recently are unmounted; their preview
@@ -69,7 +70,7 @@ export function recentChatGPTGuestKeys(
   const ordinary = [...candidates]
     .filter(({ key }) => !protectedKeys.has(key))
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-    .slice(0, CHATGPT_MIN_RETAINED_GUESTS)
+    .slice(0, activeOmniworkUnloadPolicy().minRecentGuests)
     .map(({ key }) => key);
   return [...protectedCandidates, ...ordinary];
 }
@@ -144,5 +145,6 @@ export function shouldHibernateChatGPTGuest(input: {
   // invalid/red, interrupted/orange and working are not evidence of completion.
   if (input.activity !== "idle") return false;
   const lastUsedAt = Math.max(input.lastWorkingAt || 0, input.touchedAt || 0);
-  return input.now - lastUsedAt >= CHATGPT_GUEST_HIBERNATE_AFTER_MS;
+  const idleMs = activeOmniworkUnloadPolicy().idleMs;
+  return idleMs !== null && input.now - lastUsedAt >= idleMs;
 }
