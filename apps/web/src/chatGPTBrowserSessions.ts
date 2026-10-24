@@ -28,6 +28,8 @@ export const BrowserSession = Schema.Struct({
   // null explicitly detaches a child; undefined means no lineage was ever recorded.
   parentSessionId: Schema.optional(Schema.NullOr(Schema.String)),
   project: Schema.optional(Schema.String),
+  // User-chosen sidebar border color name; unknown names render no border.
+  borderColor: Schema.optional(Schema.String),
   completion: Schema.optional(
     Schema.Struct({
       declaredAt: Schema.String,
@@ -434,6 +436,16 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
 
+  const setSessionBorderColor = useCallback(
+    (id: string, color: string | null) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id ? { ...session, borderColor: color ?? undefined } : session,
+        ),
+      ),
+    [setSessions],
+  );
+
   const syncInferredMetadata = useCallback(
     (
       updates: ReadonlyArray<{
@@ -565,6 +577,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     setSessionProject,
     setSessionParent,
     setSessionSnooze,
+    setSessionBorderColor,
     setSessionCompletion,
     syncInferredMetadata,
     pruneExpiredHidden,

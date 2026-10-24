@@ -88,7 +88,11 @@ import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
 import { ChatGPTWorkerCleanupCoordinator } from "./ChatGPTWorkerCleanupCoordinator";
 import { ChatGPTBrowserSelectionRecovery } from "./ChatGPTBrowserSelectionRecovery";
 import { ChatGPTProjectStatusIcon } from "./ChatGPTProjectStatusIcon";
-import { chatGPTSidebarProjectTitles } from "./chatGPTSidebarVisuals";
+import {
+  CHATGPT_SESSION_BORDER_COLORS,
+  chatGPTSessionBorderRingClass,
+  chatGPTSidebarProjectTitles,
+} from "./chatGPTSidebarVisuals";
 import { useOpenRigManagerChatGPTSessions } from "./useOpenRigManagerChatGPTSessions";
 import { ChatGPTSessionIcon } from "./ChatGPTSessionIcon";
 import { SidebarHeaderIconButton } from "./SidebarThreadHeader";
@@ -214,6 +218,7 @@ export function ChatGPTBrowserSidebarEntry({
     setSessionProject,
     setSessionParent,
     setSessionSnooze,
+    setSessionBorderColor,
     syncInferredMetadata,
     pruneExpiredHidden,
   } = useChatGPTBrowserSessions(environmentId);
@@ -275,6 +280,9 @@ export function ChatGPTBrowserSidebarEntry({
     sessionId?: string;
     groupKey?: string;
   } | null>(null);
+  // Tied to the menu instance so reopening the context menu starts collapsed.
+  const [borderSubmenuFor, setBorderSubmenuFor] = useState<typeof contextMenu>(null);
+  const borderSubmenuOpen = contextMenu !== null && borderSubmenuFor === contextMenu;
   const snoozePresets = useMemo(
     () => (contextMenu ? resolveSnoozePresets(new Date(), timestampFormat) : []),
     [contextMenu, timestampFormat],
@@ -912,9 +920,11 @@ export function ChatGPTBrowserSidebarEntry({
                         const isVerifiedManager =
                           verifiedManagerSessionIds?.has(session.id) === true;
                         const projectTitle = projectTitles.get(session.id);
+                        // A user-chosen border replaces the manager ring color but keeps its tint.
+                        const borderRing = chatGPTSessionBorderRingClass(session.borderColor);
                         return (
                           <div
-                            className={`flex min-w-0 items-center gap-0 ${isVerifiedManager ? "rounded-md bg-info/10 ring-1 ring-inset ring-info/80" : ""}`}
+                            className={`flex min-w-0 items-center gap-0 ${isVerifiedManager ? "rounded-md bg-info/10" : ""} ${borderRing ? `rounded-md ring-2 ring-inset ${borderRing}` : isVerifiedManager ? "ring-1 ring-inset ring-info/80" : ""}`}
                             onContextMenu={(event) => {
                               event.preventDefault();
                               setContextMenu({
@@ -1166,6 +1176,62 @@ export function ChatGPTBrowserSidebarEntry({
                       Custom snooze…
                     </button>
                   </>
+                )}
+                {contextMenu.sessionId && (
+                  <div
+                    className="relative"
+                    onMouseEnter={() => setBorderSubmenuFor(contextMenu)}
+                    onMouseLeave={() => setBorderSubmenuFor(null)}
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-haspopup="menu"
+                      aria-expanded={borderSubmenuOpen}
+                      className="flex w-full items-center justify-between gap-4 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                      onClick={() => setBorderSubmenuFor(borderSubmenuOpen ? null : contextMenu)}
+                    >
+                      <span>Border</span>
+                      <ChevronRightIcon aria-hidden className="size-3.5 text-muted-foreground" />
+                    </button>
+                    {borderSubmenuOpen && (
+                      <div
+                        role="menu"
+                        aria-label="Session border color"
+                        className="absolute top-0 left-full z-[201] min-w-32 rounded-md border border-border bg-popover p-1 shadow-lg"
+                      >
+                        {[
+                          ...CHATGPT_SESSION_BORDER_COLORS,
+                          { id: null, label: "None", swatch: null },
+                        ].map((option) => {
+                          const current =
+                            (sessions.find((entry) => entry.id === contextMenu.sessionId)
+                              ?.borderColor ?? null) === option.id;
+                          return (
+                            <button
+                              key={option.id ?? "none"}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={current}
+                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                              onClick={() => {
+                                setSessionBorderColor(contextMenu.sessionId!, option.id);
+                                setContextMenu(null);
+                              }}
+                            >
+                              <span
+                                aria-hidden
+                                className={`size-3 shrink-0 rounded-full ${option.swatch ?? "border border-muted-foreground"}`}
+                              />
+                              <span className={current ? "font-medium" : undefined}>
+                                {option.label}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 )}
                 {contextMenu.sessionId &&
                   sessions.find((entry) => entry.id === contextMenu.sessionId)?.parentSessionId && (
