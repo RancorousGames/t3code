@@ -1,5 +1,7 @@
-// @vitest-environment jsdom
+// @vitest-environment node
 import { EnvironmentId } from "@t3tools/contracts";
+// @ts-expect-error -- jsdom's types are absent in this workspace install.
+import { JSDOM } from "jsdom";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -12,6 +14,13 @@ const preview = vi.hoisted(() => ({
   navTag: "Success",
 }));
 
+vi.mock("./lib/utils", () => {
+  let nextId = 0;
+  return { randomUUID: () => `fresh-session-${++nextId}` };
+});
+vi.mock("@t3tools/client-runtime/environment", () => ({
+  scopeThreadRef: (_environmentId: unknown, threadId: unknown) => ({ threadId }),
+}));
 vi.mock("./browser/previewRuntimeTabId", () => ({
   previewRuntimeTabId: (_ref: unknown, _epoch: unknown, tabId: string) => `runtime:${tabId}`,
 }));
@@ -43,6 +52,13 @@ function Harness() {
 }
 
 beforeEach(async () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://app.t3.codes/",
+  });
+  vi.stubGlobal("window", dom.window);
+  vi.stubGlobal("document", dom.window.document);
+  vi.stubGlobal("CustomEvent", dom.window.CustomEvent);
+  vi.stubGlobal("StorageEvent", dom.window.StorageEvent);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   window.localStorage.clear();
   preview.attached = true;
@@ -67,6 +83,57 @@ afterEach(() => {
 });
 
 describe("ChatGPT browser session creation with one warm spare", () => {
+  it("separates manually opened blank guest from a subsequent backend spawn", async () => {
+    await act(async () => {
+      harness.setPrewarmedSessionId("prepared-session");
+    });
+    markChatGPTSpareReady(env, "prepared-session");
+    let manual = "";
+    let backend = "";
+    await act(async () => {
+      manual = harness.createSession("User's blank new chat");
+      backend = harness.createSession("Backend worker", { spawnRequestId: "backend-request-1" });
+    });
+    expect(manual).toBe("prepared-session");
+    expect(backend).not.toBe(manual);
+    expect(
+      harness.sessions.find((session) => session.id === manual)?.spawnRequestId,
+    ).toBeUndefined();
+    expect(harness.sessions.find((session) => session.id === backend)?.spawnRequestId).toBe(
+      "backend-request-1",
+    );
+    expect(harness.sessions).toHaveLength(3);
+  });
+
+  it("backend spawns do not consume the user warm spare and reserve separate guests concurrently", async () => {
+    await act(async () => {
+      harness.setPrewarmedSessionId("prepared-session");
+    });
+    markChatGPTSpareReady(env, "prepared-session");
+    let first = "";
+    let second = "";
+    await act(async () => {
+      first = harness.createSession("Backend A", { spawnRequestId: "backend-request-a" });
+      second = harness.createSession("Backend B", { spawnRequestId: "backend-request-b" });
+    });
+    expect(first).not.toBe(second);
+    expect(first).not.toBe("prepared-session");
+    expect(second).not.toBe("prepared-session");
+    expect(harness.prewarmedSessionId).toBe("prepared-session");
+    expect(harness.sessions).toHaveLength(3);
+    expect(harness.sessions.find((session) => session.id === first)?.spawnRequestId).toBe(
+      "backend-request-a",
+    );
+    expect(harness.sessions.find((session) => session.id === second)?.spawnRequestId).toBe(
+      "backend-request-b",
+    );
+    let manual = "";
+    await act(async () => {
+      manual = harness.createSession();
+    });
+    expect(manual).toBe("prepared-session");
+    expect(harness.sessions).toHaveLength(4);
+  });
   it("adopts the ready webview's owner and immediately provisions a different spare", async () => {
     await act(async () => {
       harness.setPrewarmedSessionId("prepared-session");
