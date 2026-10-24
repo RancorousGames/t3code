@@ -349,7 +349,7 @@ def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_o
     print(
         f"Independent T3 build-and-restart worker started (PID {child.pid}).\n"
         f"Build status log: {log_path}\n"
-        "The worker builds and verifies while T3 remains open, shows a 5-second "
+        "The worker builds and verifies while T3 remains open, shows a 15-second "
         "cancelable notification, then backs up and rapidly relaunches it.",
         flush=True,
     )
