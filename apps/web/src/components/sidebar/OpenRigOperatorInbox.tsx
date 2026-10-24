@@ -26,20 +26,39 @@ import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
 import { observeResize } from "../../lib/observeResize";
 
 type InboxItem = DesktopOpenRigInboxItem;
-type Filter = "all" | "unread" | "action" | "alerts" | "archived" | "trash";
+type Filter = "focus" | "all" | "unread" | "action" | "alerts" | "archived" | "trash";
 type AttentionKind = "form" | "approval" | "legacy" | "alert" | "none";
 
 /** Server requiresAction also marks recovery sweeps and unread mailbox notices.
  * It is not evidence of a native form the human can submit from T3. */
 export function inboxAttentionKind(item: InboxItem, address: string): AttentionKind {
+  // Old daemon versions can mistakenly flag automated sweeps as actionable.
+  if (
+    item.sourceType === "mailbox" ||
+    (item.sourceType === "queue" && /^Stuck sweep:/i.test(item.subject))
+  )
+    return "none";
   if (isNativeInboxDecision(item, address)) return "form";
   if (item.attentionKind === "notice" || item.attentionKind === "message") return "none";
   if (item.sourceType === "spawn_approval") return "approval";
   if (item.sourceType === "human_gate" && item.requiresAction && item.state !== "done")
     return "approval";
   if (item.humanQuestions != null && item.state === "pending") return "legacy";
-  if (item.requiresAction) return "alert";
+  // An older daemon may mark every human-destined legacy message as actionable.
+  // A bare boolean without an actual decision marker is not enough to interrupt.
+  if (item.requiresAction && (item.humanIntent === "decision" || item.attentionKind === "decision"))
+    return "alert";
   return "none";
+}
+
+/** A human decision or explicitly requested/exceptional progress notification. */
+export function isUserInboxAttention(item: InboxItem, address: string): boolean {
+  if (item.humanIntent === "update")
+    return (
+      item.sourceType === "queue" &&
+      (item.notificationReason === "requested" || item.notificationReason === "milestone")
+    );
+  return inboxAttentionKind(item, address) !== "none";
 }
 
 function attentionLabel(kind: AttentionKind, item: InboxItem) {
@@ -205,7 +224,7 @@ export function OpenRigOperatorInbox() {
   const [errorMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [updated, setUpdated] = useState<Date | null>(null);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>("focus");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [readIds, setReadIds] = useState<string[]>(() => readKeys(READ_KEY));
@@ -276,7 +295,9 @@ export function OpenRigOperatorInbox() {
         result.available ? "" : (result.reason ?? "OpenRig's inbox reader is unavailable."),
       );
       if (result.available) {
-        const arrivals = detectInboxArrivals(destination, result.items);
+        const arrivals = detectInboxArrivals(destination, result.items).filter((item) =>
+          isUserInboxAttention(item, destination),
+        );
         if (arrivals.length > 0) {
           const newest = arrivals[0]!;
           if (notificationsRef.current && !openRef.current)
@@ -368,6 +389,8 @@ export function OpenRigOperatorInbox() {
   );
   const trashedItems = items.filter((item) => trashed.has(inboxKey(address, item)));
   const unread = active.filter((item) => !knownRead.has(inboxKey(address, item)));
+  const attention = active.filter((item) => isUserInboxAttention(item, address));
+  const unreadAttention = attention.filter((item) => !knownRead.has(inboxKey(address, item)));
   const action = active.filter((item) => inboxAttentionKind(item, address) === "form");
   const alerts = active.filter((item) =>
     ["approval", "legacy", "alert"].includes(inboxAttentionKind(item, address)),
@@ -379,22 +402,37 @@ export function OpenRigOperatorInbox() {
   const filtered = (
     filter === "archived" ? archivedItems : filter === "trash" ? trashedItems : active
   ).filter((item) => {
+    // Derivative diagnostics are shown within the originating message, not as
+    // separate new correspondence. An orphan remains accessible in All.
+    if (
+      filter !== "archived" &&
+      filter !== "trash" &&
+      item.relatedTo &&
+      items.some((parent) => parent.id === item.relatedTo)
+    )
+      return false;
+    const related = items.filter((child) => child.relatedTo === item.id);
     const matches =
       !search.trim() ||
-      [item.subject, item.sender, item.body].some((value) =>
-        value.toLowerCase().includes(search.trim().toLowerCase()),
-      );
+      [
+        item.subject,
+        item.sender,
+        item.body,
+        ...related.flatMap((child) => [child.subject, child.body]),
+      ].some((value) => value.toLowerCase().includes(search.trim().toLowerCase()));
     return (
       matches &&
       (filter === "all" ||
-        (filter === "unread"
-          ? !knownRead.has(inboxKey(address, item))
-          : filter === "action"
-            ? inboxAttentionKind(item, address) === "form"
-            : filter === "alerts"
-              ? inboxAttentionKind(item, address) !== "none" &&
-                inboxAttentionKind(item, address) !== "form"
-              : true))
+        (filter === "focus"
+          ? isUserInboxAttention(item, address)
+          : filter === "unread"
+            ? !knownRead.has(inboxKey(address, item))
+            : filter === "action"
+              ? inboxAttentionKind(item, address) === "form"
+              : filter === "alerts"
+                ? inboxAttentionKind(item, address) !== "none" &&
+                  inboxAttentionKind(item, address) !== "form"
+                : true))
     );
   });
   // Keep the right-hand detail visible when opening a message marks it read
@@ -403,6 +441,7 @@ export function OpenRigOperatorInbox() {
     (filter === "archived" ? archivedItems : filter === "trash" ? trashedItems : active).find(
       (item) => inboxKey(address, item) === selected,
     ) ?? null;
+  const relatedDiagnostics = chosen ? items.filter((item) => item.relatedTo === chosen.id) : [];
 
   // No OpenRig delete/archive endpoint exists. These are reversible local T3
   // folders that only hide records in this installation; queue decisions and
@@ -546,7 +585,7 @@ export function OpenRigOperatorInbox() {
     (item?: InboxItem, destination?: string) => {
       if (destination && destination !== address) setAddress(destination);
       if (item) {
-        setFilter("all");
+        setFilter("focus");
         setSearch("");
         const key = inboxKey(destination ?? address, item);
         setSelected(key);
@@ -667,7 +706,7 @@ export function OpenRigOperatorInbox() {
                 <h2 className="text-base font-semibold">Human inbox</h2>
                 <p className="text-2xs text-muted-foreground">
                   {connection === "ready"
-                    ? `${active.length}${snapshot?.truncated ? "+" : ""} inbox · ${unread.length}${snapshot?.truncated ? "+" : ""} unread`
+                    ? `${attention.length}${snapshot?.truncated ? "+" : ""} for you · ${unreadAttention.length}${snapshot?.truncated ? "+" : ""} unread`
                     : "OpenRig connection unavailable"}{" "}
                   {updated &&
                     ` · Updated ${updated.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`}
@@ -706,7 +745,7 @@ export function OpenRigOperatorInbox() {
                       setAddress(event.currentTarget.value);
                       setSelected(null);
                       setSearch("");
-                      setFilter("all");
+                      setFilter("focus");
                     }}
                   >
                     {addresses.map((entry) => (
@@ -806,6 +845,7 @@ export function OpenRigOperatorInbox() {
                     >
                       {(
                         [
+                          ["focus", "For you", attention.length],
                           ["all", "All", active.length],
                           ["unread", "Unread", unread.length],
                           ["action", "Forms", action.length],
@@ -825,7 +865,7 @@ export function OpenRigOperatorInbox() {
                           {text}{" "}
                           <span
                             className={
-                              mode === "unread" && count
+                              (mode === "unread" || mode === "focus") && count
                                 ? "text-info"
                                 : (mode === "action" || mode === "alerts") && count
                                   ? "text-warning"
@@ -900,17 +940,19 @@ export function OpenRigOperatorInbox() {
                             ? "Messages unavailable."
                             : search
                               ? "No matching messages."
-                              : filter === "unread"
-                                ? "You're caught up."
-                                : filter === "action"
-                                  ? "No pending native answer forms."
-                                  : filter === "alerts"
-                                    ? "No alerts or read-only decisions."
-                                    : filter === "archived"
-                                      ? "No archived messages on this device."
-                                      : filter === "trash"
-                                        ? "Local trash is empty."
-                                        : "No messages for this address."}
+                              : filter === "focus"
+                                ? "Nothing needs your attention."
+                                : filter === "unread"
+                                  ? "You're caught up."
+                                  : filter === "action"
+                                    ? "No pending native answer forms."
+                                    : filter === "alerts"
+                                      ? "No alerts or read-only decisions."
+                                      : filter === "archived"
+                                        ? "No archived messages on this device."
+                                        : filter === "trash"
+                                          ? "Local trash is empty."
+                                          : "No messages for this address."}
                       </p>
                     )}
                     {filtered.map((item) => {
@@ -1036,7 +1078,6 @@ export function OpenRigOperatorInbox() {
                         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-muted-foreground">
                           <time dateTime={chosen.createdAt}>{dateLabel(chosen.createdAt)}</time>
                           <span>{sourceLabel(chosen)}</span>
-                          <span>State: {chosen.state}</span>
                           {inboxAttentionKind(chosen, address) !== "none" && (
                             <span className="rounded-md bg-warning/15 px-2 py-0.5 font-semibold text-warning">
                               {attentionLabel(inboxAttentionKind(chosen, address), chosen)}
@@ -1074,6 +1115,27 @@ export function OpenRigOperatorInbox() {
                           answerWriteAvailable={answerWriteAvailable}
                           onAnnouncement={setAnnouncement}
                         />
+                        {relatedDiagnostics.length > 0 && (
+                          <details className="mt-4 rounded-lg border border-border p-3 text-xs">
+                            <summary className="cursor-pointer font-medium">
+                              Internal recovery history ({relatedDiagnostics.length})
+                            </summary>
+                            {relatedDiagnostics.map((diagnostic) => (
+                              <div key={diagnostic.id} className="mt-3 border-t border-border pt-3">
+                                <p className="font-medium">{diagnostic.subject}</p>
+                                <time
+                                  dateTime={diagnostic.createdAt}
+                                  className="text-muted-foreground"
+                                >
+                                  {dateLabel(diagnostic.createdAt)}
+                                </time>
+                                <pre className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">
+                                  {diagnostic.body}
+                                </pre>
+                              </div>
+                            ))}
+                          </details>
+                        )}
                         <div className="mt-5">
                           <OpenRigHumanReplyComposer
                             item={chosen}
@@ -1122,9 +1184,12 @@ export function OpenRigOperatorInbox() {
                         </div>
                       </div>
                       <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-2 text-2xs text-muted-foreground">
-                        <span className="min-w-0 break-all">
-                          To: {address} · Record: {chosen.id}
-                        </span>
+                        <details className="min-w-0 break-all">
+                          <summary className="cursor-pointer">Technical details</summary>
+                          <span>
+                            To: {address} · Record: {chosen.id} · State: {chosen.state}
+                          </span>
+                        </details>
                         <button
                           type="button"
                           aria-label="Message options"
@@ -1256,7 +1321,7 @@ export function OpenRigOperatorInbox() {
     <>
       <section
         aria-label="OpenRig human inbox section"
-        className={`mx-2 mb-2 mt-2 overflow-hidden rounded-xl border ${connection === "ready" && unread.length ? "border-info/50 bg-info/7" : connection === "ready" && action.length ? "border-warning/40 bg-warning/5" : "border-sidebar-border bg-muted/20"}`}
+        className={`mx-2 mb-2 mt-2 overflow-hidden rounded-xl border ${connection === "ready" && unreadAttention.length ? "border-info/50 bg-info/7" : connection === "ready" && action.length ? "border-warning/40 bg-warning/5" : "border-sidebar-border bg-muted/20"}`}
       >
         <button
           ref={buttonRef}
@@ -1267,7 +1332,7 @@ export function OpenRigOperatorInbox() {
           onClick={() => (open ? closeInbox() : openInbox())}
         >
           <span
-            className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${connection === "ready" && unread.length ? "bg-info/15 text-info" : "bg-muted/40 text-sidebar-foreground"}`}
+            className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${connection === "ready" && unreadAttention.length ? "bg-info/15 text-info" : "bg-muted/40 text-sidebar-foreground"}`}
           >
             <InboxIcon className="size-5" />
           </span>
@@ -1275,18 +1340,18 @@ export function OpenRigOperatorInbox() {
             <span className="block truncate text-sm font-semibold">Human inbox</span>
             <span className="block truncate text-2xs text-sidebar-muted-foreground">
               {connection === "ready"
-                ? `${active.length}${snapshot?.truncated ? "+" : ""} inbox · ${unread.length}${snapshot?.truncated ? "+" : ""} unread`
+                ? `${attention.length}${snapshot?.truncated ? "+" : ""} for you · ${unreadAttention.length}${snapshot?.truncated ? "+" : ""} unread`
                 : connection === "loading"
                   ? "Connecting to OpenRig…"
                   : "Offline · click for details"}
             </span>
           </span>
-          {connection === "ready" && unread.length > 0 && (
+          {connection === "ready" && unreadAttention.length > 0 && (
             <span
-              aria-label={`${unread.length} unread messages on this device`}
+              aria-label={`${unreadAttention.length} unread items requiring your attention`}
               className="min-w-6 rounded-full bg-info px-1.5 py-0.5 text-center text-xs font-bold text-info-foreground"
             >
-              {unread.length}
+              {unreadAttention.length}
               {snapshot?.truncated ? "+" : ""}
             </span>
           )}

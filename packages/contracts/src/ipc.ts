@@ -1645,6 +1645,9 @@ export const DesktopOpenRigInboxItemSchema = Schema.Struct({
   humanQuestions: Schema.optional(Schema.Unknown),
   recipient: Schema.optional(Schema.String),
   humanIntent: Schema.optional(Schema.NullOr(Schema.Literals(["decision", "update"]))),
+  /** An update is surfaced only when explicitly requested or an exceptional milestone. */
+  notificationReason: Schema.optional(Schema.Literals(["requested", "milestone"])),
+  relatedTo: Schema.optional(Schema.String),
 });
 export type DesktopOpenRigInboxItem = typeof DesktopOpenRigInboxItemSchema.Type;
 export const DesktopOpenRigInboxSchema = Schema.Struct({
