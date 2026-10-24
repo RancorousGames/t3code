@@ -13,6 +13,7 @@ import {
   OpenRigOperatorInbox,
   detectInboxArrivals,
   inboxAttentionKind,
+  isUserInboxAttention,
   inboxSpeechPreview,
 } from "./OpenRigOperatorInbox";
 
@@ -164,6 +165,48 @@ async function manageMessages() {
 }
 
 describe("OpenRig floating desktop inbox", () => {
+  it("shows decisions and explicitly requested/exceptional updates, with diagnostic history grouped beneath its origin", async () => {
+    const requested = {
+      ...sample.items[0]!,
+      id: "requested",
+      subject: "Requested completion",
+      humanIntent: "update" as const,
+      notificationReason: "requested" as const,
+    };
+    const milestone = {
+      ...sample.items[0]!,
+      id: "milestone",
+      subject: "All tasks done",
+      humanIntent: "update" as const,
+      notificationReason: "milestone" as const,
+    };
+    const diagnostic = {
+      ...sample.items[0]!,
+      id: "recovery",
+      subject: "Stuck sweep: unclaimed-obligation",
+      relatedTo: "queue-1",
+      requiresAction: true,
+    };
+    expect(isUserInboxAttention(sample.items[0]!, "human@kernel")).toBe(false);
+    expect(isUserInboxAttention(sample.items[1]!, "human@kernel")).toBe(true);
+    expect(isUserInboxAttention(requested, "human@kernel")).toBe(true);
+    expect(isUserInboxAttention(milestone, "human@kernel")).toBe(true);
+    expect(isUserInboxAttention(diagnostic, "human@kernel")).toBe(false);
+    read.mockResolvedValue({
+      ...sample,
+      count: 6,
+      items: [...sample.items, requested, milestone, diagnostic],
+    });
+    await mount();
+    await click("OpenRig human inbox");
+    expect(displayMessages()).toHaveLength(3); // decision + two allowed notifications
+    await click("Filter OpenRig inbox: All");
+    expect(displayMessages()).toHaveLength(5); // diagnostics collapse into original
+    await click("Open inbox message: Build complete");
+    expect(output()).toContain("Internal recovery history");
+    expect(output()).toContain("Stuck sweep: unclaimed-obligation");
+  });
+
   it("only enables canonical Reply for verified direct queue items with live writer capability", async () => {
     const direct = {
       ...sample.items[0]!,
@@ -207,6 +250,7 @@ describe("OpenRig floating desktop inbox", () => {
     });
     await mount();
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     await click("Open inbox message: Build complete");
     await act(async () => {
       rendered!.root.findByProps({ "aria-label": "Ordinary OpenRig reply draft" }).props.onChange({
@@ -237,6 +281,7 @@ describe("OpenRig floating desktop inbox", () => {
     });
     await mount();
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     await click("Open inbox message: Build complete");
     expect(rendered!.root.findByProps({ children: "Submit reply" }).props.disabled).toBe(true);
     expect(send).toHaveBeenCalledTimes(1);
@@ -253,6 +298,17 @@ describe("OpenRig floating desktop inbox", () => {
       replyUnavailableReason: "automated_notice",
     };
     expect(inboxAttentionKind(warning, "human@kernel")).toBe("none");
+    // The exact 2026-10-24 regression: a failed terminal wake about an
+    // informational message arrived as a false "instant reply" to the human.
+    const undelivered = {
+      ...warning,
+      id: "qitem-recovery-019a7a6bd26da7dc",
+      subject: "Stuck sweep: undelivered-wake on qitem-20261024004615-ea7b30a9683a6849 (0 min)",
+      requiresAction: true,
+      attentionKind: undefined,
+    };
+    expect(inboxAttentionKind(undelivered, "human@kernel")).toBe("none");
+    expect(isUserInboxAttention(undelivered, "human@kernel")).toBe(false);
     read.mockResolvedValue({
       ...sample,
       items: [warning],
@@ -263,6 +319,7 @@ describe("OpenRig floating desktop inbox", () => {
     await mount();
     expect(output()).not.toContain("alerts or read-only decisions in loaded results");
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     await click("Open inbox message: Build complete");
     expect(rendered!.root.findByProps({ children: "Submit reply" }).props.disabled).toBe(true);
   });
@@ -274,11 +331,11 @@ describe("OpenRig floating desktop inbox", () => {
       rendered!.root.findByProps({ "aria-label": "OpenRig human inbox" }).props["aria-expanded"],
     ).toBe(false);
     expect(
-      rendered!.root.findByProps({ "aria-label": "3 unread messages on this device" }),
+      rendered!.root.findByProps({ "aria-label": "1 unread items requiring your attention" }),
     ).toBeTruthy();
     expect(
       rendered!.root.findByProps({
-        "aria-label": "2 alerts or read-only decisions in loaded results",
+        "aria-label": "1 alerts or read-only decisions in loaded results",
       }),
     ).toBeTruthy();
     expect(output()).not.toContain("pending native answer forms in loaded results");
@@ -287,6 +344,8 @@ describe("OpenRig floating desktop inbox", () => {
     expect(rendered!.root.findByProps({ "aria-label": "OpenRig human inbox window" })).toBeTruthy();
     expect(output()).toContain("Select a message");
     expect(output()).toContain("grid-cols-[minmax(150px,36%)_minmax(0,1fr)]");
+    expect(displayMessages()).toHaveLength(1); // default For you hides routine updates
+    await click("Filter OpenRig inbox: All");
     expect(displayMessages()).toHaveLength(3);
     expect(output()).toContain("Select a message");
     await click("Close human inbox");
@@ -297,14 +356,15 @@ describe("OpenRig floating desktop inbox", () => {
     read.mockResolvedValue(sample);
     await mount();
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     await click("Open inbox message: Build complete");
     expect(output()).toContain("Here is the result");
     expect(
-      rendered!.root.findByProps({ "aria-label": "2 unread messages on this device" }),
+      rendered!.root.findByProps({ "aria-label": "1 unread items requiring your attention" }),
     ).toBeTruthy();
     await click("Mark inbox message unread: Build complete");
     expect(
-      rendered!.root.findByProps({ "aria-label": "3 unread messages on this device" }),
+      rendered!.root.findByProps({ "aria-label": "1 unread items requiring your attention" }),
     ).toBeTruthy();
     await click("Open inbox message: Build complete");
     await act(async () => {
@@ -313,7 +373,7 @@ describe("OpenRig floating desktop inbox", () => {
     rendered = undefined;
     await mount();
     expect(
-      rendered!.root.findByProps({ "aria-label": "2 unread messages on this device" }),
+      rendered!.root.findByProps({ "aria-label": "1 unread items requiring your attention" }),
     ).toBeTruthy();
   });
 
@@ -324,11 +384,11 @@ describe("OpenRig floating desktop inbox", () => {
     await click("Filter OpenRig inbox: Forms");
     expect(displayMessages()).toHaveLength(0);
     await click("Filter OpenRig inbox: Alerts");
-    expect(displayMessages()).toHaveLength(2);
+    expect(displayMessages()).toHaveLength(1);
     await click("Filter OpenRig inbox: All");
     await click("Mark all loaded as read");
     expect(
-      rendered!.root.findAllByProps({ "aria-label": "3 unread messages on this device" }),
+      rendered!.root.findAllByProps({ "aria-label": "1 unread items requiring your attention" }),
     ).toHaveLength(0);
     await click("Filter OpenRig inbox: Unread");
     expect(output()).toContain("You're caught up");
@@ -352,7 +412,9 @@ describe("OpenRig floating desktop inbox", () => {
       ...sample.items[0]!,
       id: "queue-2",
       sender: "new-agent@rig",
-      subject: "Another update",
+      subject: "Requested update",
+      humanIntent: "update" as const,
+      notificationReason: "requested" as const,
       body: "Please inspect this new message.",
     };
     read.mockResolvedValue({ ...sample, count: 4, items: [...sample.items, newItem] });
@@ -366,7 +428,7 @@ describe("OpenRig floating desktop inbox", () => {
     expect(output()).toContain("Please inspect this new message.");
     expect(output()).not.toContain("New human message");
     expect(
-      rendered!.root.findByProps({ "aria-label": "3 unread messages on this device" }),
+      rendered!.root.findByProps({ "aria-label": "1 unread items requiring your attention" }),
     ).toBeTruthy();
     await click("Close human inbox");
     await click("OpenRig human inbox");
@@ -385,7 +447,9 @@ describe("OpenRig floating desktop inbox", () => {
     const newItem = {
       ...sample.items[0]!,
       id: "queue-2",
-      subject: "New release",
+      subject: "Requested release update",
+      humanIntent: "update" as const,
+      notificationReason: "requested" as const,
       body: "One two three four five six seven eight nine ten eleven twelve thirteen fourteen quinze sixteen seventeen dix-neuf twenty long text",
     };
     read.mockResolvedValue({ ...sample, items: [newItem, ...sample.items], count: 4 });
@@ -410,11 +474,12 @@ describe("OpenRig floating desktop inbox", () => {
     read.mockResolvedValue(sample);
     await mount();
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     await contextMessage("Build complete");
     expect(rendered!.root.findByProps({ "aria-label": "Message context menu" })).toBeTruthy();
     await click("Archive locally");
     expect(displayMessages()).toHaveLength(2);
-    expect(output()).toContain("2 inbox");
+    expect(output()).toContain("1 for you");
     expect(output()).toContain("OpenRig originals were not changed");
     expect(storage.get("t3code:openrig-human-inbox-archived:v1")).toContain("queue-1");
     await act(async () => {
@@ -423,6 +488,7 @@ describe("OpenRig floating desktop inbox", () => {
     rendered = undefined;
     await mount();
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     expect(displayMessages()).toHaveLength(2);
     await click("Filter OpenRig inbox: Archived");
     expect(displayMessages()).toHaveLength(1);
@@ -437,14 +503,11 @@ describe("OpenRig floating desktop inbox", () => {
     read.mockResolvedValue(sample);
     await mount();
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     await contextMessage("Approval required");
     await click("Move to local trash");
     expect(displayMessages()).toHaveLength(2);
-    expect(
-      rendered!.root.findByProps({
-        "aria-label": "1 alerts or read-only decisions in loaded results",
-      }),
-    ).toBeTruthy();
+    expect(output()).not.toContain("1 alerts or read-only decisions in loaded results");
     await click("Refresh OpenRig human inbox");
     expect(displayMessages()).toHaveLength(2);
     await click("Filter OpenRig inbox: Trash");
@@ -461,6 +524,7 @@ describe("OpenRig floating desktop inbox", () => {
     read.mockResolvedValue(sample);
     await mount();
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     await click("Open inbox message: Build complete");
     await manageMessages();
     expect(rendered!.root.findByProps({ "aria-label": "Bulk message actions" })).toBeTruthy();
@@ -481,6 +545,7 @@ describe("OpenRig floating desktop inbox", () => {
     read.mockResolvedValue(sample);
     await mount();
     await click("OpenRig human inbox");
+    await click("Filter OpenRig inbox: All");
     await click("Open inbox message: Build complete");
     await manageMessages();
     await click("Move all loaded read to trash (1)");
@@ -587,13 +652,15 @@ describe("actual server action flags versus response forms", () => {
     }));
     read.mockResolvedValue({ ...sample, items: warnings, pendingCount: 5, count: 5 });
     await mount();
-    expect(inboxAttentionKind(warnings[0]!, "human@kernel")).toBe("alert");
+    expect(inboxAttentionKind(warnings[0]!, "human@kernel")).toBe("none");
     expect(output()).not.toContain("pending native answer forms in loaded results");
-    expect(output()).toContain("5 alerts or read-only decisions in loaded results");
+    expect(output()).not.toContain("5 alerts or read-only decisions in loaded results");
     await click("OpenRig human inbox");
     await click("Filter OpenRig inbox: Forms");
     expect(displayMessages()).toHaveLength(0);
     await click("Filter OpenRig inbox: Alerts");
+    expect(displayMessages()).toHaveLength(0);
+    await click("Filter OpenRig inbox: All");
     expect(displayMessages()).toHaveLength(5);
     await act(async () => {
       rendered!.root
@@ -602,8 +669,8 @@ describe("actual server action flags versus response forms", () => {
         })[0]!
         .props.onClick();
     });
-    expect(output()).toContain("supplied no answerable");
-    expect(output()).toContain("not a multiple-choice prompt");
+    expect(output()).not.toContain("supplied no answerable");
+    expect(output()).not.toContain("not a multiple-choice prompt");
     expect(output()).not.toContain("Send answers");
     expect(rendered!.root.findByProps({ "aria-label": "Reply to OpenRig message" })).toBeTruthy();
     expect(output()).toContain(
@@ -623,7 +690,7 @@ describe("actual server action flags versus response forms", () => {
     await mount();
     expect(inboxAttentionKind(decision, "human@kernel")).toBe("form");
     expect(output()).toContain("1 pending native answer forms in loaded results");
-    expect(output()).toContain("1 alerts or read-only decisions in loaded results");
+    expect(output()).not.toContain("alerts or read-only decisions in loaded results");
     await click("OpenRig human inbox");
     await click("Filter OpenRig inbox: Forms");
     expect(displayMessages()).toHaveLength(1);

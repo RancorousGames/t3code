@@ -1203,7 +1203,7 @@ export async function fetchOpenRigOperatorInbox(
     throw new Error("Invalid OpenRig human address.");
   }
   const response = await bridgeRequest(
-    `/human-inbox?destination=${encodeURIComponent(address)}&limit=50`,
+    `/human-inbox?destination=${encodeURIComponent(address)}&limit=50&includeAll=1`,
     { method: "GET" },
     fetchImpl,
     true,
