@@ -1,6 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import { chatGPTBrowserThreadRef, readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
+import { isChatGPTHomeUrl } from "./chatGPTBrowserPrewarm";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { acquireBrowserSurfaceActivity } from "./browser/browserSurfaceStore";
@@ -46,6 +47,7 @@ export interface ChatGPTPromptAutomation {
 export async function sendInitialChatGPTPrompt(input: {
   environmentId: EnvironmentId;
   sessionId: string;
+  requestId: string;
   prompt: string;
   readSessions?: typeof readChatGPTBrowserSessions;
   automation?: ChatGPTPromptAutomation;
@@ -58,9 +60,15 @@ export async function sendInitialChatGPTPrompt(input: {
   const automation = input.automation ?? (previewBridge ? chatGPTWebviewAutomation : undefined);
   if (!automation) throw new Error("ChatGPT automation requires T3 Code desktop.");
   const session = (input.readSessions ?? readChatGPTBrowserSessions)(input.environmentId).find(
-    (entry) => entry.id === input.sessionId && !entry.hidden,
+    (entry) =>
+      entry.id === input.sessionId && !entry.hidden && entry.spawnRequestId === input.requestId,
   );
-  if (!session) throw new Error("ChatGPT spawn session must be persisted before its first prompt.");
+  if (!session)
+    return {
+      delivery: "not_sent",
+      sendAttempted: false,
+      reason: "ChatGPT guest does not belong to this exact backend spawn reservation.",
+    };
   const prompt = buildChatGPTSessionHandoffPrompt(
     input.prompt,
     session.id,
@@ -74,6 +82,7 @@ export async function sendInitialChatGPTPrompt(input: {
   const threadRef = chatGPTBrowserThreadRef(input.environmentId, input.sessionId);
   let lastError: unknown;
   let startedTyping = false;
+  let rejectedGuest = false;
   let sendAttempted = false;
   const acquireActivity = input.acquireActivity ?? acquireBrowserSurfaceActivity;
   let activeRuntimeId: string | null = null;
@@ -101,17 +110,39 @@ export async function sendInitialChatGPTPrompt(input: {
         try {
           const status = await automation.status(runtimeId);
           const url = status.url ?? "";
-          if (
-            status.available &&
-            !status.loading &&
-            /^https:\/\/(chatgpt\.com|chat\.openai\.com)(\/|$)/i.test(url)
-          ) {
+          if (status.available && !status.loading && isChatGPTHomeUrl(url)) {
             // Do not accidentally inject a message into a previous conversation.
             // Every new session starts at the home page.
             await automation.waitFor(runtimeId, {
               selector: COMPOSER_SELECTOR,
               timeoutMs: Math.min(COMPOSER_WAIT_MS, Math.max(1, deadline - now())),
             });
+            // Even a freshly reserved guest might be opened by the user before
+            // dispatch. Never clear or replace anything already in its composer.
+            const emptyComposer = await automation.evaluate(runtimeId, {
+              expression: `(() => {
+                const el = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+                if (!(el instanceof HTMLElement)) return false;
+                const text = el instanceof HTMLTextAreaElement ? el.value : (el.innerText || el.textContent || '');
+                return text.trim().length === 0;
+              })()`,
+            });
+            if (emptyComposer !== true) {
+              rejectedGuest = true;
+              throw new Error("ChatGPT composer was not empty; preserving the existing draft.");
+            }
+            // Prevent a removed/replaced reservation from writing to an orphaned guest.
+            if (
+              !(input.readSessions ?? readChatGPTBrowserSessions)(input.environmentId).some(
+                (entry) =>
+                  entry.id === input.sessionId &&
+                  !entry.hidden &&
+                  entry.spawnRequestId === input.requestId,
+              )
+            ) {
+              rejectedGuest = true;
+              throw new Error("ChatGPT spawn reservation changed before dispatch.");
+            }
             startedTyping = true;
             try {
               await automation.type(runtimeId, {
@@ -200,7 +231,7 @@ export async function sendInitialChatGPTPrompt(input: {
           lastError = error;
           // Do not retry after typing or pressing: doing so could duplicate
           // messages. Only retry readiness/selector acquisition.
-          if (startedTyping) throw error;
+          if (startedTyping || rejectedGuest) throw error;
           // A stale runtime webContents may have been replaced while mounting.
         }
       }

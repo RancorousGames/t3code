@@ -1028,12 +1028,13 @@ export function DesktopAppActivationCoordinator() {
             registeredNames,
           )?.title;
         const metadata = {
+          spawnRequestId: request.requestId,
           ...(parentSessionId ? { parentSessionId } : {}),
           ...(projectHint ? { project: projectHint } : {}),
         };
-        const sessionId = Object.keys(metadata).length
-          ? createSession(request.title, metadata)
-          : createSession(request.title);
+        // The reservation is persisted on this newly owned UUID before any
+        // automation is allowed to touch its guest's composer.
+        const sessionId = createSession(request.title, metadata);
         try {
           // Correlate the durable T3 UUID before beginning the guest prompt. If
           // the renderer detaches, a read-only sessions.list can recover it by
@@ -1046,6 +1047,7 @@ export function DesktopAppActivationCoordinator() {
           const receipt = await sendInitialChatGPTPrompt({
             environmentId,
             sessionId,
+            requestId: request.requestId,
             prompt: request.prompt,
           });
           if (receipt.delivery === "user_turn_observed") {

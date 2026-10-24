@@ -21,21 +21,26 @@ function fixture() {
   let clock = 0;
   const automation = {
     status: vi.fn(async () => ({
-      url: "https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      url: "https://chatgpt.com/",
       available: true,
       loading: false,
     })),
     waitFor: vi.fn(async () => undefined),
     type: vi.fn(async () => undefined),
     press: vi.fn(async () => undefined),
-    evaluate: vi.fn(async () => false),
+    evaluate: vi.fn(async (_runtime: string, { expression }: { expression: string }) =>
+      expression.includes("const el = document.querySelector") ? true : false,
+    ),
   };
   const input = {
     environmentId: EnvironmentId.make("local"),
     sessionId: "session",
+    requestId: "backend-spawn",
     prompt: "Do exactly one job",
     automation: automation as never,
-    readSessions: (() => [{ id: "session", title: "Worker" }]) as never,
+    readSessions: (() => [
+      { id: "session", title: "Worker", spawnRequestId: "backend-spawn" },
+    ]) as never,
     readState: (() => ({ activeTabId: "tab", serverEpoch: "epoch" })) as never,
     now: () => clock,
     pause: async (ms: number) => {
@@ -48,7 +53,7 @@ function fixture() {
 }
 
 describe("initial ChatGPT prompt delivery receipt", () => {
-  it("does not interpret /c/ URL navigation as a sent user turn or retry Enter", async () => {
+  it("does not interpret an empty composer or lack of rendered user turn as delivery or retry Enter", async () => {
     const { input, automation } = fixture();
     const result = await sendInitialChatGPTPrompt(input);
     expect(result).toMatchObject({ delivery: "unknown", sendAttempted: true });
@@ -77,15 +82,51 @@ describe("initial ChatGPT prompt delivery receipt", () => {
     expect(automation.press).not.toHaveBeenCalled();
   });
 
+  it("will not type or send into a manual guest lacking the matching spawn reservation", async () => {
+    const { input, automation } = fixture();
+    input.readSessions = (() => [{ id: "session", title: "User's manual new chat" }]) as never;
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
+    expect(automation.type).not.toHaveBeenCalled();
+    expect(automation.press).not.toHaveBeenCalled();
+  });
+
+  it("preserves an existing draft without clearing it or sending", async () => {
+    const { input, automation } = fixture();
+    automation.evaluate.mockResolvedValueOnce(false);
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
+    expect(result.reason).toContain("preserving the existing draft");
+    expect(automation.type).not.toHaveBeenCalled();
+    expect(automation.press).not.toHaveBeenCalled();
+  });
+
+  it("refuses to type into an already opened conversation instead of assuming it is fresh", async () => {
+    const { input, automation } = fixture();
+    automation.status.mockResolvedValue({
+      url: "https://chatgpt.com/c/existing",
+      available: true,
+      loading: false,
+    });
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
+    expect(automation.type).not.toHaveBeenCalled();
+    expect(automation.press).not.toHaveBeenCalled();
+  });
+
   it("delivers only after exact user-turn verification responds true", async () => {
     const { input, automation } = fixture();
-    automation.evaluate.mockResolvedValueOnce(true);
+    automation.evaluate.mockImplementation(
+      async (_runtime: string, { expression }: { expression: string }) =>
+        expression.includes("const el = document.querySelector") ||
+        expression.includes("data-message-author-role"),
+    );
     const result = await sendInitialChatGPTPrompt(input);
     expect(result).toEqual({ delivery: "user_turn_observed", sendAttempted: true });
     expect(automation.press).toHaveBeenCalledTimes(1);
     const expression = (
       automation.evaluate.mock.calls as unknown as Array<[string, { expression: string }]>
-    )[0]?.[1]?.expression;
+    ).find(([, args]) => args.expression.includes("data-message-author-role"))?.[1]?.expression;
     expect(expression).toContain("data-message-author-role");
     expect(expression).not.toContain("window.location.pathname");
   });

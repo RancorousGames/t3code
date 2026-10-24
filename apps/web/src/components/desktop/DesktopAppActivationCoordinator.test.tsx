@@ -7,6 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 const mocks = vi.hoisted(() => ({
   createSession: vi.fn(() => "spawned-session"),
+  publishProvider: vi.fn(async () => ({
+    _tag: "Success",
+    value: { ok: true, data: { work: null } },
+  })),
+  guestRef: vi.fn((_environmentId: unknown, id: string) => ({ threadId: id })),
   sendInitial: vi.fn(async () => ({ delivery: "user_turn_observed", sendAttempted: true })),
   recordSpawn: vi.fn(),
   readSpawn: vi.fn(() => [] as Array<{ sessionId: string; requestId: string }>),
@@ -51,7 +56,7 @@ vi.mock("../../previewStateStore", () => ({
   beginPreviewSessionClose: vi.fn(),
   cancelPreviewSessionClose: vi.fn(),
   clearThreadPreviewState: vi.fn(),
-  readThreadPreviewState: vi.fn(),
+  readThreadPreviewState: vi.fn(() => ({ snapshot: null, serverEpoch: null })),
 }));
 vi.mock("../../state/preview", () => ({
   previewEnvironment: { close: "close" },
@@ -70,6 +75,8 @@ vi.mock("../../state/use-atom-query-runner", () => ({
   useAtomQueryRunner: () => mocks.nativeProjection,
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
+vi.mock("../../state/agentProvider", () => ({ agentProviderCall: "agent-provider" }));
+vi.mock("../../agentProviderBrowser", () => ({ executeAgentProviderBrowserWork: vi.fn() }));
 vi.mock("../../chatGPTBrowserAutomation", () => ({
   sendInitialChatGPTPrompt: mocks.sendInitial,
 }));
@@ -79,6 +86,7 @@ vi.mock("../../chatGPTSpawnReceipts", () => ({
 }));
 vi.mock("../../chatGPTBrowserSessions", () => ({
   useChatGPTBrowserSessions: () => ({ createSession: mocks.createSession }),
+  chatGPTBrowserThreadRef: mocks.guestRef,
   readChatGPTBrowserSessions: () => mocks.browserSessions,
 }));
 vi.mock("../../desktopAppActivation", () => ({
@@ -96,6 +104,7 @@ vi.mock("../../lib/projectPaths", () => ({
 }));
 vi.mock("../../lib/utils", () => ({
   newProjectId: vi.fn(() => "c5b2d999-7c69-4709-93c9-735d76b463c7"),
+  randomUUID: vi.fn(() => "6b922542-cd54-4dcf-8e45-67c6e97bc69b"),
 }));
 vi.mock("../../state/entities", () => ({
   readProjects: vi.fn(() => mocks.projects),
@@ -155,7 +164,8 @@ vi.mock("../../state/shell", () => ({
   environmentShell: { stateAtom: vi.fn(() => "shell") },
 }));
 vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: () => mocks.createProject,
+  useAtomCommand: (name: string) =>
+    name === "agent-provider" ? mocks.publishProvider : mocks.createProject,
 }));
 
 import { DesktopAppActivationCoordinator } from "./DesktopAppActivationCoordinator";
@@ -177,9 +187,17 @@ describe("background ChatGPT activation", () => {
   };
 
   beforeEach(() => {
-    vi.stubGlobal("window", {});
+    vi.stubGlobal("window", {
+      setInterval,
+      clearInterval,
+      setTimeout,
+      clearTimeout,
+      crypto: globalThis.crypto,
+    });
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    mocks.createSession.mockClear();
+    mocks.createSession.mockReset();
+    mocks.createSession.mockReturnValue("spawned-session");
+    mocks.publishProvider.mockClear();
     mocks.sendInitial.mockReset();
     mocks.sendInitial.mockResolvedValue({ delivery: "user_turn_observed", sendAttempted: true });
     mocks.recordSpawn.mockClear();
@@ -226,10 +244,13 @@ describe("background ChatGPT activation", () => {
     };
     await act(async () => onRequest?.(request));
 
-    expect(mocks.createSession).toHaveBeenCalledExactlyOnceWith("Agent B");
+    expect(mocks.createSession).toHaveBeenCalledExactlyOnceWith("Agent B", {
+      spawnRequestId: "background-spawn",
+    });
     expect(mocks.sendInitial).toHaveBeenCalledExactlyOnceWith({
       environmentId: EnvironmentId.make("local"),
       sessionId: "spawned-session",
+      requestId: "background-spawn",
       prompt: "Please review the code",
     });
     expect(mocks.navigate).not.toHaveBeenCalled();
@@ -282,6 +303,46 @@ describe("background ChatGPT activation", () => {
     });
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
     expect(mocks.sendInitial).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps simultaneous backend spawn reservations distinct and never sends them through a manual session", async () => {
+    mocks.createSession
+      .mockReturnValueOnce("exclusive-worker-a")
+      .mockReturnValueOnce("exclusive-worker-b");
+    await act(async () => {
+      renderer = create(<DesktopAppActivationCoordinator />);
+    });
+    await act(async () => {
+      onRequest?.({
+        version: 1,
+        requestId: "spawn-a",
+        type: "chatgpt.spawn",
+        title: "A",
+        prompt: "job A",
+      });
+      onRequest?.({
+        version: 1,
+        requestId: "spawn-b",
+        type: "chatgpt.spawn",
+        title: "B",
+        prompt: "job B",
+      });
+    });
+    expect(mocks.createSession).toHaveBeenNthCalledWith(1, "A", { spawnRequestId: "spawn-a" });
+    expect(mocks.createSession).toHaveBeenNthCalledWith(2, "B", { spawnRequestId: "spawn-b" });
+    expect(mocks.sendInitial).toHaveBeenNthCalledWith(1, {
+      environmentId: EnvironmentId.make("local"),
+      sessionId: "exclusive-worker-a",
+      requestId: "spawn-a",
+      prompt: "job A",
+    });
+    expect(mocks.sendInitial).toHaveBeenNthCalledWith(2, {
+      environmentId: EnvironmentId.make("local"),
+      sessionId: "exclusive-worker-b",
+      requestId: "spawn-b",
+      prompt: "job B",
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it("makes a lost spawn response recoverable by requestId via read-only session list", async () => {
@@ -338,6 +399,7 @@ describe("background ChatGPT activation", () => {
       }),
     );
     expect(mocks.createSession).toHaveBeenCalledExactlyOnceWith("Worker", {
+      spawnRequestId: "explicit-parent",
       parentSessionId: parentId,
     });
     expect(complete).toHaveBeenCalledWith({
@@ -400,7 +462,13 @@ describe("managed native provider desktop activation", () => {
     clientRequestId: threadId,
   };
   beforeEach(async () => {
-    vi.stubGlobal("window", {});
+    vi.stubGlobal("window", {
+      setInterval,
+      clearInterval,
+      setTimeout,
+      clearTimeout,
+      crypto: globalThis.crypto,
+    });
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     onRequest = null;
     complete.mockClear();

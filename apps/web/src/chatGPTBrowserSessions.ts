@@ -13,6 +13,8 @@ import { readThreadPreviewState } from "./previewStateStore";
 export const BrowserSession = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
+  // An exact backend spawn reservation. Manual sessions and warm spares never carry it.
+  spawnRequestId: Schema.optional(Schema.String),
   hidden: Schema.optional(Schema.Boolean),
   hiddenAt: Schema.optional(Schema.Number),
   archive: Schema.optional(
@@ -306,12 +308,18 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   const createSession = useCallback(
     (
       name?: string,
-      metadata?: { parentSessionId?: string; project?: string; initialConversationUrl?: string },
+      metadata?: {
+        parentSessionId?: string;
+        project?: string;
+        initialConversationUrl?: string;
+        spawnRequestId?: string;
+      },
     ) => {
       let id = randomUUID();
       // Read the current slot synchronously: multiple buttons, the palette and
       // desktop automation can request sessions without waiting for a render.
-      if (environmentId && !metadata?.initialConversationUrl) {
+      // Backend spawns always get a fresh UUID/guest, never the user-facing warm spare.
+      if (environmentId && !metadata?.initialConversationUrl && !metadata?.spawnRequestId) {
         const spareId = getLocalStorageItem(chatGPTPrewarmKey(environmentId), Schema.String);
         if (spareId) {
           const threadRef = chatGPTBrowserThreadRef(environmentId, spareId);
@@ -364,6 +372,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           {
             id,
             title: name?.trim() || `ChatGPT ${number}`,
+            ...(metadata?.spawnRequestId ? { spawnRequestId: metadata.spawnRequestId } : {}),
             ...(metadata?.parentSessionId ? { parentSessionId: metadata.parentSessionId } : {}),
             ...(metadata?.project ? { project: metadata.project } : {}),
           },
