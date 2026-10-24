@@ -177,6 +177,36 @@ describe("OpenRig connection recovery", () => {
     expect(recovered).not.toContain("Reconnecting");
     expect(list).toHaveBeenCalledTimes(3);
   });
+  it("serializes offline retries when the OpenRig agents IPC exceeds the five-second polling interval", async () => {
+    let tick: (() => void) | undefined;
+    Object.assign(window, {
+      setInterval: (callback: () => void) => { tick = callback; return 1; },
+      clearInterval: vi.fn(),
+    });
+    await mount();
+    list.mockRejectedValueOnce(new Error("agents timeout while daemon health is OK"));
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Refresh OpenRig agents" }).props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("daemon may still be healthy");
+    let resolveSlow!: (agents: DesktopOpenRigAgent[]) => void;
+    list.mockImplementationOnce(() => new Promise((resolve) => { resolveSlow = resolve; }));
+    await act(async () => { tick?.(); });
+    expect(list).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      tick?.();
+      tick?.();
+      renderer!.root.findByProps({ "aria-label": "Refresh OpenRig agents" }).props.onClick();
+    });
+    // The first slow result must be accepted rather than invalidated by a newer poll.
+    expect(list).toHaveBeenCalledTimes(3);
+    await act(async () => { resolveSlow([agent]); });
+    const recovered = JSON.stringify(renderer!.toJSON());
+    expect(recovered).not.toContain("last confirmed seat details");
+    expect(recovered).not.toContain("Reconnecting");
+    await act(async () => { tick?.(); });
+    expect(list).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("canonical Work tab task status", () => {

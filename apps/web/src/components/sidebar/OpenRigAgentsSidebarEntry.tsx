@@ -26,6 +26,7 @@ export function OpenRigAgentsSidebarEntry() {
   const [agents, setAgents] = useState<readonly DesktopOpenRigAgent[]>([]);
   const [snapshotAt, setSnapshotAt] = useState<string | null>(null);
   const [connection, setConnection] = useState<"checking" | "online" | "offline">("checking");
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // The last snapshot of the selected seat, kept if it leaves the agent list.
@@ -36,10 +37,15 @@ export function OpenRigAgentsSidebarEntry() {
   const [topologyError, setTopologyError] = useState<string | null>(null);
   const [networkOpen, setNetworkOpen] = useState(false);
   const requestVersion = useRef(0);
+  const refreshInFlight = useRef(false);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
   const networkButtonRef = useRef<HTMLButtonElement>(null);
 
   const refresh = useCallback(async () => {
+    // A slow/blocked IPC request may outlive the five-second offline polling interval.
+    // Never supersede its result with a newer version or pile up more reads.
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     const version = ++requestVersion.current;
     // Topology is one request for every rig; it fails independently of the agent list.
     void (async () => {
@@ -64,10 +70,15 @@ export function OpenRigAgentsSidebarEntry() {
       setAgents(snapshot);
       setSnapshotAt(new Date().toISOString());
       setConnection("online");
-    } catch {
+      setConnectionError(null);
+    } catch (error) {
       if (version !== requestVersion.current) return;
-      // Preserve confirmed seat rows during transient failures; they are marked stale.
+      // A failed agents endpoint does not prove the daemon is down: /healthz may
+      // be healthy while a dependent T3 session-enumeration call times out.
       setConnection("offline");
+      setConnectionError(explanation(error));
+    } finally {
+      refreshInFlight.current = false;
     }
   }, []);
 
@@ -155,7 +166,7 @@ export function OpenRigAgentsSidebarEntry() {
               <span>OpenRig</span>
               {connection === "online" && <span className="font-normal">({agents.length})</span>}
             </button>
-            <span className="text-2xs text-sidebar-muted-foreground" role="status">
+            <span className="text-2xs text-sidebar-muted-foreground" role="status" title={connectionError ?? undefined}>
               {connection === "checking" ? "Checking…" : connection === "offline" ? "Reconnecting…" : ""}
             </span>
             <Button
@@ -211,7 +222,7 @@ export function OpenRigAgentsSidebarEntry() {
           key={workspaceAgent.id}
           agent={workspaceAgent}
           staleReason={connection !== "online"
-            ? "T3 lost its OpenRig connection. Reconnecting automatically; showing the last confirmed seat details."
+            ? `T3 could not refresh OpenRig seats; retrying automatically. The daemon may still be healthy. Showing the last confirmed seat details.${connectionError ? ` Last error: ${connectionError}` : ""}`
             : live ? null : `${workspaceAgent.name} is not in OpenRig's latest agent snapshot. Details below may be stale.`}
           snapshotAt={snapshotAt}
           tab={tab}
