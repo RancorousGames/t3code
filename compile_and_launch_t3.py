@@ -190,7 +190,7 @@ def session_backup(root: Path) -> Path:
     return backup
 
 
-def restart_countdown(seconds: int = 5) -> bool:
+def restart_countdown(seconds: int = 15) -> bool:
     """Cancelable topmost desktop notification. Closing or Escape means cancel.
 
     Run after compilation, before signaling ANY application window. If the GUI
@@ -287,7 +287,7 @@ def main(*, force_build: bool = False, restart_only: bool = False) -> None:
 
     running = bool(running_custom_processes(root))
     if running:
-        print("New build ready. Showing cancelable 5-second restart notification.", flush=True)
+        print("New build ready. Showing cancelable 15-second restart notification.", flush=True)
         if not restart_countdown():
             print("Restart canceled; current T3 remains open.", flush=True)
             return
