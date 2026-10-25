@@ -21,6 +21,7 @@ import { createPortal } from "react-dom";
 import { isElectron } from "../../env";
 import { OpenRigFloatingWindow, type FloatingSize } from "./OpenRigFloatingWindow";
 import { OpenRigHumanReplyComposer, type HumanReplyRequest } from "./OpenRigHumanReplyComposer";
+import { OpenRigHumanSendTab } from "./OpenRigHumanSendTab";
 import { OpenRigRichInboxMessage, isNativeInboxDecision } from "./OpenRigRichInboxMessage";
 import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
 import { observeResize } from "../../lib/observeResize";
@@ -215,6 +216,7 @@ function chime() {
 
 export function OpenRigOperatorInbox() {
   const [open, setOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"inbox" | "send">("inbox");
   const [address, setAddress] = useState("human@kernel");
   const [addresses, setAddresses] = useState([
     { address: "human@kernel", label: "Local operator seat" },
@@ -585,6 +587,7 @@ export function OpenRigOperatorInbox() {
     (item?: InboxItem, destination?: string) => {
       if (destination && destination !== address) setAddress(destination);
       if (item) {
+        setActiveTab("inbox");
         setFilter("focus");
         setSearch("");
         const key = inboxKey(destination ?? address, item);
@@ -696,7 +699,7 @@ export function OpenRigOperatorInbox() {
             if (!menu && !confirmDelete) closeInbox(false);
           }}
           onKeyDown={(event) => {
-            if (event.key === "/" && !isEditable(event.target)) {
+            if (activeTab === "inbox" && event.key === "/" && !isEditable(event.target)) {
               event.preventDefault();
               searchRef.current?.focus();
             }
@@ -738,6 +741,15 @@ export function OpenRigOperatorInbox() {
         >
           {({ compact }) => (
             <>
+              <div role="tablist" aria-label="Human Inbox tabs" className="flex shrink-0 gap-1 border-b border-border px-4 py-2">
+                {(["inbox", "send"] as const).map((tab) => (
+                  <button key={tab} type="button" role="tab" aria-selected={activeTab === tab}
+                    aria-label={`Human Inbox ${tab === "inbox" ? "Received" : "Send"} tab`}
+                    className={`rounded-md px-3 py-1.5 text-xs font-medium ${activeTab === tab ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                    onClick={() => setActiveTab(tab)}>{tab === "inbox" ? "Received" : "Send"}</button>
+                ))}
+              </div>
+              <div role="tabpanel" aria-label="Human Inbox Received panel" className={activeTab === "inbox" ? "contents" : "hidden"}>
               <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2">
                 <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   Inbox
@@ -1226,6 +1238,10 @@ export function OpenRigOperatorInbox() {
                     </>
                   )}
                 </div>
+              </div>
+              </div>
+              <div role="tabpanel" aria-label="Human Inbox Send panel" className={activeTab === "send" ? "flex min-h-0 flex-1" : "hidden"}>
+                <OpenRigHumanSendTab active={activeTab === "send"} />
               </div>
             </>
           )}

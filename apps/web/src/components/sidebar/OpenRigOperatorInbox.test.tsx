@@ -165,6 +165,20 @@ async function manageMessages() {
 }
 
 describe("OpenRig floating desktop inbox", () => {
+  it("keeps the received inbox flow while exposing a separate Send tab", async () => {
+    read.mockResolvedValue(sample);
+    await mount();
+    await click("OpenRig human inbox");
+    expect(rendered!.root.findByProps({ "aria-label": "Human Inbox Received tab" }).props["aria-selected"]).toBe(true);
+    await click("Filter OpenRig inbox: All");
+    expect(output()).toContain("Build complete");
+    await click("Human Inbox Send tab");
+    expect(rendered!.root.findByProps({ "aria-label": "Human Inbox Send tab" }).props["aria-selected"]).toBe(true);
+    expect(output()).toContain("Human Inbox Send panel");
+    await click("Human Inbox Received tab");
+    expect(rendered!.root.findByProps({ "aria-label": "Human Inbox Received tab" }).props["aria-selected"]).toBe(true);
+    expect(output()).toContain("Build complete");
+  });
   it("dismisses on an outside click, but keeps the inbox while its context menu is open", async () => {
     read.mockResolvedValue(sample);
     await mount();
