@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId } from "@t3tools/contracts";
 import { refreshChatGPTDesktop } from "./chatGPTSameBrowserRefreshDesktop";
+import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 
 const environmentId = EnvironmentId.make("refresh-desktop-lab");
 const sessionId = "1c045bfd-08d7-49b8-83b4-142ba0d250f8";
@@ -18,6 +19,12 @@ const loadedSafety = vi.fn(async (..._args: unknown[]) => {
   throw new Error("Old conversation cannot load");
 });
 const sent = vi.fn(async (..._args: unknown[]) => ({ delivery: "user_turn_observed" as const }));
+const observe = vi.fn(async (..._args: unknown[]) => ({
+  observedGuestUrl: null as string | null,
+  activity: "idle",
+  status: "done_or_idle",
+}));
+const read = vi.fn(async (..._args: unknown[]) => ({}));
 
 vi.mock("./chatGPTBrowserSessions", () => ({
   readChatGPTBrowserSessions: () => [session],
@@ -30,8 +37,8 @@ vi.mock("./chatGPTSessionControl", () => ({
   wakeChatGPTRefreshPredecessor: (...args: unknown[]) => wake(...args),
   assertChatGPTRefreshSafe: (...args: unknown[]) => loadedSafety(...args),
   navigateChatGPTRefreshSafe: vi.fn(),
-  inspectBrowserSession: async () => ({ observedGuestUrl: null }),
-  runChatGPTSessionControl: vi.fn(),
+  inspectBrowserSession: (...args: unknown[]) => observe(...args),
+  runChatGPTSessionControl: (...args: unknown[]) => read(...args),
 }));
 vi.mock("./chatGPTBrowserAutomation", () => ({
   sendInitialChatGPTPrompt: (...args: unknown[]) => sent(...args),
@@ -50,6 +57,12 @@ beforeEach(() => {
   wake.mockClear();
   loadedSafety.mockClear();
   sent.mockClear();
+  observe.mockReset().mockResolvedValue({
+    observedGuestUrl: null,
+    activity: "idle",
+    status: "done_or_idle",
+  });
+  read.mockReset().mockResolvedValue({});
   backup.mockClear();
   vi.stubGlobal("window", {
     localStorage: {
@@ -124,5 +137,69 @@ describe("refresh coordinator without predecessor browser recovery", () => {
     expect(wake).toHaveBeenCalledTimes(1);
     expect(reset).not.toHaveBeenCalled();
     expect(sent).not.toHaveBeenCalled();
+  });
+});
+
+describe("same-browser UNKNOWN receipt reconciliation", () => {
+  it("accepts only the original bootstrap plus collapsed DOM suffix and a real first assistant reply", async () => {
+    const prompt = "Continue the same canonical managed seat";
+    const input = {
+      environmentId,
+      operationId,
+      sessionId,
+      priorConversationId: conversationId,
+      prompt,
+      phase: "begin" as const,
+    };
+    const first = await refreshChatGPTDesktop(input);
+    expect(first.status).toBe("unknown");
+    expect(first.sendStarted).toBe(true);
+
+    const successor = "9f945488-0219-4331-a6ad-33d1453c3fa9";
+    observe.mockResolvedValue({
+      observedGuestUrl: `https://chatgpt.com/c/${successor}`,
+      activity: "idle",
+      status: "done_or_idle",
+    });
+    const user = buildChatGPTSessionHandoffPrompt(prompt, session.id, session.parentSessionId);
+    const verifiedTurn = {
+      conversationGuardValidated: true,
+      verifiedConversationId: successor,
+      session: {
+        messages: [
+          { role: "user", turn: 0, turnKey: "original", text: user + "\n…\nShow more" },
+          { role: "assistant", turn: 0, turnKey: "original", text: "I have resumed the existing seat." },
+        ],
+      },
+    };
+    // A single unexpected character is not recoverable by the display-only suffix normalization.
+    read.mockResolvedValueOnce({
+      ...verifiedTurn,
+      session: {
+        messages: [
+          { role: "user", turn: 0, turnKey: "original", text: user + " \n…\nShow more" },
+          verifiedTurn.session.messages[1],
+        ],
+      },
+    });
+    expect(
+      await refreshChatGPTDesktop({ ...input, prompt: undefined, phase: "status" }),
+    ).toMatchObject({ status: "unknown" });
+
+    read.mockResolvedValue(verifiedTurn);
+    expect(
+      await refreshChatGPTDesktop({ ...input, prompt: undefined, phase: "status" }),
+    ).toMatchObject({ status: "submitted", successorConversationId: successor });
+    expect(
+      await refreshChatGPTDesktop({ ...input, prompt: undefined, phase: "finalize" }),
+    ).toMatchObject({
+      status: "committed",
+      sessionId,
+      priorUrl: `https://chatgpt.com/c/${conversationId}`,
+      successorConversationId: successor,
+    });
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(3);
   });
 });
