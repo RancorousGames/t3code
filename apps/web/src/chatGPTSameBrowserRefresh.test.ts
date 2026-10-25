@@ -159,6 +159,7 @@ describe("refresh bootstrap DOM expansion affordance", () => {
   it("normalizes only the actual ChatGPT collapsed-message suffix", () => {
     expect(normalizeChatGPTRefreshBootstrap(submitted + "\n…\nShow more")).toBe(submitted);
     expect(normalizeChatGPTRefreshBootstrap(submitted)).toBe(submitted);
+    expect(normalizeChatGPTRefreshBootstrap(submitted + " ")).not.toBe(submitted);
   });
   it("preserves altered or interior user content so its hash cannot be accepted", () => {
     expect(normalizeChatGPTRefreshBootstrap(submitted + "\n…\nShow less")).not.toBe(submitted);
