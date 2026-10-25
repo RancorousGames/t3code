@@ -29,7 +29,10 @@ describe("ChatGPT session project grouping", () => {
     expect(groups[0]?.key).toBe("name:cascadeur");
     expect(groups[0]?.rows.map((row) => row.session.id)).toEqual(["a", "b"]);
     expect(groupChatGPTSessions([], projects, pinned)[0]?.title).toBe("Cascadeur");
-    const afterUnpin = groupChatGPTSessions([{ id: "a", title: "Cascadeur IK Research" }], projects);
+    const afterUnpin = groupChatGPTSessions(
+      [{ id: "a", title: "Cascadeur IK Research" }],
+      projects,
+    );
     expect(afterUnpin.some((group) => group.key === "name:cascadeur")).toBe(false);
   });
 
@@ -224,28 +227,21 @@ describe("ChatGPT last-active/status sorting", () => {
     const expected = groupChatGPTSessions(sessions, projects);
     expect(actual).toEqual(expected);
   });
-  it("puts errors after inactive groups, preserving rank within the error queue", () => {
+  it("globally sorts activity across projects, including idle chats, before errors", () => {
     const groups = layoutChatGPTSessions(sessions, projects, "activity", byId);
+    expect(groups).toHaveLength(1);
     expect(groups[0]?.title).toBeNull();
     expect(groups[0]?.rows.map(({ session, depth }) => [session.id, depth])).toEqual([
       ["workingWartribes", 0],
       ["workingAltraea", 0],
       ["recentAltraea", 0],
+      ["idleWartribes2", 0],
+      ["idleAltraea2", 0],
+      ["idleWartribes", 0],
+      ["idleAltraea", 0],
+      ["interrupted", 0],
+      ["invalid", 0],
     ]);
-    expect(groups.slice(1).map(({ title }) => title)).toEqual([
-      "Wartribes",
-      "Settling Altraea",
-      "Errors",
-    ]);
-    expect(groups[1]?.rows.map(({ session }) => session.id)).toEqual([
-      "idleWartribes2",
-      "idleWartribes",
-    ]);
-    expect(groups[2]?.rows.map(({ session }) => session.id)).toEqual([
-      "idleAltraea2",
-      "idleAltraea",
-    ]);
-    expect(groups[3]?.rows.map(({ session }) => session.id)).toEqual(["interrupted", "invalid"]);
   });
 
   it("keeps all working rows stable when their heartbeats change while recent rows remain time ordered", () => {
@@ -281,6 +277,32 @@ describe("ChatGPT last-active/status sorting", () => {
     ]);
   });
 
+  it("keeps permanent project assignments in Started while activity is flat", () => {
+    const pinned = [{ key: "pin:wartribes", title: "Wartribes" }];
+    const assigned = [
+      { id: "wt-old", title: "Older worker", project: "Wartribes" },
+      { id: "alt-new", title: "Newer worker", project: "Settling Altraea" },
+      { id: "wt-new", title: "Latest worker", project: "Wartribes" },
+    ];
+    const activity = {
+      "wt-old": { age: "inactive" as const, lastWorkingAt: 10 },
+      "alt-new": { age: "inactive" as const, lastWorkingAt: 40 },
+      "wt-new": { age: "inactive" as const, lastWorkingAt: 50 },
+    };
+    const global = layoutChatGPTSessions(assigned, projects, "activity", activity, pinned);
+    expect(global).toHaveLength(1);
+    expect(global[0]?.rows.map(({ session }) => session.id)).toEqual([
+      "wt-new",
+      "alt-new",
+      "wt-old",
+    ]);
+    expect(global[0]?.rows[1]?.session.project).toBe("Settling Altraea");
+
+    const started = layoutChatGPTSessions(assigned, projects, "started", activity, pinned);
+    expect(started[0]?.key).toBe("pin:wartribes");
+    expect(started[0]?.rows.map(({ session }) => session.id)).toEqual(["wt-old", "wt-new"]);
+  });
+
   it("keeps child indentation even when parent and child have different statuses", () => {
     const parent = { id: "pa", title: "Parent", project: "Wartribes" };
     const child = { id: "ch", title: "Child", parentSessionId: "pa" };
@@ -293,8 +315,10 @@ describe("ChatGPT last-active/status sorting", () => {
     expect(grouped[0]?.rows.map(({ session, depth }) => [session.id, depth])).toEqual([
       ["pa", 0],
       ["ch", 1],
+      ["idle", 0],
     ]);
-    expect(grouped.at(-1)?.title).toBe("Other");
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]?.rows.map(({ session }) => session.id)).toEqual(["pa", "ch", "idle"]);
   });
   it("treats status-unknown chats as inactive and preserves stable tie ordering", () => {
     const actual = layoutChatGPTSessions(
@@ -311,8 +335,12 @@ describe("ChatGPT last-active/status sorting", () => {
         second: { age: "recent", lastWorkingAt: 10 },
       },
     );
-    expect(actual[0]?.rows.map(({ session }) => session.id)).toEqual(["first", "second"]);
-    expect(actual[1]?.title).toBe("Cascadeur");
-    expect(actual[1]?.rows.map(({ session }) => session.id)).toEqual(["third", "fourth"]);
+    expect(actual).toHaveLength(1);
+    expect(actual[0]?.rows.map(({ session }) => session.id)).toEqual([
+      "first",
+      "second",
+      "third",
+      "fourth",
+    ]);
   });
 });

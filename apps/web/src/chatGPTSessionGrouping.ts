@@ -201,15 +201,23 @@ export function groupChatGPTSessions(
     if (hint?.toLowerCase() === "other") return null;
     // A user-permanent project wins over transient name grouping when the
     // title truly matches. Explicit session.project metadata is never changed.
-    const permanentMatch = (text: string) => permanentProjects.find((project) => {
-      const parts = tokens(project.title);
-      const words = tokens(text);
-      return parts.length > 0 && (parts.length > 1
-        ? words.some((_, index) => parts.every((word, offset) => words[index + offset] === word))
-        : parts[0]!.length >= 4 && words.includes(parts[0]!));
-    });
+    const permanentMatch = (text: string) =>
+      permanentProjects.find((project) => {
+        const parts = tokens(project.title);
+        const words = tokens(text);
+        return (
+          parts.length > 0 &&
+          (parts.length > 1
+            ? words.some((_, index) =>
+                parts.every((word, offset) => words[index + offset] === word),
+              )
+            : parts[0]!.length >= 4 && words.includes(parts[0]!))
+        );
+      });
     if (hint) {
-      const pinned = permanentProjects.find((project) => readable(project.title).toLowerCase() === readable(hint).toLowerCase());
+      const pinned = permanentProjects.find(
+        (project) => readable(project.title).toLowerCase() === readable(hint).toLowerCase(),
+      );
       if (pinned) return { key: pinned.key, title: pinned.title };
       const project = matchRegisteredProject(hint, projects);
       return project
@@ -255,7 +263,8 @@ export function groupChatGPTSessions(
   }
   // A single session does not need a project header.
   for (const [key, group] of groupMap) {
-    if (group.sessions.length > 1 || permanentProjects.some((project) => project.key === key)) continue;
+    if (group.sessions.length > 1 || permanentProjects.some((project) => project.key === key))
+      continue;
     ungrouped.push(...group.sessions);
     groupMap.delete(key);
   }
@@ -289,11 +298,14 @@ export function groupChatGPTSessions(
   // Permanent headers survive even when their last session closes and always
   // precede inferred groups. Persisting them is explicit user intent.
   for (const project of permanentProjects) {
-    if (!groupMap.has(project.key)) groupMap.set(project.key, { title: project.title, sessions: [] });
+    if (!groupMap.has(project.key))
+      groupMap.set(project.key, { title: project.title, sessions: [] });
   }
-  const ordered = [...groupMap].sort(([a], [b]) =>
-    Number(permanentProjects.some((project) => project.key === b)) -
-    Number(permanentProjects.some((project) => project.key === a)));
+  const ordered = [...groupMap].sort(
+    ([a], [b]) =>
+      Number(permanentProjects.some((project) => project.key === b)) -
+      Number(permanentProjects.some((project) => project.key === a)),
+  );
   const groups: ChatGPTSidebarGroup[] = ordered.map(([key, group]) => ({
     key,
     title: group.title,
@@ -403,28 +415,11 @@ export function layoutChatGPTSessions(
     bucket.members.forEach((session) => walk(session, 0));
     return rows;
   };
-  const priorityGroups: ChatGPTSidebarGroup[] = [];
-  const active = buckets.filter((bucket) => bucket.priority <= 1);
-  if (active.length)
-    priorityGroups.push({
-      key: "status:active",
-      title: null,
-      rows: active.flatMap(emitTree),
-    });
-  // Idle sessions retain project headings. Errors are always *below* idle.
-  const idle = buckets.filter((bucket) => bucket.priority === 2);
-  const idleGroups = groupChatGPTSessions(
-    idle.flatMap((bucket) => bucket.members),
-    projects,
-    permanentProjects,
-  );
-  priorityGroups.push(...idleGroups);
-  const errors = buckets.filter((bucket) => bucket.priority >= 3);
-  if (errors.length)
-    priorityGroups.push({
-      key: "status:errors",
-      title: "Errors",
-      rows: errors.flatMap(emitTree),
-    });
-  return priorityGroups;
+  // Activity mode is a single global queue: project grouping must not reorder
+  // idle sessions ahead of more recently active sessions from other projects.
+  // Explicit project assignments and permanent groups remain unchanged for
+  // Started mode and for project drop targets.
+  return buckets.length
+    ? [{ key: "status:activity", title: null, rows: buckets.flatMap(emitTree) }]
+    : [];
 }
