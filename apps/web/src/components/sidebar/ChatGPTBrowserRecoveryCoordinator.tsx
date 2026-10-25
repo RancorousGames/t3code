@@ -27,6 +27,7 @@ import {
   RECOVERY_GLOBAL_MS,
   RECOVERY_PER_SESSION_MS,
   RECOVERY_ORANGE_GRACE_MS,
+  RECOVERY_MISSING_COMPOSER_GRACE_MS,
   RECOVERY_REFRESH_TIMEOUT_MS,
   RECOVERY_SCAN_MS,
   cooldownElapsed,
@@ -152,8 +153,8 @@ function noteRecoveryConcern(
   recordChatGPTRecoveryEvent(environmentId, sessionId, "diagnostic", reason);
 }
 export function nextRedRetryDelay(_sessionId: string, _attempts: number): number {
-  // Uniform fixed cadence, independent of count and persisted across remounts.
-  return RECOVERY_PER_SESSION_MS;
+  // Red load failures use the global queue cadence, not a per-tab cooldown.
+  return 0;
 }
 function assistantSignature(snapshot: RecoverySnapshot): number {
   let hash = 2166136261;
@@ -390,6 +391,9 @@ export function ChatGPTBrowserRecoveryCoordinator({
     // A transient ChatGPT homepage during startup is not proof of URL loss.
     // Require an unchanged root page across scans before restoring its durable conversation.
     const lostRouteFirstSeen = new Map<string, { url: string; at: number }>();
+    // A temporarily missing composer must not turn a usable conversation into
+    // a reload. Still recover a genuinely stuck composer after a full minute.
+    const missingComposerFirstSeen = new Map<string, { conversationId: string; webview: Element; at: number }>();
     // Records live in localStorage rather than the React component lifecycle.
     // This prevents remounts from replaying a STOP or an ambiguous Continue.
     let cancelIndicatorWait: (() => void) | null = null;
@@ -415,6 +419,9 @@ export function ChatGPTBrowserRecoveryCoordinator({
         // Retain episode markers across hide/restore/remount. In particular,
         // a dispatched Continue cannot become eligible again after unmount.
         for (const id of trackedPhases.keys()) if (!eligibleIds.has(id)) phase(id, null);
+        for (const id of missingComposerFirstSeen.keys()) {
+          if (!eligibleIds.has(id)) missingComposerFirstSeen.delete(id);
+        }
 
         // Probe background pages in small batches. Their webviews may be
         // suspended offscreen until clicked, so DOM-only checks miss failures.
@@ -424,6 +431,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
           history,
           clicked,
           new Set(currentDeferredIds()),
+          new Set(currentRedIds()),
         );
         const wakeupSet = new Set(currentWakeupIds());
         const toWake = candidates.filter((id) => wakeupSet.has(id));
@@ -443,6 +451,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
           const state = readThreadPreviewState(threadRef);
           const tabId = state.activeTabId;
           if (!tabId || !state.serverEpoch) {
+            missingComposerFirstSeen.delete(sessionId);
             if (persistent.red[sessionId])
               recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "preview-not-ready");
             if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
@@ -455,6 +464,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
             (element) => element.dataset.previewTab === runtimeId,
           );
           if (!webview) {
+            missingComposerFirstSeen.delete(sessionId);
             if (persistent.red[sessionId])
               recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "guest-not-attached");
             if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
@@ -474,6 +484,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
             }
 
             if (isChatGPTGuestHibernated(runtimeId)) {
+              missingComposerFirstSeen.delete(sessionId);
               if (persistent.red[sessionId])
                 recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "guest-hibernated");
               continue; // Closed/archived and sleeping guests are not recovery targets.
@@ -485,6 +496,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
               await inspectChatGPTBrowserHealth(webview);
               const failure = chatGPTBrowserFailure(webview);
               if (failure) {
+                missingComposerFirstSeen.delete(sessionId);
                 recordChatGPTRecoveryEvent(envId, sessionId, "failure-observed", `browser-unresponsive:${failure}`);
                 const guestUrl = webview.getURL();
                 const automaticReset = failure === "blank-page" ||
@@ -499,7 +511,8 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   Array.from(document.querySelectorAll("webview")).includes(webview) &&
                   canAttempt &&
                   cooldownElapsed(recent.lastAttemptAt, attemptedAt, RECOVERY_GLOBAL_MS) &&
-                  cooldownElapsed(recent.bySession[sessionId] ?? 0, attemptedAt, RECOVERY_PER_SESSION_MS)
+                  (currentRedIds().includes(sessionId) ||
+                    cooldownElapsed(recent.bySession[sessionId] ?? 0, attemptedAt, RECOVERY_PER_SESSION_MS))
                 ) {
                   recordRecoveryAttempt(envId, sessionId, attemptedAt, currentSessionIds());
                   canAttempt = false;
@@ -520,6 +533,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
             }
             if (!expectedUrl) {
               lostRouteFirstSeen.delete(sessionId);
+              missingComposerFirstSeen.delete(sessionId);
               if (persistent.orange[sessionId] || persistent.red[sessionId])
                 noteRecoveryConcern(envId, persistent, sessionId, null,
                   "saved_conversation_url_lost", Date.now());
@@ -542,6 +556,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 typeof guestLocation === "string" &&
                 isChatGPTHomeUrl(guestLocation))
             ) {
+              missingComposerFirstSeen.delete(sessionId);
               const first = lostRouteFirstSeen.get(sessionId);
               if (!first || first.url !== expectedUrl) {
                 lostRouteFirstSeen.set(sessionId, { url: expectedUrl, at: Date.now() });
@@ -550,11 +565,11 @@ export function ChatGPTBrowserRecoveryCoordinator({
               if (
                 Date.now() - first.at < RECOVERY_SCAN_MS ||
                 !canAttempt ||
-                !cooldownElapsed(
+                (!currentRedIds().includes(sessionId) && !cooldownElapsed(
                   history.bySession[sessionId] ?? 0,
                   Date.now(),
                   RECOVERY_PER_SESSION_MS,
-                )
+                ))
               )
                 continue;
               // Both the preview's navigation AND the real guest must still
@@ -611,11 +626,11 @@ export function ChatGPTBrowserRecoveryCoordinator({
               const recent = readRecoveryHistory(envId);
               if (
                 !cooldownElapsed(recent.lastAttemptAt, attemptedAt, RECOVERY_GLOBAL_MS) ||
-                !cooldownElapsed(
+                (!currentRedIds().includes(sessionId) && !cooldownElapsed(
                   recent.bySession[sessionId] ?? 0,
                   attemptedAt,
                   RECOVERY_PER_SESSION_MS,
-                )
+                ))
               )
                 continue;
               recordRecoveryAttempt(envId, sessionId, attemptedAt, currentSessionIds());
@@ -648,6 +663,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
             const observed = await inspectFailure(webview, expectedUrl);
             if (disposed || !currentSessionIds().includes(sessionId)) continue;
             if (!observed) {
+              missingComposerFirstSeen.delete(sessionId);
               if (persistent.red[sessionId])
                 recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "probe-unverifiable");
               const episode = persistent.orange[sessionId];
@@ -673,6 +689,8 @@ export function ChatGPTBrowserRecoveryCoordinator({
               continue; // A detached guest is not proof of recovery.
             }
             const { problem, snapshot } = observed;
+            if (snapshot.activity !== "invalid: the ChatGPT composer is unavailable")
+              missingComposerFirstSeen.delete(sessionId);
             if (problem !== "healthy")
               recordChatGPTRecoveryEvent(envId, sessionId, "failure-observed", problem);
             const conversationId = chatGPTConversationIdFromUrl(expectedUrl)!;
@@ -695,6 +713,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
               continue;
             }
             if (snapshot.permanentReason) {
+              missingComposerFirstSeen.delete(sessionId);
               noteRecoveryConcern(
                 envId,
                 persistent,
@@ -887,6 +906,17 @@ export function ChatGPTBrowserRecoveryCoordinator({
             }
 
             phase(sessionId, "queued");
+            // A missing composer can occur while ChatGPT hydrates or briefly
+            // re-renders a healthy conversation. Verify the same exact broken
+            // conversation across >= 60 seconds before permitting a reload.
+            if (snapshot.activity === "invalid: the ChatGPT composer is unavailable") {
+              const first = missingComposerFirstSeen.get(sessionId);
+              if (!first || first.conversationId !== conversationId || first.webview !== webview) {
+                missingComposerFirstSeen.set(sessionId, { conversationId, webview, at: Date.now() });
+                continue;
+              }
+              if (Date.now() - first.at < RECOVERY_MISSING_COMPOSER_GRACE_MS) continue;
+            }
             if (problem !== "load-failure") {
               const key = snapshot.lastUserTurnKey;
               const turn = snapshot.lastUserTurn;
@@ -1036,30 +1066,19 @@ export function ChatGPTBrowserRecoveryCoordinator({
               saveBoundedState(envId, persistent);
             }
 
-            // Legacy persisted exponential deadlines may be far in the future.
-            // The history timestamp is the sole per-session cooldown authority.
-            const redNextAt =
-              problem === "load-failure"
-                ? (history.bySession[sessionId] ?? 0) + RECOVERY_PER_SESSION_MS
-                : 0;
-            if (
-              !canAttempt ||
-              Date.now() < redNextAt ||
-              !cooldownElapsed(
-                history.bySession[sessionId] ?? 0,
-                Date.now(),
-                RECOVERY_PER_SESSION_MS,
-              )
-            ) {
-              const nextAt = Math.max(
-                redNextAt,
-                (history.bySession[sessionId] ?? 0) + RECOVERY_PER_SESSION_MS,
-              );
+            // Confirmed load-error panels retry on the global cadence; orange
+            // problems retain the two-minute per-session cooldown.
+            const perSessionWait = problem !== "load-failure" && !cooldownElapsed(
+              history.bySession[sessionId] ?? 0,
+              Date.now(),
+              RECOVERY_PER_SESSION_MS,
+            );
+            if (!canAttempt || perSessionWait) {
               recordChatGPTRecoveryEvent(
                 envId,
                 sessionId,
                 "waiting",
-                !canAttempt ? "global-cooldown" : `next-eligible:${new Date(nextAt).toISOString()}`,
+                !canAttempt ? "global-cooldown" : `next-eligible:${new Date((history.bySession[sessionId] ?? 0) + RECOVERY_PER_SESSION_MS).toISOString()}`,
               );
               continue;
             }
@@ -1110,11 +1129,11 @@ export function ChatGPTBrowserRecoveryCoordinator({
               const attemptedAt = Date.now();
               if (
                 !cooldownElapsed(recent.lastAttemptAt, attemptedAt, RECOVERY_GLOBAL_MS) ||
-                !cooldownElapsed(
+                (problem !== "load-failure" && !cooldownElapsed(
                   recent.bySession[sessionId] ?? 0,
                   attemptedAt,
                   RECOVERY_PER_SESSION_MS,
-                )
+                ))
               )
                 continue;
 
@@ -1138,8 +1157,12 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   envId,
                   sessionId,
                   "retry-scheduled",
-                  `attempt:${persistent.red[sessionId]?.attempts},next:${new Date(persistent.red[sessionId]!.nextAt).toISOString()}`,
+                  `attempt:${persistent.red[sessionId]?.attempts},global-cadence`,
                 );
+              // A replaced/rehydrating guest must demonstrate the full sustained
+              // missing-composer failure again before another automatic reload.
+              if (snapshot.activity === "invalid: the ChatGPT composer is unavailable")
+                missingComposerFirstSeen.delete(sessionId);
               // Persist global/per-tab serialization independently of component mounts.
               recordRecoveryAttempt(envId, sessionId, attemptedAt, currentSessionIds());
               phase(sessionId, "refreshing");

@@ -55,7 +55,7 @@ describe("ChatGPT recovery diagnostics", () => {
     expect(readChatGPTRecoveryState("env", "one")).toMatchObject({
       lastAttemptAt: 1792534500000,
       retryCount: 3,
-      nextRetryAt: 1792534620000,
+      nextRetryAt: null,
       escalationReason: null,
     });
     expect(readChatGPTRecoveryState("env", "other").retryCount).toBe(0);

@@ -4,6 +4,7 @@ import {
   CHATGPT_LOAD_FAILURE_EXPRESSION,
   chatGPTRecoveryProblem,
   RECOVERY_ORANGE_GRACE_MS,
+  RECOVERY_MISSING_COMPOSER_GRACE_MS,
   RECOVERY_GLOBAL_MS,
   RECOVERY_PER_SESSION_MS,
   RECOVERY_SCAN_MS,
@@ -62,29 +63,30 @@ describe("ChatGPT conversation failure detection", () => {
 });
 
 describe("recoverable ChatGPT activity", () => {
-  it("queues only the dedicated load failure and both orange status notices", () => {
+  it("recovers confirmed load errors and sustained missing composers, but not unrelated invalid states", () => {
     expect(chatGPTRecoveryProblem("invalid: Could not load this ChatGPT conversation")).toBe(
       "load-failure",
     );
+    expect(chatGPTRecoveryProblem("invalid: the ChatGPT composer is unavailable")).toBe("load-failure");
     expect(chatGPTRecoveryProblem("interrupted")).toBe("interrupted");
     expect(chatGPTRecoveryProblem("delivery-timeout")).toBe("delivery-timeout");
     for (const state of [
       "working",
       "idle",
-      "invalid: the ChatGPT composer is unavailable",
       "invalid: this page is not on ChatGPT",
       "invalid: unrelated message",
     ]) {
       expect(chatGPTRecoveryProblem(state)).toBeNull();
     }
     expect(RECOVERY_ORANGE_GRACE_MS).toBe(600_000);
+    expect(RECOVERY_MISSING_COMPOSER_GRACE_MS).toBe(60_000);
   });
 });
 
 describe("serialized recovery cooldowns", () => {
-  it("checks every 30 seconds, with 30 seconds global and 2 minutes per session", () => {
-    expect(RECOVERY_SCAN_MS).toBe(30_000);
-    expect(RECOVERY_GLOBAL_MS).toBe(30_000);
+  it("checks every 20 seconds, with 20 seconds global and 2 minutes per session for non-red states", () => {
+    expect(RECOVERY_SCAN_MS).toBe(20_000);
+    expect(RECOVERY_GLOBAL_MS).toBe(20_000);
     expect(RECOVERY_PER_SESSION_MS).toBe(120_000);
     const now = 1_800_000;
     recordRecoveryAttempt("local", "comit", now, ["comit", "other"]);

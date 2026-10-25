@@ -1,5 +1,3 @@
-import { RECOVERY_PER_SESSION_MS } from "./components/sidebar/chatGPTConversationRecovery";
-
 /** Bounded, content-free diagnostic history readable through T3 session control. */
 export interface ChatGPTRecoveryEvent {
   readonly at: number;
@@ -101,12 +99,8 @@ export function readChatGPTRecoveryState(environmentId: string, sessionId: strin
     return {
       lastAttemptAt: typeof bySession === "number" ? bySession : null,
       retryCount: typeof r.attempts === "number" ? r.attempts : 0,
-      nextRetryAt:
-        typeof r.nextAt === "number"
-          ? typeof bySession === "number"
-            ? bySession + RECOVERY_PER_SESSION_MS
-            : Math.min(r.nextAt, Date.now() + RECOVERY_PER_SESSION_MS)
-          : null,
+      // Red failures have no per-session cooldown; the global queue is the limit.
+      nextRetryAt: null,
       orangeStage: typeof o.stage === "string" ? o.stage : null,
       // A legacy escalation must never hide a recovery candidate or stop wakeup.
       escalationReason: null,
