@@ -4,9 +4,40 @@ const PREFIX = "t3code:chatgpt-unknown-send-fence:v1:";
 const keyFor = (environmentId: EnvironmentId, sessionId: string) =>
   `${PREFIX}${environmentId}:${sessionId}`;
 
-/** A payload-free tombstone survives renderer restart. An unresolved send may
- * already have reached ChatGPT; loss of the in-memory text is not permission to
- * navigate away or click another Send button. */
+export interface DurableChatGPTSend {
+  readonly text: string;
+  readonly original: string;
+  readonly url: string;
+  readonly before: { readonly totalTurns: number; readonly lastUserTurnKey: string | null };
+  readonly policyEnrichment: {
+    schema: "t3-c05-browser-optional/v1";
+    status: "deferred" | "not_eligible" | "prepared" | "observed_user_turn";
+    reason?: string;
+    qitemIds?: string[];
+  };
+}
+
+/** Keep the reconciliation evidence alongside the reservation. A marker alone
+ * survives a restart but permanently loses the means to confirm delivery. */
+export function readDurableUnknownChatGPTSend(environmentId: EnvironmentId, sessionId: string):
+  { conversationUrl: string; reservedAt: number; attempt?: DurableChatGPTSend } | null {
+  const raw = window.localStorage.getItem(keyFor(environmentId, sessionId));
+  if (raw === null) return null;
+  const receipt = JSON.parse(raw);
+  if (![1, 2].includes(receipt.version) || typeof receipt.conversationUrl !== "string" ||
+      !Number.isFinite(receipt.reservedAt)) throw new Error("Unreadable UNKNOWN send receipt.");
+  if (receipt.version === 2) {
+    const a = receipt.attempt;
+    if (!a || typeof a.text !== "string" || typeof a.original !== "string" ||
+        a.url !== receipt.conversationUrl || !Number.isFinite(a.before?.totalTurns) ||
+        !(a.before.lastUserTurnKey === null || typeof a.before.lastUserTurnKey === "string") ||
+        a.policyEnrichment?.schema !== "t3-c05-browser-optional/v1")
+      throw new Error("Unreadable UNKNOWN send evidence.");
+  }
+  return receipt;
+}
+
+/** An unresolved send may already have reached ChatGPT. Never replay it. */
 export function hasDurableUnknownChatGPTSend(
   environmentId: EnvironmentId,
   sessionId: string,
@@ -24,6 +55,7 @@ export function reserveDurableUnknownChatGPTSend(
   sessionId: string,
   conversationUrl: string,
   replaceExisting: boolean,
+  attempt?: DurableChatGPTSend,
 ): void {
   const key = keyFor(environmentId, sessionId);
   try {
@@ -33,7 +65,8 @@ export function reserveDurableUnknownChatGPTSend(
         "An unresolved send receipt survived an earlier renderer; reconcile manually.",
       );
     }
-    const receipt = JSON.stringify({ version: 1, conversationUrl, reservedAt: Date.now() });
+    const receipt = JSON.stringify({ version: attempt ? 2 : 1, conversationUrl,
+      reservedAt: Date.now(), ...(attempt ? { attempt } : {}) });
     window.localStorage.setItem(key, receipt);
     if (window.localStorage.getItem(key) !== receipt)
       throw new Error("Persistence did not confirm the send fence.");

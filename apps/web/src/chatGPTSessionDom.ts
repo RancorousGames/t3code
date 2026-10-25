@@ -9,6 +9,8 @@ export interface PageInspection {
   activity: "working" | "idle" | "unknown";
   stuck: boolean;
   connectionInterrupted: boolean;
+  /** Positive, visible hard-limit notice (not text quoted in a chat turn). */
+  conversationFull: boolean;
   /** Sidebar activity probe output; shares exactly its guest-side rules. */
   uiActivity?: string;
   totalTurns: number;
@@ -41,6 +43,7 @@ export function inspectChatGPTPage(input: {
       activity: "unknown",
       stuck: false,
       connectionInterrupted: false,
+      conversationFull: false,
       totalTurns: 0,
       lastRole: null,
       lastText: "",
@@ -94,6 +97,13 @@ export function inspectChatGPTPage(input: {
       if (connectionInterrupted) break;
     }
   }
+  // A full conversation is terminal for this ChatGPT conversation, unlike
+  // a temporarily unavailable composer. Ignore quoted code and message bodies.
+  const conversationFull = [...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]')]
+    .some((el) => visible(el) &&
+      !el.closest('[data-message-author-role],pre,code,blockquote') &&
+      /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i.test(
+        (el.textContent ?? '').slice(0, 400)));
   // Evaluating the load-failure probe is delegated to T3's existing detector.
   const stuck = false;
   // ChatGPT changes its message wrappers periodically. Prefer explicit roles,
@@ -170,6 +180,7 @@ export function inspectChatGPTPage(input: {
     activity,
     stuck,
     connectionInterrupted,
+    conversationFull,
     totalTurns,
     lastRole: last?.role ?? null,
     lastText: latestText.slice(-400),

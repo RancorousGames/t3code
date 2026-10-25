@@ -7,6 +7,17 @@ const valid = Schema.is(DesktopAppActivationRequest);
 const common = { version: 1, requestId: "local-id" } as const;
 
 describe("ChatGPT local desktop bridge protocol", () => {
+  it("recognizes the explicit two-session rollover finalization without accepting invented conversation IDs", () => {
+    const old="385e7c81-23f5-48f3-89de-c1f9c63893d2";
+    const next="e47e787b-d36f-4043-9bf0-a4cdf3e2b3ee";
+    const action={...common,type:"chatgpt.sessions",action:"rollover_finalize",sessionId:old,
+      successorSessionId:next,priorConversationId:"6adad460-5cf4-83ed-b576-b7020f7da0a8",
+      successorConversationId:"6adbe8bc-26f4-83ed-aee4-c3aaed20c87c"};
+    expect(valid(action)).toBe(true);
+    expect(valid({...action,priorConversationId:"not-a-uuid"})).toBe(false);
+    expect(valid({...action,successorConversationId:"https://chatgpt.com/c/6adbe8bc-26f4-83ed-aee4-c3aaed20c87c"})).toBe(false);
+  });
+
   it("accepts source/recipient T3 IDs on sends without requiring a sender", () => {
     expect(
       valid({

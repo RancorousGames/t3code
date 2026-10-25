@@ -99,11 +99,14 @@ beforeEach(() => {
         );
       }
       if (script.includes("inspectChatGPTComposer"))
-        return { status: text ? "nonempty" : "empty", text, url: `https://chatgpt.com/c/${id}` };
+        return document.querySelector('#prompt-textarea')
+          ? { status: text ? "nonempty" : "empty", text, url: `https://chatgpt.com/c/${id}` }
+          : { status: "unknown", url: `https://chatgpt.com/c/${id}` };
       if (script.includes("const result ="))
         return {
           url: `https://chatgpt.com/c/${id}`,
-          activity: working ? "working" : "idle",
+          activity: working ? "working" : document.querySelector('#prompt-textarea') ? "idle" : "unknown",
+          conversationFull: !!document.querySelector('[role="alert"]')?.textContent?.includes('too long'),
           lastRole: pending ? "user" : "assistant",
           assistantHasContent: !pending,
           stuck: false,
@@ -162,17 +165,45 @@ describe("refresh loaded guest safety and atomic navigation", () => {
     await navigateChatGPTRefreshSafe(environment, session, runtime, id, "https://chatgpt.com/");
     expect(navigate).toHaveBeenCalledExactlyOnceWith("https://chatgpt.com/");
   });
-  it.each(["draft", "generating", "pending", "backup"])(
+  it("refreshes a stalled user turn without requiring an assistant reply", async () => {
+    pending = true;
+    document.querySelector('[data-message-author-role="assistant"]')!.remove();
+    const runtime = await assertChatGPTRefreshSafe(environment, session, id);
+    await navigateChatGPTRefreshSafe(environment, session, runtime, id, "https://chatgpt.com/");
+    expect(writer).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("https://chatgpt.com/");
+  });
+  it.each(["draft", "generating", "backup"])(
     "refuses %s before navigation",
     async (condition) => {
       if (condition === "draft") text = "unsent human draft";
       if (condition === "generating") working = true;
-      if (condition === "pending") pending = true;
       if (condition === "backup") writer.mockRejectedValueOnce(new Error("disk full"));
       await expect(assertChatGPTRefreshSafe(environment, session, id)).rejects.toThrow();
       expect(navigate).not.toHaveBeenCalled();
     },
   );
+  it("backs up and replaces a confirmed hard-limit page only when no editor exists", async () => {
+    document.querySelector('#prompt-textarea')!.remove();
+    const alert = document.createElement('div');
+    alert.setAttribute('role', 'alert');
+    alert.textContent = 'This conversation is too long';
+    document.body.appendChild(alert);
+    await wakeChatGPTRefreshPredecessor(environment, session, id);
+    const runtime = await assertChatGPTRefreshSafe(environment, session, id);
+    expect(writer).toHaveBeenCalledWith(expect.objectContaining({draft: '', url: `https://chatgpt.com/c/${id}`}));
+    await navigateChatGPTRefreshSafe(environment, session, runtime, id, 'https://chatgpt.com/');
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('https://chatgpt.com/');
+  });
+  it("never overrides an unsent draft even when the hard-limit notice is visible", async () => {
+    const alert = document.createElement('div');
+    alert.setAttribute('role', 'alert');
+    alert.textContent = 'This conversation is too long';
+    document.body.appendChild(alert);
+    text = 'existing human draft';
+    await expect(assertChatGPTRefreshSafe(environment, session, id)).rejects.toThrow();
+    expect(navigate).not.toHaveBeenCalled();
+  });
   it("rejects a draft typed after backup in the same guest task as navigation", async () => {
     const runtime = await assertChatGPTRefreshSafe(environment, session, id);
     document.querySelector("#prompt-textarea")!.textContent = "new draft";

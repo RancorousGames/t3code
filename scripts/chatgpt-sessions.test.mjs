@@ -20,6 +20,23 @@ NodeTest.test("list sends a correlated request on the existing local named pipe"
   NodeAssert.match(call.address, /^\\\\\.\\pipe\\t3code-app-/);
 });
 
+NodeTest.test("reconcile_send forwards an exact observed checkpoint without sending", async () => {
+  const conversationId = "6add6211-2198-83eb-afcd-04971b2b0891";
+  await controlSessions({ action: "reconcile_send", sessionId: "existing-session",
+    expectedConversationId: conversationId, message: "Already visible user turn" }, {
+      ...options, exchange: async (address, request) => {
+        calls.push({ address, request });
+        return { ok: true, data: { reconciled: true, conversationGuardValidated: true,
+          verifiedConversationId: conversationId } };
+      },
+    });
+  NodeAssert.equal(calls.at(-1).request.action, "reconcile_send");
+  NodeAssert.equal(calls.at(-1).request.expectedConversationId, conversationId);
+  NodeAssert.equal(calls.at(-1).request.message, "Already visible user turn");
+  await NodeAssert.rejects(controlSessions({ action: "reconcile_send",
+    sessionId: "existing-session", message: "Already visible user turn" }, options), /expectedConversationId/);
+});
+
 NodeTest.test("list forwards all supported UI filters through the desktop socket", async () => {
   for (const which of ["visible", "recent", "working", "blocked", "all"]) {
     await controlSessions({ action: "list", which }, options);
@@ -537,5 +554,40 @@ NodeTest.test("returns T3 failures unchanged", async () => {
       },
     ),
     /Actively generating/,
+  );
+});
+
+NodeTest.test("degraded manager rollover requires an explicit decision and leaves the old guest intact", async () => {
+  const input = {
+    action: "rollover_finalize",
+    sessionId: "old-manager",
+    successorSessionId: "new-manager",
+    priorConversationId: "6adbcd07-8da8-83ed-b657-31fedcddd634",
+    successorConversationId: "6adc11ea-6620-83eb-98e3-2493fe2c71b9",
+    recoveryMode: true,
+    managerDecision: true,
+    reason: "User authorized refreshing an unavailable manager, preserving its guest",
+  };
+  const sent = [];
+  const exchange = async (_address, request) => {
+    sent.push(request);
+    return { ok: true, data: {
+      action: "rollover_finalize", priorSessionId: request.sessionId,
+      successorSessionId: request.successorSessionId, persisted: true, acknowledged: true,
+      predecessorArchived: true, guestReleased: false,
+    }};
+  };
+  const result = await controlSessions(input, { exchange, home: ".t3" });
+  NodeAssert.equal(result.guestReleased, false);
+  NodeAssert.equal(sent[0].recoveryMode, true);
+  NodeAssert.equal(sent[0].managerDecision, true);
+  NodeAssert.match(sent[0].reason, /unavailable manager/);
+  await NodeAssert.rejects(
+    controlSessions({ ...input, managerDecision: false }, { exchange, home: ".t3" }),
+    /managerDecision/,
+  );
+  await NodeAssert.rejects(
+    controlSessions({ ...input, reason: "" }, { exchange, home: ".t3" }),
+    /reason/,
   );
 });

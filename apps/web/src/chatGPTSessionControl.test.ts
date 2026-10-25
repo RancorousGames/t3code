@@ -18,6 +18,7 @@ import {
   appendUnverifiedOpenRigPolicies,
   prepareChatGPTSessionMessage,
 } from "./chatGPTSessionMessaging";
+import { reserveDurableUnknownChatGPTSend } from "./chatGPTUncertainSendFence";
 
 const autoWake = (id: string) =>
   "[AUTOMATED TEMPORARY OMNIHUB KEEP-AWAKE; not a human message] If you have already been assigned work that is still authorized and unfinished, please resume it and report meaningful progress or blockers. If you are blocked on a human decision, finished, or awaiting input, do not invent work; state that fact. This monitor is a temporary bootstrap to be replaced by OpenRig's canonical scheduler. [Monitor attempt: " +
@@ -144,6 +145,10 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
             text: composerDraft,
           }; // read-only composer probe, no guest focus or transcript
         if (script.includes("const el=document.querySelector(")) return composerDraft; // existing draft check
+        if (script.includes("Array.from(document.querySelectorAll('[data-message-author-role")) {
+          const expected = script.match(/=== ("(?:\\.|[^"\\])*")/);
+          return visible && !!expected && typed === JSON.parse(expected[1]!);
+        }
         if (script.includes("Boolean(document.querySelector(")) return true; // composer waitFor
         if (script.includes("Contenteditable rejected text")) {
           expect(script).toContain("Composer contains an existing draft");
@@ -569,6 +574,47 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     } finally {
       fixture.guest.remove();
     }
+  });
+  it("restores UNKNOWN evidence after renderer restart and confirms delivery without another click", async () => {
+    const fixture = guestFixture(async () => { throw new Error("offline"); },
+      { virtualized: true, delayed: true, pressThrows: true });
+    const input = { environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3" }] as never,
+      action: "send" as const, sessionId: browserId,
+      expectedConversationId: conversationId, message: "Restart recovery task" };
+    try {
+      expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "unknown" });
+      resetUncertainChatGPTSendsForTests(true);
+      expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "unknown" });
+      expect(fixture.presses).toBe(1);
+      fixture.revealTurn();
+      const result = await runChatGPTSessionControl({ ...input, action: "read" });
+      expect(result).toMatchObject({ sendReceipt: { delivery: "user_turn_observed" } });
+      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(false);
+      expect(fixture.presses).toBe(1);
+    } finally { fixture.guest.remove(); }
+  });
+  it("resolves a legacy marker only at an explicitly supplied, observed history checkpoint", async () => {
+    const fixture = guestFixture(async () => { throw new Error("offline"); }, { pressThrows: true });
+    const input = { environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3" }] as never,
+      action: "send" as const, sessionId: browserId,
+      expectedConversationId: conversationId, message: "Known history checkpoint" };
+    try {
+      await runChatGPTSessionControl(input);
+      resetUncertainChatGPTSendsForTests();
+      reserveDurableUnknownChatGPTSend("local" as never, browserId,
+        `https://chatgpt.com/c/${conversationId}`, false);
+      await expect(runChatGPTSessionControl({ ...input, action: "reconcile_send", message: "Missing message" }))
+        .rejects.toThrow("not observable");
+      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
+      expect(await runChatGPTSessionControl({ ...input, action: "reconcile_send" })).toMatchObject({
+        reconciled: true, legacyReceipt: true, sendAttempted: false,
+        delivery: "legacy_unknown_resolved_at_observed_checkpoint",
+      });
+      expect(fixture.presses).toBe(1);
+      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(false);
+    } finally { fixture.guest.remove(); }
   });
   it("returns UNKNOWN after a clicked but unobserved message times out without replay", async () => {
     const fixture = guestFixture(
