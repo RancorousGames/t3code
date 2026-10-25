@@ -208,9 +208,14 @@ export async function sendInitialChatGPTPrompt(input: {
             // Neither a new conversation URL nor an empty composer confirms
             // delivery. Require the exact rendered user turn before acknowledging.
             const deliveredExpression = `(() => {
-            const expected = ${JSON.stringify(prompt)}.trim();
+            // ChatGPT renders multiline messages through nested Markdown blocks;
+            // textContent can omit visual paragraph separators. Match the actual
+            // visible user turn, never merely the disabled/cleared composer.
+            const normalize = (text) => (text || '').replace(/\\u200b/g, '')
+              .replace(/\\s+/g, ' ').trim();
+            const expected = normalize(${JSON.stringify(prompt)});
             return [...document.querySelectorAll('[data-message-author-role="user"]')]
-              .some((el) => el.textContent?.trim() === expected);
+              .some((el) => normalize(el.innerText || el.textContent) === expected);
           })()`;
             while (now() < deadline) {
               try {
