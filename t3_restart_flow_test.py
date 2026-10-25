@@ -64,6 +64,22 @@ class RestartOrderTest(unittest.TestCase):
             countdown.assert_not_called()
 
 
+class RestartDeadlineTest(unittest.TestCase):
+    def test_postpones_add_exponential_minutes_without_losing_elapsed_time(self):
+        clock = [100.0]
+        with patch.object(restart.time, "monotonic", side_effect=lambda: clock[0]):
+            countdown = restart.RestartDeadline(15)
+            clock[0] = 114.25  # The first postponement can be clicked at the last second.
+            self.assertEqual(countdown.remaining_seconds(), 1)
+            for minutes in (1, 2, 4, 8, 16, 16):
+                self.assertEqual(countdown.next_postpone_minutes(), minutes)
+                remaining = countdown.remaining_seconds()
+                countdown.postpone()
+                self.assertEqual(countdown.remaining_seconds(), remaining + minutes * 60)
+            clock[0] = countdown.deadline + 0.1
+            self.assertEqual(countdown.remaining_seconds(), 0)
+
+
 class StageActivationTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
