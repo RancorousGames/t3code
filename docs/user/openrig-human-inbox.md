@@ -16,6 +16,12 @@ Selections are **local drafts** until you explicitly press **Send answers**. The
 
 The action endpoint is **not** part of the Phase-1 bridge. It requires a full OpenRig daemon with its original queue writer and a separate secret (`OPENRIG_T3_HUMAN_ANSWER_TOKEN`, at least 24 characters) made available to **OpenRig and T3 desktop main/IPC**. The secret must **never** be placed in the renderer, web bundles, local storage or a message. Existing optional OpenRig integration bearer authorization still applies. Do not interpret the presence of a rendered form or a clickable choice as proof the write service is configured.
 
+## TaskBoard review gates
+
+When an agent is blocked on a linked TaskBoard review, its inbox message shows the review's thumbnail and an **Open review** button, which opens the local TaskBoard page in your browser. Only loopback (`localhost`/`127.0.0.1`) TaskBoard links open.
+
+After reviewing, choose a verdict (or use the verdict already recorded in TaskBoard), add an optional note, and press **Release gate…**. The desktop shows a native confirmation before sending anything. The result reports two separate things: whether OpenRig released the gate, and whether the agent's wake-up was delivered. If the result is unknown, T3 never sends it again on its own; use **Check status**. TaskBoard does not release gates in T3 automatically. Releasing uses the same `OPENRIG_T3_HUMAN_ANSWER_TOKEN` setup as interactive answers.
+
 ## Organizing the inbox
 
 Right-click a message (or press **Shift+F10** with its row focused) to mark read/unread, archive locally, move to local trash, restore, or copy. There is also a **...** button in the message-detail footer. **Manage** above the list provides bulk actions: archive all loaded, archive all loaded read, move all loaded or all loaded read to local trash, and restore all loaded archived/trashed. Bulk trash requires confirmation. Archived and Trash each have their own selectable folder, and both support restoration.

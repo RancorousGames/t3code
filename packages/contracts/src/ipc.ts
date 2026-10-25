@@ -1648,8 +1648,77 @@ export const DesktopOpenRigInboxItemSchema = Schema.Struct({
   /** An update is surfaced only when explicitly requested or an exceptional milestone. */
   notificationReason: Schema.optional(Schema.Literals(["requested", "milestone"])),
   relatedTo: Schema.optional(Schema.String),
+  /** Linked TaskBoard review gate; only `decodeOpenRigReviewGate` output may be trusted. */
+  reviewGate: Schema.optional(Schema.Unknown),
 });
 export type DesktopOpenRigInboxItem = typeof DesktopOpenRigInboxItemSchema.Type;
+
+export const OPENRIG_REVIEW_GATE_VERDICTS = ["approved", "changes_requested", "rejected"] as const;
+export type OpenRigReviewGateVerdict = (typeof OPENRIG_REVIEW_GATE_VERDICTS)[number];
+export interface OpenRigReviewGate {
+  readonly gateQitemId: string;
+  readonly reviewId: string;
+  readonly reviewRevision: string;
+  /** A display-only link from OpenRig; the containing human_gate item carries live gate state. */
+  readonly authorityVerified: false;
+  readonly title: string | null;
+  readonly reviewUrl: string | null;
+  readonly thumbnailUrl: string | null;
+}
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+/** TaskBoard is a local web tool: only credential-free loopback http(s) URLs. */
+export function safeOpenRigReviewUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 2_048) return null;
+  try {
+    const url = new URL(value);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      !LOOPBACK_HOSTS.has(url.hostname) ||
+      url.username ||
+      url.password
+    )
+      return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+function safeReviewThumbnail(value: unknown): string | null {
+  if (
+    typeof value === "string" &&
+    value.length <= 200_000 &&
+    /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/u.test(value)
+  )
+    return value;
+  return safeOpenRigReviewUrl(value);
+}
+
+/** Strict decode of an inbox item's review-gate link. Anything malformed is not a gate. */
+export function decodeOpenRigReviewGate(value: unknown): OpenRigReviewGate | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const gate = value as Record<string, unknown>;
+  if (
+    typeof gate.gateQitemId !== "string" ||
+    !/^qitem-[A-Za-z0-9_-]{1,100}$/u.test(gate.gateQitemId) ||
+    typeof gate.reviewId !== "string" ||
+    !/^[A-Za-z0-9._:-]{1,128}$/u.test(gate.reviewId) ||
+    typeof gate.reviewRevision !== "string" ||
+    !/^[A-Za-z0-9._:-]{1,128}$/u.test(gate.reviewRevision) ||
+    gate.authorityVerified !== false
+  )
+    return null;
+  return {
+    gateQitemId: gate.gateQitemId,
+    reviewId: gate.reviewId,
+    reviewRevision: gate.reviewRevision,
+    authorityVerified: false,
+    title: typeof gate.title === "string" ? gate.title.slice(0, 200) : null,
+    reviewUrl: safeOpenRigReviewUrl(gate.reviewUrl),
+    thumbnailUrl: safeReviewThumbnail(gate.thumbnailUrl),
+  };
+}
 export const DesktopOpenRigInboxSchema = Schema.Struct({
   available: Schema.Boolean,
   reason: Schema.optional(Schema.String),
@@ -1723,6 +1792,48 @@ export const DesktopOpenRigOperatorReplyResultSchema = Schema.Union([
   }),
 ]);
 export type DesktopOpenRigOperatorReplyResult = typeof DesktopOpenRigOperatorReplyResultSchema.Type;
+
+/** Renderer names the selected inbox item and gate only. MAIN re-reads both, then asks the human natively. */
+export const DesktopOpenRigReviewGateSelectionSchema = Schema.Struct({
+  destination: Schema.Literal("human@kernel"),
+  qitemId: Schema.String,
+  gateQitemId: Schema.String,
+});
+export type DesktopOpenRigReviewGateSelection =
+  typeof DesktopOpenRigReviewGateSelectionSchema.Type;
+export const DesktopOpenRigReviewGateResolveInputSchema = Schema.Struct({
+  destination: Schema.Literal("human@kernel"),
+  qitemId: Schema.String,
+  gateQitemId: Schema.String,
+  reviewId: Schema.String,
+  reviewRevision: Schema.String,
+  verdict: Schema.Literals(OPENRIG_REVIEW_GATE_VERDICTS),
+  requestId: Schema.String,
+  note: Schema.optional(Schema.String),
+});
+export type DesktopOpenRigReviewGateResolveInput =
+  typeof DesktopOpenRigReviewGateResolveInputSchema.Type;
+/** `gateReleased` is durable; `delivery` is the transport status, not proof of agent consumption. */
+export const DesktopOpenRigReviewGateResolveResultSchema = Schema.Union([
+  Schema.Struct({
+    outcome: Schema.Literal("released"),
+    requestId: Schema.String,
+    gateQitemId: Schema.String,
+    reviewId: Schema.String,
+    reviewRevision: Schema.String,
+    verdict: Schema.Literals(OPENRIG_REVIEW_GATE_VERDICTS),
+    status: Schema.Literals(["recorded", "idempotent"]),
+    gateReleased: Schema.Literal(true),
+    delivery: Schema.Literals(["verified", "queued", "indeterminate", "failed"]),
+    wakeIntentDurable: Schema.Boolean,
+  }),
+  Schema.Struct({
+    outcome: Schema.Literals(["not_sent", "cancelled", "unknown", "unconfirmed"]),
+    reason: Schema.String,
+  }),
+]);
+export type DesktopOpenRigReviewGateResolveResult =
+  typeof DesktopOpenRigReviewGateResolveResultSchema.Type;
 
 export interface DesktopChatGPTDraftSnapshotInput {
   readonly sessionId: string;
@@ -1798,6 +1909,16 @@ export interface DesktopBridge {
   reconcileOpenRigOperatorReply?: (
     input: DesktopOpenRigOperatorReplyInput,
   ) => Promise<DesktopOpenRigOperatorReplyResult>;
+  /** MAIN opens the review URL it re-read from OpenRig; the renderer never supplies a URL. */
+  openOpenRigReviewGate?: (input: DesktopOpenRigReviewGateSelection) => Promise<boolean>;
+  /** MAIN re-validates the selected gate and shows a native confirmation before any POST. */
+  resolveOpenRigReviewGate?: (
+    input: DesktopOpenRigReviewGateResolveInput,
+  ) => Promise<DesktopOpenRigReviewGateResolveResult>;
+  /** Read-only receipt lookup for an UNKNOWN resolve; never re-POSTs. */
+  reconcileOpenRigReviewGate?: (
+    input: DesktopOpenRigReviewGateResolveInput,
+  ) => Promise<DesktopOpenRigReviewGateResolveResult>;
   listOpenRigSessions?: () => Promise<readonly DesktopOpenRigSession[]>;
   listOpenRigManagedSessions?: (seatId: string) => Promise<DesktopOpenRigSeatSessions>;
   discoverOpenRigSeats?: () => Promise<DesktopOpenRigSeatTopology>;

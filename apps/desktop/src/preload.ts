@@ -137,6 +137,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.OPENRIG_OPERATOR_REPLY_CHANNEL, input),
   reconcileOpenRigOperatorReply: (input) =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_OPERATOR_REPLY_LOOKUP_CHANNEL, input),
+  openOpenRigReviewGate: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_REVIEW_GATE_OPEN_CHANNEL, input),
+  resolveOpenRigReviewGate: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_REVIEW_GATE_RESOLVE_CHANNEL, input),
+  reconcileOpenRigReviewGate: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_REVIEW_GATE_RECEIPT_CHANNEL, input),
   listOpenRigSessions: () => ipcRenderer.invoke(IpcChannels.OPENRIG_LIST_SESSIONS_CHANNEL),
   listOpenRigManagedSessions: (seatId) =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_MANAGED_SESSIONS_CHANNEL, seatId),
