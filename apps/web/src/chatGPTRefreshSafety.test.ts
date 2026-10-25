@@ -7,7 +7,12 @@ import {
   assertChatGPTRefreshSafe,
   navigateChatGPTRefreshSafe,
   wakeChatGPTRefreshPredecessor,
+  hasUncertainChatGPTSend,
 } from "./chatGPTSessionControl";
+import {
+  reserveDurableUnknownChatGPTSend,
+  releaseDurableUnknownChatGPTSend,
+} from "./chatGPTUncertainSendFence";
 
 const id = "6ad81f45-bd10-83ed-8128-6a3d584c876c";
 const environment = EnvironmentId.make("refresh-lab");
@@ -57,7 +62,10 @@ beforeEach(() => {
   writer = vi.fn(async () => ({ uncertainSendPresent: false }));
   navigate = vi.fn();
   vi.stubGlobal("document", dom.window.document);
-  vi.stubGlobal("window", { desktopBridge: { savePrivateChatGPTDraftSnapshot: writer } });
+  vi.stubGlobal("window", {
+    localStorage: dom.window.localStorage,
+    desktopBridge: { savePrivateChatGPTDraftSnapshot: writer },
+  });
   vi.spyOn(dom.window.Element.prototype, "getClientRects").mockReturnValue({
     length: 1,
   } as DOMRectList);
@@ -113,6 +121,18 @@ afterEach(() => {
 });
 
 describe("refresh loaded guest safety and atomic navigation", () => {
+  it("refuses refresh when an UNKNOWN send survived renderer restart without its original text", async () => {
+    const url = `https://chatgpt.com/c/${id}`;
+    reserveDurableUnknownChatGPTSend(environment, session.id, url, false);
+    expect(hasUncertainChatGPTSend(environment, session.id)).toBe(true);
+    await expect(assertChatGPTRefreshSafe(environment, session, id)).rejects.toThrow(
+      "UNKNOWN sends",
+    );
+    expect(writer).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    releaseDurableUnknownChatGPTSend(environment, session.id);
+    expect(hasUncertainChatGPTSend(environment, session.id)).toBe(false);
+  });
   it("wakes a hibernated predecessor in its existing slot before the private draft backup", async () => {
     hibernated = true;
     await wakeChatGPTRefreshPredecessor(environment, session, id);
