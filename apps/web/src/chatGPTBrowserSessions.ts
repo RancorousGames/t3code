@@ -19,6 +19,9 @@ export const BrowserSession = Schema.Struct({
   title: Schema.String,
   // Present only for sessions created after timestamp tracking was introduced.
   createdAt: Schema.optional(Schema.Number),
+  // Immutable creation evidence. Older entries without it remain unknown unless
+  // they carry an explicit backend spawn reservation; titles/lineage are not proof.
+  creationOrigin: Schema.optional(Schema.Literals(["manual", "backend"])),
   // An exact backend spawn reservation. Manual sessions and warm spares never carry it.
   spawnRequestId: Schema.optional(Schema.String),
   // Only explicit UI-created fresh chats carry this; legacy and backend guests do not.
@@ -53,6 +56,15 @@ export const BrowserSession = Schema.Struct({
   ),
 });
 export type BrowserSession = typeof BrowserSession.Type;
+
+/** Persisted origin has priority except where a backend reservation proves otherwise. */
+export function chatGPTSessionCreationOrigin(
+  session: BrowserSession,
+): "manual" | "backend" | "unknown" {
+  if (session.spawnRequestId?.trim()) return "backend";
+  return session.creationOrigin ?? "unknown";
+}
+
 const BrowserSessions = Schema.Array(BrowserSession);
 export const chatGPTBrowserSessionsKey = (environmentId: EnvironmentId | null) =>
   `t3code:chatgpt-browser:sessions:${environmentId ?? "unconnected"}`;
@@ -375,8 +387,14 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       let id = randomUUID();
       // Read the current slot synchronously: multiple buttons, the palette and
       // desktop automation can request sessions without waiting for a render.
-      // Backend spawns always get a fresh UUID/guest, never the user-facing warm spare.
-      if (environmentId && !metadata?.initialConversationUrl && !metadata?.spawnRequestId) {
+      // A warm spare belongs only to an explicit human UI action. Backend or
+      // unspecified callers always receive a fresh UUID/guest, even without a receipt.
+      if (
+        environmentId &&
+        metadata?.explicitlyUserCreated === true &&
+        !metadata.initialConversationUrl &&
+        !metadata.spawnRequestId
+      ) {
         const spareId = getLocalStorageItem(chatGPTPrewarmKey(environmentId), Schema.String);
         if (spareId) {
           const threadRef = chatGPTBrowserThreadRef(environmentId, spareId);
@@ -431,7 +449,11 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             id,
             title: name?.trim() || `ChatGPT ${number}`,
             createdAt,
-            ...(metadata?.spawnRequestId ? { spawnRequestId: metadata.spawnRequestId } : {}),
+            ...(metadata?.spawnRequestId
+              ? { creationOrigin: "backend" as const, spawnRequestId: metadata.spawnRequestId }
+              : metadata?.explicitlyUserCreated && !metadata.initialConversationUrl
+                ? { creationOrigin: "manual" as const }
+                : {}),
             ...(metadata?.explicitlyUserCreated &&
             !name &&
             !metadata.initialConversationUrl &&

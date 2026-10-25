@@ -16,7 +16,8 @@ function BrowserIndex() {
     void navigate({
       to: "/browser/$browserSessionId",
       params: {
-        browserSessionId: sessions.find((session) => !session.hidden)?.id ?? createSession(),
+        browserSessionId: sessions.find((session) => !session.hidden)?.id ??
+          createSession(undefined, { explicitlyUserCreated: true }),
       },
       replace: true,
     });

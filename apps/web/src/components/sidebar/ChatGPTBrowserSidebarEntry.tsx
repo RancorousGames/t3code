@@ -5,6 +5,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   ArrowDownUpIcon,
+  BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ChevronUpIcon,
@@ -14,6 +15,7 @@ import {
   PlusIcon,
   SearchIcon,
   SlidersHorizontalIcon,
+  UserRoundIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -31,6 +33,7 @@ import {
   chatGPTBrowserLastUrlKey,
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserThreadRef,
+  chatGPTSessionCreationOrigin,
   useChatGPTBrowserSessions,
   type ChatGPTSessionRemovalSource,
 } from "../../chatGPTBrowserSessions";
@@ -1027,6 +1030,7 @@ export function ChatGPTBrowserSidebarEntry({
                           </div>
                         ) : null;
                         const spawn = spawnCreation.get(session.id);
+                        const creationOrigin = chatGPTSessionCreationOrigin(session);
                         const timeline = readChatGPTSessionTimeline(
                           environmentId,
                           session,
@@ -1041,6 +1045,13 @@ export function ChatGPTBrowserSidebarEntry({
                           <div className="flex max-w-80 flex-col gap-2 text-left">
                             <div>{summary}</div>
                             <div className="flex flex-col gap-1 border-t border-border pt-2 text-xs">
+                              <span>
+                                Origin: {creationOrigin === "manual"
+                                  ? "Manual"
+                                  : creationOrigin === "backend"
+                                    ? "AI/backend spawned"
+                                    : "Unknown (legacy)"}
+                              </span>
                               <span>
                                 Created: {formatChatGPTSessionDateTime(timeline.createdAt)}
                               </span>
@@ -1168,6 +1179,18 @@ export function ChatGPTBrowserSidebarEntry({
                                         {isVerifiedManager && (
                                           <CrownIcon
                                             aria-label="Verified OpenRig manager"
+                                            className="size-3.5 shrink-0 text-info"
+                                          />
+                                        )}
+                                        {creationOrigin === "manual" && (
+                                          <UserRoundIcon
+                                            aria-label="Manually created ChatGPT session"
+                                            className="size-3.5 shrink-0 text-muted-foreground"
+                                          />
+                                        )}
+                                        {creationOrigin === "backend" && (
+                                          <BotIcon
+                                            aria-label="Backend-spawned ChatGPT session"
                                             className="size-3.5 shrink-0 text-info"
                                           />
                                         )}

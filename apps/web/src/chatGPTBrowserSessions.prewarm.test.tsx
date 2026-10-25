@@ -40,7 +40,11 @@ vi.mock("./previewStateStore", () => ({
 }));
 
 import { markChatGPTSpareReady, releaseChatGPTSpare } from "./chatGPTBrowserPrewarm";
-import { useChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
+import {
+  chatGPTBrowserSessionsKey,
+  chatGPTSessionCreationOrigin,
+  useChatGPTBrowserSessions,
+} from "./chatGPTBrowserSessions";
 
 const env = EnvironmentId.make("prewarm-integration");
 let harness: ReturnType<typeof useChatGPTBrowserSessions>;
@@ -101,12 +105,66 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     expect(manual?.manualEmptyCandidateCreatedAt).toBeGreaterThan(0);
     expect(backend?.manualEmptyCandidateCreatedAt).toBeUndefined();
     expect(inferred?.manualEmptyCandidateCreatedAt).toBeUndefined();
+    expect(chatGPTSessionCreationOrigin(manual!)).toBe("manual");
+    expect(chatGPTSessionCreationOrigin(backend!)).toBe("backend");
+    expect(chatGPTSessionCreationOrigin(inferred!)).toBe("unknown");
     await act(async () => harness.disqualifyManualEmptyCandidate(manuallyCreated));
     expect(
       harness.sessions.find((session) => session.id === manuallyCreated)
         ?.manualEmptyCandidateDisqualified,
     ).toBe(true);
   });
+  it("persists explicit origins through storage rehydration without guessing legacy origin", async () => {
+    let manual = "";
+    let backend = "";
+    await act(async () => {
+      manual = harness.createSession(undefined, { explicitlyUserCreated: true });
+      backend = harness.createSession("Backend worker", { spawnRequestId: "backend-1" });
+    });
+    const raw = window.localStorage.getItem(chatGPTBrowserSessionsKey(env));
+    expect(raw).toBeTruthy();
+    const saved = JSON.parse(raw!) as Array<{ id: string; creationOrigin?: string }>;
+    expect(saved.find((session) => session.id === manual)?.creationOrigin).toBe("manual");
+    expect(saved.find((session) => session.id === backend)?.creationOrigin).toBe("backend");
+    await act(async () => renderer?.unmount());
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    expect(chatGPTSessionCreationOrigin(harness.sessions.find((s) => s.id === manual)!)).toBe(
+      "manual",
+    );
+    expect(chatGPTSessionCreationOrigin(harness.sessions.find((s) => s.id === backend)!)).toBe(
+      "backend",
+    );
+    // Initial historical record has neither backend reservation nor creation marker.
+    expect(chatGPTSessionCreationOrigin(harness.sessions.find((s) => s.id === "chatgpt")!)).toBe(
+      "unknown",
+    );
+    // A legacy backend reservation is still explicit evidence even without the new marker.
+    expect(chatGPTSessionCreationOrigin({ id: "old-worker", title: "Worker", spawnRequestId: "old-id" })).toBe(
+      "backend",
+    );
+  });
+
+  it("never lends a manual warm spare to an unspecified or backend caller", async () => {
+    await act(async () => harness.setPrewarmedSessionId("prepared-session"));
+    markChatGPTSpareReady(env, "prepared-session");
+    let unspecified = "";
+    let backend = "";
+    let manual = "";
+    await act(async () => {
+      unspecified = harness.createSession("Unnamed caller");
+      backend = harness.createSession("Backend", { spawnRequestId: "backend-2" });
+      manual = harness.createSession(undefined, { explicitlyUserCreated: true });
+    });
+    expect(unspecified).not.toBe("prepared-session");
+    expect(backend).not.toBe("prepared-session");
+    expect(manual).toBe("prepared-session");
+    expect(chatGPTSessionCreationOrigin(harness.sessions.find((s) => s.id === unspecified)!)).toBe(
+      "unknown",
+    );
+  });
+
   it("separates manually opened blank guest from a subsequent backend spawn", async () => {
     await act(async () => {
       harness.setPrewarmedSessionId("prepared-session");
@@ -115,7 +173,7 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     let manual = "";
     let backend = "";
     await act(async () => {
-      manual = harness.createSession("User's blank new chat");
+      manual = harness.createSession("User's blank new chat", { explicitlyUserCreated: true });
       backend = harness.createSession("Backend worker", { spawnRequestId: "backend-request-1" });
     });
     expect(manual).toBe("prepared-session");
@@ -153,7 +211,7 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     );
     let manual = "";
     await act(async () => {
-      manual = harness.createSession();
+      manual = harness.createSession(undefined, { explicitlyUserCreated: true });
     });
     expect(manual).toBe("prepared-session");
     expect(harness.sessions).toHaveLength(4);
@@ -165,7 +223,7 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     markChatGPTSpareReady(env, "prepared-session");
     let created: string | undefined;
     await act(async () => {
-      created = harness.createSession("New work");
+      created = harness.createSession("New work", { explicitlyUserCreated: true });
     });
     expect(created).toBe("prepared-session");
     expect(harness.sessions.find((session) => session.id === created)?.title).toBe("New work");
@@ -178,7 +236,7 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     // Only one browser can claim a prepared owner, even if the second click is immediate.
     let second: string | undefined;
     await act(async () => {
-      second = harness.createSession();
+      second = harness.createSession(undefined, { explicitlyUserCreated: true });
     });
     expect(second).not.toBe(created);
     expect(second).not.toBe(harness.prewarmedSessionId);
@@ -193,7 +251,7 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     preview.loading = true;
     let created: string | undefined;
     await act(async () => {
-      created = harness.createSession();
+      created = harness.createSession(undefined, { explicitlyUserCreated: true });
     });
     expect(created).not.toBe("prepared-session");
     expect(harness.prewarmedSessionId).toBe("prepared-session");
@@ -201,7 +259,7 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     preview.loading = false;
     preview.url = "https://chatgpt.com/c/existing-chat";
     await act(async () => {
-      created = harness.createSession();
+      created = harness.createSession(undefined, { explicitlyUserCreated: true });
     });
     expect(created).not.toBe("prepared-session");
     expect(harness.prewarmedSessionId).toBe("prepared-session");
@@ -209,7 +267,7 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     preview.url = "https://chatgpt.com/";
     preview.hasWebContents = false;
     await act(async () => {
-      created = harness.createSession();
+      created = harness.createSession(undefined, { explicitlyUserCreated: true });
     });
     expect(created).not.toBe("prepared-session");
     expect(harness.prewarmedSessionId).toBe("prepared-session");
