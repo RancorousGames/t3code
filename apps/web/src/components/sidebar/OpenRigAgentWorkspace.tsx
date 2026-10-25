@@ -47,6 +47,7 @@ import {
   historyHref,
   isPreIntentLaunchRejection,
   primarySession,
+  planSeatRoute,
   seatBlockers,
   seatStatusTone,
   sendDefinitelyNotSent,
@@ -380,6 +381,7 @@ export function OpenRigAgentWorkspace({
           <TabPanel id="overview" tab={tab}>
             <div className={`grid min-h-0 flex-1 ${compact ? "grid-cols-1 grid-rows-[minmax(0,1fr)_auto] overflow-y-auto" : "grid-cols-[minmax(0,1fr)_minmax(250px,300px)]"}`}>
               <ChatPanel
+                key={agent.id}
                 agent={agent}
                 seat={seat}
                 primary={primary}
@@ -674,11 +676,122 @@ function ChatPanel({
   onManageSessions: () => void;
 }) {
   const [sending, setSending] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const repairInFlight = useRef(false);
   const [feedback, setFeedback] = useState("");
+  const currentSeatRef = useRef(agent.id);
+  useEffect(() => {
+    currentSeatRef.current = agent.id;
+    return () => { currentSeatRef.current = ""; };
+  }, [agent.id]);
   const draft = memory.draft;
   const setDraft = (value: string) => onMemoryChange((current) => ({ ...current, draft: value }));
   const href = historyHref(primary?.target ?? null);
   const heldSend = memory.heldSend;
+  const route = planSeatRoute(seat.ledger, seat.profile);
+
+  /** A click may select ONE exact existing session, or create ONE seat-configured session.
+   * Never use legacy bindings, implicit adoption, or an UNKNOWN operation as a retry signal. */
+  async function establishRoute() {
+    if (repairInFlight.current || sending || heldSend || seat.mutating || memory.unresolvedOperationId) return;
+    repairInFlight.current = true;
+    setRepairing(true);
+    setFeedback("");
+    const stillHere = () => currentSeatRef.current === agent.id;
+    try {
+      const read = window.desktopBridge?.listOpenRigManagedSessions;
+      if (!read) throw new Error("Managed-session read is not installed.");
+      const fresh = await read(agent.id);
+      if (!stillHere()) return;
+      seat.setLedger(fresh);
+      let profile = seat.profile;
+      if (fresh.sessions.length === 0) {
+        const readProfile = window.desktopBridge?.readOpenRigExecutionProfile;
+        if (!readProfile) throw new Error("Execution-profile read is not installed.");
+        profile = await readProfile(agent.id);
+        if (!stillHere()) return;
+        seat.setProfile(profile);
+      }
+      const decision = planSeatRoute(fresh, profile);
+      if (decision.kind === "blocked") {
+        setFeedback(decision.reason);
+        return;
+      }
+      if (decision.kind === "ready") {
+        setFeedback("OpenRig already confirms an exact active primary. Route refreshed; no message sent.");
+        return;
+      }
+      const select = window.desktopBridge?.selectOpenRigPrimarySession;
+      if (decision.kind === "select") {
+        if (!select) throw new Error("Primary selection is not installed.");
+        try {
+          const updated = await select({ seatId: agent.id, sessionId: decision.sessionId });
+          if (!stillHere()) return;
+          seat.setLedger(updated);
+          setFeedback(canMessagePrimary(primarySession(updated))
+            ? "OpenRig confirmed the exact primary. You can send your draft."
+            : "Selection returned without a routable primary. Inspect Sessions.");
+        } catch (error) {
+          if (stillHere()) setFeedback("Primary selection is unconfirmed: " + explanation(error) +
+            ". Refresh and inspect OpenRig's ledger; do not assume routing changed.");
+        }
+        return;
+      }
+      // This is an explicit operator click, with NO existing managed sessions,
+      // a freshly read execution profile, and a unique operation ID.
+      const launch = window.desktopBridge?.startOpenRigManagedSession;
+      if (!launch) throw new Error("Managed session creation is not installed.");
+      const operationId = randomUUID();
+      if (!stillHere()) return;
+      onMemoryChange((current) => ({ ...current, unresolvedOperationId: operationId }));
+      let launched: DesktopOpenRigSeatSessions;
+      try {
+        launched = await launch({ seatId: agent.id, operationId, kind: decision.mode });
+      } catch (error) {
+        if (!stillHere()) return;
+        const reason = explanation(error);
+        if (isPreIntentLaunchRejection(reason)) {
+          onMemoryChange((current) => ({ ...current, unresolvedOperationId: null }));
+          setFeedback("OpenRig refused creation before launch: " + reason);
+        } else {
+          setFeedback("Creation outcome UNKNOWN (" + operationId + "): " + reason +
+            ". Inspect Sessions/ledger before clearing the hold or starting another conversation.");
+        }
+        seat.refresh();
+        return;
+      }
+      if (!stillHere()) return;
+      seat.setLedger(launched);
+      onMemoryChange((current) => ({ ...current, unresolvedOperationId: null }));
+      const owned = launched.sessions.find((s) => s.operationId === operationId);
+      // Newly created pending sessions may not have a provider conversation URL
+      // yet. Never select or replace them until OpenRig records an exact target.
+      const after = planSeatRoute(launched, profile);
+      if (owned?.status === "active" && after.kind === "select" && after.sessionId === owned.id && select) {
+        try {
+          const selected = await select({ seatId: agent.id, sessionId: owned.id });
+          if (!stillHere()) return;
+          seat.setLedger(selected);
+          setFeedback(canMessagePrimary(primarySession(selected))
+            ? "OpenRig created and selected the exact primary. Your draft is ready to send."
+            : "OpenRig created a managed conversation, but it is not yet routable. Inspect Sessions.");
+        } catch (error) {
+          if (stillHere()) setFeedback("Managed conversation created; primary selection unconfirmed: " +
+            explanation(error) + ". Inspect the ledger; no message sent.");
+        }
+      } else {
+        setFeedback("OpenRig persisted the managed conversation. " +
+          (owned?.status === "pending"
+            ? "Exact provider target is pending: reconcile it in Sessions; do not start another."
+            : "Refresh to select its verified primary when routable.") + " No message sent.");
+      }
+    } catch (error) {
+      if (stillHere()) setFeedback("Route check unavailable: " + explanation(error) + ". No message was sent.");
+    } finally {
+      repairInFlight.current = false;
+      if (stillHere()) setRepairing(false);
+    }
+  }
 
   async function submit() {
     if (sending || heldSend || !draft.trim() || !canSend) return;
@@ -719,6 +832,7 @@ function ChatPanel({
   return (
     <div className="flex min-h-0 min-w-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-4 py-2 text-2xs text-muted-foreground">
+        <span>Seat address: <span className="select-all font-mono text-foreground" aria-label="Exact OpenRig seat address">{agent.id}</span></span>
         {primary ? (
           <>
             <span>Message target: primary</span>
@@ -777,8 +891,7 @@ function ChatPanel({
         )}
       </div>
       <div className="shrink-0 border-t border-border p-3">
-        {canSend ? (
-          <form
+        <form
             className="space-y-1.5"
             onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void submit(); }}
           >
@@ -800,10 +913,31 @@ function ChatPanel({
             />
             <div className="flex items-center justify-between gap-2">
               <span role="status" className="min-w-0 text-2xs text-muted-foreground">{feedback}</span>
-              <Button type="submit" size="sm" disabled={sending || Boolean(heldSend) || !draft.trim()}>
+              <Button type="submit" size="sm" disabled={!canSend || repairing || sending || Boolean(heldSend) || !draft.trim()}>
                 <SendIcon aria-hidden />{sending || heldSend?.state === "sending" ? "Sending…" : "Send"}
               </Button>
             </div>
+            {!canSend && (
+              <div role="alert" className="space-y-2 rounded-md border border-border bg-muted/30 p-2 text-xs">
+                <p>{route.kind === "blocked" ? route.reason :
+                  route.kind === "select" ? "One exact managed conversation is available but is not selected as primary." :
+                  route.kind === "launch" ? "No managed conversation exists. OpenRig can launch one using this seat's verified provider settings." :
+                  "OpenRig route information is being refreshed."}
+                  {" "}Your draft is retained; no message has been submitted.</p>
+                {memory.unresolvedOperationId && <p>Creation operation {memory.unresolvedOperationId} is unresolved. Inspect the ledger before another creation.</p>}
+                <div className="flex flex-wrap gap-2">
+                  {(route.kind === "select" || route.kind === "launch") && (
+                    <Button type="button" size="xs" variant="outline"
+                      disabled={repairing || sending || Boolean(heldSend) || Boolean(memory.unresolvedOperationId) || seat.mutating}
+                      onClick={() => void establishRoute()}>
+                      {repairing ? "Checking route…" : route.kind === "select" ? "Connect known primary" : "Create managed conversation"}
+                    </Button>
+                  )}
+                  <Button type="button" size="xs" variant="ghost-muted" onClick={seat.refresh}>Recheck route</Button>
+                  <Button type="button" size="xs" variant="ghost-muted" onClick={onManageSessions}>Sessions</Button>
+                </div>
+              </div>
+            )}
             {heldSend?.state === "uncertain" && (
               <div role="alert" className="space-y-1.5 rounded-md border border-warning/40 bg-warning/8 p-2 text-xs">
                 <p>Previous delivery is unknown. This seat is held to prevent an accidental duplicate.
@@ -823,16 +957,6 @@ function ChatPanel({
               </div>
             )}
           </form>
-        ) : seat.ledger ? (
-          <div role="alert" className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span className="min-w-0 flex-1">
-              No routable active managed primary. Messaging requires OpenRig to confirm an exact provider conversation and
-              select it as primary; legacy bindings cannot receive seat messages.
-            </span>
-            <Button size="xs" variant="outline" onClick={onManageSessions}>Open Sessions</Button>
-          </div>
-        ) : null}
-        {!canSend && feedback && <span role="status" className="block text-2xs text-muted-foreground">{feedback}</span>}
       </div>
     </div>
   );

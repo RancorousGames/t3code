@@ -484,7 +484,7 @@ describe("OpenRig managed seat sidebar", () => {
     expect(output).toContain("Agent network");
     expect(output).toContain("Seat-to-seat messages");
     expect(output).toContain("sender identity is");
-    expect(output).toContain("not enforced yet");
+    expect(output).toContain("unverified by design");
     expect(output).not.toContain("Approve once");
     await act(async () => {
       renderer!.root.findByProps({ "aria-label": "Close agent network" }).props.onClick();
@@ -679,10 +679,17 @@ describe("OpenRig managed seat sidebar", () => {
       target: null, conversationId: null, threadId: null, environmentId: null, targetKey: null };
     listManaged.mockResolvedValue(ledger([pending]));
     await mount();
-    expect(JSON.stringify(renderer!.toJSON())).toContain("No routable active managed primary");
-    expect(renderer!.root.findAllByProps({ "aria-label": "Message to Builder" })).toHaveLength(0);
-    expect(renderer!.root.findAllByType("a")).toHaveLength(0);
+    expect(JSON.stringify(renderer!.toJSON())).toContain("requires reconciliation");
+    expect(renderer!.root.findAllByProps({ "aria-label": "Message to Builder" }).length).toBeGreaterThan(0);
+    expect(renderer!.root.findAllByProps({ "aria-label": "Exact OpenRig seat address" }).length).toBeGreaterThan(0);
+    expect(renderer!.root.findByType("form").props.children).toBeDefined();
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Message to Builder" }).props.onChange({ currentTarget: { value: "Keep draft" } });
+      renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} });
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Keep draft");
     expect(send).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("keeps legacy bindings visible but never enables managed send without an active primary", async () => {
@@ -692,7 +699,59 @@ describe("OpenRig managed seat sidebar", () => {
     const output = JSON.stringify(renderer!.toJSON());
     expect(output).toContain("Legacy conversation still recorded");
     expect(output).toContain("cannot receive seat messages");
-    expect(renderer!.root.findAllByProps({ "aria-label": "Message to Builder" })).toHaveLength(0);
+    expect(renderer!.root.findAllByProps({ "aria-label": "Message to Builder" }).length).toBeGreaterThan(0);
+    expect(JSON.stringify(renderer!.toJSON())).toContain(agent.id);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("repairs the one exact active managed conversation without creating or sending", async () => {
+    listManaged.mockResolvedValue(ledger([session("session-a", false)]));
+    primary.mockResolvedValue(ledger([session("session-a", true)]));
+    await mount();
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Message to Builder" }).props.onChange({ currentTarget: { value: "Retained draft" } });
+      click("Connect known primary");
+    });
+    expect(primary).toHaveBeenCalledExactlyOnceWith({ seatId: agent.id, sessionId: "session-a" });
+    expect(start).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Retained draft");
+    await act(async () => { renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
+    expect(send).toHaveBeenCalledExactlyOnceWith({ id: agent.id, message: "Retained draft" });
+  });
+
+  it("creates one exact configured managed conversation and selects it only after verification", async () => {
+    listManaged.mockResolvedValue(ledger([]));
+    start.mockImplementation(async (input: unknown) =>
+      ledger([{ ...session("session-a", false), operationId: (input as { operationId: string }).operationId }]));
+    primary.mockResolvedValue(ledger([session("session-a", true)]));
+    await mount();
+    await act(async () => { click("Create managed conversation"); });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]![0]).toMatchObject({ seatId: agent.id, kind: "native" });
+    expect(primary).toHaveBeenCalledExactlyOnceWith({ seatId: agent.id, sessionId: "session-a" });
+    expect(send).not.toHaveBeenCalled();
+    expect(JSON.stringify(renderer!.toJSON())).toContain("draft is ready to send");
+  });
+
+  it("does not create or select a primary when two candidates compete", async () => {
+    listManaged.mockResolvedValue(ledger([session("session-a", false), session("session-b", false)]));
+    await mount();
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Multiple exact active conversations");
+    expect(start).not.toHaveBeenCalled();
+    expect(primary).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("holds an unknown creation operation and prevents replay", async () => {
+    listManaged.mockResolvedValue(ledger([]));
+    start.mockRejectedValue(new Error("OpenRig bridge HTTP 503: indeterminate"));
+    await mount();
+    await act(async () => { click("Create managed conversation"); });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Creation outcome UNKNOWN");
+    await act(async () => { click("Create managed conversation"); });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(primary).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -751,7 +810,7 @@ describe("OpenRig managed seat sidebar", () => {
     expect(output).toContain("Exact thread observed; reconciliation required");
     expect(output).toContain("Initial-message acknowledgment not verified");
     expect(output).toContain("no automatic retry");
-    expect(renderer!.root.findAllByProps({ "aria-label": "Message to Builder" })).toHaveLength(0);
+    expect(renderer!.root.findAllByProps({ "aria-label": "Message to Builder" }).length).toBeGreaterThan(0);
   });
 
   it("keeps manual adoption behind Advanced and requires an explicit selected conversation", async () => {
