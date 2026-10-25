@@ -5,7 +5,6 @@ import { CSS } from "@dnd-kit/utilities";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   ArrowDownUpIcon,
-  BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ChevronUpIcon,
@@ -15,7 +14,6 @@ import {
   PlusIcon,
   SearchIcon,
   SlidersHorizontalIcon,
-  UserRoundIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -58,7 +56,6 @@ import {
   chatGPTWorkerVisibilityStorageKey,
   chatGPTVerifiedWorkerEvidenceKey,
   captureVerifiedChatGPTWorkerIdentities,
-  childChatGPTSessionIds,
   filterChatGPTWorkerGroups,
   linkedChatGPTWorkerIds,
   restoreVerifiedChatGPTWorkerIds,
@@ -110,7 +107,8 @@ import { ChatGPTBrowserSelectionRecovery } from "./ChatGPTBrowserSelectionRecove
 import { ChatGPTProjectStatusIcon } from "./ChatGPTProjectStatusIcon";
 import {
   CHATGPT_SESSION_BORDER_COLORS,
-  chatGPTSessionBorderRingClass,
+  chatGPTSessionHighlightAccentClass,
+  chatGPTSessionDisplayRole,
   chatGPTSidebarProjectTitles,
 } from "./chatGPTSidebarVisuals";
 import { useOpenRigManagerChatGPTSessions } from "./useOpenRigManagerChatGPTSessions";
@@ -238,6 +236,23 @@ export function ChatGPTBrowserSidebarEntry({
   const environmentId = usePrimaryEnvironmentId();
   const projects = useProjects();
   const verifiedManagerSessionIds = useOpenRigManagerChatGPTSessions(environmentId);
+  // A transient manager-seat ledger outage must not turn a manager into a worker.
+  const [knownManagerIds, setKnownManagerIds] = useLocalStorage(
+    `t3code:chatgpt-browser:known-managers:${environmentId ?? "unconnected"}`,
+    [] as string[],
+    Schema.Array(Schema.String),
+  );
+  useEffect(() => {
+    if (verifiedManagerSessionIds === null) return;
+    const ids = [...verifiedManagerSessionIds].sort();
+    // Keep previously confirmed manager identities through temporary ledger gaps.
+    const merged = [...new Set([...knownManagerIds, ...ids])].sort();
+    if (JSON.stringify(merged) !== JSON.stringify(knownManagerIds)) setKnownManagerIds(merged);
+  }, [verifiedManagerSessionIds, knownManagerIds, setKnownManagerIds]);
+  const managerIds = useMemo(
+    () => new Set([...(verifiedManagerSessionIds ?? []), ...knownManagerIds]),
+    [verifiedManagerSessionIds, knownManagerIds],
+  );
   const {
     sessions,
     createSession,
@@ -477,21 +492,41 @@ export function ChatGPTBrowserSidebarEntry({
     () =>
       verifiedManagerSessionIds === null
         ? restoreVerifiedChatGPTWorkerIds(sessions, verifiedWorkerSnapshot)
-        : linkedChatGPTWorkerIds(sessions, verifiedManagerSessionIds),
-    [sessions, verifiedManagerSessionIds, verifiedWorkerSnapshot],
+        : linkedChatGPTWorkerIds(sessions, managerIds),
+    [sessions, managerIds, verifiedManagerSessionIds, verifiedWorkerSnapshot],
   );
   // Outages must not clear a verified identity snapshot; equally, never
   // manufacture new worker identities from parent links while OpenRig is offline.
   useEffect(() => {
     if (verifiedManagerSessionIds === null) return;
-    const fresh = captureVerifiedChatGPTWorkerIdentities(sessions, verifiedManagerSessionIds);
+    const fresh = captureVerifiedChatGPTWorkerIdentities(sessions, managerIds);
     if (JSON.stringify(fresh) !== JSON.stringify(verifiedWorkerSnapshot)) {
       setVerifiedWorkerSnapshot(fresh);
     }
-  }, [sessions, verifiedManagerSessionIds, verifiedWorkerSnapshot, setVerifiedWorkerSnapshot]);
-  // Show/hide is strictly a display filter: every child row is toggleable, even if OpenRig is offline.
-  const childIds = useMemo(() => childChatGPTSessionIds(sessions), [sessions]);
-  const visibleWorkerCount = visibleSessions.filter((session) => childIds.has(session.id)).length;
+  }, [
+    sessions,
+    managerIds,
+    verifiedManagerSessionIds,
+    verifiedWorkerSnapshot,
+    setVerifiedWorkerSnapshot,
+  ]);
+  // Adopted chats and managers stay visible when workers are hidden, even
+  // if they still belong to a manager's child-session tree.
+  const hideableWorkerIds = useMemo(
+    () =>
+      new Set(
+        sessions
+          .filter(
+            (session) =>
+              chatGPTSessionDisplayRole(session, managerIds.has(session.id)) === "worker",
+          )
+          .map((session) => session.id),
+      ),
+    [sessions, managerIds],
+  );
+  const visibleWorkerCount = visibleSessions.filter((session) =>
+    hideableWorkerIds.has(session.id),
+  ).length;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
   // Like Hidden, the Snoozed view falls back to active sessions once it empties.
@@ -512,7 +547,7 @@ export function ChatGPTBrowserSidebarEntry({
     );
     const filtered = filterChatGPTWorkerGroups(
       groups,
-      childIds,
+      hideableWorkerIds,
       showingHidden || showWorkers,
       permanentProjectKeys,
     );
@@ -528,7 +563,7 @@ export function ChatGPTBrowserSidebarEntry({
     activities,
     permanentProjects,
     activeSessionId,
-    childIds,
+    hideableWorkerIds,
     showWorkers,
     permanentProjectKeys,
   ]);
@@ -1072,14 +1107,17 @@ export function ChatGPTBrowserSidebarEntry({
                             </div>
                           </div>
                         );
-                        const isVerifiedManager =
-                          verifiedManagerSessionIds?.has(session.id) === true;
+                        const isVerifiedManager = managerIds.has(session.id);
+                        const displayRole = chatGPTSessionDisplayRole(session, isVerifiedManager);
                         const projectTitle = projectTitles.get(session.id);
-                        // A user-chosen border replaces the manager ring color but keeps its tint.
-                        const borderRing = chatGPTSessionBorderRingClass(session.borderColor);
+                        // Identity backgrounds are separate from status text/icon colors.
+                        // Personal highlights are a slim leading accent, not an outline.
+                        const highlightAccent = chatGPTSessionHighlightAccentClass(
+                          session.borderColor,
+                        );
                         return (
                           <div
-                            className={`flex min-w-0 items-center gap-0 ${isVerifiedManager ? "rounded-md bg-info/10" : ""} ${borderRing ? `rounded-md ring-1 ring-inset ${borderRing}` : isVerifiedManager ? "ring-1 ring-inset ring-info/80" : ""}`}
+                            className={`relative flex min-w-0 items-center gap-0 rounded-md ${displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.075)]" : ""}`}
                             onContextMenu={(event) => {
                               event.preventDefault();
                               setContextMenu({
@@ -1090,6 +1128,12 @@ export function ChatGPTBrowserSidebarEntry({
                             }}
                             style={{ paddingLeft: `${Math.min(depth, 5) * 12}px` }}
                           >
+                            {highlightAccent && (
+                              <span
+                                aria-hidden
+                                className={`pointer-events-none absolute inset-y-1 left-0 z-10 w-[3px] rounded-full ${highlightAccent}`}
+                              />
+                            )}
                             <Tooltip>
                               {showingHidden ? (
                                 <TooltipTrigger
@@ -1155,6 +1199,8 @@ export function ChatGPTBrowserSidebarEntry({
                                     render={
                                       <SidebarMenuButton
                                         size="sm"
+                                        // Keep the role tint visible through the selected-row surface.
+                                        className="data-[active=true]:bg-white/[0.06]"
                                         isActive={activeSessionId === session.id}
                                         aria-current={
                                           activeSessionId === session.id ? "page" : undefined
@@ -1187,18 +1233,6 @@ export function ChatGPTBrowserSidebarEntry({
                                         {isVerifiedManager && (
                                           <CrownIcon
                                             aria-label="Verified OpenRig manager"
-                                            className="size-3.5 shrink-0 text-info"
-                                          />
-                                        )}
-                                        {creationOrigin === "manual" && (
-                                          <UserRoundIcon
-                                            aria-label="Manually created ChatGPT session"
-                                            className="size-3.5 shrink-0 text-muted-foreground"
-                                          />
-                                        )}
-                                        {creationOrigin === "backend" && (
-                                          <BotIcon
-                                            aria-label="Backend-spawned ChatGPT session"
                                             className="size-3.5 shrink-0 text-info"
                                           />
                                         )}
@@ -1378,13 +1412,13 @@ export function ChatGPTBrowserSidebarEntry({
                       className="flex w-full items-center justify-between gap-4 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
                       onClick={() => setBorderSubmenuFor(borderSubmenuOpen ? null : contextMenu)}
                     >
-                      <span>Border</span>
+                      <span>Highlight</span>
                       <ChevronRightIcon aria-hidden className="size-3.5 text-muted-foreground" />
                     </button>
                     {borderSubmenuOpen && (
                       <div
                         role="menu"
-                        aria-label="Session border color"
+                        aria-label="Session highlight color"
                         className="absolute top-0 left-full z-[201] min-w-32 rounded-md border border-border bg-popover p-1 shadow-lg"
                       >
                         {[

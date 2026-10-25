@@ -22,6 +22,9 @@ export const BrowserSession = Schema.Struct({
   // Immutable creation evidence. Older entries without it remain unknown unless
   // they carry an explicit backend spawn reservation; titles/lineage are not proof.
   creationOrigin: Schema.optional(Schema.Literals(["manual", "backend"])),
+  // A backend-created worker becomes a personal chat after an actual human send
+  // or a user-assigned highlight. Creation provenance remains unchanged.
+  humanControlled: Schema.optional(Schema.Boolean),
   // An exact backend spawn reservation. Manual sessions and warm spares never carry it.
   spawnRequestId: Schema.optional(Schema.String),
   // Only explicit UI-created fresh chats carry this; legacy and backend guests do not.
@@ -568,8 +571,21 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             ? {
                 ...session,
                 borderColor: color ?? undefined,
+                humanControlled: session.humanControlled === true || color !== null,
                 autoCloseExempt: session.autoCloseExempt === true || color !== null,
               }
+            : session,
+        ),
+      ),
+    [setSessions],
+  );
+
+  const markHumanControlled = useCallback(
+    (id: string) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id && !session.humanControlled
+            ? { ...session, humanControlled: true, autoCloseExempt: true }
             : session,
         ),
       ),
@@ -723,6 +739,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     finalizeRollover,
     setSessionSnooze,
     setSessionBorderColor,
+    markHumanControlled,
     markDirectInteraction,
     setSessionCompletion,
     syncInferredMetadata,

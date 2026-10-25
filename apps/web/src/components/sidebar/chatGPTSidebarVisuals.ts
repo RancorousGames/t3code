@@ -1,5 +1,5 @@
 import type { DesktopOpenRigSeatSessions, DesktopOpenRigSeatTopology } from "@t3tools/contracts";
-import type { BrowserSession } from "../../chatGPTBrowserSessions";
+import { chatGPTSessionCreationOrigin, type BrowserSession } from "../../chatGPTBrowserSessions";
 
 /** Only the explicit RigSpec role (never a display title) establishes manager type. */
 export function isOpenRigManagerRole(role: string | null): boolean {
@@ -58,17 +58,28 @@ export function chatGPTSidebarProjectTitles(
   return titles;
 }
 
-/** Sidebar border colors a user can pin to a ChatGPT session from its context menu. */
+/** Manager seats outrank both human adoption and creation origin. */
+export function chatGPTSessionDisplayRole(
+  session: BrowserSession,
+  verifiedManager: boolean,
+): "manager" | "worker" | "human" {
+  if (verifiedManager) return "manager";
+  if (session.humanControlled || chatGPTSessionCreationOrigin(session) !== "backend")
+    return "human";
+  return "worker";
+}
+
+/** User-selected personal highlight colors, independent of AI activity color. */
 export const CHATGPT_SESSION_BORDER_COLORS = [
-  { id: "red", label: "Red", ring: "ring-red-500/55", swatch: "bg-red-500" },
-  { id: "orange", label: "Orange", ring: "ring-orange-500/55", swatch: "bg-orange-500" },
-  { id: "yellow", label: "Yellow", ring: "ring-yellow-400/55", swatch: "bg-yellow-400" },
-  { id: "green", label: "Green", ring: "ring-emerald-500/55", swatch: "bg-emerald-500" },
-  { id: "blue", label: "Blue", ring: "ring-sky-500/55", swatch: "bg-sky-500" },
-  { id: "purple", label: "Purple", ring: "ring-violet-500/55", swatch: "bg-violet-500" },
-  { id: "pink", label: "Pink", ring: "ring-pink-500/55", swatch: "bg-pink-500" },
+  { id: "red", label: "Red", accent: "bg-red-500/70", swatch: "bg-red-500" },
+  { id: "orange", label: "Orange", accent: "bg-orange-500/70", swatch: "bg-orange-500" },
+  { id: "yellow", label: "Yellow", accent: "bg-yellow-400/70", swatch: "bg-yellow-400" },
+  { id: "green", label: "Green", accent: "bg-emerald-500/70", swatch: "bg-emerald-500" },
+  { id: "blue", label: "Blue", accent: "bg-sky-500/70", swatch: "bg-sky-500" },
+  { id: "purple", label: "Purple", accent: "bg-violet-500/70", swatch: "bg-violet-500" },
+  { id: "pink", label: "Pink", accent: "bg-pink-500/70", swatch: "bg-pink-500" },
 ] as const;
 
-export function chatGPTSessionBorderRingClass(color: string | undefined): string | null {
-  return CHATGPT_SESSION_BORDER_COLORS.find((entry) => entry.id === color)?.ring ?? null;
+export function chatGPTSessionHighlightAccentClass(color: string | undefined): string | null {
+  return CHATGPT_SESSION_BORDER_COLORS.find((entry) => entry.id === color)?.accent ?? null;
 }

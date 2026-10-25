@@ -21,6 +21,8 @@ import {
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserThreadRef,
   isChatGPTConversationUrl,
+  readChatGPTBrowserSessions,
+  useChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { readThreadPreviewState, useThreadPreviewState } from "../../previewStateStore";
@@ -53,6 +55,7 @@ export function useChatGPTBrowserSessionActivity(
     [environmentId, sessionId],
   );
   const preview = useThreadPreviewState(threadRef);
+  const { markHumanControlled } = useChatGPTBrowserSessions(environmentId);
   const tabId = preview.activeTabId;
   const runtimeTabId = tabId ? previewRuntimeTabId(threadRef, preview.serverEpoch, tabId) : null;
   const unloaded = useChatGPTGuestHibernation((state) =>
@@ -120,6 +123,27 @@ export function useChatGPTBrowserSessionActivity(
               (element) => element.dataset.previewTab === runtimeTabId,
             );
             if (webview) {
+              // Check the guest preload's trusted-send marker against the actual
+              // user-turn count. Do not adopt on a mere click or local navigation.
+              const session = readChatGPTBrowserSessions(environmentId).find(
+                (entry) => entry.id === sessionId,
+              );
+              if (session && !session.humanControlled && isOnConversation()) {
+                try {
+                  const observed: unknown = await webview.executeJavaScript(
+                    `(() => {
+                      const root = document.documentElement;
+                      const at = Number(root.getAttribute("data-t3code-human-chat-send-at"));
+                      const before = Number(root.getAttribute("data-t3code-human-chat-send-count"));
+                      const now = document.querySelectorAll('[data-message-author-role="user"]').length;
+                      return at > 0 && Number.isFinite(before) && now > before;
+                    })()`,
+                  );
+                  if (observed === true) markHumanControlled(sessionId);
+                } catch {
+                  // Guest reloads and navigation races should not affect status.
+                }
+              }
               const value = await inspectChatGPTBrowserHealth(webview);
               if (
                 value === "working" ||

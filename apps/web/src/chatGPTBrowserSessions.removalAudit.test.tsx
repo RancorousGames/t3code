@@ -105,6 +105,32 @@ describe("durable T3 ChatGPT local browser removal audit", () => {
       true,
     );
   });
+  it("keeps a backend worker human-controlled after clearing its colored highlight or remounting", async () => {
+    const worker = await add("Backend worker");
+    await act(async () => harness.setSessionBorderColor(worker, "purple"));
+    await act(async () => harness.setSessionBorderColor(worker, null));
+    expect(readChatGPTBrowserSessions(env).find((session) => session.id === worker)).toMatchObject({
+      humanControlled: true,
+      autoCloseExempt: true,
+    });
+    await unmount();
+    await mount();
+    expect(harness.sessions.find((session) => session.id === worker)?.humanControlled).toBe(true);
+  });
+
+  it("marks a worker as human-controlled only on explicit submission, not navigation", async () => {
+    const worker = await add("Backend worker");
+    expect(
+      harness.sessions.find((session) => session.id === worker)?.humanControlled,
+    ).toBeUndefined();
+    await act(async () => harness.markDirectInteraction(worker));
+    expect(
+      harness.sessions.find((session) => session.id === worker)?.humanControlled,
+    ).toBeUndefined();
+    await act(async () => harness.markHumanControlled(worker));
+    expect(harness.sessions.find((session) => session.id === worker)?.humanControlled).toBe(true);
+  });
+
   it("records only verified index removal after a sidebar close, with original metadata and cached URL ID", async () => {
     const parent = await add("Manager");
     const child = await add("Child title", { parentSessionId: parent });

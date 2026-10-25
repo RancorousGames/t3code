@@ -9,7 +9,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { deriveProjectIdentity } from "../../projectIdentity";
 import {
   CHATGPT_SESSION_BORDER_COLORS,
-  chatGPTSessionBorderRingClass,
+  chatGPTSessionHighlightAccentClass,
+  chatGPTSessionDisplayRole,
   chatGPTSidebarProjectTitles,
   isOpenRigManagerRole,
   verifiedManagerChatGPTTabIds,
@@ -86,16 +87,50 @@ const ledger = (
   },
 });
 
-describe("persistent ChatGPT session border palette", () => {
-  it("maps every user-selectable color to a stable Tailwind ring and clears unknown/None selections", () => {
+describe("persistent ChatGPT personal highlight palette", () => {
+  it("maps every user-selectable color to a slim left-accent class and clears unknown/None", () => {
     expect(CHATGPT_SESSION_BORDER_COLORS.map((entry) => entry.id)).toEqual([
-      "red", "orange", "yellow", "green", "blue", "purple", "pink",
+      "red",
+      "orange",
+      "yellow",
+      "green",
+      "blue",
+      "purple",
+      "pink",
     ]);
     for (const color of CHATGPT_SESSION_BORDER_COLORS) {
-      expect(chatGPTSessionBorderRingClass(color.id)).toBe(color.ring);
+      expect(chatGPTSessionHighlightAccentClass(color.id)).toBe(color.accent);
     }
-    expect(chatGPTSessionBorderRingClass(undefined)).toBeNull();
-    expect(chatGPTSessionBorderRingClass("unsupported-color")).toBeNull();
+    expect(chatGPTSessionHighlightAccentClass(undefined)).toBeNull();
+    expect(chatGPTSessionHighlightAccentClass("unsupported-color")).toBeNull();
+  });
+});
+
+describe("ChatGPT sidebar session identities", () => {
+  const backend = {
+    id: "worker-1",
+    title: "Worker",
+    creationOrigin: "backend" as const,
+    spawnRequestId: "spawn-1",
+  };
+
+  it("renders only backend-created, unadopted non-managers as workers", () => {
+    expect(chatGPTSessionDisplayRole(backend, false)).toBe("worker");
+    expect(chatGPTSessionDisplayRole({ ...backend, humanControlled: true }, false)).toBe("human");
+    expect(
+      chatGPTSessionDisplayRole(
+        { ...backend, creationOrigin: "manual", spawnRequestId: undefined },
+        false,
+      ),
+    ).toBe("human");
+    expect(chatGPTSessionDisplayRole({ id: "legacy", title: "Legacy" }, false)).toBe("human");
+  });
+
+  it("never demotes a manager even when its guest was adopted or highlighted", () => {
+    expect(chatGPTSessionDisplayRole(backend, true)).toBe("manager");
+    expect(
+      chatGPTSessionDisplayRole({ ...backend, humanControlled: true, borderColor: "blue" }, true),
+    ).toBe("manager");
   });
 });
 
