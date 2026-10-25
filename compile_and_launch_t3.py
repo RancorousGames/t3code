@@ -190,6 +190,24 @@ def session_backup(root: Path) -> Path:
     return backup
 
 
+class RestartDeadline:
+    """Monotonic restart deadline; postponements add 1, 2, 4, 8, then 16 minutes."""
+
+    def __init__(self, seconds: int):
+        self.deadline = time.monotonic() + seconds
+        self.postpones = 0
+
+    def remaining_seconds(self) -> int:
+        return max(0, math.ceil(self.deadline - time.monotonic()))
+
+    def next_postpone_minutes(self) -> int:
+        return 2 ** min(self.postpones, 4)
+
+    def postpone(self) -> None:
+        self.deadline += self.next_postpone_minutes() * 60
+        self.postpones += 1
+
+
 def restart_countdown(seconds: int = 15) -> bool:
     """Cancelable topmost desktop notification. Closing or Escape means cancel.
 
@@ -204,7 +222,7 @@ def restart_countdown(seconds: int = 15) -> bool:
         window.attributes("-topmost", True)
         window.resizable(False, False)
         window.configure(bg="#1c2029")
-        width, height = 360, 115
+        width, height = 390, 125
         window.geometry(f"{width}x{height}+"
                         f"{max(0, window.winfo_screenwidth() - width - 25)}+"
                         f"{max(0, window.winfo_screenheight() - height - 65)}")
@@ -216,27 +234,44 @@ def restart_countdown(seconds: int = 15) -> bool:
         description.pack()
         confirmed = False
         active = True
-        deadline = time.monotonic() + seconds
+        countdown = RestartDeadline(seconds)
 
         def cancel(_event=None):
             nonlocal active
             active = False
             window.quit()
 
+        def show_remaining(remaining: int):
+            duration = (f"{remaining // 60}m {remaining % 60:02d}s"
+                        if remaining >= 60 else f"{remaining}s")
+            label.configure(text=f"Restarting T3 in {duration}...")
+
         def tick():
             nonlocal confirmed
             if not active:
                 return
-            remaining = max(0, math.ceil(deadline - time.monotonic()))
+            remaining = countdown.remaining_seconds()
             if remaining == 0:
                 confirmed = True
                 window.quit()
                 return
-            label.configure(text=f"Restarting T3 in {remaining}...")
+            show_remaining(remaining)
             window.after(100, tick)
 
-        tk.Button(window, text="Cancel restart", command=cancel,
-                  font=("Segoe UI", 9), padx=15).pack(pady=9)
+        def postpone():
+            if not active:
+                return
+            countdown.postpone()
+            postpone_button.configure(text=f"Postpone +{countdown.next_postpone_minutes()} min")
+            show_remaining(countdown.remaining_seconds())
+
+        buttons = tk.Frame(window, bg="#1c2029")
+        buttons.pack(pady=9)
+        postpone_button = tk.Button(buttons, text="Postpone +1 min", command=postpone,
+                                    font=("Segoe UI", 9), padx=12)
+        postpone_button.pack(side="left", padx=5)
+        tk.Button(buttons, text="Cancel restart", command=cancel,
+                  font=("Segoe UI", 9), padx=12).pack(side="left", padx=5)
         window.protocol("WM_DELETE_WINDOW", cancel)
         window.bind("<Escape>", cancel)
         window.after(0, tick)
