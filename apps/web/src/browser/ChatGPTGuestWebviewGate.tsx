@@ -19,6 +19,7 @@ import {
   wakeChatGPTGuest,
 } from "./chatGPTGuestHibernation";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
+import { useChatGPTSessionSnoozed } from "./useChatGPTSessionSnoozed";
 
 // Keep desktop guest attachment/retention separate from the upstream host's
 // preview-session rendering. A hibernated guest is never reattached just to
@@ -29,6 +30,7 @@ export function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrow
     AuthPreviewOperateScope,
   );
   const profileId = useTabProfileId(props.profileId);
+  const snoozed = useChatGPTSessionSnoozed(props.threadRef);
   const selected = useBrowserSurfaceStore(
     (state) => state.byTabId[props.runtimeTabId]?.visible === true,
   );
@@ -42,11 +44,11 @@ export function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrow
   const [guestMayAttach, setGuestMayAttach] = useState(!stagger);
 
   useEffect(() => {
-    if (hibernated && selected) wakeChatGPTGuest(props.runtimeTabId);
-  }, [hibernated, selected, props.runtimeTabId]);
+    if (hibernated && selected && !snoozed) wakeChatGPTGuest(props.runtimeTabId);
+  }, [hibernated, selected, snoozed, props.runtimeTabId]);
 
   useEffect(() => {
-    if (!stagger || !canOperatePreview || hibernated) return;
+    if (!stagger || !canOperatePreview || hibernated || snoozed) return;
     const controller = new AbortController();
     void chatGPTGuestHydrationLimiter
       .request(props.runtimeTabId, controller.signal)
@@ -54,13 +56,13 @@ export function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrow
         if (allowed && !controller.signal.aborted) setGuestMayAttach(true);
       });
     return () => controller.abort();
-  }, [stagger, canOperatePreview, hibernated, props.runtimeTabId]);
+  }, [stagger, canOperatePreview, hibernated, snoozed, props.runtimeTabId]);
 
   useEffect(() => {
     if (stagger && selected) chatGPTGuestHydrationLimiter.prioritize(props.runtimeTabId);
   }, [stagger, selected, props.runtimeTabId]);
 
-  return canOperatePreview && (guestMayAttach || !stagger) && !hibernated ? (
+  return canOperatePreview && (guestMayAttach || !stagger) && !hibernated && !snoozed ? (
     <HostedBrowserWebview {...props} profileId={profileId} />
   ) : null;
 }

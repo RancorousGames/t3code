@@ -1921,6 +1921,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ],
         { concurrency: 2, discard: true },
       );
+      // Hibernation releases the desktop tab but preserves the server session.
+      // Explicitly close its guest instead of relying on DOM removal to free it.
+      const wc = webContents.fromId(closedTab.webContentsId);
+      if (wc && !wc.isDestroyed()) {
+        yield* attempt({ operation: "closeTab.closeGuest", tabId, webContentsId: wc.id }, () =>
+          wc.close({ waitForBeforeUnload: false }),
+        );
+      }
     }
     const updatedAt = yield* currentIso;
     const closed: PreviewTabState = {

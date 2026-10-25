@@ -1,6 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { CircleIcon, GlobeIcon, LoaderCircleIcon } from "lucide-react";
+import { CircleIcon, GlobeIcon, LoaderCircleIcon, MoonIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBrowserSurfaceStore } from "../../browser/browserSurfaceStore";
@@ -41,6 +41,7 @@ const WORKING_HEARTBEAT_MS = 30_000;
 export function useChatGPTBrowserSessionActivity(
   environmentId: EnvironmentId,
   sessionId: string,
+  snoozed = false,
 ): {
   age: ChatGPTActivityAge;
   label: string;
@@ -82,7 +83,7 @@ export function useChatGPTBrowserSessionActivity(
     previousState.current = "unknown";
     missingComposerObservations.current = 0;
     lastHeartbeatAt.current = 0;
-    if (!runtimeTabId) return;
+    if (!runtimeTabId || snoozed) return;
     const firstObservedAt = Date.now();
 
     const isOnConversation = () => {
@@ -250,7 +251,7 @@ export function useChatGPTBrowserSessionActivity(
       disposed = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [runtimeTabId, setLastWorkingAt, tabId, threadRef]);
+  }, [runtimeTabId, setLastWorkingAt, snoozed, tabId, threadRef]);
 
   // Reclassify recently finished sessions as old even when the browser
   // remains idle, without making every row repaint once per second.
@@ -263,28 +264,34 @@ export function useChatGPTBrowserSessionActivity(
   }, [lastWorkingAt]);
 
   const activity = result.tabId === runtimeTabId ? result.activity : "unknown";
-  const age = unloaded ? "unloaded" : chatGPTActivityAge(activity, lastWorkingAt, now);
+  const age = snoozed
+    ? "snoozed"
+    : unloaded
+      ? "unloaded"
+      : chatGPTActivityAge(activity, lastWorkingAt, now);
   const reason = result.tabId === runtimeTabId ? result.reason : null;
   const label =
-    age === "unloaded"
-      ? "ChatGPT is unloaded; open to reload the conversation"
-      : age === "working"
-        ? "ChatGPT is working"
-        : age === "recent"
-          ? "ChatGPT worked within the last 15 minutes"
-          : age === "inactive"
-            ? "ChatGPT is inactive; no work in the last 15 minutes"
-            : age === "interrupted"
-              ? "ChatGPT connection interrupted; waiting for the complete answer"
-              : age === "delivery-timeout"
-                ? "ChatGPT message delivery timed out; please try again"
-                : age === "invalid"
-                  ? reason === "browser-unresponsive"
-                    ? "ChatGPT browser is blank or unresponsive; waiting for an instance reset"
-                    : `ChatGPT page unavailable${reason ? `: ${reason}` : ""}`
-                  : `ChatGPT status unknown${reason ? `: ${reason}` : ""}`;
+    age === "snoozed"
+      ? "ChatGPT is snoozed; unsnooze to reload the conversation"
+      : age === "unloaded"
+        ? "ChatGPT is unloaded; open to reload the conversation"
+        : age === "working"
+          ? "ChatGPT is working"
+          : age === "recent"
+            ? "ChatGPT worked within the last 15 minutes"
+            : age === "inactive"
+              ? "ChatGPT is inactive; no work in the last 15 minutes"
+              : age === "interrupted"
+                ? "ChatGPT connection interrupted; waiting for the complete answer"
+                : age === "delivery-timeout"
+                  ? "ChatGPT message delivery timed out; please try again"
+                  : age === "invalid"
+                    ? reason === "browser-unresponsive"
+                      ? "ChatGPT browser is blank or unresponsive; waiting for an instance reset"
+                      : `ChatGPT page unavailable${reason ? `: ${reason}` : ""}`
+                    : `ChatGPT status unknown${reason ? `: ${reason}` : ""}`;
   const recoveryProblem =
-    !unloaded && result.tabId === runtimeTabId
+    !snoozed && !unloaded && result.tabId === runtimeTabId
       ? chatGPTRecoveryProblem(activity === "invalid" ? `invalid: ${reason ?? ""}` : activity)
       : null;
   return { age, label, lastWorkingAt, recoveryProblem };
@@ -298,6 +305,7 @@ export function ChatGPTBrowserSessionActivityIcon({
   readonly age: ChatGPTActivityAge;
   readonly recovering?: boolean;
 }) {
+  if (age === "snoozed") return <MoonIcon aria-hidden className="size-4" />;
   if (recovering)
     return (
       <LoaderCircleIcon

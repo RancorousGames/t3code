@@ -15,7 +15,8 @@ export function ChatGPTProjectStatusIcon({
   readonly age: ChatGPTActivityAge;
   readonly recovering: boolean;
 }) {
-  if (!project) return <ChatGPTBrowserSessionActivityIcon age={age} recovering={recovering} />;
+  if (!project || age === "snoozed")
+    return <ChatGPTBrowserSessionActivityIcon age={age} recovering={recovering} />;
   const { monogram, color } = deriveProjectIdentity(project);
   return (
     <span className="relative inline-flex size-5 shrink-0 items-center justify-center">

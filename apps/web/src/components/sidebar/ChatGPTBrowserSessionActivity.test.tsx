@@ -38,8 +38,8 @@ const environmentId = EnvironmentId.make("test-environment");
 const sessionId = "test-session";
 const storageKey = chatGPTBrowserLastWorkingKey(environmentId, sessionId);
 
-function ActivityObserver() {
-  const activity = useChatGPTBrowserSessionActivity(environmentId, sessionId);
+function ActivityObserver({ snoozed = false }: { snoozed?: boolean }) {
+  const activity = useChatGPTBrowserSessionActivity(environmentId, sessionId, snoozed);
   return (
     <span
       role="status"
@@ -86,8 +86,12 @@ beforeEach(() => {
   webview = document.createElement("webview");
   webview.dataset.previewTab = runtimeId;
   Object.defineProperty(webview, "executeJavaScript", {
-    value: mocks.execute,
+    value: async (expression: string) => {
+      const result = await mocks.execute(expression);
+      return expression.includes("blank:") ? { blank: false, activity: result } : result;
+    },
   });
+  Object.assign(webview, { getURL: () => mocks.nav.url });
   document.body.appendChild(webview);
   // A shown guest: polled at the foreground rate and never hibernated.
   const surface = useBrowserSurfaceStore.getState();
@@ -106,6 +110,30 @@ afterEach(() => {
 });
 
 describe("ChatGPT guest hibernation", () => {
+  it("replaces live/error status with snoozed and stops inspection until unsnoozed", async () => {
+    mocks.execute.mockResolvedValue("invalid: unavailable");
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("invalid");
+    await act(async () => {
+      renderer!.update(<ActivityObserver snoozed />);
+    });
+    const status = renderer!.root.findByType("span");
+    expect(status.props.children).toBe("snoozed");
+    expect(status.props["data-recovery-problem"]).toBe("");
+    const probes = mocks.execute.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(mocks.execute.mock.calls.length).toBe(probes);
+    mocks.execute.mockResolvedValue("working");
+    await act(async () => {
+      renderer!.update(<ActivityObserver />);
+    });
+    expect(status.props.children).toBe("working");
+  });
+
   it("unloads a hidden, long-idle conversation and stops probing it", async () => {
     useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
     mocks.execute.mockImplementation(async (expression) =>

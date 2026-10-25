@@ -11,6 +11,7 @@ export type ChatGPTActivityState =
   | "delivery-timeout";
 export type ChatGPTActivityAge =
   | "working"
+  | "snoozed"
   | "unloaded"
   | "recent"
   | "inactive"
@@ -26,6 +27,7 @@ export function chatGPTActivityColorClass(age: ChatGPTActivityAge): string {
       return "text-lime-500! dark:text-lime-400!";
     case "recent":
       return "text-[#5d82a9]! dark:text-[#88a9c8]!";
+    case "snoozed":
     case "inactive":
       return "text-muted-foreground!";
     case "unloaded":

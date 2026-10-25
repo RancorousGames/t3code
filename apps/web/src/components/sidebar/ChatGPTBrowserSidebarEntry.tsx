@@ -182,16 +182,18 @@ function SortableBrowserSessionRow({
 function BrowserSessionActivityMonitor({
   id,
   environmentId,
+  snoozed,
   onChange,
 }: {
   id: string;
   environmentId: NonNullable<ReturnType<typeof usePrimaryEnvironmentId>>;
+  snoozed: boolean;
   onChange: (
     id: string,
     activity: ReturnType<typeof useChatGPTBrowserSessionActivity> | null,
   ) => void;
 }) {
-  const activity = useChatGPTBrowserSessionActivity(environmentId, id);
+  const activity = useChatGPTBrowserSessionActivity(environmentId, id, snoozed);
   useEffect(() => {
     onChange(id, activity);
   }, [
@@ -867,11 +869,12 @@ export function ChatGPTBrowserSidebarEntry({
           <ChatGPTBrowserSessionRuntime
             environmentId={environmentId}
             sessionId={session.id}
-            suspended={closingId === session.id}
+            suspended={closingId === session.id || isSnoozed(session)}
           />
           <BrowserSessionActivityMonitor
             id={session.id}
             environmentId={environmentId}
+            snoozed={isSnoozed(session)}
             onChange={recordActivity}
           />
         </Fragment>
@@ -1150,6 +1153,8 @@ export function ChatGPTBrowserSidebarEntry({
                                             setSessionHidden(session.id, false);
                                             setShowHidden(false);
                                           }
+                                          if (isSnoozed(session))
+                                            setSessionSnooze([session.id], null);
                                           void navigate({
                                             to: "/browser/$browserSessionId",
                                             params: { browserSessionId: session.id },

@@ -457,6 +457,7 @@ const makeTestPreviewWebContents = (
     executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
     isDestroyed: () => false,
     getType: () => "webview",
+    close: vi.fn(),
     getURL: () => "https://example.com",
     getTitle: () => "Example",
     isLoadingMainFrame: () => false,
@@ -2544,6 +2545,39 @@ describe("PreviewManager", () => {
         expect(states.at(-1)?.audible).toBe(false);
       }),
     ),
+  );
+
+  effectIt.effect(
+    "releases the guest when its desktop tab closes and permits waking the same tab",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const capturePage = vi.fn();
+          let destroyed = false;
+          const guest = Object.assign(makeTestPreviewWebContents(capturePage, 42), {
+            isDestroyed: () => destroyed,
+            close: vi.fn(() => {
+              destroyed = true;
+            }),
+          });
+          const replacement = Object.assign(makeTestPreviewWebContents(capturePage, 43), {
+            close: vi.fn(),
+          });
+          fromId.mockImplementation((id) => (id === 42 ? guest : id === 43 ? replacement : null));
+          yield* manager.createTab("tab_hibernate");
+          yield* manager.registerWebview("tab_hibernate", 42);
+
+          yield* manager.closeTab("tab_hibernate");
+          expect(destroyed).toBe(true);
+          expect(guest.close).toHaveBeenCalledExactlyOnceWith({ waitForBeforeUnload: false });
+          yield* manager.closeTab("tab_hibernate");
+          expect(guest.close).toHaveBeenCalledTimes(1);
+
+          yield* manager.createTab("tab_hibernate");
+          yield* manager.registerWebview("tab_hibernate", 43);
+          expect(replacement.close).not.toHaveBeenCalled();
+        }),
+      ),
   );
 
   effectIt.effect("blocks late webview and capture starts during tab close", () =>
