@@ -8,6 +8,7 @@ const shared = vi.hoisted(() => ({
   uiActivity: "idle",
   safe: true,
   draft: "",
+  unknownSend: false,
 }));
 vi.mock("./browser/chatGPTGuestHibernation", () => ({
   isChatGPTGuestHibernated: () => false,
@@ -32,14 +33,19 @@ vi.mock("./chatGPTBrowserSessions", () => ({
 }));
 vi.mock("./components/preview/previewBridge", () => ({
   previewBridge: {
-    navigate: vi.fn(async (_runtime: string, url: string) => { shared.url = url; }),
+    navigate: vi.fn(async (_runtime: string, url: string) => {
+      shared.url = url;
+    }),
     refresh: vi.fn(),
   },
 }));
 vi.mock("./chatGPTWebviewAutomation", () => ({
   chatGPTWebviewAutomation: {
     evaluate: vi.fn(async (_runtime: string, options: { expression: string }) =>
-      options.expression.startsWith("(() => {const el=document.querySelector(") ? shared.draft : shared.safe),
+      options.expression.startsWith("(() => {const el=document.querySelector(")
+        ? shared.draft
+        : shared.safe,
+    ),
   },
 }));
 vi.mock("./components/sidebar/chatGPTConversationRecovery", () => ({
@@ -84,6 +90,7 @@ beforeEach(() => {
   shared.uiActivity = "idle";
   shared.safe = true;
   shared.draft = "";
+  shared.unknownSend = false;
   const guest = {
     dataset: { previewTab: "unit-runtime" },
     executeJavaScript: async () => ({
@@ -100,9 +107,16 @@ beforeEach(() => {
     }),
   };
   vi.stubGlobal("document", { querySelectorAll: () => [guest] });
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => key === `saved:${session.id}` ? JSON.stringify(shared.saved) : null,
-  });
+  const storage = {
+    getItem: (key: string) =>
+      key === `saved:${session.id}`
+        ? JSON.stringify(shared.saved)
+        : shared.unknownSend && key.includes("chatgpt-unknown-send-fence")
+          ? "pending"
+          : null,
+  };
+  vi.stubGlobal("localStorage", storage);
+  vi.stubGlobal("window", { localStorage: storage });
   vi.clearAllMocks();
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -111,14 +125,17 @@ describe("hidden-session list contract", () => {
   const hidden = { id: "previously-hidden", title: "Hidden worker", hidden: true };
   const list = (includeHidden?: boolean) =>
     runChatGPTSessionControl({
-      environmentId: "local" as never, sessions: [session, hidden],
-      action: "list", which: "all", ...(includeHidden === undefined ? {} : { includeHidden }),
+      environmentId: "local" as never,
+      sessions: [session, hidden],
+      action: "list",
+      which: "all",
+      ...(includeHidden === undefined ? {} : { includeHidden }),
     });
 
   it("excludes hidden even for which=all unless opted in, without reviving the hidden guest", async () => {
-    const ordinary = await list() as { sessions: Array<{ id: string }> };
+    const ordinary = (await list()) as { sessions: Array<{ id: string }> };
     expect(ordinary.sessions.map((entry) => entry.id)).toEqual([session.id]);
-    const optedIn = await list(true) as { sessions: Array<{ id: string; hidden: boolean }> };
+    const optedIn = (await list(true)) as { sessions: Array<{ id: string; hidden: boolean }> };
     expect(optedIn.sessions.map((entry) => entry.id)).toEqual([session.id, hidden.id]);
     expect(optedIn.sessions[1]?.hidden).toBe(true);
     expect(optedIn.sessions[1]).toHaveProperty("latestMessageFirstFiveWords", null);
@@ -128,25 +145,49 @@ describe("hidden-session list contract", () => {
 describe("exact-session state changes", () => {
   it("allows a safe local close, but rejects a nonempty composer draft", async () => {
     await expect(changeState("closed")).resolves.toMatchObject({
-      action: "change_state", state: "closed", sessionId: session.id,
+      action: "change_state",
+      state: "closed",
+      sessionId: session.id,
     });
     shared.draft = "unfinished work";
     await expect(changeState("closed")).rejects.toThrow(/composer draft/);
   });
 
-  it("rejects hide and close during active generation", async () => {
+  it("closes only the addressed container during active generation, but cannot hide it", async () => {
     shared.activity = "working";
     shared.uiActivity = "working";
-    await expect(changeState("closed")).rejects.toThrow(/generating/);
+    await expect(changeState("closed")).resolves.toMatchObject({
+      action: "change_state",
+      sessionId: session.id,
+      state: "closed",
+    });
     await expect(changeState("hidden")).rejects.toThrow(/generating/);
   });
 
+  it("preserves drafts and UNKNOWN sends even while generating", async () => {
+    shared.activity = "working";
+    shared.uiActivity = "working";
+    shared.draft = "unsent draft";
+    await expect(changeState("closed")).rejects.toThrow(/composer draft/);
+    shared.draft = "";
+    shared.unknownSend = true;
+    await expect(changeState("closed")).rejects.toThrow(/UNKNOWN send/);
+  });
+
   it("only affects the addressed session state, not other sessions", async () => {
-    await expect(changeState("hidden")).resolves.toMatchObject({ sessionId: session.id, state: "hidden" });
-    await expect(runChatGPTSessionControl({
-      environmentId: "local" as never, sessions: [session], action: "change_state",
-      sessionId: "different-session", state: "closed",
-    })).rejects.toThrow(/Unknown ChatGPT session id/);
+    await expect(changeState("hidden")).resolves.toMatchObject({
+      sessionId: session.id,
+      state: "hidden",
+    });
+    await expect(
+      runChatGPTSessionControl({
+        environmentId: "local" as never,
+        sessions: [session],
+        action: "change_state",
+        sessionId: "different-session",
+        state: "closed",
+      }),
+    ).rejects.toThrow(/Unknown ChatGPT session id/);
   });
 });
 
@@ -164,13 +205,15 @@ describe("existing blank ChatGPT homepage recovery through normal OMCP reload", 
   });
 
   it("cancels a selection-triggered recovery before navigation if the user switched tabs", async () => {
-    await expect(runChatGPTSessionControl({
-      environmentId: "local" as never,
-      sessions: [session],
-      sessionId: session.id,
-      action: "reload",
-      shouldContinue: () => false,
-    })).rejects.toThrow(/no longer selected/);
+    await expect(
+      runChatGPTSessionControl({
+        environmentId: "local" as never,
+        sessions: [session],
+        sessionId: session.id,
+        action: "reload",
+        shouldContinue: () => false,
+      }),
+    ).rejects.toThrow(/no longer selected/);
     expect(previewBridge!.navigate).not.toHaveBeenCalled();
     expect(previewBridge!.refresh).not.toHaveBeenCalled();
   });

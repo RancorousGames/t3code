@@ -867,8 +867,10 @@ export async function runChatGPTSessionControl(input: {
       return { action, state, sessionId: entry.id, alreadyInState: false };
     }
     const before = await inspectBrowserSession(environmentId, entry);
-    if (before.status === "working" || before.uiColor === "working")
-      throw new Error("Refusing to change state while ChatGPT is generating.");
+    // Hiding an active guest is disruptive; closing an explicitly addressed
+    // local container is not. ChatGPT continues generating on its servers.
+    if (state === "hidden" && (before.status === "working" || before.uiColor === "working"))
+      throw new Error("Refusing to hide while ChatGPT is generating.");
     if (state === "hidden") {
       const latest = await inspectBrowserSession(environmentId, entry);
       if (
@@ -879,28 +881,40 @@ export async function runChatGPTSessionControl(input: {
         throw new Error("Session became active or navigated during hide inspection.");
     }
     if (state === "closed") {
-      if (
-        !["new", "done_or_idle", "waiting_for_input"].includes(before.status) ||
-        !before.observedGuestUrl
-      )
-        throw new Error("Cannot permanently close an unreadable, pending or interrupted session.");
+      // Only the exact session ID can be closed. Active generation and a
+      // pending assistant reply are remote work, not unsent local content.
+      const closable = (status: string) =>
+        ["new", "working", "pending_or_stalled", "done_or_idle", "waiting_for_input"].includes(
+          status,
+        );
+      if (!closable(before.status) || !before.observedGuestUrl)
+        throw new Error("Cannot permanently close an unreadable or interrupted session.");
+      if (hasUncertainChatGPTSend(environmentId, entry.id))
+        throw new Error("Cannot permanently close a session with an UNKNOWN send.");
       const { runtimeId, webview } = guestFor(environmentId, entry.id);
       if (!runtimeId || !webview)
         throw new Error("Cannot inspect the exact session guest before permanent close.");
-      const draft = await chatGPTWebviewAutomation.evaluate(runtimeId, {
-        expression: `(() => {const el=document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
-          return el instanceof HTMLTextAreaElement ? el.value :
-            el instanceof HTMLElement ? (el.innerText||el.textContent||"") : null;})()`,
-      });
-      if (typeof draft !== "string" || draft.trim())
-        throw new Error("Cannot permanently close: composer draft is nonempty or unreadable.");
-      const latest = await inspectBrowserSession(environmentId, entry);
-      if (
-        latest.observedGuestUrl !== before.observedGuestUrl ||
-        latest.status !== before.status ||
-        latest.uiColor === "working"
-      )
-        throw new Error("Session changed during close inspection; refusing permanent close.");
+      // Check again immediately before returning the closure authorization:
+      // closing must never destroy a composer draft or UNKNOWN send.
+      for (let check = 0; check < 2; check++) {
+        const draft = await chatGPTWebviewAutomation.evaluate(runtimeId, {
+          expression: `(() => {const el=document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+            return el instanceof HTMLTextAreaElement ? el.value :
+              el instanceof HTMLElement ? (el.innerText||el.textContent||"") : null;})()`,
+        });
+        if (typeof draft !== "string" || draft.trim())
+          throw new Error("Cannot permanently close: composer draft is nonempty or unreadable.");
+        const latest = await inspectBrowserSession(environmentId, entry);
+        const exactGuest = guestFor(environmentId, entry.id);
+        if (
+          latest.observedGuestUrl !== before.observedGuestUrl ||
+          !closable(latest.status) ||
+          exactGuest.runtimeId !== runtimeId ||
+          exactGuest.webview !== webview ||
+          hasUncertainChatGPTSend(environmentId, entry.id)
+        )
+          throw new Error("Session guest, conversation or send changed during close inspection.");
+      }
     }
     return { action, state, sessionId: entry.id, alreadyInState: false };
   }

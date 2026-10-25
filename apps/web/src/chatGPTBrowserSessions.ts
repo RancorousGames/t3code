@@ -235,6 +235,46 @@ export function reorderChatGPTSessions(
   return reordered;
 }
 
+/**
+ * A sidebar project drag moves the linked ChatGPT subtree as one unit.
+ * Keep existing session order/guest state and child links; only the dragged
+ * root detaches from its old parent. A visited set bounds corrupt cycles.
+ */
+export function moveChatGPTSessionProject(
+  sessions: readonly BrowserSession[],
+  id: string,
+  project: string | null,
+): BrowserSession[] {
+  if (!sessions.some((session) => session.id === id)) return [...sessions];
+
+  const children = new Map<string, string[]>();
+  for (const session of sessions) {
+    if (!session.parentSessionId) continue;
+    const siblings = children.get(session.parentSessionId) ?? [];
+    siblings.push(session.id);
+    children.set(session.parentSessionId, siblings);
+  }
+
+  const moving = new Set([id]);
+  const pending = [id];
+  while (pending.length) {
+    for (const childId of children.get(pending.pop()!) ?? []) {
+      if (moving.has(childId)) continue;
+      moving.add(childId);
+      pending.push(childId);
+    }
+  }
+
+  const target = project ?? "Other";
+  return sessions.map((session) =>
+    !moving.has(session.id)
+      ? session
+      : session.id === id
+        ? { ...session, project: target, parentSessionId: null }
+        : { ...session, project: target },
+  );
+}
+
 /** Hiding prepends to the hidden list; restoring appends to the live list. */
 export function setChatGPTSessionHidden(
   sessions: readonly BrowserSession[],
@@ -423,13 +463,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
 
   const setSessionProject = useCallback(
     (id: string, project: string | null) =>
-      setSessions((current) =>
-        current.map((session) =>
-          session.id === id
-            ? { ...session, project: project ?? "Other", parentSessionId: null }
-            : session,
-        ),
-      ),
+      setSessions((current) => moveChatGPTSessionProject(current, id, project)),
     [setSessions],
   );
 
