@@ -36,9 +36,9 @@ const threadId = ThreadId.make("thread:spawn-hold");
 const projectId = ProjectId.make("project:spawn-hold");
 const models = ["gpt-6-astra", "gpt-5.6-luna", "claude-opus-5-5", "unknown", "gpt-6-luna"];
 
-describe("root creation restored while delegated and forked native creation stay held", () => {
+describe("native root, delegated and forked creation", () => {
   it.effect.each(models)(
-    "dispatches ordinary root for %s while denying delegation and fork before effects",
+    "dispatches root, delegation and fork for %s through normal validation",
     (model) =>
       Effect.gen(function* () {
         const effects: string[] = [];
@@ -46,6 +46,7 @@ describe("root creation restored while delegated and forked native creation stay
           Layer.provide(
             Layer.mergeAll(
               Layer.mock(Orchestrator.OrchestratorV2)({
+                getThreadRecords: () => Effect.succeed({ thread: { projectId } } as never),
                 dispatch: () =>
                   Effect.sync(() => {
                     effects.push("dispatch");
@@ -60,7 +61,9 @@ describe("root creation restored while delegated and forked native creation stay
                   }),
               }),
               Layer.mock(ProviderSessions.ProviderSessionManagerV2)({}),
-              Layer.mock(Receipts.CommandReceiptStoreV2)({}),
+              Layer.mock(Receipts.CommandReceiptStoreV2)({
+                getByCommandId: () => Effect.succeed(Option.none()),
+              }),
               ServerSettings.layerTest(),
             ),
           ),
@@ -108,16 +111,10 @@ describe("root creation restored while delegated and forked native creation stay
             creationSource: "web",
           } as const;
           for (const command of [delegate, fork]) {
-            const error = yield* service.dispatch(command).pipe(Effect.flip);
-            assert.equal(error._tag, "OrchestratorCommandRejectedError");
-            assert.isTrue(
-              typeof error.cause === "object" &&
-                error.cause !== null &&
-                "_tag" in error.cause &&
-                error.cause._tag === "NativeSpawnApprovalUnavailable",
-            );
+            yield* service.dispatch(command);
           }
-          assert.deepEqual(effects, ["dispatch"], "delegation and fork still have zero effects");
+          assert.deepEqual(effects, ["dispatch", "transcript", "dispatch", "transcript", "dispatch"]);
+
         }).pipe(Effect.provide(layer));
       }),
   );

@@ -1,15 +1,4 @@
 import { isProviderAvailable, type ModelSelection, type ServerProvider } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
-
-export class NativeSpawnApprovalUnavailable extends Schema.TaggedError<NativeSpawnApprovalUnavailable>()(
-  "NativeSpawnApprovalUnavailable",
-  { operationId: Schema.String },
-) {
-  override get message(): string {
-    return "Native session creation is held until authenticated, single-use human spawn approval is available.";
-  }
-}
 
 /**
  * Catalog eligibility is NOT approval or an execution authorization. It can
@@ -73,13 +62,3 @@ export function assessNativeSpawnCatalogTarget(input: {
     ? "exact-luna-candidate"
     : "human-approval-required";
 }
-
-export const NATIVE_SPAWN_APPROVAL_HOLD_CONSTRAINT =
-  "Native creation is held pending authenticated single-use approval/reservation, including exact Luna until the trusted verifier is connected.";
-
-// This is a hold, not an approval verifier. No actor/model/transport field can
-// bypass it. Replace only with the online canonical reservation authority.
-export const holdNativeSpawn = (
-  operationId: string,
-): Effect.Effect<void, NativeSpawnApprovalUnavailable> =>
-  Effect.fail(new NativeSpawnApprovalUnavailable({ operationId }));
