@@ -60,13 +60,13 @@ export function chatGPTSidebarProjectTitles(
 
 /** Sidebar border colors a user can pin to a ChatGPT session from its context menu. */
 export const CHATGPT_SESSION_BORDER_COLORS = [
-  { id: "red", label: "Red", ring: "ring-red-500", swatch: "bg-red-500" },
-  { id: "orange", label: "Orange", ring: "ring-orange-500", swatch: "bg-orange-500" },
-  { id: "yellow", label: "Yellow", ring: "ring-yellow-400", swatch: "bg-yellow-400" },
-  { id: "green", label: "Green", ring: "ring-emerald-500", swatch: "bg-emerald-500" },
-  { id: "blue", label: "Blue", ring: "ring-sky-500", swatch: "bg-sky-500" },
-  { id: "purple", label: "Purple", ring: "ring-violet-500", swatch: "bg-violet-500" },
-  { id: "pink", label: "Pink", ring: "ring-pink-500", swatch: "bg-pink-500" },
+  { id: "red", label: "Red", ring: "ring-red-500/55", swatch: "bg-red-500" },
+  { id: "orange", label: "Orange", ring: "ring-orange-500/55", swatch: "bg-orange-500" },
+  { id: "yellow", label: "Yellow", ring: "ring-yellow-400/55", swatch: "bg-yellow-400" },
+  { id: "green", label: "Green", ring: "ring-emerald-500/55", swatch: "bg-emerald-500" },
+  { id: "blue", label: "Blue", ring: "ring-sky-500/55", swatch: "bg-sky-500" },
+  { id: "purple", label: "Purple", ring: "ring-violet-500/55", swatch: "bg-violet-500" },
+  { id: "pink", label: "Pink", ring: "ring-pink-500/55", swatch: "bg-pink-500" },
 ] as const;
 
 export function chatGPTSessionBorderRingClass(color: string | undefined): string | null {

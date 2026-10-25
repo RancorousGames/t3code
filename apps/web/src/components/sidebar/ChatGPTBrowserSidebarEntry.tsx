@@ -1071,7 +1071,7 @@ export function ChatGPTBrowserSidebarEntry({
                         const borderRing = chatGPTSessionBorderRingClass(session.borderColor);
                         return (
                           <div
-                            className={`flex min-w-0 items-center gap-0 ${isVerifiedManager ? "rounded-md bg-info/10" : ""} ${borderRing ? `rounded-md ring-2 ring-inset ${borderRing}` : isVerifiedManager ? "ring-1 ring-inset ring-info/80" : ""}`}
+                            className={`flex min-w-0 items-center gap-0 ${isVerifiedManager ? "rounded-md bg-info/10" : ""} ${borderRing ? `rounded-md ring-1 ring-inset ${borderRing}` : isVerifiedManager ? "ring-1 ring-inset ring-info/80" : ""}`}
                             onContextMenu={(event) => {
                               event.preventDefault();
                               setContextMenu({
