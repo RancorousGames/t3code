@@ -1238,7 +1238,7 @@ function OpenCommandPaletteDialog(props: {
       shortcutCommand: "chatgpt.newSession",
       run: () => navigate({
         to: "/browser/$browserSessionId",
-        params: { browserSessionId: createChatGPTSession() },
+        params: { browserSessionId: createChatGPTSession(undefined, { explicitlyUserCreated: true }) },
       }),
     });
   }

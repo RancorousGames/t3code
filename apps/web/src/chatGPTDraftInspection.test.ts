@@ -7,6 +7,8 @@ import {
   sameComposerProbe,
   CHATGPT_COMPOSER_PROBE_EXPRESSION,
   hasVerifiedEmptyChatGPTComposer,
+  hasVerifiedUnusedNewChatGuest,
+  inspectUnusedNewChatMarkers,
 } from "./chatGPTDraftInspection";
 
 describe("read-only per-guest composer inspection", () => {
@@ -73,6 +75,44 @@ describe("read-only per-guest composer inspection", () => {
     expect(
       await hasVerifiedEmptyChatGPTComposer(make([empty, new Error("guest detached")]), url),
     ).toBe(false);
+  });
+
+  it("rejects attachments, transcript turns and unknown home layouts before unused-chat cleanup", () => {
+    const home = "https://chatgpt.com/";
+    const dom = new JSDOM('<form><div id="prompt-textarea" contenteditable="true"></div></form>', {
+      url: home,
+    });
+    const doc = dom.window.document;
+    expect(inspectUnusedNewChatMarkers(doc, home)).toBe(true);
+    expect(inspectUnusedNewChatMarkers(doc, home + "c/abc")).toBe(false);
+    doc
+      .querySelector("form")!
+      .insertAdjacentHTML("beforeend", '<div data-testid="composer-attachment">queued file</div>');
+    expect(inspectUnusedNewChatMarkers(doc, home)).toBe(false);
+    doc.querySelector('[data-testid="composer-attachment"]')!.remove();
+    doc.body.insertAdjacentHTML("beforeend", '<article data-message-author-role="user"></article>');
+    expect(inspectUnusedNewChatMarkers(doc, home)).toBe(false);
+    doc.querySelector("article")!.remove();
+    doc.querySelector("form")!.remove();
+    expect(inspectUnusedNewChatMarkers(doc, home)).toBe(false);
+    dom.window.close();
+  });
+
+  it("rejects changed composer text or changing guest markers across asynchronous reads", async () => {
+    const home = "https://chatgpt.com/";
+    const empty = { status: "empty", url: home, text: "" };
+    const changed = { status: "nonempty", url: home, text: "draft" };
+    const guest = (values: unknown[]) =>
+      ({
+        executeJavaScript: async () => values.shift(),
+      }) as unknown as HTMLElementTagNameMap["webview"];
+    expect(await hasVerifiedUnusedNewChatGuest(guest([true, empty, empty, true]), home)).toBe(true);
+    expect(await hasVerifiedUnusedNewChatGuest(guest([true, empty, changed, true]), home)).toBe(
+      false,
+    );
+    expect(await hasVerifiedUnusedNewChatGuest(guest([true, empty, empty, false]), home)).toBe(
+      false,
+    );
   });
 
   it("only accepts two identical concrete observations of the same guest URL", () => {

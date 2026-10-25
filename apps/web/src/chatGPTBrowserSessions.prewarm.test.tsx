@@ -83,6 +83,30 @@ afterEach(() => {
 });
 
 describe("ChatGPT browser session creation with one warm spare", () => {
+  it("timestamps only explicitly manual, fresh UI sessions and not inferred or backend sessions", async () => {
+    let manuallyCreated = "";
+    let backendCreated = "";
+    let inferredCreated = "";
+    await act(async () => {
+      manuallyCreated = harness.createSession(undefined, { explicitlyUserCreated: true });
+      backendCreated = harness.createSession("worker", {
+        explicitlyUserCreated: true,
+        spawnRequestId: "spawn-1",
+      });
+      inferredCreated = harness.createSession();
+    });
+    const manual = harness.sessions.find((session) => session.id === manuallyCreated);
+    const backend = harness.sessions.find((session) => session.id === backendCreated);
+    const inferred = harness.sessions.find((session) => session.id === inferredCreated);
+    expect(manual?.manualEmptyCandidateCreatedAt).toBeGreaterThan(0);
+    expect(backend?.manualEmptyCandidateCreatedAt).toBeUndefined();
+    expect(inferred?.manualEmptyCandidateCreatedAt).toBeUndefined();
+    await act(async () => harness.disqualifyManualEmptyCandidate(manuallyCreated));
+    expect(
+      harness.sessions.find((session) => session.id === manuallyCreated)
+        ?.manualEmptyCandidateDisqualified,
+    ).toBe(true);
+  });
   it("separates manually opened blank guest from a subsequent backend spawn", async () => {
     await act(async () => {
       harness.setPrewarmedSessionId("prepared-session");

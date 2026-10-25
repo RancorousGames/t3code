@@ -15,6 +15,9 @@ export const BrowserSession = Schema.Struct({
   title: Schema.String,
   // An exact backend spawn reservation. Manual sessions and warm spares never carry it.
   spawnRequestId: Schema.optional(Schema.String),
+  // Only explicit UI-created fresh chats carry this; legacy and backend guests do not.
+  manualEmptyCandidateCreatedAt: Schema.optional(Schema.Number),
+  manualEmptyCandidateDisqualified: Schema.optional(Schema.Boolean),
   hidden: Schema.optional(Schema.Boolean),
   hiddenAt: Schema.optional(Schema.Number),
   archive: Schema.optional(
@@ -91,6 +94,7 @@ export type ChatGPTSessionRemovalSource =
   | "desktop-menu-action"
   | "desktop-IPC-request"
   | "expiration"
+  | "unused-empty-manual"
   | "unknown";
 
 export type ChatGPTSessionRemovalReceipt = {
@@ -196,6 +200,7 @@ function isChatGPTSessionRemovalReceipt(value: unknown): value is ChatGPTSession
       entry.source === "desktop-menu-action" ||
       entry.source === "desktop-IPC-request" ||
       entry.source === "expiration" ||
+      entry.source === "unused-empty-manual" ||
       entry.source === "unknown") &&
     entry.authenticatedCaller === "UNKNOWN" &&
     entry.draftSafetyVerified === false &&
@@ -353,6 +358,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         project?: string;
         initialConversationUrl?: string;
         spawnRequestId?: string;
+        explicitlyUserCreated?: boolean;
       },
     ) => {
       let id = randomUUID();
@@ -413,6 +419,14 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             id,
             title: name?.trim() || `ChatGPT ${number}`,
             ...(metadata?.spawnRequestId ? { spawnRequestId: metadata.spawnRequestId } : {}),
+            ...(metadata?.explicitlyUserCreated &&
+            !name &&
+            !metadata.initialConversationUrl &&
+            !metadata.spawnRequestId &&
+            !metadata.parentSessionId &&
+            !metadata.project
+              ? { manualEmptyCandidateCreatedAt: Date.now() }
+              : {}),
             ...(metadata?.parentSessionId ? { parentSessionId: metadata.parentSessionId } : {}),
             ...(metadata?.project ? { project: metadata.project } : {}),
           },
@@ -421,6 +435,25 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       return id;
     },
     [environmentId, sessions, setPrewarmedSessionId, setSessions],
+  );
+
+  const disqualifyManualEmptyCandidate = useCallback(
+    (id: string) =>
+      setSessions((current) => {
+        if (
+          !current.some(
+            (session) =>
+              session.id === id &&
+              session.manualEmptyCandidateCreatedAt &&
+              !session.manualEmptyCandidateDisqualified,
+          )
+        )
+          return current;
+        return current.map((session) =>
+          session.id === id ? { ...session, manualEmptyCandidateDisqualified: true } : session,
+        );
+      }),
+    [setSessions],
   );
 
   const setSessionCompletion = useCallback(
@@ -611,6 +644,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     prewarmedSessionId,
     setPrewarmedSessionId,
     createSession,
+    disqualifyManualEmptyCandidate,
     reorderSessions,
     renameSession,
     renameSessionFromPageTitle,

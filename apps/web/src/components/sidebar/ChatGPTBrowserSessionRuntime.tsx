@@ -7,6 +7,7 @@ import {
 import * as Schema from "effect/Schema";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { isChatGPTHomeUrl } from "../../chatGPTBrowserPrewarm";
 import {
   CHATGPT_DEFAULT_URL,
   chatGPTBrowserLastUrlKey,
@@ -46,7 +47,9 @@ export function ChatGPTBrowserSessionRuntime({
     [environmentId, sessionId],
   );
   const previewState = useThreadPreviewState(threadRef);
-  const { renameSessionFromPageTitle } = useChatGPTBrowserSessions(environmentId);
+  const { renameSessionFromPageTitle, disqualifyManualEmptyCandidate } =
+    useChatGPTBrowserSessions(environmentId);
+  const observedHomeRef = useRef(false);
   const open = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const close = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const list = useAtomQueryRunner(previewEnvironment.list, { refresh: true, reportFailure: false });
@@ -139,6 +142,19 @@ export function ChatGPTBrowserSessionRuntime({
   const navStatus = previewState.snapshot?.navStatus;
   const currentUrl = navStatus?._tag === "Success" ? navStatus.url : null;
   const currentTitle = navStatus?._tag === "Success" ? navStatus.title : null;
+  useEffect(() => {
+    if (currentUrl !== null && isChatGPTHomeUrl(currentUrl)) {
+      observedHomeRef.current = true;
+    } else if (
+      (currentUrl !== null && !isChatGPTHomeUrl(currentUrl)) ||
+      (observedHomeRef.current &&
+        (navStatus?._tag === "Loading" || navStatus?._tag === "LoadFailed"))
+    ) {
+      // Once this guest navigates away from its pristine home, future returns
+      // to home cannot prove that no send or navigation attempt ever occurred.
+      disqualifyManualEmptyCandidate(sessionId);
+    }
+  }, [currentUrl, navStatus?._tag, disqualifyManualEmptyCandidate, sessionId]);
   useEffect(() => {
     if (isChatGPTConversationUrl(currentUrl)) renameSessionFromPageTitle(sessionId, currentTitle);
   }, [currentTitle, currentUrl, renameSessionFromPageTitle, sessionId]);

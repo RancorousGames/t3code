@@ -94,6 +94,7 @@ import {
 import { chatGPTRecoveryHoverDetails } from "./chatGPTRecoveryHoverDetails";
 import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
 import { ChatGPTWorkerCleanupCoordinator } from "./ChatGPTWorkerCleanupCoordinator";
+import { ChatGPTUnusedManualSessionCleanup } from "./ChatGPTUnusedManualSessionCleanup";
 import { ChatGPTBrowserSelectionRecovery } from "./ChatGPTBrowserSelectionRecovery";
 import { ChatGPTProjectStatusIcon } from "./ChatGPTProjectStatusIcon";
 import {
@@ -129,7 +130,7 @@ export function ChatGPTBrowserNewSessionAction() {
       onClick={() =>
         void navigate({
           to: "/browser/$browserSessionId",
-          params: { browserSessionId: createSession() },
+          params: { browserSessionId: createSession(undefined, { explicitlyUserCreated: true }) },
         })
       }
     >
@@ -734,6 +735,12 @@ export function ChatGPTBrowserSidebarEntry({
           </div>
         )}
       </SidebarMenuItem>
+      <ChatGPTUnusedManualSessionCleanup
+        environmentId={environmentId}
+        activeSessionId={activeSessionId}
+        managerIds={verifiedManagerSessionIds}
+        now={clockNow}
+      />
       <ChatGPTWorkerCleanupCoordinator
         environmentId={environmentId}
         sessions={sessions}
@@ -779,7 +786,9 @@ export function ChatGPTBrowserSidebarEntry({
             onClick={() =>
               void navigate({
                 to: "/browser/$browserSessionId",
-                params: { browserSessionId: createSession() },
+                params: {
+                  browserSessionId: createSession(undefined, { explicitlyUserCreated: true }),
+                },
               })
             }
           >
