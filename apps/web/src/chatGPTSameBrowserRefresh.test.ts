@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   refreshSameBrowser,
+  normalizeChatGPTRefreshBootstrap,
   type RefreshPorts,
   type RefreshReceipt,
 } from "./chatGPTSameBrowserRefresh";
@@ -150,5 +151,20 @@ describe("same browser refresh durable navigation intent", () => {
       "persistence unconfirmed",
     );
     expect(ports.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("refresh bootstrap DOM expansion affordance", () => {
+  const submitted = "Exact OpenRig handoff\n\nT3 Code local inter-session routing\nend";
+  it("normalizes only the actual ChatGPT collapsed-message suffix", () => {
+    expect(normalizeChatGPTRefreshBootstrap(submitted + "\n…\nShow more")).toBe(submitted);
+    expect(normalizeChatGPTRefreshBootstrap(submitted)).toBe(submitted);
+  });
+  it("preserves altered or interior user content so its hash cannot be accepted", () => {
+    expect(normalizeChatGPTRefreshBootstrap(submitted + "\n…\nShow less")).not.toBe(submitted);
+    expect(normalizeChatGPTRefreshBootstrap("other\n…\nShow more")).not.toBe(submitted);
+    expect(normalizeChatGPTRefreshBootstrap(submitted + "\n…\nShow more\nextra")).not.toBe(
+      submitted,
+    );
   });
 });

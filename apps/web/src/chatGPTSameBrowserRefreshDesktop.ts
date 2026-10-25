@@ -1,5 +1,9 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { refreshSameBrowser, type RefreshReceipt } from "./chatGPTSameBrowserRefresh";
+import {
+  refreshSameBrowser,
+  normalizeChatGPTRefreshBootstrap,
+  type RefreshReceipt,
+} from "./chatGPTSameBrowserRefresh";
 import {
   assertChatGPTRefreshSafe,
   wakeChatGPTRefreshPredecessor,
@@ -138,7 +142,7 @@ export async function refreshChatGPTDesktop(input: {
         return { conversationId, bootstrapHash: null, assistantReplied: false };
       return {
         conversationId,
-        bootstrapHash: await hash(user.text.trim()),
+        bootstrapHash: await hash(normalizeChatGPTRefreshBootstrap(user.text)),
         assistantReplied:
           observed.activity === "idle" &&
           observed.status === "done_or_idle" &&
