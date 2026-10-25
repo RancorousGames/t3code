@@ -738,6 +738,33 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     });
   });
 
+  it("does not let a payload-less legacy UNKNOWN block a new independently guarded message forever", async () => {
+    const url = `https://chatgpt.com/c/${conversationId}`;
+    const fixture = guestFixture(async () => ({ schema: "t3-c05-browser-optional/v1",
+      status: "ready", browserSessionId: browserId, conversationId, policies: [] }));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() - 120_000);
+    reserveDurableUnknownChatGPTSend("local" as never, browserId, url, false);
+    vi.useRealTimers();
+    try {
+      const result = await runChatGPTSessionControl({
+        environmentId: "local" as never,
+        sessions: [{ id: browserId, title: "Coordinator" }] as never,
+        action: "send", sessionId: browserId, expectedConversationId: conversationId,
+        message: "New distinct test message",
+      });
+      expect(result).toMatchObject({ messageSent: true, delivery: "user_turn_observed" });
+      expect(fixture.presses).toBe(1);
+      expect(fixture.typed).toBe("New distinct test message");
+      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(false);
+      expect([...Array(window.localStorage.length).keys()]
+        .map(i => window.localStorage.key(i))
+        .some(k => k?.includes("chatgpt-legacy-unknown-archive"))).toBe(true);
+    } finally {
+      fixture.guest.remove();
+    }
+  });
+
   it("exposes UNKNOWN then reconciled DELIVERED on read, without resubmitting", async () => {
     const fixture = guestFixture(
       async () => {

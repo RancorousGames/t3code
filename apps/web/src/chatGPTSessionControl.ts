@@ -14,6 +14,7 @@ import {
   releaseDurableUnknownChatGPTSend,
   clearDurableUnknownChatGPTSendsForTests,
   readDurableUnknownChatGPTSend,
+  archiveLegacyUnknownChatGPTSend,
   type DurableChatGPTSend,
 } from "./chatGPTUncertainSendFence";
 import { chatGPTWebviewAutomation } from "./chatGPTWebviewAutomation";
@@ -1313,10 +1314,15 @@ export async function runChatGPTSessionControl(input: {
           };
       }
     }
-    if (!unresolved && hasDurableUnknownChatGPTSend(environmentId, entry.id)) {
-      throw new Error(
-        "An UNKNOWN send survived the renderer restart; preserve this conversation and reconcile manually.",
-      );
+    const legacyUnknown = !unresolved
+      ? readDurableUnknownChatGPTSend(environmentId, entry.id) : null;
+    // Legacy v1 receipts preserved only a URL, not the original message. They
+    // cannot be positively reconciled. A *new* guarded send may proceed after
+    // proving the same idle conversation and a truly empty composer below;
+    // archive the original unresolved evidence instead of deleting it.
+    if (legacyUnknown && (legacyUnknown.attempt || !input.expectedConversationId ||
+      legacyUnknown.conversationUrl !== before.observedGuestUrl)) {
+      throw new Error("Unresolved UNKNOWN send needs its original conversation and guarded reconciliation.");
     }
     if (unresolved && unresolved.url !== before.observedGuestUrl)
       throw new Error(
@@ -1394,6 +1400,8 @@ export async function runChatGPTSessionControl(input: {
     });
     if (typeof draft === "string" && draft.trim())
       throw new Error("Composer contains an existing draft; refusing to overwrite it.");
+    if (legacyUnknown && typeof draft !== "string")
+      throw new Error("Cannot prove an empty composer; legacy UNKNOWN remains held.");
     // Optional C05 applies only to an already authorized guarded send to an existing
     // guest. Never scans idle browsers or wakes guests solely to fetch policy.
     let policyEnrichment: {
@@ -1494,6 +1502,9 @@ export async function runChatGPTSessionControl(input: {
     }
     if ((uncertainChatGPTSends.get(receiptKey) ?? null) !== (unresolved ?? null))
       throw new Error("Unknown-send ledger changed before typing; aborting.");
+    if (legacyUnknown && !archiveLegacyUnknownChatGPTSend(
+      environmentId, entry.id, before.observedGuestUrl ?? ""))
+      throw new Error("Legacy UNKNOWN evidence could not be archived; send remains blocked.");
     await chatGPTWebviewAutomation.waitFor(runtimeId, {
       selector: COMPOSER_SELECTOR,
       timeoutMs: 3000,

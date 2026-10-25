@@ -1,6 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
 const PREFIX = "t3code:chatgpt-unknown-send-fence:v1:";
+const ARCHIVED_LEGACY_PREFIX = "t3code:chatgpt-legacy-unknown-archive:v1:";
 const keyFor = (environmentId: EnvironmentId, sessionId: string) =>
   `${PREFIX}${environmentId}:${sessionId}`;
 
@@ -78,6 +79,37 @@ export function reserveDurableUnknownChatGPTSend(
       },
     );
   }
+}
+
+/**
+ * Legacy v1 fences stored no message bytes, so their original delivery cannot
+ * be reconciled automatically. Preserve that uncertainty in an independent
+ * durable archive instead of letting it block every future, distinct send.
+ * Caller must first prove exact conversation, idle state and empty composer.
+ * Never use this for v2 fences: those carry evidence for normal reconciliation.
+ */
+export function archiveLegacyUnknownChatGPTSend(
+  environmentId: EnvironmentId,
+  sessionId: string,
+  exactUrl: string,
+  now = Date.now(),
+): boolean {
+  const key = keyFor(environmentId, sessionId);
+  const current = readDurableUnknownChatGPTSend(environmentId, sessionId);
+  if (!current || current.attempt || current.conversationUrl !== exactUrl ||
+      now - current.reservedAt < 60_000) return false;
+  const archiveKey = ARCHIVED_LEGACY_PREFIX + environmentId + ":" + sessionId;
+  const prior = window.localStorage.getItem(archiveKey);
+  const entry = JSON.stringify({ ...current, reason: "legacy_payload_missing; original_delivery_unresolved",
+    archivedAt: now });
+  // Write and verify the archive BEFORE removing the active fence.
+  window.localStorage.setItem(archiveKey, prior ? prior + "\n" + entry : entry);
+  if (window.localStorage.getItem(archiveKey) !== (prior ? prior + "\n" + entry : entry))
+    throw new Error("Could not persist legacy UNKNOWN evidence; send remains blocked.");
+  window.localStorage.removeItem(key);
+  if (window.localStorage.getItem(key) !== null)
+    throw new Error("Could not release legacy UNKNOWN fence; send remains blocked.");
+  return true;
 }
 
 /** Only invoke after observing the original exact sent turn. */
