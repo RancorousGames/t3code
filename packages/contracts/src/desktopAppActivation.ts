@@ -88,7 +88,8 @@ export const DesktopAppActivationRequest = Schema.Union([
   }),
   Schema.Struct({
     ...DesktopAppActivationBase,
-    type: Schema.Literal("chatgpt.refresh"),
+    // Legacy wire name remains accepted for in-flight operator requests.
+    type: Schema.Literals(["chatgpt.reboot", "chatgpt.refresh"]),
     requestId: NativeOperationId,
     sessionId: NativeOperationId,
     priorConversationId: ChatGPTConversationId,

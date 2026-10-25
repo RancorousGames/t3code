@@ -8,7 +8,7 @@ import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorag
 // Store the two newer observations separately from the sidebar session array:
 // a working ChatGPT guest can produce frequent heartbeats without rewriting
 // the complete session list. Existing last-working history remains authoritative.
-const timeKey = (environmentId: string, sessionId: string, kind: "active" | "refresh") =>
+const timeKey = (environmentId: string, sessionId: string, kind: "active" | "refresh" | "reboot") =>
   `t3code:chatgpt-browser:last-${kind}:${environmentId}:${sessionId}`;
 
 function readTime(key: string): number | null {
@@ -40,13 +40,22 @@ export function recordChatGPTSessionActiveAt(
   recordTime(timeKey(environmentId, sessionId, "active"), at);
 }
 
-/** Call only after a refresh bridge resolves or a rollover is confirmed committed. */
+/** Browser page reload recovery only; an Agent Reboot starts a new ChatGPT conversation. */
 export function recordChatGPTSessionRefreshedAt(
   environmentId: string,
   sessionId: string,
   at = Date.now(),
 ): void {
   recordTime(timeKey(environmentId, sessionId, "refresh"), at);
+}
+
+/** Record a verified same-seat Agent Reboot, not an ordinary browser reload. */
+export function recordChatGPTSessionRebootedAt(
+  environmentId: string,
+  sessionId: string,
+  at = Date.now(),
+): void {
+  recordTime(timeKey(environmentId, sessionId, "reboot"), at);
 }
 
 export function readChatGPTSessionTimeline(
@@ -58,6 +67,7 @@ export function readChatGPTSessionTimeline(
   createdAt: number | null;
   lastActiveAt: number | null;
   lastRefreshAt: number | null;
+  lastRebootAt: number | null;
 } {
   const createdAt = session.createdAt ?? verifiedSpawnCreatedAt;
   const working =
@@ -82,6 +92,7 @@ export function readChatGPTSessionTimeline(
         : null,
     lastActiveAt: lastActiveAt > 0 ? lastActiveAt : null,
     lastRefreshAt: readTime(timeKey(environmentId, session.id, "refresh")),
+    lastRebootAt: readTime(timeKey(environmentId, session.id, "reboot")),
   };
 }
 

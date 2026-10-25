@@ -1,25 +1,25 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
-  refreshSameBrowser,
-  normalizeChatGPTRefreshBootstrap,
-  type RefreshReceipt,
-} from "./chatGPTSameBrowserRefresh";
+  rebootSameBrowser,
+  normalizeChatGPTRebootBootstrap,
+  type RebootReceipt,
+} from "./chatGPTSameBrowserReboot";
 import {
-  assertChatGPTRefreshSafe,
-  wakeChatGPTRefreshPredecessor,
-  navigateChatGPTRefreshSafe,
+  assertChatGPTRebootSafe,
+  wakeChatGPTRebootPredecessor,
+  navigateChatGPTRebootSafe,
   inspectBrowserSession,
   runChatGPTSessionControl,
 } from "./chatGPTSessionControl";
 import { readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
-import { recordChatGPTSessionRefreshedAt } from "./chatGPTSessionTimestamps";
+import { recordChatGPTSessionRebootedAt } from "./chatGPTSessionTimestamps";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { sendInitialChatGPTPrompt } from "./chatGPTBrowserAutomation";
 import {
-  inspectErroredRefreshPredecessor,
-  navigateOfflineChatGPTRefresh,
-  type OfflineRefreshPredecessor,
-} from "./chatGPTRefreshOffline";
+  inspectErroredRebootPredecessor,
+  navigateOfflineChatGPTReboot,
+  type OfflineRebootPredecessor,
+} from "./chatGPTRebootOffline";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 
 async function hash(text: string) {
@@ -29,7 +29,7 @@ async function hash(text: string) {
 
 /** Existing browser, parent, project and selection are never rewritten. This
  * separate durable journal retains every old canonical URL across restarts. */
-export async function refreshChatGPTDesktop(input: {
+export async function rebootChatGPTDesktop(input: {
   environmentId: EnvironmentId;
   operationId: string;
   sessionId: string;
@@ -39,9 +39,9 @@ export async function refreshChatGPTDesktop(input: {
 }) {
   const sessions = readChatGPTBrowserSessions(input.environmentId);
   const session = sessions.find((s) => s.id === input.sessionId);
-  if (!session || session.hidden) throw new Error("Exact visible refresh browser required.");
+  if (!session || session.hidden) throw new Error("Exact visible reboot browser required.");
   const key = `t3code:chatgpt-browser:refresh:v1:${input.environmentId}`;
-  const read = (): RefreshReceipt[] => {
+  const read = (): RebootReceipt[] => {
     const value: unknown = JSON.parse(window.localStorage.getItem(key) ?? "[]");
     if (
       !Array.isArray(value) ||
@@ -58,16 +58,16 @@ export async function refreshChatGPTDesktop(input: {
           !["unknown", "submitted", "committed", "restored"].includes(r.status),
       )
     )
-      throw new Error("Refresh history is unreadable; preserve it for recovery.");
+      throw new Error("Reboot history is unreadable; preserve it for recovery.");
     return value;
   };
   let runtimeId: string | null = null;
   let guardedConversationId: string | null = null;
-  let offlinePredecessor: OfflineRefreshPredecessor | null = null;
+  let offlinePredecessor: OfflineRebootPredecessor | null = null;
   let offlineDraftBackedUp = false;
   const existing = read().find((r) => r.operationId === input.operationId);
   if (!input.prompt && (input.phase === "begin" || !existing))
-    throw new Error("Initial refresh requires a prompt.");
+    throw new Error("Initial reboot requires a prompt.");
   const bootstrapHash = input.prompt
     ? await hash(
         buildChatGPTSessionHandoffPrompt(input.prompt, session.id, session.parentSessionId),
@@ -76,35 +76,35 @@ export async function refreshChatGPTDesktop(input: {
   // A positively verified editor-free error can be replaced in this same
   // browser slot. Ordinary unloaded/unknown guests retain the safe wake path.
   if (input.phase === "begin" && !existing) {
-    offlinePredecessor = await inspectErroredRefreshPredecessor(
+    offlinePredecessor = await inspectErroredRebootPredecessor(
       input.environmentId,
       session,
       input.priorConversationId,
     );
     if (!offlinePredecessor)
-      await wakeChatGPTRefreshPredecessor(input.environmentId, session, input.priorConversationId);
+      await wakeChatGPTRebootPredecessor(input.environmentId, session, input.priorConversationId);
   }
-  const receipt = await refreshSameBrowser({ ...input, bootstrapHash }, input.phase, {
+  const receipt = await rebootSameBrowser({ ...input, bootstrapHash }, input.phase, {
     read,
     write: (receipts) => window.localStorage.setItem(key, JSON.stringify(receipts)),
     assertSafe: async (id) => {
       if (
         JSON.stringify(readChatGPTBrowserSessions(input.environmentId)) !== JSON.stringify(sessions)
       )
-        throw new Error("Browser hierarchy changed during refresh.");
+        throw new Error("Browser hierarchy changed during reboot.");
       if (offlinePredecessor) {
         if (id !== input.priorConversationId)
           throw new Error("Offline predecessor identity changed.");
-        const current = await inspectErroredRefreshPredecessor(input.environmentId, session, id);
+        const current = await inspectErroredRebootPredecessor(input.environmentId, session, id);
         if (
           !current ||
           current.runtimeId !== offlinePredecessor.runtimeId ||
           current.webview !== offlinePredecessor.webview
         )
-          throw new Error("Offline predecessor changed before refresh.");
+          throw new Error("Offline predecessor changed before reboot.");
         if (!offlineDraftBackedUp) {
           const backup = window.desktopBridge?.savePrivateChatGPTDraftSnapshot;
-          if (!backup) throw new Error("Private draft backup unavailable for offline refresh.");
+          if (!backup) throw new Error("Private draft backup unavailable for offline reboot.");
           const saved = await backup({
             sessionId: session.id,
             url: `https://chatgpt.com/c/${id}`,
@@ -118,7 +118,7 @@ export async function refreshChatGPTDesktop(input: {
           )
             throw new Error("Offline empty-draft backup could not be verified.");
           offlineDraftBackedUp = true;
-          const after = await inspectErroredRefreshPredecessor(input.environmentId, session, id);
+          const after = await inspectErroredRebootPredecessor(input.environmentId, session, id);
           if (!after || after.webview !== current.webview || after.runtimeId !== current.runtimeId)
             throw new Error("Offline predecessor changed during private draft backup.");
         }
@@ -126,15 +126,15 @@ export async function refreshChatGPTDesktop(input: {
         guardedConversationId = id;
         return;
       }
-      const checked = await assertChatGPTRefreshSafe(input.environmentId, session, id);
-      if (runtimeId && checked !== runtimeId) throw new Error("Refresh browser runtime changed.");
+      const checked = await assertChatGPTRebootSafe(input.environmentId, session, id);
+      if (runtimeId && checked !== runtimeId) throw new Error("Reboot browser runtime changed.");
       runtimeId = checked;
       guardedConversationId = id;
     },
     navigate: async (url) => {
-      if (!runtimeId) throw new Error("No safe refresh runtime.");
+      if (!runtimeId) throw new Error("No safe reboot runtime.");
       if (offlinePredecessor) {
-        await navigateOfflineChatGPTRefresh(
+        await navigateOfflineChatGPTReboot(
           input.environmentId,
           session,
           input.priorConversationId,
@@ -143,7 +143,7 @@ export async function refreshChatGPTDesktop(input: {
         );
         return;
       }
-      await navigateChatGPTRefreshSafe(
+      await navigateChatGPTRebootSafe(
         input.environmentId,
         session,
         runtimeId,
@@ -156,16 +156,14 @@ export async function refreshChatGPTDesktop(input: {
         ...input,
         prompt: input.prompt!,
         requestId: input.operationId,
-        // A refresh reservation is distinct from the immutable creation receipt.
+        // A reboot reservation is distinct from the immutable creation receipt.
         readSessions: () =>
           readChatGPTBrowserSessions(input.environmentId).map((s) =>
             s.id === session.id ? { ...s, spawnRequestId: input.operationId } : s,
           ),
       });
       if (receipt.delivery !== "user_turn_observed")
-        throw new Error(
-          "Refresh submit unconfirmed; read status, never repeat navigation or send.",
-        );
+        throw new Error("Reboot submit unconfirmed; read status, never repeat navigation or send.");
     },
     observe: async () => {
       const observed = await inspectBrowserSession(input.environmentId, session);
@@ -199,7 +197,7 @@ export async function refreshChatGPTDesktop(input: {
         return { conversationId, bootstrapHash: null, assistantReplied: false };
       return {
         conversationId,
-        bootstrapHash: await hash(normalizeChatGPTRefreshBootstrap(user.text)),
+        bootstrapHash: await hash(normalizeChatGPTRebootBootstrap(user.text)),
         assistantReplied:
           observed.activity === "idle" &&
           observed.status === "done_or_idle" &&
@@ -213,7 +211,7 @@ export async function refreshChatGPTDesktop(input: {
     input.phase === "finalize" &&
     existing?.status !== "committed"
   ) {
-    recordChatGPTSessionRefreshedAt(input.environmentId, input.sessionId);
+    recordChatGPTSessionRebootedAt(input.environmentId, input.sessionId);
   }
   return receipt;
 }

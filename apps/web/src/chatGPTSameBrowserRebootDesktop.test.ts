@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId } from "@t3tools/contracts";
-import { refreshChatGPTDesktop } from "./chatGPTSameBrowserRefreshDesktop";
+import { rebootChatGPTDesktop } from "./chatGPTSameBrowserRebootDesktop";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 
-const environmentId = EnvironmentId.make("refresh-desktop-lab");
+const environmentId = EnvironmentId.make("reboot-desktop-lab");
 const sessionId = "1c045bfd-08d7-49b8-83b4-142ba0d250f8";
 const conversationId = "6adad1ef-d298-83ed-a7a8-b8ec03d44abd";
 const operationId = "10c8696f-2550-4bda-8b38-3a1534528c76";
@@ -29,14 +29,14 @@ const read = vi.fn(async (..._args: unknown[]) => ({}));
 vi.mock("./chatGPTBrowserSessions", () => ({
   readChatGPTBrowserSessions: () => [session],
 }));
-vi.mock("./chatGPTRefreshOffline", () => ({
-  inspectErroredRefreshPredecessor: (...args: unknown[]) => offline(...args),
-  navigateOfflineChatGPTRefresh: (...args: unknown[]) => reset(...args),
+vi.mock("./chatGPTRebootOffline", () => ({
+  inspectErroredRebootPredecessor: (...args: unknown[]) => offline(...args),
+  navigateOfflineChatGPTReboot: (...args: unknown[]) => reset(...args),
 }));
 vi.mock("./chatGPTSessionControl", () => ({
-  wakeChatGPTRefreshPredecessor: (...args: unknown[]) => wake(...args),
-  assertChatGPTRefreshSafe: (...args: unknown[]) => loadedSafety(...args),
-  navigateChatGPTRefreshSafe: vi.fn(),
+  wakeChatGPTRebootPredecessor: (...args: unknown[]) => wake(...args),
+  assertChatGPTRebootSafe: (...args: unknown[]) => loadedSafety(...args),
+  navigateChatGPTRebootSafe: vi.fn(),
   inspectBrowserSession: (...args: unknown[]) => observe(...args),
   runChatGPTSessionControl: (...args: unknown[]) => read(...args),
 }));
@@ -75,7 +75,7 @@ beforeEach(() => {
   });
 });
 
-describe("refresh coordinator without predecessor browser recovery", () => {
+describe("reboot coordinator without predecessor browser recovery", () => {
   it("preserves the original sidebar slot, backs up first, and never repeats an uncertain send", async () => {
     const input = {
       environmentId,
@@ -85,7 +85,7 @@ describe("refresh coordinator without predecessor browser recovery", () => {
       prompt: "Continue the same OpenRig seat",
       phase: "begin" as const,
     };
-    const first = await refreshChatGPTDesktop(input);
+    const first = await rebootChatGPTDesktop(input);
     expect(first.status).toBe("unknown");
     expect(first.priorUrl).toBe(`https://chatgpt.com/c/${conversationId}`);
     expect(wake).not.toHaveBeenCalled();
@@ -99,16 +99,16 @@ describe("refresh coordinator without predecessor browser recovery", () => {
       "https://chatgpt.com/",
     );
     expect(sent).toHaveBeenCalledTimes(1);
-    const second = await refreshChatGPTDesktop(input);
+    const second = await rebootChatGPTDesktop(input);
     expect(second).toEqual(first);
     expect(reset).toHaveBeenCalledTimes(1);
     expect(sent).toHaveBeenCalledTimes(1);
   });
 
-  it("fails before saving a refresh intent when private draft backup fails", async () => {
+  it("fails before saving a reboot intent when private draft backup fails", async () => {
     backup.mockRejectedValueOnce(new Error("disk full"));
     await expect(
-      refreshChatGPTDesktop({
+      rebootChatGPTDesktop({
         environmentId,
         operationId,
         sessionId,
@@ -125,7 +125,7 @@ describe("refresh coordinator without predecessor browser recovery", () => {
   it("does not bypass the normal safety path unless the predecessor is definitely errored", async () => {
     offline.mockResolvedValue(null);
     await expect(
-      refreshChatGPTDesktop({
+      rebootChatGPTDesktop({
         environmentId,
         operationId,
         sessionId,
@@ -151,7 +151,7 @@ describe("same-browser UNKNOWN receipt reconciliation", () => {
       prompt,
       phase: "begin" as const,
     };
-    const first = await refreshChatGPTDesktop(input);
+    const first = await rebootChatGPTDesktop(input);
     expect(first.status).toBe("unknown");
     expect(first.sendStarted).toBe(true);
 
@@ -168,7 +168,12 @@ describe("same-browser UNKNOWN receipt reconciliation", () => {
       session: {
         messages: [
           { role: "user", turn: 0, turnKey: "original", text: user + "\n…\nShow more" },
-          { role: "assistant", turn: 0, turnKey: "original", text: "I have resumed the existing seat." },
+          {
+            role: "assistant",
+            turn: 0,
+            turnKey: "original",
+            text: "I have resumed the existing seat.",
+          },
         ],
       },
     };
@@ -183,15 +188,15 @@ describe("same-browser UNKNOWN receipt reconciliation", () => {
       },
     });
     expect(
-      await refreshChatGPTDesktop({ ...input, prompt: undefined, phase: "status" }),
+      await rebootChatGPTDesktop({ ...input, prompt: undefined, phase: "status" }),
     ).toMatchObject({ status: "unknown" });
 
     read.mockResolvedValue(verifiedTurn);
     expect(
-      await refreshChatGPTDesktop({ ...input, prompt: undefined, phase: "status" }),
+      await rebootChatGPTDesktop({ ...input, prompt: undefined, phase: "status" }),
     ).toMatchObject({ status: "submitted", successorConversationId: successor });
     expect(
-      await refreshChatGPTDesktop({ ...input, prompt: undefined, phase: "finalize" }),
+      await rebootChatGPTDesktop({ ...input, prompt: undefined, phase: "finalize" }),
     ).toMatchObject({
       status: "committed",
       sessionId,

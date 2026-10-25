@@ -1,20 +1,20 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
-  refreshSameBrowser,
-  normalizeChatGPTRefreshBootstrap,
-  type RefreshPorts,
-  type RefreshReceipt,
-} from "./chatGPTSameBrowserRefresh";
+  rebootSameBrowser,
+  normalizeChatGPTRebootBootstrap,
+  type RebootPorts,
+  type RebootReceipt,
+} from "./chatGPTSameBrowserReboot";
 
 function fixture() {
-  let saved: RefreshReceipt[] = [];
+  let saved: RebootReceipt[] = [];
   const input = {
     operationId: "operation",
     sessionId: "browser",
     priorConversationId: "old",
     bootstrapHash: "hash",
   };
-  const ports: RefreshPorts = {
+  const ports: RebootPorts = {
     read: () => structuredClone(saved),
     write: (value) => {
       saved = structuredClone(value);
@@ -31,18 +31,18 @@ function fixture() {
   return { input, ports };
 }
 
-describe("same browser refresh durable navigation intent", () => {
+describe("same browser reboot durable navigation intent", () => {
   it("keeps the browser, archives old URL and rotates generation only once", async () => {
     const { input, ports } = fixture();
-    expect(await refreshSameBrowser(input, "begin", ports)).toMatchObject({
+    expect(await rebootSameBrowser(input, "begin", ports)).toMatchObject({
       sessionId: "browser",
       priorUrl: "https://chatgpt.com/c/old",
       successorConversationId: "new",
       generation: 1,
       status: "submitted",
     });
-    await refreshSameBrowser(input, "begin", ports);
-    expect(await refreshSameBrowser(input, "finalize", ports)).toMatchObject({
+    await rebootSameBrowser(input, "begin", ports);
+    expect(await rebootSameBrowser(input, "finalize", ports)).toMatchObject({
       status: "committed",
     });
     expect(ports.navigate).toHaveBeenCalledTimes(1);
@@ -54,13 +54,13 @@ describe("same browser refresh durable navigation intent", () => {
       expect(ports.read()[0]?.status).toBe("unknown");
       throw new Error("lost ack");
     });
-    await expect(refreshSameBrowser(input, "begin", ports)).rejects.toThrow("lost ack");
+    await expect(rebootSameBrowser(input, "begin", ports)).rejects.toThrow("lost ack");
     ports.observe = vi.fn(async () => ({
       conversationId: "old",
       bootstrapHash: null,
       assistantReplied: false,
     }));
-    expect(await refreshSameBrowser(input, "begin", { ...ports })).toMatchObject({
+    expect(await rebootSameBrowser(input, "begin", { ...ports })).toMatchObject({
       status: "unknown",
     });
     expect(ports.navigate).toHaveBeenCalledTimes(1);
@@ -72,13 +72,13 @@ describe("same browser refresh durable navigation intent", () => {
       .fn()
       .mockRejectedValueOnce(new Error("navigation failed"))
       .mockResolvedValue(undefined);
-    await expect(refreshSameBrowser(input, "begin", ports)).rejects.toThrow();
+    await expect(rebootSameBrowser(input, "begin", ports)).rejects.toThrow();
     ports.observe = vi.fn(async () => ({
       conversationId: null,
       bootstrapHash: null,
       assistantReplied: false,
     }));
-    expect(await refreshSameBrowser(input, "restore", ports)).toMatchObject({ status: "restored" });
+    expect(await rebootSameBrowser(input, "restore", ports)).toMatchObject({ status: "restored" });
     expect(ports.navigate).toHaveBeenLastCalledWith("https://chatgpt.com/c/old");
   });
   it("never restores or resends an ambiguous submit", async () => {
@@ -86,11 +86,11 @@ describe("same browser refresh durable navigation intent", () => {
     ports.send = vi.fn(async () => {
       throw new Error("unknown submit");
     });
-    await expect(refreshSameBrowser(input, "begin", ports)).rejects.toThrow("unknown submit");
-    await expect(refreshSameBrowser(input, "restore", ports)).rejects.toThrow(
+    await expect(rebootSameBrowser(input, "begin", ports)).rejects.toThrow("unknown submit");
+    await expect(rebootSameBrowser(input, "restore", ports)).rejects.toThrow(
       "Submit may have started",
     );
-    expect(await refreshSameBrowser(input, "status", ports)).toMatchObject({ status: "submitted" });
+    expect(await rebootSameBrowser(input, "status", ports)).toMatchObject({ status: "submitted" });
     expect(ports.send).toHaveBeenCalledTimes(1);
   });
   it.each(["old", "unrelated"])("rejects old identity or unmatched bootstrap %s", async (id) => {
@@ -100,7 +100,7 @@ describe("same browser refresh durable navigation intent", () => {
       bootstrapHash: id === "old" ? "hash" : "wrong",
       assistantReplied: true,
     }));
-    expect(await refreshSameBrowser(input, "begin", ports)).toMatchObject({ status: "unknown" });
+    expect(await rebootSameBrowser(input, "begin", ports)).toMatchObject({ status: "unknown" });
   });
   it("requires a first assistant reply, blocks concurrent operations and mismatched IDs", async () => {
     const { input, ports } = fixture();
@@ -109,13 +109,13 @@ describe("same browser refresh durable navigation intent", () => {
       bootstrapHash: "hash",
       assistantReplied: false,
     }));
-    await refreshSameBrowser(input, "begin", ports);
-    await expect(refreshSameBrowser(input, "finalize", ports)).rejects.toThrow("First assistant");
+    await rebootSameBrowser(input, "begin", ports);
+    await expect(rebootSameBrowser(input, "finalize", ports)).rejects.toThrow("First assistant");
     await expect(
-      refreshSameBrowser({ ...input, operationId: "other" }, "begin", ports),
+      rebootSameBrowser({ ...input, operationId: "other" }, "begin", ports),
     ).rejects.toThrow("unresolved");
     await expect(
-      refreshSameBrowser({ ...input, bootstrapHash: "different" }, "begin", ports),
+      rebootSameBrowser({ ...input, bootstrapHash: "different" }, "begin", ports),
     ).rejects.toThrow("different inputs");
   });
   it("fails before navigation on draft, active generation or failed backup", async () => {
@@ -123,48 +123,48 @@ describe("same browser refresh durable navigation intent", () => {
     ports.assertSafe = vi.fn(async () => {
       throw new Error("unsafe");
     });
-    await expect(refreshSameBrowser(input, "begin", ports)).rejects.toThrow("unsafe");
+    await expect(rebootSameBrowser(input, "begin", ports)).rejects.toThrow("unsafe");
     expect(ports.read()).toEqual([]);
     expect(ports.navigate).not.toHaveBeenCalled();
   });
   it("can revisit archived old history only after safely backing up the new completed generation", async () => {
     const { input, ports } = fixture();
-    await refreshSameBrowser(input, "begin", ports);
-    await refreshSameBrowser(input, "finalize", ports);
+    await rebootSameBrowser(input, "begin", ports);
+    await rebootSameBrowser(input, "finalize", ports);
     ports.assertSafe = vi.fn(async (id) => {
       if (id !== "new") throw new Error("wrong guard");
     });
-    const restored = await refreshSameBrowser(input, "restore", ports);
+    const restored = await rebootSameBrowser(input, "restore", ports);
     expect(restored).toMatchObject({
       status: "committed",
       historyRestoreIssued: true,
       successorConversationId: "new",
     });
-    await refreshSameBrowser(input, "restore", ports);
+    await rebootSameBrowser(input, "restore", ports);
     expect(ports.navigate).toHaveBeenCalledTimes(2);
     expect(ports.navigate).toHaveBeenLastCalledWith("https://chatgpt.com/c/old");
   });
   it("refuses all navigation when persistence cannot be verified", async () => {
     const { input, ports } = fixture();
     ports.write = () => {};
-    await expect(refreshSameBrowser(input, "begin", ports)).rejects.toThrow(
+    await expect(rebootSameBrowser(input, "begin", ports)).rejects.toThrow(
       "persistence unconfirmed",
     );
     expect(ports.navigate).not.toHaveBeenCalled();
   });
 });
 
-describe("refresh bootstrap DOM expansion affordance", () => {
+describe("reboot bootstrap DOM expansion affordance", () => {
   const submitted = "Exact OpenRig handoff\n\nT3 Code local inter-session routing\nend";
   it("normalizes only the actual ChatGPT collapsed-message suffix", () => {
-    expect(normalizeChatGPTRefreshBootstrap(submitted + "\n…\nShow more")).toBe(submitted);
-    expect(normalizeChatGPTRefreshBootstrap(submitted)).toBe(submitted);
-    expect(normalizeChatGPTRefreshBootstrap(submitted + " ")).not.toBe(submitted);
+    expect(normalizeChatGPTRebootBootstrap(submitted + "\n…\nShow more")).toBe(submitted);
+    expect(normalizeChatGPTRebootBootstrap(submitted)).toBe(submitted);
+    expect(normalizeChatGPTRebootBootstrap(submitted + " ")).not.toBe(submitted);
   });
   it("preserves altered or interior user content so its hash cannot be accepted", () => {
-    expect(normalizeChatGPTRefreshBootstrap(submitted + "\n…\nShow less")).not.toBe(submitted);
-    expect(normalizeChatGPTRefreshBootstrap("other\n…\nShow more")).not.toBe(submitted);
-    expect(normalizeChatGPTRefreshBootstrap(submitted + "\n…\nShow more\nextra")).not.toBe(
+    expect(normalizeChatGPTRebootBootstrap(submitted + "\n…\nShow less")).not.toBe(submitted);
+    expect(normalizeChatGPTRebootBootstrap("other\n…\nShow more")).not.toBe(submitted);
+    expect(normalizeChatGPTRebootBootstrap(submitted + "\n…\nShow more\nextra")).not.toBe(
       submitted,
     );
   });

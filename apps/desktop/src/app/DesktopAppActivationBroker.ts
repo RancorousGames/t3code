@@ -77,7 +77,8 @@ export class DesktopAppActivationBroker {
           const pending = this.#pending.get(request.requestId);
           const uncertain =
             pending?.dispatched &&
-            (request.type === "chatgpt.refresh" ||
+            (request.type === "chatgpt.reboot" ||
+              request.type === "chatgpt.refresh" ||
               request.type === "chatgpt.spawn" ||
               request.type === "chatgpt.sessions" ||
               request.type === "openrig.human_inbox");
@@ -91,7 +92,8 @@ export class DesktopAppActivationBroker {
             ),
           );
         },
-        request.type === "chatgpt.refresh" ||
+        request.type === "chatgpt.reboot" ||
+          request.type === "chatgpt.refresh" ||
           request.type === "chatgpt.spawn" ||
           request.type === "chatgpt.sessions" ||
           request.type === "openrig.human_inbox"
@@ -110,6 +112,7 @@ export class DesktopAppActivationBroker {
     // thread (or a different application). The already-running renderer can
     // create and drive ChatGPT's browser tab without activating the window.
     if (
+      request.type !== "chatgpt.reboot" &&
       request.type !== "chatgpt.refresh" &&
       request.type !== "chatgpt.spawn" &&
       request.type !== "chatgpt.sessions" &&
@@ -130,6 +133,7 @@ export class DesktopAppActivationBroker {
     for (const pending of this.#pending.values()) {
       if (
         pending.dispatched &&
+        pending.request.type !== "chatgpt.reboot" &&
         pending.request.type !== "chatgpt.refresh" &&
         pending.request.type !== "chatgpt.spawn" &&
         pending.request.type !== "chatgpt.sessions" &&
@@ -197,6 +201,7 @@ export class DesktopAppActivationBroker {
         // request was not handed off. Only ordinary workspace requests may be
         // retried on a newly registered renderer.
         if (
+          pending.request.type !== "chatgpt.reboot" &&
           pending.request.type !== "chatgpt.refresh" &&
           pending.request.type !== "chatgpt.spawn" &&
           pending.request.type !== "chatgpt.sessions" &&

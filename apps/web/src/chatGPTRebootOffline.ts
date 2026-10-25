@@ -14,7 +14,7 @@ import { hasUncertainChatGPTSend } from "./chatGPTSessionControl";
 import { hasChatGPTLoadFailure } from "./components/sidebar/chatGPTConversationRecovery";
 import { readThreadPreviewState } from "./previewStateStore";
 
-export interface OfflineRefreshPredecessor {
+export interface OfflineRebootPredecessor {
   readonly runtimeId: string;
   readonly webview: HTMLElementTagNameMap["webview"];
 }
@@ -24,7 +24,7 @@ function pinnedPredecessor(
   environmentId: EnvironmentId,
   session: BrowserSession,
   priorConversationId: string,
-): OfflineRefreshPredecessor | null {
+): OfflineRebootPredecessor | null {
   if (session.hidden || hasUncertainChatGPTSend(environmentId, session.id)) return null;
   const thread = chatGPTBrowserThreadRef(environmentId, session.id);
   const state = readThreadPreviewState(thread);
@@ -61,22 +61,22 @@ function pinnedPredecessor(
 }
 
 /** Only a confirmed blank renderer is safe to replace without querying its DOM. */
-export function inspectOfflineRefreshPredecessor(
+export function inspectOfflineRebootPredecessor(
   environmentId: EnvironmentId,
   session: BrowserSession,
   priorConversationId: string,
-): OfflineRefreshPredecessor | null {
+): OfflineRebootPredecessor | null {
   const candidate = pinnedPredecessor(environmentId, session, priorConversationId);
   return candidate && chatGPTBrowserFailure(candidate.webview) === "blank-page" ? candidate : null;
 }
 
 /** The explicit ChatGPT load-error page is another terminal, editor-free state. */
-export async function inspectErroredRefreshPredecessor(
+export async function inspectErroredRebootPredecessor(
   environmentId: EnvironmentId,
   session: BrowserSession,
   priorConversationId: string,
-): Promise<OfflineRefreshPredecessor | null> {
-  const blank = inspectOfflineRefreshPredecessor(environmentId, session, priorConversationId);
+): Promise<OfflineRebootPredecessor | null> {
+  const blank = inspectOfflineRebootPredecessor(environmentId, session, priorConversationId);
   if (blank) {
     // Health detects visible blanks; additionally exclude even hidden editors.
     try {
@@ -126,24 +126,24 @@ export async function inspectErroredRefreshPredecessor(
 /**
  * Recheck the exact failed guest immediately before replacing it. Host reset
  * preserves the logical T3 browser slot and works when the old page cannot
- * navigate itself. The caller persists a private draft backup and the refresh
+ * navigate itself. The caller persists a private draft backup and the reboot
  * intent BEFORE invoking this operation.
  */
-export async function navigateOfflineChatGPTRefresh(
+export async function navigateOfflineChatGPTReboot(
   environmentId: EnvironmentId,
   session: BrowserSession,
   conversationId: string,
-  predecessor: OfflineRefreshPredecessor,
+  predecessor: OfflineRebootPredecessor,
   url: string,
 ): Promise<void> {
   if (url !== "https://chatgpt.com/")
-    throw new Error("Offline refresh may only open a fresh ChatGPT home.");
-  const current = await inspectErroredRefreshPredecessor(environmentId, session, conversationId);
+    throw new Error("Offline reboot may only open a fresh ChatGPT home.");
+  const current = await inspectErroredRebootPredecessor(environmentId, session, conversationId);
   if (
     !current ||
     current.runtimeId !== predecessor.runtimeId ||
     current.webview !== predecessor.webview
   )
-    throw new Error("Offline refresh predecessor changed; preserving its browser.");
+    throw new Error("Offline reboot predecessor changed; preserving its browser.");
   await resetHostedBrowserGuest(predecessor.runtimeId, url);
 }

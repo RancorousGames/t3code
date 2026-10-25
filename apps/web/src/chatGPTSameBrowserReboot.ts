@@ -1,12 +1,12 @@
 /** ChatGPT displays a collapsed, read-only UI expansion affordance after long user messages.
  * It is NOT part of the submitted prompt and must not invalidate its exact hash.
  * Only this anchored known suffix is removed; arbitrary text remains a mismatch. */
-export function normalizeChatGPTRefreshBootstrap(text: string): string {
+export function normalizeChatGPTRebootBootstrap(text: string): string {
   // Do not trim the submitted text: even a single extra space changes the receipt hash.
   return text.replace(/\n…\nShow more$/, "");
 }
 
-export type RefreshReceipt = {
+export type RebootReceipt = {
   operationId: string;
   sessionId: string;
   priorConversationId: string;
@@ -19,9 +19,9 @@ export type RefreshReceipt = {
   historyRestoreIssued?: boolean;
 };
 
-export interface RefreshPorts {
-  read(): RefreshReceipt[];
-  write(receipts: RefreshReceipt[]): void;
+export interface RebootPorts {
+  read(): RebootReceipt[];
+  write(receipts: RebootReceipt[]): void;
   assertSafe(conversationId: string | null): Promise<void>;
   navigate(url: string): Promise<void>;
   send(): Promise<void>;
@@ -34,7 +34,7 @@ export interface RefreshPorts {
 
 /** The intent is durable before navigation. Repeated begin/status calls only
  * observe; an ambiguous navigation or submit is never replayed. */
-export async function refreshSameBrowser(
+export async function rebootSameBrowser(
   input: {
     operationId: string;
     sessionId: string;
@@ -42,8 +42,8 @@ export async function refreshSameBrowser(
     bootstrapHash: string;
   },
   phase: "begin" | "status" | "restore" | "finalize",
-  ports: RefreshPorts,
-): Promise<RefreshReceipt> {
+  ports: RebootPorts,
+): Promise<RebootReceipt> {
   let receipts = ports.read();
   let receipt = receipts.find((r) => r.operationId === input.operationId);
   if (
@@ -52,28 +52,28 @@ export async function refreshSameBrowser(
       receipt.priorConversationId !== input.priorConversationId ||
       receipt.bootstrapHash !== input.bootstrapHash)
   )
-    throw new Error("Refresh operation ID reused with different inputs.");
-  const save = (value: RefreshReceipt) => {
+    throw new Error("Reboot operation ID reused with different inputs.");
+  const save = (value: RebootReceipt) => {
     const fresh = ports.read();
     const previous = fresh.find((r) => r.operationId === input.operationId);
     if (JSON.stringify(previous) !== JSON.stringify(receipt))
-      throw new Error("Refresh receipt changed concurrently.");
+      throw new Error("Reboot receipt changed concurrently.");
     const next = previous
       ? fresh.map((r) => (r.operationId === value.operationId ? value : r))
       : [...fresh, value];
     ports.write(next);
     if (JSON.stringify(ports.read()) !== JSON.stringify(next))
-      throw new Error("Refresh receipt persistence unconfirmed; no further action.");
+      throw new Error("Reboot receipt persistence unconfirmed; no further action.");
     receipt = value;
   };
   if (!receipt) {
-    if (phase !== "begin") throw new Error("Unknown refresh operation.");
+    if (phase !== "begin") throw new Error("Unknown reboot operation.");
     if (
       receipts.some(
         (r) => r.sessionId === input.sessionId && !["committed", "restored"].includes(r.status),
       )
     )
-      throw new Error("Another refresh is unresolved in this browser.");
+      throw new Error("Another reboot is unresolved in this browser.");
     await ports.assertSafe(input.priorConversationId);
     receipts = ports.read();
     if (
@@ -81,7 +81,7 @@ export async function refreshSameBrowser(
         (r) => r.sessionId === input.sessionId && !["committed", "restored"].includes(r.status),
       )
     )
-      throw new Error("Concurrent refresh reserved this browser.");
+      throw new Error("Concurrent reboot reserved this browser.");
     save({
       ...input,
       priorUrl: `https://chatgpt.com/c/${input.priorConversationId}`,
@@ -100,7 +100,7 @@ export async function refreshSameBrowser(
     save({ ...receipt!, sendStarted: true });
     await ports.send();
   }
-  if (!receipt) throw new Error("Refresh intent missing.");
+  if (!receipt) throw new Error("Reboot intent missing.");
   if (receipt.status === "restored") return receipt;
   if (receipt.status === "committed") {
     if (phase === "restore" && !receipt.historyRestoreIssued) {
@@ -137,7 +137,7 @@ export async function refreshSameBrowser(
     receipt.successorConversationId &&
     receipt.successorConversationId !== observed.conversationId
   )
-    throw new Error("Refresh successor conversation changed.");
+    throw new Error("Reboot successor conversation changed.");
   if (phase === "finalize" && !observed.assistantReplied)
     throw new Error("First assistant response is not verified.");
   save({

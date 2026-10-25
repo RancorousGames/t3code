@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { EnvironmentId } from "@t3tools/contracts";
 import { chatGPTBrowserLastUrlKey } from "./chatGPTBrowserSessions";
 import {
-  inspectOfflineRefreshPredecessor,
-  inspectErroredRefreshPredecessor,
-  navigateOfflineChatGPTRefresh,
-} from "./chatGPTRefreshOffline";
+  inspectOfflineRebootPredecessor,
+  inspectErroredRebootPredecessor,
+  navigateOfflineChatGPTReboot,
+} from "./chatGPTRebootOffline";
 
-const environment = EnvironmentId.make("offline-refresh");
+const environment = EnvironmentId.make("offline-reboot");
 const id = "6ad81f45-bd10-83ed-8128-6a3d584c876c";
 const session = { id: "browser", title: "Manager" };
 const url = `https://chatgpt.com/c/${id}`;
@@ -27,7 +27,7 @@ const reset = vi.fn(async (_runtime: string, _url: string) => ({
   webContentsId: 2,
 }));
 
-vi.mock("./browser/previewRuntimeTabId", () => ({ previewRuntimeTabId: () => "refresh-runtime" }));
+vi.mock("./browser/previewRuntimeTabId", () => ({ previewRuntimeTabId: () => "reboot-runtime" }));
 vi.mock("./browser/chatGPTGuestHibernation", () => ({
   isChatGPTGuestHibernated: () => hibernated,
 }));
@@ -66,7 +66,7 @@ beforeEach(() => {
     JSON.stringify(url),
   );
   const guest = document.createElement("webview");
-  guest.dataset.previewTab = "refresh-runtime";
+  guest.dataset.previewTab = "reboot-runtime";
   Object.defineProperty(guest, "getURL", { value: () => url });
   Object.defineProperty(guest, "executeJavaScript", {
     value: async () => (failure === "blank-page" ? !hiddenEditor : errorPanel),
@@ -78,87 +78,83 @@ afterEach(() => {
   dom.window.close();
 });
 
-describe("offline same-browser refresh", () => {
+describe("offline same-browser reboot", () => {
   it("uses the existing slot without reading the broken conversation", async () => {
-    const predecessor = inspectOfflineRefreshPredecessor(environment, session, id);
+    const predecessor = inspectOfflineRebootPredecessor(environment, session, id);
     expect(predecessor).not.toBeNull();
-    await navigateOfflineChatGPTRefresh(
+    await navigateOfflineChatGPTReboot(
       environment,
       session,
       id,
       predecessor!,
       "https://chatgpt.com/",
     );
-    expect(reset).toHaveBeenCalledExactlyOnceWith("refresh-runtime", "https://chatgpt.com/");
+    expect(reset).toHaveBeenCalledExactlyOnceWith("reboot-runtime", "https://chatgpt.com/");
   });
 
   it("refuses a blank renderer with a hidden draft editor", async () => {
     hiddenEditor = true;
-    expect(await inspectErroredRefreshPredecessor(environment, session, id)).toBeNull();
+    expect(await inspectErroredRebootPredecessor(environment, session, id)).toBeNull();
     expect(reset).not.toHaveBeenCalled();
   });
 
   it("allows a confirmed ChatGPT load-error page without requiring recovery", async () => {
     failure = null;
     errorPanel = true;
-    const predecessor = await inspectErroredRefreshPredecessor(environment, session, id);
+    const predecessor = await inspectErroredRebootPredecessor(environment, session, id);
     expect(predecessor).not.toBeNull();
-    await navigateOfflineChatGPTRefresh(
+    await navigateOfflineChatGPTReboot(
       environment,
       session,
       id,
       predecessor!,
       "https://chatgpt.com/",
     );
-    expect(reset).toHaveBeenCalledExactlyOnceWith("refresh-runtime", "https://chatgpt.com/");
+    expect(reset).toHaveBeenCalledExactlyOnceWith("reboot-runtime", "https://chatgpt.com/");
   });
 
   it.each(["probe-timeout", null])(
     "does not erase an unreadable or unconfirmed composer (%s)",
     (problem) => {
       failure = problem;
-      expect(inspectOfflineRefreshPredecessor(environment, session, id)).toBeNull();
+      expect(inspectOfflineRebootPredecessor(environment, session, id)).toBeNull();
     },
   );
 
   it("refuses wrong predecessor, saved URL, active loading, UNKNOWN send and hibernation", () => {
     expect(
-      inspectOfflineRefreshPredecessor(
-        environment,
-        session,
-        "ffffffff-ffff-ffff-ffff-ffffffffffff",
-      ),
+      inspectOfflineRebootPredecessor(environment, session, "ffffffff-ffff-ffff-ffff-ffffffffffff"),
     ).toBeNull();
     navUrl = "https://chatgpt.com/c/ffffffff-ffff-ffff-ffff-ffffffffffff";
-    expect(inspectOfflineRefreshPredecessor(environment, session, id)).toBeNull();
+    expect(inspectOfflineRebootPredecessor(environment, session, id)).toBeNull();
     navUrl = url;
     unknownSend = true;
-    expect(inspectOfflineRefreshPredecessor(environment, session, id)).toBeNull();
+    expect(inspectOfflineRebootPredecessor(environment, session, id)).toBeNull();
     unknownSend = false;
     loading = true;
-    expect(inspectOfflineRefreshPredecessor(environment, session, id)).toBeNull();
+    expect(inspectOfflineRebootPredecessor(environment, session, id)).toBeNull();
     loading = false;
     hibernated = true;
-    expect(inspectOfflineRefreshPredecessor(environment, session, id)).toBeNull();
+    expect(inspectOfflineRebootPredecessor(environment, session, id)).toBeNull();
     hibernated = false;
     window.localStorage.setItem(
       chatGPTBrowserLastUrlKey(environment, session.id),
       JSON.stringify("https://chatgpt.com/"),
     );
-    expect(inspectOfflineRefreshPredecessor(environment, session, id)).toBeNull();
+    expect(inspectOfflineRebootPredecessor(environment, session, id)).toBeNull();
     expect(reset).not.toHaveBeenCalled();
   });
 
   it("rejects a changed browser or newly uncertain send before replacement", async () => {
-    const predecessor = inspectOfflineRefreshPredecessor(environment, session, id)!;
+    const predecessor = inspectOfflineRebootPredecessor(environment, session, id)!;
     unknownSend = true;
     await expect(
-      navigateOfflineChatGPTRefresh(environment, session, id, predecessor, "https://chatgpt.com/"),
+      navigateOfflineChatGPTReboot(environment, session, id, predecessor, "https://chatgpt.com/"),
     ).rejects.toThrow("changed");
     unknownSend = false;
     document.querySelector("webview")!.remove();
     await expect(
-      navigateOfflineChatGPTRefresh(environment, session, id, predecessor, "https://chatgpt.com/"),
+      navigateOfflineChatGPTReboot(environment, session, id, predecessor, "https://chatgpt.com/"),
     ).rejects.toThrow("changed");
     expect(reset).not.toHaveBeenCalled();
   });

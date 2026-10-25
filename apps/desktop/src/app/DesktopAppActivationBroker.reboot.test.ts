@@ -4,14 +4,14 @@ import type { DesktopAppActivationRequest } from "@t3tools/contracts";
 
 const request: DesktopAppActivationRequest = {
   version: 1,
-  type: "chatgpt.refresh",
+  type: "chatgpt.reboot",
   phase: "begin",
   requestId: "894f98c4-3c2a-4b2a-bafe-1d3034381111",
   sessionId: "594f98c4-3c2a-4b2a-bafe-1d3034381111",
   priorConversationId: "694f98c4-3c2a-4b2a-bafe-1d3034381111",
   prompt: "Continue",
 };
-describe("refresh broker no-replay boundary", () => {
+describe("reboot broker no-replay boundary", () => {
   it("preserves selection and never replays on renderer replacement", async () => {
     const activate = vi.fn(),
       send = vi.fn(),
@@ -33,7 +33,7 @@ describe("refresh broker no-replay boundary", () => {
     expect(await reply).toMatchObject({ ok: true });
     broker.close();
   });
-  it("reports UNKNOWN after a possibly dispatched refresh instead of replaying", async () => {
+  it("reports UNKNOWN after a possibly dispatched reboot instead of replaying", async () => {
     const broker = new DesktopAppActivationBroker({ requestTimeoutMs: 1000, activate: vi.fn() });
     broker.registerRenderer(() => {
       throw new Error("lost transport");

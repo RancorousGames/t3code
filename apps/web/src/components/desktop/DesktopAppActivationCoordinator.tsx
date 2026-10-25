@@ -11,7 +11,7 @@ import {
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
 
 import { sendInitialChatGPTPrompt } from "../../chatGPTBrowserAutomation";
-import { refreshChatGPTDesktop } from "../../chatGPTSameBrowserRefreshDesktop";
+import { rebootChatGPTDesktop } from "../../chatGPTSameBrowserRebootDesktop";
 import { recordChatGPTSpawnCreated, readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
 import {
   chatGPTBrowserLastUrlKey,
@@ -552,7 +552,12 @@ export function DesktopAppActivationCoordinator() {
           let resolvedSessionId = request.sessionId;
           let exactConversationId = request.expectedConversationId;
           let openedConversationSession = false;
-          if ((request.action === "read" || request.action === "send" || request.action === "reconcile_send") && request.sessionId) {
+          if (
+            (request.action === "read" ||
+              request.action === "send" ||
+              request.action === "reconcile_send") &&
+            request.sessionId
+          ) {
             const address = resolveChatGPTSessionAddress(
               request.sessionId,
               sessionSnapshot,
@@ -580,7 +585,9 @@ export function DesktopAppActivationCoordinator() {
             exactConversationId = address.conversationId ?? undefined;
             let needsNewSession = address.create;
             if (request.action === "reconcile_send" && needsNewSession)
-              throw new Error("Reconciliation requires an existing exact conversation; no browser was created.");
+              throw new Error(
+                "Reconciliation requires an existing exact conversation; no browser was created.",
+              );
             if (
               !address.create &&
               address.conversationId &&
@@ -698,16 +705,26 @@ export function DesktopAppActivationCoordinator() {
             const successorId = request.successorSessionId;
             const priorConversationId = request.priorConversationId;
             const successorConversationId = request.successorConversationId;
-            if (!priorId || !successorId || !priorConversationId || !successorConversationId ||
-                priorId === successorId)
-              throw new Error("Exact distinct predecessor/successor browser and conversation IDs required.");
+            if (
+              !priorId ||
+              !successorId ||
+              !priorConversationId ||
+              !successorConversationId ||
+              priorId === successorId
+            )
+              throw new Error(
+                "Exact distinct predecessor/successor browser and conversation IDs required.",
+              );
             const original = sessionSnapshot.find((s) => s.id === priorId);
             const successor = sessionSnapshot.find((s) => s.id === successorId);
             if (!original || !successor || successor.hidden)
               throw new Error("Rollover session missing or successor hidden.");
             const oldUrl = `https://chatgpt.com/c/${priorConversationId}`;
-            const alreadyArchived = original.hidden && !!original.archive &&
-              !original.archive.restoredAt && original.archive.conversationUrl === oldUrl;
+            const alreadyArchived =
+              original.hidden &&
+              !!original.archive &&
+              !original.archive.restoredAt &&
+              original.archive.conversationUrl === oldUrl;
             const degraded = request.recoveryMode === true;
             if (degraded && (request.managerDecision !== true || !request.reason?.trim()))
               throw new Error("Error-state rollover requires a manager decision and audit reason.");
@@ -715,7 +732,8 @@ export function DesktopAppActivationCoordinator() {
             // Preserve it without loading, sending, or claiming its draft is empty.
             if (degraded && !alreadyArchived) {
               const cachedOldUrl = getLocalStorageItem(
-                chatGPTBrowserLastUrlKey(environmentId, priorId), Schema.String,
+                chatGPTBrowserLastUrlKey(environmentId, priorId),
+                Schema.String,
               );
               if (chatGPTConversationIdFromUrl(cachedOldUrl) !== priorConversationId)
                 throw new Error("Unreachable predecessor lacks its exact saved conversation URL.");
@@ -726,37 +744,63 @@ export function DesktopAppActivationCoordinator() {
             if (!alreadyArchived && !degraded) {
               // A successful OpenRig primary CAS does not prove a draft can be
               // discarded. Require an exact read and a private empty-draft backup.
-              const checked = await runChatGPTSessionControl({
-                environmentId, sessions: sessionSnapshot, action: "read",
-                sessionId: priorId, expectedConversationId: priorConversationId, count: 1,
-              }) as { conversationGuardValidated?: boolean; verifiedConversationId?: string };
-              if (!checked.conversationGuardValidated ||
-                  checked.verifiedConversationId !== priorConversationId)
+              const checked = (await runChatGPTSessionControl({
+                environmentId,
+                sessions: sessionSnapshot,
+                action: "read",
+                sessionId: priorId,
+                expectedConversationId: priorConversationId,
+                count: 1,
+              })) as { conversationGuardValidated?: boolean; verifiedConversationId?: string };
+              if (
+                !checked.conversationGuardValidated ||
+                checked.verifiedConversationId !== priorConversationId
+              )
                 throw new Error("Predecessor conversation guard not verified.");
               const observed = await inspectBrowserSession(environmentId, original);
-              if (observed.status !== "done_or_idle" || observed.activity !== "idle" ||
-                  observed.lastRole !== "assistant" ||
-                  chatGPTConversationIdFromUrl(observed.observedGuestUrl) !== priorConversationId)
+              if (
+                observed.status !== "done_or_idle" ||
+                observed.activity !== "idle" ||
+                observed.lastRole !== "assistant" ||
+                chatGPTConversationIdFromUrl(observed.observedGuestUrl) !== priorConversationId
+              )
                 throw new Error("Predecessor is not a verified idle completed assistant turn.");
-              const draft = await runChatGPTSessionControl({
-                environmentId, sessions: sessionSnapshot, action: "snapshot", sessionId: priorId,
-              }) as { status?: string; uncertainSendPresent?: boolean };
+              const draft = (await runChatGPTSessionControl({
+                environmentId,
+                sessions: sessionSnapshot,
+                action: "snapshot",
+                sessionId: priorId,
+              })) as { status?: string; uncertainSendPresent?: boolean };
               if (draft.status !== "backed_up_empty" || draft.uncertainSendPresent === true)
-                throw new Error("Predecessor draft/UNKNOWN send was not proved empty and backed up.");
+                throw new Error(
+                  "Predecessor draft/UNKNOWN send was not proved empty and backed up.",
+                );
             }
             // Successor is independently bound to the canonical /c/<uuid>,
             // not merely a convenient title or current selected T3 tab.
-            const checkedSuccessor = await runChatGPTSessionControl({
-              environmentId, sessions: sessionSnapshot, action: "read",
-              sessionId: successorId, expectedConversationId: successorConversationId, count: 1,
-            }) as { conversationGuardValidated?: boolean; verifiedConversationId?: string };
-            if (!checkedSuccessor.conversationGuardValidated ||
-                checkedSuccessor.verifiedConversationId !== successorConversationId)
+            const checkedSuccessor = (await runChatGPTSessionControl({
+              environmentId,
+              sessions: sessionSnapshot,
+              action: "read",
+              sessionId: successorId,
+              expectedConversationId: successorConversationId,
+              count: 1,
+            })) as { conversationGuardValidated?: boolean; verifiedConversationId?: string };
+            if (
+              !checkedSuccessor.conversationGuardValidated ||
+              checkedSuccessor.verifiedConversationId !== successorConversationId
+            )
               throw new Error("Successor conversation guard not verified.");
-            if (JSON.stringify(readChatGPTBrowserSessions(environmentId)) !== JSON.stringify(sessionSnapshot))
+            if (
+              JSON.stringify(readChatGPTBrowserSessions(environmentId)) !==
+              JSON.stringify(sessionSnapshot)
+            )
               throw new Error("T3 hierarchy changed during rollover preflight; no mutation.");
             const plan = {
-              priorId, successorId, priorConversationId, successorConversationId,
+              priorId,
+              successorId,
+              priorConversationId,
+              successorConversationId,
               priorConversationUrl: oldUrl,
               archivedAt: alreadyArchived ? original.archive!.archivedAt : new Date().toISOString(),
             };
@@ -767,14 +811,19 @@ export function DesktopAppActivationCoordinator() {
             const saved = readChatGPTBrowserSessions(environmentId);
             const savedOld = saved.find((s) => s.id === priorId);
             const savedNew = saved.find((s) => s.id === successorId);
-            if (!savedOld?.hidden || savedOld.archive?.conversationUrl !== oldUrl ||
-                savedNew?.parentSessionId !== (original.parentSessionId ?? null) ||
-                savedNew.project !== (original.project ?? successor.project) ||
-                saved.some((s) => s.parentSessionId === priorId))
+            if (
+              !savedOld?.hidden ||
+              savedOld.archive?.conversationUrl !== oldUrl ||
+              savedNew?.parentSessionId !== (original.parentSessionId ?? null) ||
+              savedNew.project !== (original.project ?? successor.project) ||
+              saved.some((s) => s.parentSessionId === priorId)
+            )
               throw new Error("Rollover hierarchy persistence is unconfirmed.");
             // Use the existing archive release semantics, not permanent close.
             const threadRef = chatGPTBrowserThreadRef(environmentId, priorId);
-            const previews = degraded ? [] : Object.values(readThreadPreviewState(threadRef).sessions);
+            const previews = degraded
+              ? []
+              : Object.values(readThreadPreviewState(threadRef).sessions);
             for (const preview of previews) {
               beginPreviewSessionClose(threadRef, preview.tabId);
               let result;
@@ -794,15 +843,22 @@ export function DesktopAppActivationCoordinator() {
             }
             if (!degraded) clearThreadPreviewState(threadRef);
             return {
-              version: 1, requestId: request.requestId, ok: true,
+              version: 1,
+              requestId: request.requestId,
+              ok: true,
               data: {
-                action: "rollover_finalize", persisted: true, acknowledged: true,
-                priorSessionId: priorId, successorSessionId: successorId,
+                action: "rollover_finalize",
+                persisted: true,
+                acknowledged: true,
+                priorSessionId: priorId,
+                successorSessionId: successorId,
                 inheritedParentSessionId: savedNew.parentSessionId ?? null,
                 inheritedProject: savedNew.project ?? null,
-                transferredChildren: sessionSnapshot
-                  .filter((s) => s.parentSessionId === priorId && s.id !== successorId).length,
-                predecessorArchived: true, guestReleased: !degraded,
+                transferredChildren: sessionSnapshot.filter(
+                  (s) => s.parentSessionId === priorId && s.id !== successorId,
+                ).length,
+                predecessorArchived: true,
+                guestReleased: !degraded,
                 draftSafety: degraded ? "unverified_guest_retained" : "backed_up_empty",
               },
             };
@@ -1095,11 +1151,11 @@ export function DesktopAppActivationCoordinator() {
           };
         }
       }
-      if (request.type === "chatgpt.refresh") {
+      if (request.type === "chatgpt.reboot" || request.type === "chatgpt.refresh") {
         const environmentId = primaryEnvironment?.environmentId;
         try {
-          if (!environmentId) throw new Error("Connect the refresh environment first.");
-          const receipt = await refreshChatGPTDesktop({
+          if (!environmentId) throw new Error("Connect the Agent Reboot environment first.");
+          const receipt = await rebootChatGPTDesktop({
             environmentId,
             operationId: request.requestId,
             sessionId: request.sessionId,
@@ -1111,7 +1167,11 @@ export function DesktopAppActivationCoordinator() {
             version: 1,
             requestId: request.requestId,
             ok: true,
-            data: { action: "refresh", ...receipt, retrySafe: false },
+            data: {
+              action: request.type === "chatgpt.refresh" ? "refresh" : "reboot",
+              ...receipt,
+              retrySafe: false,
+            },
           };
         } catch (error) {
           return {
@@ -1372,9 +1432,10 @@ export function DesktopAppActivationCoordinator() {
               : null;
           const work = response?.work;
           if (work && work.environmentId === environmentId) {
-            const result = work.action === "create"
-              ? await executeProviderBrowserCreate(environmentId, work, createSession)
-              : await executeAgentProviderBrowserWork(environmentId, work);
+            const result =
+              work.action === "create"
+                ? await executeProviderBrowserCreate(environmentId, work, createSession)
+                : await executeAgentProviderBrowserWork(environmentId, work);
             // Never re-execute a work item following failed acknowledgement.
             await publishAgentProvider({
               environmentId,

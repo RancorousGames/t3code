@@ -1048,7 +1048,8 @@ export function ChatGPTBrowserSidebarEntry({
                             <div>{summary}</div>
                             <div className="flex flex-col gap-1 border-t border-border pt-2 text-xs">
                               <span>
-                                Origin: {creationOrigin === "manual"
+                                Origin:{" "}
+                                {creationOrigin === "manual"
                                   ? "Manual"
                                   : creationOrigin === "backend"
                                     ? "AI/backend spawned"
@@ -1061,7 +1062,12 @@ export function ChatGPTBrowserSidebarEntry({
                                 Last active: {formatChatGPTSessionDateTime(timeline.lastActiveAt)}
                               </span>
                               <span>
-                                Last refresh: {formatChatGPTSessionDateTime(timeline.lastRefreshAt)}
+                                Last browser reload:{" "}
+                                {formatChatGPTSessionDateTime(timeline.lastRefreshAt)}
+                              </span>
+                              <span>
+                                Last Agent Reboot:{" "}
+                                {formatChatGPTSessionDateTime(timeline.lastRebootAt)}
                               </span>
                             </div>
                           </div>
