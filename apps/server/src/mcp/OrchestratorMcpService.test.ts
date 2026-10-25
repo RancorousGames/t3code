@@ -867,7 +867,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       subagents,
     }) as unknown as OrchestrationV2ThreadProjection;
 
-  it.effect("reports adapter/model catalogs while accurately holding native child execution", () =>
+  it.effect("reports runnable adapter/model catalogs and unavailable provider constraints", () =>
     Effect.gen(function* () {
       const disabledAntigravityInstanceId = ProviderInstanceId.make("antigravity-alt");
       const forkOnlyInstanceId = ProviderInstanceId.make("forkOnly");
@@ -982,15 +982,9 @@ describe("OrchestratorMcpService provider resolution", () => {
         ]) {
           const entry = byId.get(instanceId);
           assert.isDefined(entry);
-          assert.isFalse(
-            entry!.canRunChildTask,
-            `native create must stay unavailable for ${instanceId}`,
-          );
-          assert.isFalse(entry!.canRunCrossProviderChildTask);
-          assert.isTrue(
-            entry!.constraints.some((item) => item.includes("authenticated single-use")),
-            `expected truthful approval hold for ${instanceId}`,
-          );
+          assert.isTrue(entry!.canRunChildTask);
+          assert.isTrue(entry!.canRunCrossProviderChildTask);
+          assert.deepEqual(entry!.constraints, []);
           assert.isFalse(entry!.constraints.includes("No V2 provider adapter is registered."));
         }
 
@@ -998,9 +992,6 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.isDefined(disabled);
         assert.isFalse(disabled!.canRunChildTask);
         assert.isTrue(disabled!.constraints.includes("Provider instance is disabled."));
-        assert.isTrue(
-          disabled!.constraints.some((item) => item.includes("authenticated single-use")),
-        );
 
         const fork = byId.get(forkOnlyInstanceId);
         assert.isDefined(fork);
@@ -1061,8 +1052,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     }),
   );
 
-  // These read-only assertions exercise the SAME resolver used by the held
-  // createThreads/delegateTask entrypoints. Candidate resolution is not approval.
+  // These assertions exercise the resolver shared by createThreads and delegateTask.
   const targetLayer = (input: {
     providers: ReadonlyArray<ServerProvider>;
     adapters: ReadonlyArray<ProviderInstanceId>;
@@ -1124,14 +1114,6 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.equal(explicit.modelSelection.instanceId, antigravityInstanceId);
           assert.equal(explicit.modelSelection.model, "ant-model");
           assert.deepEqual(driver.modelSelection, explicit.modelSelection);
-          const held = yield* service
-            .delegateTask(scope, {
-              task: "Summarize the diff.",
-              target: { providerInstanceId: antigravityInstanceId },
-              clientRequestId: "antigravity-target-held",
-            })
-            .pipe(Effect.flip);
-          assert.equal(held.code, "capability_denied");
         }).pipe(Effect.provide(layer));
       }),
   );
@@ -1237,7 +1219,7 @@ describe("OrchestratorMcpService provider resolution", () => {
   );
 
   it.effect(
-    "accepted-command resolution preserves target under disabled project but never authorizes spawn",
+    "accepted-command resolution preserves target under disabled project",
     () =>
       Effect.gen(function* () {
         let enabled = true;
@@ -1263,14 +1245,6 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.equal(fresh.code, "provider_unavailable");
           const replay = yield* service.resolveTargetCandidate(parentProjection([]), target, true);
           assert.deepEqual(replay.modelSelection, first.modelSelection);
-          const held = yield* service
-            .delegateTask(scope, {
-              task: "Summarize the diff.",
-              target,
-              clientRequestId: "receipt-replay-held",
-            })
-            .pipe(Effect.flip);
-          assert.equal(held.code, "capability_denied");
         }).pipe(Effect.provide(layer));
       }),
   );
@@ -1422,7 +1396,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
   );
 
-  it.effect("create_threads remains held even when requested driver cannot resolve", () =>
+  it.effect("create_threads rejects an unavailable driver before dispatch", () =>
     Effect.gen(function* () {
       const layer = targetLayer({ providers: [], adapters: [] });
       yield* Effect.gen(function* () {
@@ -1435,10 +1409,10 @@ describe("OrchestratorMcpService provider resolution", () => {
                 target: { driverKind: ProviderDriverKind.make("claudeAgent") },
               },
             ],
-            clientRequestId: "held-unresolved-driver",
+            clientRequestId: "unresolved-driver",
           })
           .pipe(Effect.flip);
-        assert.equal(error.code, "capability_denied");
+        assert.equal(error.code, "provider_unavailable");
       }).pipe(Effect.provide(layer));
     }),
   );

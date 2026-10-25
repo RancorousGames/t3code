@@ -81,7 +81,6 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import { nativeCreateHold, unavailableNativeSpawnCapabilities } from "./NativeSpawnApprovalHook.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -1975,9 +1974,9 @@ const make = Effect.gen(function* () {
               provider.supportedRuntimeModes.length === 0
                 ? {}
                 : { runtimeModes: [...provider.supportedRuntimeModes] }),
-              // Catalog readiness is not spawn authority. While the private
-              // verifier is absent, no provider is executable as a new child.
-              ...unavailableNativeSpawnCapabilities(constraints),
+              canRunChildTask: constraints.length === 0,
+              canRunCrossProviderChildTask: constraints.length === 0,
+              constraints,
             };
           }),
           features: {
@@ -1994,8 +1993,6 @@ const make = Effect.gen(function* () {
       }),
     delegateTask: (callerScope, input) =>
       Effect.gen(function* () {
-        // No trusted one-use spawn decision exists yet. Reject before any delegated_task.request dispatch.
-        yield* nativeCreateHold;
         const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
         const parentRun = parent.runs
           .filter(ThreadManagementService.isActiveRun)
@@ -2287,7 +2284,6 @@ const make = Effect.gen(function* () {
       }),
     createThreads: (callerScope, input) =>
       Effect.gen(function* () {
-        yield* nativeCreateHold;
         const { scope, parent } = yield* loadThreadCaller(callerScope, "create_threads");
         const parentRun = ThreadManagementService.latestActiveRun(parent);
         if (
