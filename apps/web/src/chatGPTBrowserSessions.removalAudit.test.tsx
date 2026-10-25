@@ -90,6 +90,21 @@ afterEach(async () => {
 });
 
 describe("durable T3 ChatGPT local browser removal audit", () => {
+  it("keeps auto-close exemption after unsnooze and clearing a highlighted border", async () => {
+    const worker = await add("Worker");
+    await act(async () => harness.setSessionSnooze([worker], Date.now() + 3600_000));
+    await act(async () => harness.setSessionSnooze([worker], null));
+    expect(readChatGPTBrowserSessions(env).find((s) => s.id === worker)?.autoCloseExempt).toBe(
+      true,
+    );
+
+    const highlighted = await add("Highlighted");
+    await act(async () => harness.setSessionBorderColor(highlighted, "blue"));
+    await act(async () => harness.setSessionBorderColor(highlighted, null));
+    expect(readChatGPTBrowserSessions(env).find((s) => s.id === highlighted)?.autoCloseExempt).toBe(
+      true,
+    );
+  });
   it("records only verified index removal after a sidebar close, with original metadata and cached URL ID", async () => {
     const parent = await add("Manager");
     const child = await add("Child title", { parentSessionId: parent });
