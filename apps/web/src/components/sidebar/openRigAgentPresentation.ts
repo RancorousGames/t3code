@@ -99,6 +99,39 @@ export function canMessagePrimary(primary: DesktopOpenRigManagedSession | null):
     (primary.target?.kind === "t3-thread" || primary.target?.kind === "chatgpt-conversation");
 }
 
+/** An operator-initiated route repair can only use OpenRig-owned, exact targets.
+ * Pending/indeterminate sessions are never replaced with a guessed new launch. */
+export type SeatRoutePlan =
+  | { kind: "ready"; sessionId: string }
+  | { kind: "select"; sessionId: string }
+  | { kind: "launch"; mode: "native" | "chatgpt" }
+  | { kind: "blocked"; reason: string };
+
+export function planSeatRoute(
+  ledger: DesktopOpenRigSeatSessions | null,
+  profile: DesktopOpenRigExecutionProfile | null,
+): SeatRoutePlan {
+  if (!ledger) return { kind: "blocked", reason: "OpenRig managed-session ledger is unavailable." };
+  const primary = primarySession(ledger);
+  if (canMessagePrimary(primary)) return { kind: "ready", sessionId: primary!.id };
+  const active = ledger.sessions.filter((s) => s.seatId === ledger.seatId && canMessagePrimary(s));
+  if (ledger.pendingRecoveryCount > 0 ||
+      ledger.sessions.some((s) => s.status === "pending" || s.status === "indeterminate" || s.status === "unavailable"))
+    return { kind: "blocked", reason: "A managed session requires reconciliation. Inspect Sessions; do not launch a duplicate." };
+  if (active.length > 1)
+    return { kind: "blocked", reason: "Multiple exact active conversations exist. Choose the intended primary in Sessions." };
+  if (active.length === 1) return { kind: "select", sessionId: active[0]!.id };
+  if (ledger.sessions.length > 0)
+    return { kind: "blocked", reason: "Existing managed sessions are not active. Inspect or recover them in Sessions before launching another." };
+  if (!profile)
+    return { kind: "blocked", reason: "Read the OpenRig execution profile before starting a managed conversation." };
+  const runtime = (profile.rigSpec.runtime ?? profile.profile?.runtime ?? "").toLowerCase();
+  if (runtime === "chatgpt") return { kind: "launch", mode: "chatgpt" };
+  if ((runtime === "codex" || runtime === "claude") && profile.nativeLaunchReady)
+    return { kind: "launch", mode: "native" };
+  return { kind: "blocked", reason: "No verified launch configuration. Select a ChatGPT runtime or configure an exact ready native provider in Sessions/Settings." };
+}
+
 export function formatTimestamp(value: string | null | undefined): string | null {
   if (!value) return null;
   const time = new Date(value);
