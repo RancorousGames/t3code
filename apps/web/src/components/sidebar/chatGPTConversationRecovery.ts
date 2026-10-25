@@ -49,9 +49,14 @@ export function hasChatGPTLoadFailure(): boolean {
 }
 
 export const CHATGPT_LOAD_FAILURE_EXPRESSION = `(${hasChatGPTLoadFailure.toString()})()`;
-export type ChatGPTRecoveryProblem = "load-failure" | "interrupted" | "delivery-timeout";
+export type ChatGPTRecoveryProblem =
+  | "load-failure"
+  | "browser-unresponsive"
+  | "interrupted"
+  | "delivery-timeout";
 
 export function chatGPTRecoveryProblem(activity: string): ChatGPTRecoveryProblem | null {
+  if (activity === "invalid: browser-unresponsive") return "browser-unresponsive";
   // Every red/invalid ChatGPT guest is a recovery candidate, not just the error panel.
   if (activity.startsWith("invalid: ")) return "load-failure";
   if (activity === "interrupted" || activity === "delivery-timeout") return activity;

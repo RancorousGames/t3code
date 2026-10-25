@@ -15,6 +15,7 @@ import {
 } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import { hasVerifiedEmptyChatGPTComposer } from "../../chatGPTDraftInspection";
+import { inspectChatGPTBrowserHealth } from "../../chatGPTBrowserHealth";
 import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import {
   chatGPTBrowserLastWorkingKey,
@@ -118,18 +119,7 @@ export function useChatGPTBrowserSessionActivity(
               (element) => element.dataset.previewTab === runtimeTabId,
             );
             if (webview) {
-              let deadline: ReturnType<typeof setTimeout> | undefined;
-              const value = await Promise.race([
-                webview.executeJavaScript(CHATGPT_ACTIVITY_EXPRESSION),
-                new Promise<string>((resolve) => {
-                  deadline = setTimeout(
-                    () => resolve("unknown: ChatGPT inspection timed out"),
-                    4_000,
-                  );
-                }),
-              ]).finally(() => {
-                if (deadline !== undefined) clearTimeout(deadline);
-              });
+              const value = await inspectChatGPTBrowserHealth(webview);
               if (
                 value === "working" ||
                 value === "idle" ||
@@ -289,7 +279,9 @@ export function useChatGPTBrowserSessionActivity(
               : age === "delivery-timeout"
                 ? "ChatGPT message delivery timed out; please try again"
                 : age === "invalid"
-                  ? `ChatGPT page unavailable${reason ? `: ${reason}` : ""}`
+                  ? reason === "browser-unresponsive"
+                    ? "ChatGPT browser is blank or unresponsive; waiting for an instance reset"
+                    : `ChatGPT page unavailable${reason ? `: ${reason}` : ""}`
                   : `ChatGPT status unknown${reason ? `: ${reason}` : ""}`;
   const recoveryProblem =
     !unloaded && result.tabId === runtimeTabId
