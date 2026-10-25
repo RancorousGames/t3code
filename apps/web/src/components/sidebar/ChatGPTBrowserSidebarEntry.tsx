@@ -47,8 +47,12 @@ import { shortcutLabelForCommand } from "../../keybindings";
 import { searchChatGPTSessionGroups } from "../../chatGPTSessionSearch";
 import {
   chatGPTWorkerVisibilityStorageKey,
+  chatGPTVerifiedWorkerEvidenceKey,
+  captureVerifiedChatGPTWorkerIdentities,
   filterChatGPTWorkerGroups,
   linkedChatGPTWorkerIds,
+  restoreVerifiedChatGPTWorkerIds,
+  type VerifiedChatGPTWorkerIdentity,
 } from "../../chatGPTWorkerVisibility";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { resolveSnoozePresets } from "../Sidebar.snooze";
@@ -102,6 +106,14 @@ import { ChatGPTSessionIcon } from "./ChatGPTSessionIcon";
 import { SidebarHeaderIconButton } from "./SidebarThreadHeader";
 import { useChatGPTBrowserSessionActivity } from "./ChatGPTBrowserSessionActivity";
 import { chatGPTActivityColorClass } from "./chatGPTActivity";
+
+const VerifiedWorkerEvidenceSchema = Schema.Array(
+  Schema.Struct({
+    sessionId: Schema.String,
+    parentSessionId: Schema.String,
+    spawnRequestId: Schema.String,
+  }),
+);
 
 export function ChatGPTBrowserNewSessionAction() {
   const navigate = useNavigate();
@@ -246,6 +258,11 @@ export function ChatGPTBrowserSidebarEntry({
     chatGPTWorkerVisibilityStorageKey(environmentId),
     true,
     Schema.Boolean,
+  );
+  const [verifiedWorkerSnapshot, setVerifiedWorkerSnapshot] = useLocalStorage(
+    chatGPTVerifiedWorkerEvidenceKey(environmentId),
+    [] as VerifiedChatGPTWorkerIdentity[],
+    VerifiedWorkerEvidenceSchema,
   );
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -421,9 +438,21 @@ export function ChatGPTBrowserSidebarEntry({
   // The verified manager seat ledger, not a parent link or title, determines
   // which nested manager rows are exempt from the worker visibility toggle.
   const workerIds = useMemo(
-    () => linkedChatGPTWorkerIds(sessions, verifiedManagerSessionIds),
-    [sessions, verifiedManagerSessionIds],
+    () =>
+      verifiedManagerSessionIds === null
+        ? restoreVerifiedChatGPTWorkerIds(sessions, verifiedWorkerSnapshot)
+        : linkedChatGPTWorkerIds(sessions, verifiedManagerSessionIds),
+    [sessions, verifiedManagerSessionIds, verifiedWorkerSnapshot],
   );
+  // Outages must not clear a verified identity snapshot; equally, never
+  // manufacture new worker identities from parent links while OpenRig is offline.
+  useEffect(() => {
+    if (verifiedManagerSessionIds === null) return;
+    const fresh = captureVerifiedChatGPTWorkerIdentities(sessions, verifiedManagerSessionIds);
+    if (JSON.stringify(fresh) !== JSON.stringify(verifiedWorkerSnapshot)) {
+      setVerifiedWorkerSnapshot(fresh);
+    }
+  }, [sessions, verifiedManagerSessionIds, verifiedWorkerSnapshot, setVerifiedWorkerSnapshot]);
   const visibleWorkerCount = visibleSessions.filter((session) => workerIds.has(session.id)).length;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
@@ -631,12 +660,20 @@ export function ChatGPTBrowserSidebarEntry({
                   <MenuCheckboxItem
                     checked={showWorkers}
                     onCheckedChange={(checked) => setShowWorkers(checked)}
-                    aria-label={`Show parent-linked ChatGPT workers (${visibleWorkerCount})`}
-                    title="Hiding parent-linked workers doesn't close or suspend them. Unlinked workers remain visible; Shift-drag a session onto its parent in the same project to link it."
+                    aria-label={`Show verified spawned ChatGPT workers (${visibleWorkerCount}${verifiedManagerSessionIds === null ? " last verified" : ""})`}
+                    title={
+                      verifiedManagerSessionIds === null
+                        ? "Live manager seat identification unavailable. Only previously verified, unchanged worker identities can be filtered; unknown sessions remain visible."
+                        : "Only parent-linked backend-spawned workers are filtered. Managers and manual chats stay visible. This never closes or suspends work."
+                    }
                   >
                     <span className="flex items-center gap-4">
                       <span className="flex-1">Show workers</span>
-                      <span className="text-xs text-muted-foreground">{visibleWorkerCount}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {verifiedManagerSessionIds === null
+                          ? `${visibleWorkerCount} last known`
+                          : visibleWorkerCount}
+                      </span>
                     </span>
                   </MenuCheckboxItem>
                   {snoozedSessions.length > 0 && (
@@ -700,6 +737,8 @@ export function ChatGPTBrowserSidebarEntry({
       <ChatGPTWorkerCleanupCoordinator
         environmentId={environmentId}
         sessions={sessions}
+        verifiedWorkerIds={workerIds}
+        managerAttributionAvailable={verifiedManagerSessionIds !== null}
         open={cleanupOpen}
         onOpenChange={setCleanupOpen}
       />

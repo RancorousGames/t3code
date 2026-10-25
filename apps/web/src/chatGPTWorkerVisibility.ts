@@ -5,13 +5,23 @@ import { chatGPTParentIndex } from "./chatGPTSessionLineage";
 export const chatGPTWorkerVisibilityStorageKey = (environmentId: string | null) =>
   `t3code:chatgpt-browser:show-manager-workers:${environmentId ?? "unconnected"}`;
 
+export const chatGPTVerifiedWorkerEvidenceKey = (environmentId: string | null) =>
+  `t3code:chatgpt-browser:verified-worker-identity:v1:${environmentId ?? "unconnected"}`;
+
+export interface VerifiedChatGPTWorkerIdentity {
+  sessionId: string;
+  parentSessionId: string;
+  spawnRequestId: string;
+}
+
 /**
- * Parentage alone does not establish a worker role: an authoritative OpenRig
- * manager seat can itself be nested under another manager. The caller passes
- * only active manager tab UUIDs verified against RigSpec seat roles and ledgers.
- * Never classify managers from their display titles or project names.
+ * A worker must have BOTH a valid explicit parentSessionId and a durable
+ * backend spawn reservation. Manually created/drag-linked chats and orphaned
+ * parent links are not evidence of a managed worker. A manager seat can itself
+ * be spawned below another manager, so verified RigSpec manager tabs are exempt.
  *
- * Missing/cyclic parent links stay visible rather than guessing worker status.
+ * If manager ledgers are unavailable, fail open instead of hiding managers.
+ * Titles and project labels are never role evidence.
  */
 export function linkedChatGPTWorkerIds(
   sessions: readonly BrowserSession[],
@@ -23,8 +33,55 @@ export function linkedChatGPTWorkerIds(
   const parentById = chatGPTParentIndex(sessions);
   return new Set(
     sessions.flatMap((session) =>
-      parentById.get(session.id) && !verifiedManagerSessionIds.has(session.id) ? [session.id] : [],
+      parentById.get(session.id) &&
+      session.spawnRequestId?.trim() &&
+      !verifiedManagerSessionIds.has(session.id)
+        ? [session.id]
+        : [],
     ),
+  );
+}
+
+/** Remember only worker identities actually classified while complete manager-seat evidence was online. */
+export function captureVerifiedChatGPTWorkerIdentities(
+  sessions: readonly BrowserSession[],
+  verifiedManagerSessionIds: ReadonlySet<string>,
+): VerifiedChatGPTWorkerIdentity[] {
+  const workers = linkedChatGPTWorkerIds(sessions, verifiedManagerSessionIds);
+  return sessions
+    .flatMap((session) =>
+      workers.has(session.id) && session.parentSessionId && session.spawnRequestId
+        ? [
+            {
+              sessionId: session.id,
+              parentSessionId: session.parentSessionId,
+              spawnRequestId: session.spawnRequestId,
+            },
+          ]
+        : [],
+    )
+    .sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
+/** During a transient seat-ledger outage, show/hide only previously VERIFIED worker identities.
+ * A changed/missing/cyclic parent link or spawn reservation invalidates the snapshot.
+ * New children stay visible until fresh manager evidence can exclude manager seats.
+ */
+export function restoreVerifiedChatGPTWorkerIds(
+  sessions: readonly BrowserSession[],
+  snapshot: readonly VerifiedChatGPTWorkerIdentity[],
+): ReadonlySet<string> {
+  const parents = chatGPTParentIndex(sessions);
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  return new Set(
+    snapshot.flatMap((record) => {
+      const current = byId.get(record.sessionId);
+      return current?.spawnRequestId === record.spawnRequestId &&
+        current.parentSessionId === record.parentSessionId &&
+        parents.get(current.id) === record.parentSessionId
+        ? [record.sessionId]
+        : [];
+    }),
   );
 }
 
