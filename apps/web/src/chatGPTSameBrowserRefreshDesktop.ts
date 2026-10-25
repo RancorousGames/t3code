@@ -12,6 +12,7 @@ import {
   runChatGPTSessionControl,
 } from "./chatGPTSessionControl";
 import { readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
+import { recordChatGPTSessionRefreshedAt } from "./chatGPTSessionTimestamps";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { sendInitialChatGPTPrompt } from "./chatGPTBrowserAutomation";
 import {
@@ -83,7 +84,7 @@ export async function refreshChatGPTDesktop(input: {
     if (!offlinePredecessor)
       await wakeChatGPTRefreshPredecessor(input.environmentId, session, input.priorConversationId);
   }
-  return refreshSameBrowser({ ...input, bootstrapHash }, input.phase, {
+  const receipt = await refreshSameBrowser({ ...input, bootstrapHash }, input.phase, {
     read,
     write: (receipts) => window.localStorage.setItem(key, JSON.stringify(receipts)),
     assertSafe: async (id) => {
@@ -207,4 +208,12 @@ export async function refreshChatGPTDesktop(input: {
       };
     },
   });
+  if (
+    receipt.status === "committed" &&
+    input.phase === "finalize" &&
+    existing?.status !== "committed"
+  ) {
+    recordChatGPTSessionRefreshedAt(input.environmentId, input.sessionId);
+  }
+  return receipt;
 }

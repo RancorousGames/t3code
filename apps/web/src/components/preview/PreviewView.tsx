@@ -81,6 +81,7 @@ import { alternatePreviewRuntime, useRendersServerTabNatively } from "~/browser/
 import { ServerBrowserSurface, type ServerBrowserHandle } from "~/browser/ServerBrowserSurface";
 import { cn } from "~/lib/utils";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
+import { recordChatGPTSessionRefreshedAt } from "~/chatGPTSessionTimestamps";
 import { usePreviewSession } from "./usePreviewSession";
 import { ZoomIndicator } from "./ZoomIndicator";
 import { AgentBrowserCursor } from "./AgentBrowserCursor";
@@ -297,7 +298,15 @@ export function PreviewView({
 
   const handleRefresh = () => {
     if (isServerTab) serverSurfaceRef.current?.reload();
-    else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
+    else if (previewBridge && runtimeTabId) {
+      void previewBridge.refresh(runtimeTabId).then(() => {
+        const threadId = String(threadRef.threadId);
+        const prefix = "t3-browser-session:";
+        if (threadId.startsWith(prefix)) {
+          recordChatGPTSessionRefreshedAt(threadRef.environmentId, threadId.slice(prefix.length));
+        }
+      });
+    }
   };
 
   const adjustServerTab = async (change: Omit<PreviewAdjustInput, "threadId" | "tabId">) => {
