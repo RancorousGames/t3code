@@ -508,6 +508,7 @@ export function ChatGPTBrowserSidebarEntry({
       showingHidden ? "started" : sortMode,
       activities as Readonly<Record<string, ChatGPTSessionSortActivity>>,
       permanentProjects,
+      activeSessionId,
     );
     const filtered = filterChatGPTWorkerGroups(
       groups,
@@ -526,6 +527,7 @@ export function ChatGPTBrowserSidebarEntry({
     sortMode,
     activities,
     permanentProjects,
+    activeSessionId,
     childIds,
     showWorkers,
     permanentProjectKeys,

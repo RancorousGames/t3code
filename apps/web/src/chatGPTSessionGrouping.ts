@@ -1,4 +1,4 @@
-import type { BrowserSession } from "./chatGPTBrowserSessions";
+import { chatGPTSessionCreationOrigin, type BrowserSession } from "./chatGPTBrowserSessions";
 import { chatGPTParentIndex } from "./chatGPTSessionLineage";
 import learned from "./chatGPTGroupingTraining.generated.json";
 
@@ -337,6 +337,7 @@ export function layoutChatGPTSessions(
   sortMode: ChatGPTSessionSortMode,
   activityById: Readonly<Record<string, ChatGPTSessionSortActivity>>,
   permanentProjects: readonly ChatGPTPermanentProject[] = [],
+  selectedSessionId?: string,
 ): ChatGPTSidebarGroup[] {
   if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects);
   const rank: Record<ChatGPTSessionSortActivity["age"], number> = {
@@ -350,11 +351,28 @@ export function layoutChatGPTSessions(
     invalid: 4,
   };
   const order = new Map(sessions.map((session, index) => [session.id, index]));
-  // Keep parent/child subtrees together across status boundaries. The
-  // previous flat "active" queue always erased indentation.
   const enriched = applyConfirmedChatGPTSessionMetadata(sessions);
-  const byId = new Map(enriched.map((session) => [session.id, session]));
-  const parentById = chatGPTParentIndex(enriched);
+  // Selection only pins a confirmed manual session, not a legacy unknown or
+  // backend worker. Green sessions otherwise float independently of lineage.
+  const selectedManual = enriched.find(
+    (session) =>
+      session.id === selectedSessionId && chatGPTSessionCreationOrigin(session) === "manual",
+  );
+  const working = enriched.filter(
+    (session) => session.id !== selectedManual?.id && activityById[session.id]?.age === "working",
+  );
+  const promoted = [...(selectedManual ? [selectedManual] : []), ...working];
+  const promotedIds = new Set(promoted.map((session) => session.id));
+  const independentRows: ChatGPTSidebarSession[] = promoted.map((session) => ({
+    session,
+    depth: 0,
+    childCount: 0,
+  }));
+  // Retain indentation for nonworking subtrees, but never let a parent with
+  // lower priority pull a green child out of the active queue.
+  const remainder = enriched.filter((session) => !promotedIds.has(session.id));
+  const byId = new Map(remainder.map((session) => [session.id, session]));
+  const parentById = chatGPTParentIndex(remainder);
   const children = new Map<string, BrowserSession[]>();
   const rootFor = (session: BrowserSession): string => {
     let node = session;
@@ -368,7 +386,7 @@ export function layoutChatGPTSessions(
     return node.id;
   };
   const rootBuckets = new Map<string, BrowserSession[]>();
-  for (const session of enriched) {
+  for (const session of remainder) {
     const rootId = rootFor(session);
     if (!rootBuckets.has(rootId)) rootBuckets.set(rootId, []);
     rootBuckets.get(rootId)!.push(session);
@@ -419,7 +437,6 @@ export function layoutChatGPTSessions(
   // idle sessions ahead of more recently active sessions from other projects.
   // Explicit project assignments and permanent groups remain unchanged for
   // Started mode and for project drop targets.
-  return buckets.length
-    ? [{ key: "status:activity", title: null, rows: buckets.flatMap(emitTree) }]
-    : [];
+  const rows = [...independentRows, ...buckets.flatMap(emitTree)];
+  return rows.length ? [{ key: "status:activity", title: null, rows }] : [];
 }
