@@ -165,6 +165,21 @@ async function manageMessages() {
 }
 
 describe("OpenRig floating desktop inbox", () => {
+  it("dismisses on an outside click, but keeps the inbox while its context menu is open", async () => {
+    read.mockResolvedValue(sample);
+    await mount();
+    await click("OpenRig human inbox");
+    const pointerdown = vi.mocked(document.addEventListener).mock.calls
+      .filter(([name]) => name === "pointerdown").at(-1)?.[1] as ((event: PointerEvent) => void) | undefined;
+    expect(pointerdown).toBeDefined();
+    await manageMessages();
+    await act(async () => pointerdown!({ button: 0, target: document.body } as unknown as PointerEvent));
+    expect(rendered!.root.findAllByProps({ "aria-label": "OpenRig human inbox window" })).toHaveLength(1);
+    await click("Dismiss inbox menu");
+    await act(async () => pointerdown!({ button: 0, target: document.body } as unknown as PointerEvent));
+    expect(rendered!.root.findAllByProps({ "aria-label": "OpenRig human inbox window" })).toHaveLength(0);
+    expect(rendered!.root.findByProps({ "aria-label": "OpenRig human inbox" }).props["aria-expanded"]).toBe(false);
+  });
   it("shows decisions and explicitly requested/exceptional updates, with diagnostic history grouped beneath its origin", async () => {
     const requested = {
       ...sample.items[0]!,

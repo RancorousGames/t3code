@@ -80,6 +80,7 @@ export function OpenRigAgentNetwork({
   onRefreshAgents,
   onOpenAgent,
   onClose,
+  onOutsideClose,
 }: {
   agents: readonly DesktopOpenRigAgent[];
   topology: DesktopOpenRigSeatTopology | null;
@@ -87,6 +88,7 @@ export function OpenRigAgentNetwork({
   onRefreshAgents: () => Promise<void>;
   onOpenAgent: (seatId: string) => void;
   onClose: () => void;
+  onOutsideClose: () => void;
 }) {
   const seatIds = useMemo(
     () => [...new Set([...(topology?.seats.map((seat) => seat.id) ?? []), ...agents.map((agent) => agent.id)])].sort(),
@@ -141,6 +143,7 @@ export function OpenRigAgentNetwork({
       minSize={MIN_SIZE}
       compactBelow={860}
       onEscape={onClose}
+      onOutsidePointerDown={onOutsideClose}
       header={() => (
         <header className="flex items-center gap-3 border-b border-border px-4 py-3">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-info/10 text-info">
