@@ -120,6 +120,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
   savePrivateChatGPTDraftSnapshot: (input) =>
     ipcRenderer.invoke(IpcChannels.PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL, input),
+  readTaskBoardWorkerClaims: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_WORKER_CLAIMS_CHANNEL),
   listOpenRigAgents: () => ipcRenderer.invoke(IpcChannels.OPENRIG_LIST_AGENTS_CHANNEL),
   listPendingOpenRigNativeApprovals: () =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_NATIVE_APPROVAL_PENDING_CHANNEL),

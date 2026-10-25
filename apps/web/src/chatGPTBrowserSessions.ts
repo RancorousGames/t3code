@@ -8,7 +8,10 @@ import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPTBrowserPrewarm";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { randomUUID } from "./lib/utils";
-import { finalizeChatGPTRolloverHierarchy, type ChatGPTRolloverPlan } from "./chatGPTRolloverFinalize";
+import {
+  finalizeChatGPTRolloverHierarchy,
+  type ChatGPTRolloverPlan,
+} from "./chatGPTRolloverFinalize";
 import { readThreadPreviewState } from "./previewStateStore";
 
 export const BrowserSession = Schema.Struct({
@@ -33,6 +36,9 @@ export const BrowserSession = Schema.Struct({
     }),
   ),
   snoozedUntil: Schema.optional(Schema.Number),
+  // Sticky exemptions: unsnooze or clearing a colored border never reenables auto-close.
+  autoCloseExempt: Schema.optional(Schema.Boolean),
+  lastDirectInteractionAt: Schema.optional(Schema.Number),
   // null explicitly detaches a child; undefined means no lineage was ever recorded.
   parentSessionId: Schema.optional(Schema.NullOr(Schema.String)),
   project: Schema.optional(Schema.String),
@@ -98,6 +104,7 @@ export type ChatGPTSessionRemovalSource =
   | "desktop-IPC-request"
   | "expiration"
   | "unused-empty-manual"
+  | "completed-worker"
   | "unknown";
 
 export type ChatGPTSessionRemovalReceipt = {
@@ -204,6 +211,7 @@ function isChatGPTSessionRemovalReceipt(value: unknown): value is ChatGPTSession
       entry.source === "desktop-IPC-request" ||
       entry.source === "expiration" ||
       entry.source === "unused-empty-manual" ||
+      entry.source === "completed-worker" ||
       entry.source === "unknown") &&
     entry.authenticatedCaller === "UNKNOWN" &&
     entry.draftSafetyVerified === false &&
@@ -517,7 +525,13 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       const targets = new Set(ids);
       setSessions((current) =>
         current.map((session) =>
-          targets.has(session.id) ? { ...session, snoozedUntil: until ?? undefined } : session,
+          targets.has(session.id)
+            ? {
+                ...session,
+                snoozedUntil: until ?? undefined,
+                autoCloseExempt: session.autoCloseExempt === true || until !== null,
+              }
+            : session,
         ),
       );
     },
@@ -528,9 +542,28 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     (id: string, color: string | null) =>
       setSessions((current) =>
         current.map((session) =>
-          session.id === id ? { ...session, borderColor: color ?? undefined } : session,
+          session.id === id
+            ? {
+                ...session,
+                borderColor: color ?? undefined,
+                autoCloseExempt: session.autoCloseExempt === true || color !== null,
+              }
+            : session,
         ),
       ),
+    [setSessions],
+  );
+
+  const markDirectInteraction = useCallback(
+    (id: string, at = Date.now()) => {
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id && at > (session.lastDirectInteractionAt ?? 0)
+            ? { ...session, lastDirectInteractionAt: at }
+            : session,
+        ),
+      );
+    },
     [setSessions],
   );
 
@@ -668,6 +701,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     finalizeRollover,
     setSessionSnooze,
     setSessionBorderColor,
+    markDirectInteraction,
     setSessionCompletion,
     syncInferredMetadata,
     pruneExpiredHidden,

@@ -1799,8 +1799,7 @@ export const DesktopOpenRigReviewGateSelectionSchema = Schema.Struct({
   qitemId: Schema.String,
   gateQitemId: Schema.String,
 });
-export type DesktopOpenRigReviewGateSelection =
-  typeof DesktopOpenRigReviewGateSelectionSchema.Type;
+export type DesktopOpenRigReviewGateSelection = typeof DesktopOpenRigReviewGateSelectionSchema.Type;
 export const DesktopOpenRigReviewGateResolveInputSchema = Schema.Struct({
   destination: Schema.Literal("human@kernel"),
   qitemId: Schema.String,
@@ -1863,6 +1862,15 @@ export interface DesktopChatGPTDraftSnapshotReceipt {
 }
 
 export interface DesktopBridge {
+  /** Read-only local TaskBoard Done evidence; unavailable on non-desktop clients. */
+  readTaskBoardWorkerClaims?: () => Promise<
+    readonly {
+      taskId: string;
+      claimedBy: string;
+      column: string;
+      completedAt: number | null;
+    }[]
+  >;
   /** Local desktop-only private backup: raw draft and pending send never return over activation IPC. */
   savePrivateChatGPTDraftSnapshot?: (
     input: DesktopChatGPTDraftSnapshotInput,

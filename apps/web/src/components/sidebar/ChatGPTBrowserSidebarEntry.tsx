@@ -101,6 +101,7 @@ import {
 import { chatGPTRecoveryHoverDetails } from "./chatGPTRecoveryHoverDetails";
 import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
 import { ChatGPTWorkerCleanupCoordinator } from "./ChatGPTWorkerCleanupCoordinator";
+import { ChatGPTCompletedWorkerCleanup } from "./ChatGPTCompletedWorkerCleanup";
 import { ChatGPTUnusedManualSessionCleanup } from "./ChatGPTUnusedManualSessionCleanup";
 import { ChatGPTBrowserSelectionRecovery } from "./ChatGPTBrowserSelectionRecovery";
 import { ChatGPTProjectStatusIcon } from "./ChatGPTProjectStatusIcon";
@@ -243,6 +244,7 @@ export function ChatGPTBrowserSidebarEntry({
     setSessionParent,
     setSessionSnooze,
     setSessionBorderColor,
+    markDirectInteraction,
     syncInferredMetadata,
     pruneExpiredHidden,
   } = useChatGPTBrowserSessions(environmentId);
@@ -315,6 +317,12 @@ export function ChatGPTBrowserSidebarEntry({
     () => new Set(permanentProjects.map((project) => project.key)),
     [permanentProjects],
   );
+  const previousSelected = useRef(activeSessionId);
+  useEffect(() => {
+    const before = previousSelected.current;
+    if (before && before !== activeSessionId) markDirectInteraction(before);
+    previousSelected.current = activeSessionId;
+  }, [activeSessionId, markDirectInteraction]);
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -690,9 +698,7 @@ export function ChatGPTBrowserSidebarEntry({
                   >
                     <span className="flex items-center gap-4">
                       <span className="flex-1">Show workers</span>
-                      <span className="text-xs text-muted-foreground">
-                        {visibleWorkerCount}
-                      </span>
+                      <span className="text-xs text-muted-foreground">{visibleWorkerCount}</span>
                     </span>
                   </MenuCheckboxItem>
                   {snoozedSessions.length > 0 && (
@@ -753,6 +759,11 @@ export function ChatGPTBrowserSidebarEntry({
           </div>
         )}
       </SidebarMenuItem>
+      <ChatGPTCompletedWorkerCleanup
+        environmentId={environmentId}
+        managerIds={verifiedManagerSessionIds}
+        now={clockNow}
+      />
       <ChatGPTUnusedManualSessionCleanup
         environmentId={environmentId}
         activeSessionId={activeSessionId}
@@ -1134,6 +1145,7 @@ export function ChatGPTBrowserSidebarEntry({
                                             sessions.map((item) => item.id),
                                           );
                                           recordChatGPTSessionActiveAt(environmentId, session.id);
+                                          markDirectInteraction(session.id);
                                           if (session.hidden) {
                                             setSessionHidden(session.id, false);
                                             setShowHidden(false);
