@@ -7,15 +7,8 @@ import { formatTimestamp } from "./openRigAgentPresentation";
 import { isCostlyModel, readCostlyPatterns } from "./openRigCostPolicy";
 
 /**
- * Display of OpenRig spawn-approval requests (policy:
- * OpenRig docs/as-built/openrig-t3-spawn-approval-policy-20261019.md).
- *
- * PROPOSED renderer shape, pending the IPC contract with the T3/OpenRig
- * owners; it is deliberately not in packages/contracts yet. No endpoint exists
- * today, so live surfaces render SPAWN_APPROVAL_FEED_UNAVAILABLE. Decision
- * buttons render only when a trusted, privileged decision function is passed;
- * nothing passes one until the protected writer exists. There is no
- * client-side approval state.
+ * Displays canonical OpenRig spawn-approval records. Decisions route through
+ * desktop MAIN when supported; the renderer never holds approval authority.
  */
 export type SpawnApprovalStatus =
   | "requested"
@@ -70,8 +63,7 @@ export type SpawnNativeReview = (operationId: string) => Promise<DesktopOpenRigN
 
 export const SPAWN_APPROVAL_FEED_UNAVAILABLE: SpawnApprovalFeed = {
   kind: "unavailable",
-  reason:
-    "OpenRig has no spawn-approval endpoint yet and the policy is not enforced. Agent-initiated native sessions can currently start without approval.",
+  reason: "Native spawn approval history is not available in this desktop build.",
 };
 
 const STATUS: Record<SpawnApprovalStatus, { label: string; variant: "warning" | "success" | "info" | "error" | "outline" }> = {
@@ -118,7 +110,7 @@ export function SpawnApprovalCard({
     try {
       const outcome = await onReview(request.operationId);
       setResult(outcome.outcome === "recorded" && outcome.item
-        ? `Canonical decision status: ${outcome.item.status}. Execution is still blocked pending server-side release.`
+        ? `Decision recorded: ${outcome.item.status}. Check the operation status for launch outcome.`
         : outcome.outcome === "verification-unavailable"
           ? "Windows Hello verification unavailable. No decision was recorded."
           : "Native review cancelled. No decision was recorded.");
@@ -204,13 +196,8 @@ export function OpenRigSpawnApprovalPanel({
   const now = Date.now();
   if (feed.kind === "unavailable")
     return (
-      <div role="status" className="space-y-1 rounded-lg border border-warning/40 bg-warning/8 px-3 py-2 text-2xs leading-relaxed">
-        <p className="font-semibold">Spawn approval: not enforced yet</p>
+      <div role="status" className="rounded-lg border border-border bg-muted/10 px-3 py-2 text-2xs text-muted-foreground">
         <p>{feed.reason}</p>
-        <p className="text-muted-foreground">
-          Policy: agent-initiated native sessions need human approval unless the model is server-verified GPT-6 Luna; ChatGPT
-          browser sessions are exempt. This is separate from a session&apos;s runtime approval mode.
-        </p>
       </div>
     );
   if (feed.kind === "loading") return <p role="status" className="text-2xs text-muted-foreground">Loading spawn approvals…</p>;
@@ -336,12 +323,6 @@ export function OpenRigCanonicalSpawnApprovals({
 
   return (
     <section aria-label="Canonical native spawn approvals" className="space-y-2">
-      <div role="status" className="rounded-md border border-warning/50 bg-warning/8 px-3 py-2 text-2xs">
-        <strong>Native approval release: RED.</strong>{" "}
-        Source-only review wiring is not deployed or certified. A recorded human decision does not
-        launch a thread or release the server-side guard; exact per-child reservation, provider SDK
-        coverage and production attestation remain unverified.
-      </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-2xs text-muted-foreground">
           {lastRead ? `Canonical read ${formatTimestamp(lastRead)}` : "Canonical approval feed not yet confirmed"}
