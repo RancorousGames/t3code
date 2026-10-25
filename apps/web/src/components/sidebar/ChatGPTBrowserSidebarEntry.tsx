@@ -83,7 +83,11 @@ import {
   type ChatGPTRecoveryPhase,
 } from "./ChatGPTBrowserRecoveryCoordinator";
 import { recordSessionClick } from "./chatGPTConversationRecovery";
-import { readChatGPTRecoveryState } from "../../chatGPTRecoveryDiagnostics";
+import {
+  readChatGPTRecoveryEvents,
+  readChatGPTRecoveryState,
+} from "../../chatGPTRecoveryDiagnostics";
+import { chatGPTRecoveryHoverDetails } from "./chatGPTRecoveryHoverDetails";
 import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
 import { ChatGPTWorkerCleanupCoordinator } from "./ChatGPTWorkerCleanupCoordinator";
 import { ChatGPTBrowserSelectionRecovery } from "./ChatGPTBrowserSelectionRecovery";
@@ -917,6 +921,27 @@ export function ChatGPTBrowserSidebarEntry({
                                         ? "Queued for automatic recovery if the connection stays interrupted"
                                         : "Queued for automatic recovery; waiting for its turn or retry cooldown"
                                     : null;
+                        const recoveryDetails =
+                          activity.age === "invalid" ||
+                          activity.age === "interrupted" ||
+                          activity.age === "delivery-timeout"
+                            ? chatGPTRecoveryHoverDetails({
+                                age: activity.age,
+                                label: activity.label,
+                                phase: recoveryPhase,
+                                state: readChatGPTRecoveryState(environmentId, session.id),
+                                events: readChatGPTRecoveryEvents(environmentId, session.id, 25),
+                                now: clockNow,
+                              })
+                            : null;
+                        const recoveryTooltip = recoveryDetails ? (
+                          <div className="flex max-w-80 flex-col gap-1 text-left">
+                            <span className="font-semibold">ChatGPT recovery</span>
+                            {recoveryDetails.map((detail) => (
+                              <span key={detail}>{detail}</span>
+                            ))}
+                          </div>
+                        ) : null;
                         const isVerifiedManager =
                           verifiedManagerSessionIds?.has(session.id) === true;
                         const projectTitle = projectTitles.get(session.id);
@@ -972,7 +997,8 @@ export function ChatGPTBrowserSidebarEntry({
                                 </TooltipTrigger>
                               )}
                               <TooltipPopup>
-                                {`${projectTitle ? `${projectTitle} project · ` : ""}${isVerifiedManager ? "OpenRig manager · " : ""}${recoveryLabel ?? (showingHidden ? activity.label : `Drag to reorder or onto a project; Shift-drop on a session to nest. ${activity.label}`)}`}
+                                {recoveryTooltip ??
+                                  `${projectTitle ? `${projectTitle} project · ` : ""}${isVerifiedManager ? "OpenRig manager · " : ""}${recoveryLabel ?? (showingHidden ? activity.label : `Drag to reorder or onto a project; Shift-drop on a session to nest. ${activity.label}`)}`}
                               </TooltipPopup>
                             </Tooltip>
                             <div className="min-w-0 flex-1">
@@ -992,51 +1018,69 @@ export function ChatGPTBrowserSidebarEntry({
                                   }}
                                 />
                               ) : (
-                                <SidebarMenuButton
-                                  size="sm"
-                                  isActive={activeSessionId === session.id}
-                                  aria-current={activeSessionId === session.id ? "page" : undefined}
-                                  title={
-                                    showingHidden ? "Restore session" : "Double-click to rename"
-                                  }
-                                  onClick={() => {
-                                    setSelectionRecoveryClick((value) => value + 1);
-                                    recordSessionClick(
-                                      environmentId,
-                                      session.id,
-                                      sessions.map((item) => item.id),
-                                    );
-                                    if (session.hidden) {
-                                      setSessionHidden(session.id, false);
-                                      setShowHidden(false);
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <SidebarMenuButton
+                                        size="sm"
+                                        isActive={activeSessionId === session.id}
+                                        aria-current={
+                                          activeSessionId === session.id ? "page" : undefined
+                                        }
+                                        title={
+                                          recoveryDetails
+                                            ? undefined
+                                            : showingHidden
+                                              ? "Restore session"
+                                              : "Double-click to rename"
+                                        }
+                                        onClick={() => {
+                                          setSelectionRecoveryClick((value) => value + 1);
+                                          recordSessionClick(
+                                            environmentId,
+                                            session.id,
+                                            sessions.map((item) => item.id),
+                                          );
+                                          if (session.hidden) {
+                                            setSessionHidden(session.id, false);
+                                            setShowHidden(false);
+                                          }
+                                          void navigate({
+                                            to: "/browser/$browserSessionId",
+                                            params: { browserSessionId: session.id },
+                                          });
+                                        }}
+                                        onDoubleClick={() => {
+                                          setTitle(session.title);
+                                          setRenamingId(session.id);
+                                        }}
+                                      >
+                                        {isVerifiedManager && (
+                                          <CrownIcon
+                                            aria-label="Verified OpenRig manager"
+                                            className="size-3.5 shrink-0 text-info"
+                                          />
+                                        )}
+                                        <span
+                                          className={`min-w-0 flex-1 truncate ${chatGPTActivityColorClass(activity.age)}`}
+                                        >
+                                          {session.title}
+                                        </span>
+                                        {childCount > 0 && (
+                                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                                            {childCount}
+                                          </span>
+                                        )}
+                                      </SidebarMenuButton>
                                     }
-                                    void navigate({
-                                      to: "/browser/$browserSessionId",
-                                      params: { browserSessionId: session.id },
-                                    });
-                                  }}
-                                  onDoubleClick={() => {
-                                    setTitle(session.title);
-                                    setRenamingId(session.id);
-                                  }}
-                                >
-                                  {isVerifiedManager && (
-                                    <CrownIcon
-                                      aria-label="Verified OpenRig manager"
-                                      className="size-3.5 shrink-0 text-info"
-                                    />
-                                  )}
-                                  <span
-                                    className={`min-w-0 flex-1 truncate ${chatGPTActivityColorClass(activity.age)}`}
-                                  >
-                                    {session.title}
-                                  </span>
-                                  {childCount > 0 && (
-                                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                                      {childCount}
-                                    </span>
-                                  )}
-                                </SidebarMenuButton>
+                                  />
+                                  <TooltipPopup>
+                                    {recoveryTooltip ??
+                                      (showingHidden
+                                        ? "Restore session"
+                                        : "Double-click to rename")}
+                                  </TooltipPopup>
+                                </Tooltip>
                               )}
                             </div>
                             <Button
