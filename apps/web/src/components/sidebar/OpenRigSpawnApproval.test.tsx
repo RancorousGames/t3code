@@ -32,9 +32,9 @@ function output() { return JSON.stringify(renderer!.toJSON()); }
 describe("OpenRig approvals must fail closed pending canonical writer", () => {
   it("labels the real live feed as unavailable and exposes no operator decision action", async () => {
     await mount(SPAWN_APPROVAL_FEED_UNAVAILABLE);
-    expect(output()).toContain("not enforced yet");
-    expect(output()).toContain("no spawn-approval endpoint yet");
-    expect(output()).toContain("GPT-6 Luna");
+    expect(output()).toContain("history is not available in this desktop build");
+    expect(output()).not.toContain("not enforced yet");
+    expect(output()).not.toContain("RED");
     expect(output()).not.toContain("Approve once");
     expect(output()).not.toContain("Deny");
   });
@@ -118,7 +118,7 @@ describe("MAIN-only canonical approval reads and native review routing", () => {
       address: "human@kernel",
       items: [canonical], count: 1, truncated: false,
       nextCursor: null, decisionWriteAvailable: false, executionReserveAvailable: false,
-      note: "Source-only; running release RED",
+      note: "Canonical native approvals",
     }));
     const review = vi.fn(async (_operationId: string) => ({
       outcome: "recorded" as const, item: { ...canonical, stateVersion: 5, status: "denied" as const },
@@ -135,7 +135,8 @@ describe("MAIN-only canonical approval reads and native review routing", () => {
     await act(async () => {
       renderer = create(<OpenRigCanonicalSpawnApprovals seatId="seat-a" seatName={(id) => id} />);
     });
-    expect(output()).toContain("release: RED");
+    expect(output()).not.toContain("Native approval release");
+    expect(output()).not.toContain("Source-only review wiring");
     expect(output()).toContain(canonical.operationId);
     expect(output()).toContain(canonical.descriptorSha256);
     expect(output()).toContain("Canonical version");
@@ -150,7 +151,7 @@ describe("MAIN-only canonical approval reads and native review routing", () => {
     });
     expect(review).toHaveBeenCalledExactlyOnceWith(canonical.operationId);
     expect(output()).toContain("denied");
-    expect(output()).toContain("Execution is still blocked");
+    expect(output()).toContain("Check the operation status for launch outcome");
     expect(output()).not.toContain("Approve once");
     expect(output()).not.toContain("Deny");
   });
@@ -165,7 +166,9 @@ describe("MAIN-only canonical approval reads and native review routing", () => {
       renderer = create(<OpenRigCanonicalSpawnApprovals seatId={null} seatName={(id) => id} />);
     });
     expect(output()).toContain("Attestation refused");
-    expect(output()).toContain("release: RED");
+    expect(output()).toContain("Spawn approvals unavailable");
+    expect(output()).not.toContain("Native approval release");
+    expect(output()).not.toContain("Source-only review wiring");
     expect(output()).not.toContain("No spawn approval requests");
   });
 });
