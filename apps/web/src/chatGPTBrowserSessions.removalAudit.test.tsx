@@ -122,6 +122,23 @@ describe("durable T3 ChatGPT local browser removal audit", () => {
     expect(audit()).toEqual([record]);
   });
 
+  it("persists a distinct unused-empty-manual cleanup reason without claiming server conversation deletion", async () => {
+    const id = await add("ChatGPT 2");
+    await remove(id, "unused-empty-manual");
+    expect(audit()).toEqual([
+      expect.objectContaining({
+        sessionId: id,
+        source: "unused-empty-manual",
+        conversationId: null,
+        persistence: "local-session-list-verified",
+        draftSafetyVerified: false,
+      }),
+    ]);
+    await unmount();
+    await mount();
+    expect(audit()[0]?.source).toBe("unused-empty-manual");
+  });
+
   it("distinguishes desktop menu close from IPC request without claiming authenticated human identity", async () => {
     const menu = await add("Menu");
     const ipc = await add("Remote close");

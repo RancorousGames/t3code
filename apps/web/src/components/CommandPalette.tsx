@@ -416,7 +416,9 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       setOpen(false);
       void navigate({
         to: "/browser/$browserSessionId",
-        params: { browserSessionId: createBrowserSession() },
+        params: {
+          browserSessionId: createBrowserSession(undefined, { explicitlyUserCreated: true }),
+        },
       });
     });
     return () => unsubscribe?.();
@@ -457,7 +459,9 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         setOpen(false);
         void navigate({
           to: "/browser/$browserSessionId",
-          params: { browserSessionId: createBrowserSession() },
+          params: {
+            browserSessionId: createBrowserSession(undefined, { explicitlyUserCreated: true }),
+          },
         });
         return;
       }
@@ -2265,7 +2269,9 @@ function OpenCommandPaletteDialog(props: {
       run: async () => {
         await navigate({
           to: "/browser/$browserSessionId",
-          params: { browserSessionId: createBrowserSession() },
+          params: {
+            browserSessionId: createBrowserSession(undefined, { explicitlyUserCreated: true }),
+          },
         });
       },
     });
