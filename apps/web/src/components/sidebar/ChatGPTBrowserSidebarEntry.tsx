@@ -55,6 +55,7 @@ import {
   chatGPTWorkerVisibilityStorageKey,
   chatGPTVerifiedWorkerEvidenceKey,
   captureVerifiedChatGPTWorkerIdentities,
+  childChatGPTSessionIds,
   filterChatGPTWorkerGroups,
   linkedChatGPTWorkerIds,
   restoreVerifiedChatGPTWorkerIds,
@@ -475,7 +476,9 @@ export function ChatGPTBrowserSidebarEntry({
       setVerifiedWorkerSnapshot(fresh);
     }
   }, [sessions, verifiedManagerSessionIds, verifiedWorkerSnapshot, setVerifiedWorkerSnapshot]);
-  const visibleWorkerCount = visibleSessions.filter((session) => workerIds.has(session.id)).length;
+  // Show/hide is strictly a display filter: every child row is toggleable, even if OpenRig is offline.
+  const childIds = useMemo(() => childChatGPTSessionIds(sessions), [sessions]);
+  const visibleWorkerCount = visibleSessions.filter((session) => childIds.has(session.id)).length;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
   // Like Hidden, the Snoozed view falls back to active sessions once it empties.
@@ -495,7 +498,7 @@ export function ChatGPTBrowserSidebarEntry({
     );
     const filtered = filterChatGPTWorkerGroups(
       groups,
-      workerIds,
+      childIds,
       showingHidden || showWorkers,
       permanentProjectKeys,
     );
@@ -510,7 +513,7 @@ export function ChatGPTBrowserSidebarEntry({
     sortMode,
     activities,
     permanentProjects,
-    workerIds,
+    childIds,
     showWorkers,
     permanentProjectKeys,
   ]);
@@ -682,19 +685,13 @@ export function ChatGPTBrowserSidebarEntry({
                   <MenuCheckboxItem
                     checked={showWorkers}
                     onCheckedChange={(checked) => setShowWorkers(checked)}
-                    aria-label={`Show verified spawned ChatGPT workers (${visibleWorkerCount}${verifiedManagerSessionIds === null ? " last verified" : ""})`}
-                    title={
-                      verifiedManagerSessionIds === null
-                        ? "Live manager seat identification unavailable. Only previously verified, unchanged worker identities can be filtered; unknown sessions remain visible."
-                        : "Only parent-linked backend-spawned workers are filtered. Managers and manual chats stay visible. This never closes or suspends work."
-                    }
+                    aria-label={`Show child ChatGPT sessions (${visibleWorkerCount})`}
+                    title="Toggle child sessions in the sidebar only; sessions continue running and are not closed or unloaded."
                   >
                     <span className="flex items-center gap-4">
                       <span className="flex-1">Show workers</span>
                       <span className="text-xs text-muted-foreground">
-                        {verifiedManagerSessionIds === null
-                          ? `${visibleWorkerCount} last known`
-                          : visibleWorkerCount}
+                        {visibleWorkerCount}
                       </span>
                     </span>
                   </MenuCheckboxItem>

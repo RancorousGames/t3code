@@ -5,6 +5,11 @@ import { chatGPTParentIndex } from "./chatGPTSessionLineage";
 export const chatGPTWorkerVisibilityStorageKey = (environmentId: string | null) =>
   `t3code:chatgpt-browser:show-manager-workers:${environmentId ?? "unconnected"}`;
 
+/** A sidebar-only view filter: every session with a parent is a child, regardless of spawn source or role. */
+export function childChatGPTSessionIds(sessions: readonly BrowserSession[]): ReadonlySet<string> {
+  return new Set(sessions.filter((session) => !!session.parentSessionId).map((session) => session.id));
+}
+
 export const chatGPTVerifiedWorkerEvidenceKey = (environmentId: string | null) =>
   `t3code:chatgpt-browser:verified-worker-identity:v1:${environmentId ?? "unconnected"}`;
 

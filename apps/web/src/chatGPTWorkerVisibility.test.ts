@@ -12,6 +12,7 @@ import { searchChatGPTSessionGroups } from "./chatGPTSessionSearch";
 import {
   chatGPTWorkerVisibilityStorageKey,
   captureVerifiedChatGPTWorkerIdentities,
+  childChatGPTSessionIds,
   filterChatGPTWorkerGroups,
   linkedChatGPTWorkerIds,
   restoreVerifiedChatGPTWorkerIds,
@@ -46,6 +47,21 @@ const ids = (groups: ReturnType<typeof layoutChatGPTSessions>) =>
   groups.flatMap((group) => group.rows.map((row) => row.session.id));
 
 describe("ChatGPT parent-linked worker visibility", () => {
+  it("temporarily hides every child (including manager children, manual children and orphans) without changing sessions", () => {
+    const original = [
+      ...sessions,
+      { id: "nested-manager", title: "Nested manager", parentSessionId: "manager" },
+    ];
+    const before = JSON.stringify(original);
+    const children = childChatGPTSessionIds(original);
+    expect([...children].sort()).toEqual(["child", "grandchild", "nested-manager", "orphan"].sort());
+    const full = layoutChatGPTSessions(original, projects, "started", {});
+    const filtered = filterChatGPTWorkerGroups(full, children, false, new Set());
+    expect(ids(filtered).sort()).toEqual(["manager", "manual", "detached"].sort());
+    expect(filterChatGPTWorkerGroups(full, children, true, new Set())).toEqual(full);
+    expect(JSON.stringify(original)).toBe(before);
+  });
+
   it("persists the view preference independently for each connected environment", () => {
     const first = chatGPTWorkerVisibilityStorageKey("server-a");
     const second = chatGPTWorkerVisibilityStorageKey("server-b");
