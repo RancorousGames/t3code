@@ -79,6 +79,7 @@ import { alternatePreviewRuntime, useRendersServerTabNatively } from "~/browser/
 import { ServerBrowserSurface, type ServerBrowserHandle } from "~/browser/ServerBrowserSurface";
 import { cn } from "~/lib/utils";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
+import { recordChatGPTSessionRefreshedAt } from "~/chatGPTSessionTimestamps";
 import { usePreviewSession } from "./usePreviewSession";
 import { ZoomIndicator } from "./ZoomIndicator";
 import { AgentBrowserCursor } from "./AgentBrowserCursor";
@@ -328,9 +329,19 @@ export function PreviewView({
   );
 
   const handleRefresh = useCallback(() => {
-    if (isServerTab) serverSurfaceRef.current?.reload();
-    else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
-  }, [isServerTab, runtimeTabId]);
+    if (isServerTab) {
+      serverSurfaceRef.current?.reload();
+    } else if (previewBridge && runtimeTabId) {
+      void previewBridge.refresh(runtimeTabId).then(() => {
+        // A toolbar refresh is distinct from a mount or wake.
+        const threadId = String(threadRef.threadId);
+        const prefix = "t3-browser-session:";
+        if (threadId.startsWith(prefix)) {
+          recordChatGPTSessionRefreshedAt(threadRef.environmentId, threadId.slice(prefix.length));
+        }
+      });
+    }
+  }, [isServerTab, runtimeTabId, threadRef.environmentId, threadRef.threadId]);
 
   /** Appearance and zoom of a server tab, through the server for every client. */
   const adjustServerTab = useCallback(

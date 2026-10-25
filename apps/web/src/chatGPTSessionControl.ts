@@ -58,6 +58,7 @@ import {
   readChatGPTRecoveryState,
   recordChatGPTRecoveryEvent,
 } from "./chatGPTRecoveryDiagnostics";
+import { recordChatGPTSessionRefreshedAt } from "./chatGPTSessionTimestamps";
 import { validChatGPTCompletion } from "./chatGPTSessionCompletion";
 import { assertArchivableSession, descendantSessions } from "./chatGPTSessionArchivePolicy";
 
@@ -1115,6 +1116,7 @@ export async function runChatGPTSessionControl(input: {
       sessions.map((s) => s.id),
     );
     await previewBridge.refresh(runtimeId);
+    recordChatGPTSessionRefreshedAt(environmentId, entry.id);
     recordChatGPTRecoveryEvent(environmentId, entry.id, "manual-refresh-issued", before.status);
     return { sessionId: entry.id, reloaded: true, previousStatus: before.status };
   }

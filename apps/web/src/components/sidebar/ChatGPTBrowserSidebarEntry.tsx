@@ -35,6 +35,12 @@ import {
   type ChatGPTSessionRemovalSource,
 } from "../../chatGPTBrowserSessions";
 import { isElectron } from "../../env";
+import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
+import {
+  readChatGPTSessionTimeline,
+  formatChatGPTSessionDateTime,
+  recordChatGPTSessionActiveAt,
+} from "../../chatGPTSessionTimestamps";
 import {
   applyConfirmedChatGPTSessionMetadata,
   groupChatGPTSessions,
@@ -239,6 +245,21 @@ export function ChatGPTBrowserSidebarEntry({
     syncInferredMetadata,
     pruneExpiredHidden,
   } = useChatGPTBrowserSessions(environmentId);
+  // Old worker sessions may have a durable, exact creation receipt even though
+  // the session index itself predates createdAt. Decode this journal only once.
+  const spawnCreation = useMemo(() => {
+    if (!environmentId) return new Map<string, { requestId: string; createdAt: number }>();
+    try {
+      return new Map(
+        readChatGPTSpawnReceipts(environmentId).map((receipt) => [
+          receipt.sessionId,
+          { requestId: receipt.requestId, createdAt: receipt.createdAt },
+        ]),
+      );
+    } catch {
+      return new Map<string, { requestId: string; createdAt: number }>();
+    }
+  }, [environmentId, sessions]);
   const close = useAtomCommand(previewEnvironment.close);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [recoveryPhases, setRecoveryPhases] = useState<Record<string, ChatGPTRecoveryPhase>>({});
@@ -994,6 +1015,33 @@ export function ChatGPTBrowserSidebarEntry({
                             ))}
                           </div>
                         ) : null;
+                        const spawn = spawnCreation.get(session.id);
+                        const timeline = readChatGPTSessionTimeline(
+                          environmentId,
+                          session,
+                          activity.lastWorkingAt,
+                          spawn && spawn.requestId === session.spawnRequestId
+                            ? spawn.createdAt
+                            : undefined,
+                        );
+                        // One shared hover body for both the drag/status icon and the
+                        // session title: retain the richer recovery diagnostics.
+                        const withTimeline = (summary: ReactNode) => (
+                          <div className="flex max-w-80 flex-col gap-2 text-left">
+                            <div>{summary}</div>
+                            <div className="flex flex-col gap-1 border-t border-border pt-2 text-xs">
+                              <span>
+                                Created: {formatChatGPTSessionDateTime(timeline.createdAt)}
+                              </span>
+                              <span>
+                                Last active: {formatChatGPTSessionDateTime(timeline.lastActiveAt)}
+                              </span>
+                              <span>
+                                Last refresh: {formatChatGPTSessionDateTime(timeline.lastRefreshAt)}
+                              </span>
+                            </div>
+                          </div>
+                        );
                         const isVerifiedManager =
                           verifiedManagerSessionIds?.has(session.id) === true;
                         const projectTitle = projectTitles.get(session.id);
@@ -1049,8 +1097,10 @@ export function ChatGPTBrowserSidebarEntry({
                                 </TooltipTrigger>
                               )}
                               <TooltipPopup>
-                                {recoveryTooltip ??
-                                  `${projectTitle ? `${projectTitle} project · ` : ""}${isVerifiedManager ? "OpenRig manager · " : ""}${recoveryLabel ?? (showingHidden ? activity.label : `Drag to reorder or onto a project; Shift-drop on a session to nest. ${activity.label}`)}`}
+                                {withTimeline(
+                                  recoveryTooltip ??
+                                    `${projectTitle ? `${projectTitle} project · ` : ""}${isVerifiedManager ? "OpenRig manager · " : ""}${recoveryLabel ?? (showingHidden ? activity.label : `Drag to reorder or onto a project; Shift-drop on a session to nest. ${activity.label}`)}`,
+                                )}
                               </TooltipPopup>
                             </Tooltip>
                             <div className="min-w-0 flex-1">
@@ -1079,13 +1129,6 @@ export function ChatGPTBrowserSidebarEntry({
                                         aria-current={
                                           activeSessionId === session.id ? "page" : undefined
                                         }
-                                        title={
-                                          recoveryDetails
-                                            ? undefined
-                                            : showingHidden
-                                              ? "Restore session"
-                                              : "Double-click to rename"
-                                        }
                                         onClick={() => {
                                           setSelectionRecoveryClick((value) => value + 1);
                                           recordSessionClick(
@@ -1093,6 +1136,7 @@ export function ChatGPTBrowserSidebarEntry({
                                             session.id,
                                             sessions.map((item) => item.id),
                                           );
+                                          recordChatGPTSessionActiveAt(environmentId, session.id);
                                           if (session.hidden) {
                                             setSessionHidden(session.id, false);
                                             setShowHidden(false);
@@ -1127,10 +1171,12 @@ export function ChatGPTBrowserSidebarEntry({
                                     }
                                   />
                                   <TooltipPopup>
-                                    {recoveryTooltip ??
-                                      (showingHidden
-                                        ? "Restore session"
-                                        : "Double-click to rename")}
+                                    {withTimeline(
+                                      recoveryTooltip ??
+                                        (showingHidden
+                                          ? "Restore session"
+                                          : "Double-click to rename"),
+                                    )}
                                   </TooltipPopup>
                                 </Tooltip>
                               )}

@@ -13,6 +13,8 @@ import { readThreadPreviewState } from "./previewStateStore";
 export const BrowserSession = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
+  // Present only for sessions created after timestamp tracking was introduced.
+  createdAt: Schema.optional(Schema.Number),
   // An exact backend spawn reservation. Manual sessions and warm spares never carry it.
   spawnRequestId: Schema.optional(Schema.String),
   // Only explicit UI-created fresh chats carry this; legacy and backend guests do not.
@@ -410,6 +412,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           Schema.String,
         );
       }
+      const createdAt = Date.now();
       setSessions((current) => {
         let number = 1;
         while (current.some((session) => session.title === `ChatGPT ${number}`)) number += 1;
@@ -418,6 +421,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           {
             id,
             title: name?.trim() || `ChatGPT ${number}`,
+            createdAt,
             ...(metadata?.spawnRequestId ? { spawnRequestId: metadata.spawnRequestId } : {}),
             ...(metadata?.explicitlyUserCreated &&
             !name &&

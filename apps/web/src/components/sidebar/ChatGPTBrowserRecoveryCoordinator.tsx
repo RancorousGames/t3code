@@ -13,6 +13,7 @@ import {
 } from "../../chatGPTBrowserSessions";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { recordChatGPTRecoveryEvent } from "../../chatGPTRecoveryDiagnostics";
+import { recordChatGPTSessionRefreshedAt } from "../../chatGPTSessionTimestamps";
 import { isChatGPTHomeUrl } from "../../chatGPTBrowserPrewarm";
 import { inspectChatGPTPage } from "../../chatGPTSessionDom";
 import { isChatGPTGuestHibernated } from "../../browser/chatGPTGuestHibernation";
@@ -1115,6 +1116,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   finished ? "refresh-finished" : "refresh-timeout",
                   problem,
                 );
+                if (finished) recordChatGPTSessionRefreshedAt(envId, sessionId);
                 if (!finished && problem !== "load-failure")
                   noteRecoveryConcern(
                     envId,
