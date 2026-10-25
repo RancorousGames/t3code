@@ -8,6 +8,7 @@ import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPTBrowserPrewarm";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { randomUUID } from "./lib/utils";
+import { finalizeChatGPTRolloverHierarchy, type ChatGPTRolloverPlan } from "./chatGPTRolloverFinalize";
 import { readThreadPreviewState } from "./previewStateStore";
 
 export const BrowserSession = Schema.Struct({
@@ -469,6 +470,13 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
 
+  const finalizeRollover = useCallback(
+    (plan: ChatGPTRolloverPlan) => {
+      setSessions((current) => finalizeChatGPTRolloverHierarchy(current, plan));
+    },
+    [setSessions],
+  );
+
   const setSessionParent = useCallback(
     (id: string, parentId: string | null) => {
       setSessions((current) => {
@@ -657,6 +665,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     setSessionArchived,
     setSessionProject,
     setSessionParent,
+    finalizeRollover,
     setSessionSnooze,
     setSessionBorderColor,
     setSessionCompletion,
