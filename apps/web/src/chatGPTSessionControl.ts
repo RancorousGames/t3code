@@ -6,6 +6,12 @@ import {
   wakeChatGPTGuest,
 } from "./browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
+import {
+  hasDurableUnknownChatGPTSend,
+  reserveDurableUnknownChatGPTSend,
+  releaseDurableUnknownChatGPTSend,
+  clearDurableUnknownChatGPTSendsForTests,
+} from "./chatGPTUncertainSendFence";
 import { chatGPTWebviewAutomation } from "./chatGPTWebviewAutomation";
 import {
   chatGPTBrowserThreadRef,
@@ -112,6 +118,7 @@ const uncertainChatGPTSends = new Map<string, PendingChatGPTSend>();
 export function resetUncertainChatGPTSendsForTests(): void {
   if (import.meta.env.MODE !== "test") throw new Error("Test-only reset refused.");
   uncertainChatGPTSends.clear();
+  clearDurableUnknownChatGPTSendsForTests();
 }
 // Explicitly duplicate-safe *temporary machine prompt*, not general user or
 // OpenRig policy-enriched messages. Validate the entire fixed body and UUID.
@@ -135,7 +142,8 @@ export function canReplaceGenericUnknown(
 
 /** Synchronous, non-consuming guard: an unknown send needs its guest for reconciliation. */
 export function hasUncertainChatGPTSend(environmentId: EnvironmentId, sessionId: string): boolean {
-  return uncertainChatGPTSends.has(sendReceiptKey(environmentId, sessionId));
+  return uncertainChatGPTSends.has(sendReceiptKey(environmentId, sessionId)) ||
+    hasDurableUnknownChatGPTSend(environmentId, sessionId);
 }
 
 /**
@@ -660,6 +668,7 @@ export async function runChatGPTSessionControl(input: {
     // hydration/reconciliation side effects. This is an exact loaded-guest-only read.
     const receiptKey = sendReceiptKey(environmentId, entry.id);
     const pending = uncertainChatGPTSends.get(receiptKey) ?? null;
+    const persistedUnknown = hasDurableUnknownChatGPTSend(environmentId, entry.id);
     const pendingRevision = pending ? JSON.stringify(pending) : null;
     const ledgerUnchanged = () => {
       const current = uncertainChatGPTSends.get(receiptKey) ?? null;
@@ -669,7 +678,7 @@ export async function runChatGPTSessionControl(input: {
       sessionId: entry.id,
       status: "UNKNOWN" as const,
       reason,
-      uncertainSendPresent: pending !== null,
+      uncertainSendPresent: pending !== null || persistedUnknown,
     });
     if (entry.hidden) return unknown("hidden_guest");
     const guest = guestFor(environmentId, entry.id);
@@ -910,6 +919,7 @@ export async function runChatGPTSessionControl(input: {
     );
     const receiptKey = sendReceiptKey(environmentId, entry.id);
     const pending = uncertainChatGPTSends.get(receiptKey);
+    const persistedUnknown = hasDurableUnknownChatGPTSend(environmentId, entry.id);
     let sendReceipt:
       | { delivery: "unknown" | "user_turn_observed"; sendAttempted: true }
       | undefined;
@@ -923,11 +933,16 @@ export async function runChatGPTSessionControl(input: {
           /* read still reports the actual transcript */
         }
       }
-      if (delivered) uncertainChatGPTSends.delete(receiptKey);
+      if (delivered) {
+        releaseDurableUnknownChatGPTSend(environmentId, entry.id);
+        uncertainChatGPTSends.delete(receiptKey);
+      }
       sendReceipt = { delivery: delivered ? "user_turn_observed" : "unknown", sendAttempted: true };
     } else if (pending) {
       // A new URL does not prove that the old user message was delivered.
       // Retain the unrelated pending receipt until explicit reconciliation.
+      sendReceipt = { delivery: "unknown", sendAttempted: true };
+    } else if (persistedUnknown) {
       sendReceipt = { delivery: "unknown", sendAttempted: true };
     }
     if (input.expectedConversationId !== undefined) {
@@ -1102,6 +1117,9 @@ export async function runChatGPTSessionControl(input: {
     }
     const receiptKey = sendReceiptKey(environmentId, entry.id);
     const unresolved = uncertainChatGPTSends.get(receiptKey);
+    if (!unresolved && hasDurableUnknownChatGPTSend(environmentId, entry.id)) {
+      throw new Error("An UNKNOWN send survived the renderer restart; preserve this conversation and reconcile manually.");
+    }
     if (unresolved && unresolved.url !== before.observedGuestUrl)
       throw new Error(
         "UNKNOWN send belongs to a previous conversation; preserve and reconcile before sending.",
@@ -1111,6 +1129,7 @@ export async function runChatGPTSessionControl(input: {
       if (attached.runtimeId) {
         try {
           if (await reconcileChatGPTSend(environmentId, entry.id, attached.runtimeId, unresolved)) {
+            releaseDurableUnknownChatGPTSend(environmentId, entry.id);
             uncertainChatGPTSends.delete(receiptKey);
             return {
               sessionId: entry.id,
@@ -1297,6 +1316,7 @@ export async function runChatGPTSessionControl(input: {
       before,
       policyEnrichment,
     };
+    reserveDurableUnknownChatGPTSend(environmentId, entry.id, attempt.url, duplicateSafeReplacement);
     uncertainChatGPTSends.set(receiptKey, attempt);
     try {
       await chatGPTWebviewAutomation.press(runtimeId, {
@@ -1325,6 +1345,7 @@ export async function runChatGPTSessionControl(input: {
     while (Date.now() < deadline) {
       try {
         if (await reconcileChatGPTSend(environmentId, entry.id, runtimeId, attempt)) {
+          releaseDurableUnknownChatGPTSend(environmentId, entry.id);
           uncertainChatGPTSends.delete(receiptKey);
           return {
             sessionId: entry.id,
