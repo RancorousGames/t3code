@@ -54,6 +54,7 @@ export function ChatGPTBrowserSessionRuntime({
   const close = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const list = useAtomQueryRunner(previewEnvironment.list, { refresh: true, reportFailure: false });
   const openingRef = useRef(false);
+  const startupRetryUsedRef = useRef(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [lastUrl, setLastUrl] = useLocalStorage(
     chatGPTBrowserLastUrlKey(environmentId, sessionId),
@@ -130,6 +131,27 @@ export function ChatGPTBrowserSessionRuntime({
     suspended,
     threadRef,
   ]);
+
+  // React may report a transient update-depth error while dozens of stored
+  // sessions hydrate after desktop startup. Retry that specific failure once
+  // after hydration, through the ordinary list-before-open path (never blindly
+  // reload an existing guest or discard a draft). Persistent errors keep Retry.
+  useEffect(() => {
+    if (
+      quiet ||
+      !openError ||
+      startupRetryUsedRef.current ||
+      !/Minified React error #185|Maximum update depth exceeded/i.test(openError)
+    )
+      return;
+    const delay =
+      3_000 + ([...sessionId].reduce((value, char) => value + char.charCodeAt(0), 0) % 2_000);
+    const retry = setTimeout(() => {
+      startupRetryUsedRef.current = true;
+      setOpenError((current) => (current === openError ? null : current));
+    }, delay);
+    return () => clearTimeout(retry);
+  }, [quiet, openError, sessionId]);
 
   // The offscreen spare has no user-facing retry button. Retry a failed open
   // conservatively without rendering error UI over the workspace.

@@ -43,7 +43,12 @@ vi.mock("../../state/preview", () => ({
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => mocks.close }));
 vi.mock("../../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => mocks.list }));
 vi.mock("../../hooks/useLocalStorage", () => ({
-  useLocalStorage: () => [mocks.lastUrl, mocks.setUrl],
+  useLocalStorage: (key: string) =>
+    key.startsWith("t3code:chatgpt-browser:last-url:")
+      ? [mocks.lastUrl, mocks.setUrl]
+      : key.startsWith("t3code:chatgpt-browser:sessions:")
+        ? [[], vi.fn()]
+        : ["", vi.fn()],
 }));
 vi.mock("../preview/usePreviewSession", () => ({ usePreviewSession: () => {} }));
 vi.mock("../preview/openPreviewSession", () => ({ openPreviewSession: mocks.open }));
@@ -82,6 +87,7 @@ beforeEach(() => {
   };
 });
 afterEach(() => {
+  vi.useRealTimers();
   if (renderer) act(() => renderer?.unmount());
   renderer = undefined;
   vi.unstubAllGlobals();
@@ -102,6 +108,20 @@ describe("ChatGPT session startup", () => {
     expect(mocks.open).toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://chatgpt.com/c/saved" }),
     );
+  });
+
+  it("automatically retries a transient startup React update-depth failure once", async () => {
+    vi.useFakeTimers();
+    mocks.list.mockRejectedValueOnce(new Error("Minified React error #185"));
+    await mount();
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_100);
+    });
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(mocks.open).toHaveBeenCalledTimes(1);
+    // A second transient error must remain actionable, not trigger a retry loop.
+    vi.useRealTimers();
   });
 
   it("reuses an existing server tab discovered after a renderer restart", async () => {
