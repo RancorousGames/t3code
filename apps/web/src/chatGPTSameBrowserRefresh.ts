@@ -1,3 +1,10 @@
+/** ChatGPT displays a collapsed, read-only UI expansion affordance after long user messages.
+ * It is NOT part of the submitted prompt and must not invalidate its exact hash.
+ * Only this anchored known suffix is removed; arbitrary text remains a mismatch. */
+export function normalizeChatGPTRefreshBootstrap(text: string): string {
+  return text.trim().replace(/\n…\nShow more$/, "");
+}
+
 export type RefreshReceipt = {
   operationId: string;
   sessionId: string;
