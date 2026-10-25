@@ -14,12 +14,12 @@ const environment = EnvironmentId.make("refresh-lab");
 const session = { id: "browser", title: "Lab" };
 vi.mock("./browser/previewRuntimeTabId", () => ({ previewRuntimeTabId: () => "refresh-runtime" }));
 let hibernated = false;
-const wake = vi.fn(() => {
+const wake = vi.fn((_runtimeId: string) => {
   hibernated = false;
 });
 vi.mock("./browser/chatGPTGuestHibernation", () => ({
   isChatGPTGuestHibernated: () => hibernated,
-  wakeChatGPTGuest: (...args: string[]) => wake(...args),
+  wakeChatGPTGuest: (runtimeId: string) => wake(runtimeId),
   touchChatGPTGuest: vi.fn(),
 }));
 vi.mock("./previewStateStore", () => ({
