@@ -6,6 +6,9 @@ import {
   useBrowserSurfaceStore,
 } from "../../browser/browserSurfaceStore";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
+import { resetHostedBrowserGuest } from "../../browser/hostedBrowserGuestReset";
+import { chatGPTBrowserFailure, inspectChatGPTBrowserHealth } from "../../chatGPTBrowserHealth";
+import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import {
   chatGPTBrowserLastUrlKey,
   chatGPTBrowserThreadRef,
@@ -447,21 +450,6 @@ export function ChatGPTBrowserRecoveryCoordinator({
           }
           const nav = state.sessions[tabId]?.navStatus;
           const expectedUrl = expectedConversationUrl(envId, sessionId, nav);
-          if (!expectedUrl) {
-            lostRouteFirstSeen.delete(sessionId);
-            if (persistent.orange[sessionId] || persistent.red[sessionId])
-              noteRecoveryConcern(
-                envId,
-                persistent,
-                sessionId,
-                null,
-                "saved_conversation_url_lost",
-                Date.now(),
-              );
-            if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
-            continue;
-          }
-
           const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
           const webview = Array.from(document.querySelectorAll("webview")).find(
             (element) => element.dataset.previewTab === runtimeId,
@@ -489,6 +477,54 @@ export function ChatGPTBrowserRecoveryCoordinator({
               if (persistent.red[sessionId])
                 recordChatGPTRecoveryEvent(envId, sessionId, "blocked", "guest-hibernated");
               continue; // Closed/archived and sleeping guests are not recovery targets.
+            }
+            // A new blank homepage has no conversation identity, so it must be
+            // handled before conversation-only recovery. Never wake hidden guests
+            // just to diagnose a renderer, or reset a timed-out conversation blindly.
+            if (useBrowserSurfaceStore.getState().byTabId[runtimeId]?.visible) {
+              await inspectChatGPTBrowserHealth(webview);
+              const failure = chatGPTBrowserFailure(webview);
+              if (failure) {
+                recordChatGPTRecoveryEvent(envId, sessionId, "failure-observed", `browser-unresponsive:${failure}`);
+                const guestUrl = webview.getURL();
+                const automaticReset = failure === "blank-page" ||
+                  (!expectedUrl && isChatGPTHomeUrl(guestUrl));
+                const latest = readThreadPreviewState(threadRef);
+                const attemptedAt = Date.now();
+                const recent = readRecoveryHistory(envId);
+                if (
+                  !disposed && currentSessionIds().includes(sessionId) &&
+                  automaticReset && !hasUncertainChatGPTSend(envId, sessionId) &&
+                  latest.activeTabId === tabId && latest.serverEpoch === state.serverEpoch &&
+                  Array.from(document.querySelectorAll("webview")).includes(webview) &&
+                  canAttempt &&
+                  cooldownElapsed(recent.lastAttemptAt, attemptedAt, RECOVERY_GLOBAL_MS) &&
+                  cooldownElapsed(recent.bySession[sessionId] ?? 0, attemptedAt, RECOVERY_PER_SESSION_MS)
+                ) {
+                  recordRecoveryAttempt(envId, sessionId, attemptedAt, currentSessionIds());
+                  canAttempt = false;
+                  phase(sessionId, "refreshing");
+                  recordChatGPTRecoveryEvent(envId, sessionId, "browser-reset-requested", failure);
+                  try {
+                    const result = await resetHostedBrowserGuest(runtimeId, expectedUrl ?? guestUrl);
+                    recordChatGPTRecoveryEvent(envId, sessionId, "browser-reset-attached",
+                      `${result.previousWebContentsId}->${result.webContentsId}`);
+                  } catch {
+                    recordChatGPTRecoveryEvent(envId, sessionId, "browser-reset-unconfirmed");
+                  } finally {
+                    phase(sessionId, null);
+                  }
+                }
+                continue;
+              }
+            }
+            if (!expectedUrl) {
+              lostRouteFirstSeen.delete(sessionId);
+              if (persistent.orange[sessionId] || persistent.red[sessionId])
+                noteRecoveryConcern(envId, persistent, sessionId, null,
+                  "saved_conversation_url_lost", Date.now());
+              if (!currentRedIds().includes(sessionId)) phase(sessionId, null);
+              continue;
             }
             // The guest can redirect to chatgpt.com/ while the last confirmed
             // /c/<id> survives in localStorage. A normal refresh would only

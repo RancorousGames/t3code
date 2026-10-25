@@ -36,6 +36,8 @@ const COLOR_SCHEME_OPTIONS: ReadonlyArray<{
  */
 export interface PreviewMoreMenuActions {
   readonly hardReload: () => void;
+  /** Replaces an attached desktop guest while keeping the tab and profile. */
+  readonly resetBrowserInstance?: () => void;
   readonly setColorScheme: (colorScheme: DesktopPreviewColorScheme) => void;
   readonly zoomIn: () => void;
   readonly zoomOut: () => void;
@@ -104,6 +106,11 @@ export function PreviewMoreMenu({
         <MenuItem onClick={actions.hardReload} disabled={disabled}>
           Hard reload
         </MenuItem>
+        {actions.resetBrowserInstance ? (
+          <MenuItem onClick={actions.resetBrowserInstance}>
+            Reset browser instance
+          </MenuItem>
+        ) : null}
         {actions.openDevTools ? (
           <MenuItem onClick={actions.openDevTools} disabled={disabled}>
             Open DevTools

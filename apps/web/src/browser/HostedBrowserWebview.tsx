@@ -24,6 +24,10 @@ import { BrowserDeviceToolbar } from "./BrowserDeviceToolbar";
 import { BrowserViewportResizeHandles } from "./BrowserViewportResizeHandles";
 import { acquireDesktopTab, type AcquiredDesktopTab, withDesktopTab } from "./desktopTabLifetime";
 import { resolveHostedBrowserWebviewWrapperStyle } from "./hostedBrowserWebviewStyle";
+import {
+  registerHostedBrowserGuestReset,
+  type BrowserGuestResetResult,
+} from "./hostedBrowserGuestReset";
 import { usePreviewWebviewConfig } from "./previewWebviewConfigState";
 import { useBrowserViewportResize } from "./useBrowserViewportResize";
 import {
@@ -38,6 +42,7 @@ interface ElectronWebview extends HTMLElement {
   preload?: string;
   webpreferences?: string;
   getWebContentsId: () => number;
+  getURL: () => string;
   executeJavaScript: (code: string, userGesture?: boolean) => Promise<unknown>;
 }
 
@@ -143,6 +148,53 @@ export function HostedBrowserWebview(props: {
   const [webviewGeneration, setWebviewGeneration] = useState(0);
   const [recoverySrc, setRecoverySrc] = useState(initialSrc);
   const latestUrlRef = useRef(initialUrl);
+  const pendingResetRef = useRef<{
+    previousWebContentsId: number;
+    resolve: (result: BrowserGuestResetResult) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const resetPromiseRef = useRef<Promise<BrowserGuestResetResult> | null>(null);
+
+  useEffect(() => {
+    const unregister = registerHostedBrowserGuestReset(runtimeTabId, (url) => {
+      if (resetPromiseRef.current) return resetPromiseRef.current;
+      const webview = webviewRef.current;
+      if (!webview) return Promise.reject(new Error("The browser guest is not mounted."));
+      let previousWebContentsId: number;
+      let target: string;
+      try {
+        previousWebContentsId = webview.getWebContentsId();
+        target = url ?? webview.getURL() ?? latestUrlRef.current ?? initialSrc;
+      } catch {
+        return Promise.reject(new Error("The browser guest is not attached yet."));
+      }
+      const promise = new Promise<BrowserGuestResetResult>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingResetRef.current = null;
+          resetPromiseRef.current = null;
+          reject(new Error("Browser reset was requested, but replacement attachment is unconfirmed."));
+        }, 10_000);
+        pendingResetRef.current = { previousWebContentsId, resolve, reject, timer };
+      });
+      resetPromiseRef.current = promise;
+      // Replace only the webview, preserving the logical tab, profile and sidebar
+      // session. Incident findings: docs/operations/chatgpt-blank-browser-recovery.md.
+      setRecoverySrc(target || latestUrlRef.current || initialSrc);
+      setWebviewGeneration((generation) => generation + 1);
+      return promise;
+    });
+    return () => {
+      unregister();
+      const pending = pendingResetRef.current;
+      if (pending) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("Browser tab closed during reset; attachment is unconfirmed."));
+        pendingResetRef.current = null;
+        resetPromiseRef.current = null;
+      }
+    };
+  }, [initialSrc, runtimeTabId]);
 
   useEffect(() => {
     latestUrlRef.current = initialUrl;
@@ -171,6 +223,13 @@ export function HostedBrowserWebview(props: {
           const webContentsId = webview.getWebContentsId();
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
             await bridge.registerWebview(runtimeTabId, webContentsId);
+            const pending = pendingResetRef.current;
+            if (!disposed && pending && webContentsId !== pending.previousWebContentsId) {
+              clearTimeout(pending.timer);
+              pendingResetRef.current = null;
+              resetPromiseRef.current = null;
+              pending.resolve({ previousWebContentsId: pending.previousWebContentsId, webContentsId });
+            }
           }
         } catch {
           // did-attach/dom-ready will retry if the guest was not ready yet.

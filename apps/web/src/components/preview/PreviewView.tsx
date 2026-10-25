@@ -18,6 +18,7 @@ import {
   type PreviewAdjustInput,
 } from "@t3tools/contracts";
 import { normalizePreviewUrl, resolveAddressBarInput } from "@t3tools/shared/preview";
+import { resetHostedBrowserGuest } from "~/browser/hostedBrowserGuestReset";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -533,6 +534,16 @@ export function PreviewView({
   const desktopCall = (op: ((tabId: string) => Promise<void>) | undefined) => () => {
     if (op && runtimeTabId) void op(runtimeTabId).catch(() => undefined);
   };
+  const resetBrowserInstance = () => {
+    if (!runtimeTabId) return;
+    void resetHostedBrowserGuest(runtimeTabId).then(
+      () => toastManager.add({ type: "success", title: "Browser instance replaced" }),
+      (error: unknown) => toastManager.add({
+        type: "error", title: "Browser reset could not be confirmed",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      }),
+    );
+  };
   const moreMenuActions: PreviewMoreMenuActions | null = serverOwnsRendering
     ? {
         hardReload: () => void adjustServerTab({ hardReload: true }),
@@ -545,6 +556,7 @@ export function PreviewView({
         ...(nativeServerTab && previewBridge
           ? {
               openDevTools: desktopCall(previewBridge.openDevTools),
+              resetBrowserInstance,
               toggleNativePictureInPicture: () => handleNativePictureInPicture(),
             }
           : {}),
@@ -552,6 +564,7 @@ export function PreviewView({
     : previewBridge
       ? {
           hardReload: desktopCall(previewBridge.hardReload),
+          resetBrowserInstance,
           setColorScheme: (colorScheme) => {
             if (runtimeTabId)
               void previewBridge?.setColorScheme(runtimeTabId, colorScheme).catch(() => undefined);
