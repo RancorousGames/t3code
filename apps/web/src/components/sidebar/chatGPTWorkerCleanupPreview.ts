@@ -19,14 +19,17 @@ export interface WorkerCleanupPreviewRow {
 export function previewUnverifiedWorkerCleanup(
   sessions: readonly BrowserSession[],
   spawnReceipts: readonly WorkerSpawnReceipt[],
+  verifiedWorkerIds: ReadonlySet<string>,
 ): readonly WorkerCleanupPreviewRow[] {
   const parents = chatGPTParentIndex(sessions);
-  const receipts = new Set(spawnReceipts.map((receipt) => receipt.sessionId));
+  const receipts = new Map(spawnReceipts.map((receipt) => [receipt.sessionId, receipt.requestId]));
 
   return sessions.flatMap((session) => {
     const parentSessionId = parents.get(session.id);
-    if (!parentSessionId || session.id === "chatgpt") return [];
-    const hasManagedSpawnReceipt = receipts.has(session.id);
+    // Show only already classified worker rows, not managers or manually
+    // linked sessions. This is a diagnostic list, never an action queue.
+    if (!parentSessionId || !verifiedWorkerIds.has(session.id)) return [];
+    const hasManagedSpawnReceipt = receipts.get(session.id) === session.spawnRequestId;
     return [
       {
         sessionId: session.id,
@@ -34,8 +37,8 @@ export function previewUnverifiedWorkerCleanup(
         parentSessionId,
         hasManagedSpawnReceipt,
         blockReason: hasManagedSpawnReceipt
-          ? "Spawn receipt does not attest parent provenance or owner completion."
-          : "No managed spawn receipt; parent link alone is not verified ownership.",
+          ? "Not eligible: spawn receipt lacks verified parent ownership and completion."
+          : "Not eligible: durable spawn correlation exists, but no separate cleanup receipt.",
       },
     ];
   });

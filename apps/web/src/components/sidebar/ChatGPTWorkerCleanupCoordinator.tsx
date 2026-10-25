@@ -40,11 +40,15 @@ export const chatGPTWorkerCleanupSettingsKey = (environmentId: EnvironmentId) =>
 export function ChatGPTWorkerCleanupCoordinator({
   environmentId,
   sessions,
+  verifiedWorkerIds,
+  managerAttributionAvailable,
   open,
   onOpenChange,
 }: {
   environmentId: EnvironmentId;
   sessions: readonly BrowserSession[];
+  verifiedWorkerIds: ReadonlySet<string>;
+  managerAttributionAvailable: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -57,7 +61,9 @@ export function ChatGPTWorkerCleanupCoordinator({
   // Only inspect spawn receipts while the dialog is open. A recorded spawn is
   // evidence of a request ID, not authoritative parent provenance.
   const spawnReceipts = open ? readChatGPTSpawnReceipts(environmentId) : [];
-  const preview = open ? previewUnverifiedWorkerCleanup(sessions, spawnReceipts) : [];
+  const preview = open
+    ? previewUnverifiedWorkerCleanup(sessions, spawnReceipts, verifiedWorkerIds)
+    : [];
   const blockedPlan = open
     ? planChatGPTWorkerCleanup({
         sessions,
@@ -77,13 +83,16 @@ export function ChatGPTWorkerCleanupCoordinator({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Worker cleanup</DialogTitle>
-          <DialogDescription>Preview only. Nothing is archived, hidden or closed yet.</DialogDescription>
+          <DialogTitle>Worker cleanup preferences</DialogTitle>
+          <DialogDescription>
+            No automatic cleanup runs yet. These switches save preferences for a future cleanup
+            feature; they do not archive, hide or close any sessions.
+          </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <section aria-label="Worker auto-cleanup preferences" className="space-y-3 text-sm">
             <label className="flex items-center justify-between gap-4">
-              <span>Auto-archive finished workers</span>
+              <span>Future: Auto-archive finished workers</span>
               <Switch
                 size="sm"
                 aria-label="Opt in to future automatic archive of verified completed workers"
@@ -100,7 +109,7 @@ export function ChatGPTWorkerCleanupCoordinator({
             <label
               className={`flex items-center justify-between gap-4 ${settings.enabled ? "" : "text-muted-foreground"}`}
             >
-              <span>Close 7 days after archiving</span>
+              <span>Future: Close 7 days after archiving</span>
               <Switch
                 size="sm"
                 disabled={!settings.enabled}
@@ -114,13 +123,20 @@ export function ChatGPTWorkerCleanupCoordinator({
           </section>
           <div role="status" className="space-y-1 text-xs text-muted-foreground">
             <p className="font-medium text-foreground">
-              Dry run: {preview.length} parent-linked session{preview.length === 1 ? "" : "s"} to
-              review; {blockedPlan?.actions.length ?? 0} authorized cleanup actions.
+              {managerAttributionAvailable
+                ? `Informational list: ${preview.length} identified worker${preview.length === 1 ? "" : "s"}; none are cleanup candidates.`
+                : preview.length > 0
+                  ? `Live manager verification unavailable: showing ${preview.length} previously verified worker${preview.length === 1 ? "" : "s"} only. None are cleanup candidates.`
+                  : "Worker identification unavailable: no current or cached manager seat evidence."}
             </p>
             <p>
-              Blocked: spawn receipts do not authenticate parent ownership; verified worker Done
-              receipts and guest draft/send/recovery clearance are unavailable. Restart
-              reconciliation is not connected. Existing sessions are untouched.
+              This is NOT a list of sessions that would be cleaned if you enabled the switches.
+              Cleanup requires separately verified ownership, Done receipts and safe guest-state
+              checks, which are not connected. {blockedPlan?.actions.length ?? 0} actions available.
+            </p>
+            <p>
+              Show workers affects sidebar rows only, independently of these preferences. All
+              sessions, active work and unsent drafts remain untouched.
             </p>
           </div>
           {preview.length > 0 && (
@@ -131,7 +147,7 @@ export function ChatGPTWorkerCleanupCoordinator({
                   {entry.blockReason}
                 </p>
               ))}
-              {preview.length > 8 && <p>{preview.length - 8} more blocked parent-linked sessions.</p>}
+              {preview.length > 8 && <p>{preview.length - 8} more informational worker rows.</p>}
             </div>
           )}
         </DialogPanel>

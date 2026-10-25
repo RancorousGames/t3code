@@ -10,27 +10,31 @@ import { previewUnverifiedWorkerCleanup } from "./chatGPTWorkerCleanupPreview";
 describe("Worker cleanup preview with incomplete runtime evidence", () => {
   const sessions: BrowserSession[] = [
     { id: "manager", title: "Manager" },
-    { id: "worker", title: "Worker", parentSessionId: "manager" },
+    { id: "worker", title: "Worker", parentSessionId: "manager", spawnRequestId: "spawn-request" },
     { id: "manual", title: "Manually linked", parentSessionId: "manager" },
     { id: "orphan", title: "Orphan", parentSessionId: "missing" },
     { id: "root", title: "Other user tab" },
     { id: "detached", title: "Detached", parentSessionId: null },
   ];
 
-  it("shows only existing same-environment parent links but never calls them verified", () => {
-    const preview = previewUnverifiedWorkerCleanup(sessions, [
-      { sessionId: "worker", requestId: "spawn-request" },
-    ]);
-    expect(preview.map((row) => row.sessionId)).toEqual(["worker", "manual"]);
+  it("lists only classified workers, not manual children, managers, or orphans", () => {
+    const preview = previewUnverifiedWorkerCleanup(
+      sessions,
+      [{ sessionId: "worker", requestId: "spawn-request" }],
+      new Set(["worker"]),
+    );
+    expect(preview.map((row) => row.sessionId)).toEqual(["worker"]);
     expect(preview[0]).toMatchObject({
       parentSessionId: "manager",
       hasManagedSpawnReceipt: true,
     });
-    expect(preview[0]?.blockReason).toMatch(/does not attest parent provenance/);
-    expect(preview[1]).toMatchObject({
-      hasManagedSpawnReceipt: false,
-    });
-    expect(preview[1]?.blockReason).toMatch(/not verified ownership/);
+    expect(preview[0]?.blockReason).toMatch(/Not eligible/);
+    const stale = previewUnverifiedWorkerCleanup(
+      sessions,
+      [{ sessionId: "worker", requestId: "different-spawn" }],
+      new Set(["worker"]),
+    );
+    expect(stale[0]?.hasManagedSpawnReceipt).toBe(false);
   });
 
   it("does not manufacture a verified link or Done receipt even when opted in and idle", () => {
@@ -46,9 +50,11 @@ describe("Worker cleanup preview with incomplete runtime evidence", () => {
           }
         : session,
     );
-    const preview = previewUnverifiedWorkerCleanup(completed, [
-      { sessionId: "worker", requestId: "spawn-request" },
-    ]);
+    const preview = previewUnverifiedWorkerCleanup(
+      completed,
+      [{ sessionId: "worker", requestId: "spawn-request" }],
+      new Set(["worker"]),
+    );
     expect(preview.find((row) => row.sessionId === "worker")?.hasManagedSpawnReceipt).toBe(true);
     const plan = planChatGPTWorkerCleanup({
       sessions: completed,

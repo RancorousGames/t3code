@@ -11,8 +11,10 @@ import { layoutChatGPTSessions } from "./chatGPTSessionGrouping";
 import { searchChatGPTSessionGroups } from "./chatGPTSessionSearch";
 import {
   chatGPTWorkerVisibilityStorageKey,
+  captureVerifiedChatGPTWorkerIdentities,
   filterChatGPTWorkerGroups,
   linkedChatGPTWorkerIds,
+  restoreVerifiedChatGPTWorkerIds,
 } from "./chatGPTWorkerVisibility";
 
 const projects = [
@@ -22,8 +24,19 @@ const projects = [
 
 const sessions: BrowserSession[] = [
   { id: "manager", title: "Wartribes manager", project: "Wartribes" },
-  { id: "child", title: "T3 Code work", parentSessionId: "manager", project: "T3 Code" },
-  { id: "grandchild", title: "Review work", parentSessionId: "child" },
+  {
+    id: "child",
+    title: "T3 Code work",
+    parentSessionId: "manager",
+    spawnRequestId: "spawn-child",
+    project: "T3 Code",
+  },
+  {
+    id: "grandchild",
+    title: "Review work",
+    parentSessionId: "child",
+    spawnRequestId: "spawn-grandchild",
+  },
   { id: "manual", title: "Manually opened T3 Code", project: "T3 Code" },
   { id: "orphan", title: "Work left unlinked", parentSessionId: "lost-manager" },
   { id: "detached", title: "Detached work", parentSessionId: null },
@@ -48,13 +61,50 @@ describe("ChatGPT parent-linked worker visibility", () => {
     }
   });
 
-  it("filters only proven parent links, including descendants, not worker-like names or orphan references", () => {
+  it("filters only spawned parent-linked children, including descendants, not worker-like names or orphan references", () => {
     const workers = linkedChatGPTWorkerIds(sessions);
     expect([...workers]).toEqual(["child", "grandchild"]);
     expect(workers.has("manual")).toBe(false);
     expect(workers.has("orphan")).toBe(false);
     expect(workers.has("detached")).toBe(false);
     expect(workers.has("manager")).toBe(false);
+  });
+
+  it("restores only previously verified worker identities when the seat ledger is offline", () => {
+    const managers = new Set(["manager"]);
+    const known = captureVerifiedChatGPTWorkerIdentities(sessions, managers);
+    expect(known.map((entry) => entry.sessionId)).toEqual(["child", "grandchild"]);
+    expect([...restoreVerifiedChatGPTWorkerIds(sessions, known)]).toEqual(["child", "grandchild"]);
+
+    const changed: BrowserSession[] = [
+      ...sessions.map((s) => (s.id === "child" ? { ...s, parentSessionId: null } : s)),
+      {
+        id: "new-manager",
+        title: "New manager",
+        parentSessionId: "manager",
+        spawnRequestId: "fresh",
+      },
+    ];
+    const restored = restoreVerifiedChatGPTWorkerIds(changed, known);
+    expect(restored.has("child")).toBe(false);
+    expect(restored.has("new-manager")).toBe(false);
+    // The grandchild's unchanged direct link remains valid, but a changed spawn
+    // reservation must invalidate even a still present parent.
+    expect(restored.has("grandchild")).toBe(true);
+    const recycled = changed.map((s) =>
+      s.id === "grandchild" ? { ...s, spawnRequestId: "different" } : s,
+    );
+    expect(restoreVerifiedChatGPTWorkerIds(recycled, known).size).toBe(0);
+  });
+
+  it("keeps manually linked chats visible even when their parent is a known manager", () => {
+    const linked = [
+      ...sessions,
+      { id: "manual-child", title: "Personal chat", parentSessionId: "manager" },
+    ];
+    const workers = linkedChatGPTWorkerIds(linked, new Set(["manager"]));
+    expect(workers.has("manual-child")).toBe(false);
+    expect(workers.has("child")).toBe(true);
   });
 
   it("leaves cyclic or absent parent links visible and does not guess from a title or project", () => {
@@ -128,23 +178,72 @@ describe("ChatGPT parent-linked worker visibility", () => {
 describe("verified manager seats are never filtered as subordinate workers", () => {
   const lineage: BrowserSession[] = [
     { id: "omni", title: "Omni Coordinator", project: "Omni" },
-    { id: "t3-manager", title: "T3 Code Manager", parentSessionId: "omni", project: "T3 Code" },
-    { id: "t3-worker", title: "T3 source specialist", parentSessionId: "t3-manager" },
-    { id: "wartribes-manager", title: "Wartribes Manager", parentSessionId: "omni" },
-    { id: "rig-manager", title: "RIG MANAGER", parentSessionId: "omni" },
-    { id: "omni-worker", title: "Coordinator worker", parentSessionId: "omni" },
-    { id: "new-manager", title: "Renamed seat", parentSessionId: "t3-manager" },
-    { id: "new-worker", title: "Nested worker", parentSessionId: "new-manager" },
+    {
+      id: "t3-manager",
+      title: "T3 Code Manager",
+      parentSessionId: "omni",
+      spawnRequestId: "spawn-manager",
+      project: "T3 Code",
+    },
+    {
+      id: "t3-worker",
+      title: "T3 source specialist",
+      parentSessionId: "t3-manager",
+      spawnRequestId: "spawn-t3-worker",
+    },
+    {
+      id: "wartribes-manager",
+      title: "Wartribes Manager",
+      parentSessionId: "omni",
+      spawnRequestId: "spawn-wartribes-manager",
+    },
+    {
+      id: "rig-manager",
+      title: "RIG MANAGER",
+      parentSessionId: "omni",
+      spawnRequestId: "spawn-rig-manager",
+    },
+    {
+      id: "omni-worker",
+      title: "Coordinator worker",
+      parentSessionId: "omni",
+      spawnRequestId: "spawn-omni-worker",
+    },
+    {
+      id: "new-manager",
+      title: "Renamed seat",
+      parentSessionId: "t3-manager",
+      spawnRequestId: "spawn-new-manager",
+    },
+    {
+      id: "new-worker",
+      title: "Nested worker",
+      parentSessionId: "new-manager",
+      spawnRequestId: "spawn-new-worker",
+    },
     { id: "unknown-orphan", title: "Unknown class", parentSessionId: "not-present" },
     { id: "unknown-root", title: "T3 Code Manager (unverified)", project: "T3 Code" },
-    { id: "hidden-worker", title: "Hidden worker", parentSessionId: "t3-manager", hidden: true },
+    {
+      id: "hidden-worker",
+      title: "Hidden worker",
+      parentSessionId: "t3-manager",
+      spawnRequestId: "spawn-hidden-worker",
+      hidden: true,
+    },
     {
       id: "snoozed-worker",
       title: "Snoozed worker",
       parentSessionId: "t3-manager",
+      spawnRequestId: "spawn-snoozed-worker",
       snoozedUntil: Date.now() + 300_000,
     },
-    { id: "hidden-manager", title: "Hidden manager", parentSessionId: "omni", hidden: true },
+    {
+      id: "hidden-manager",
+      title: "Hidden manager",
+      parentSessionId: "omni",
+      spawnRequestId: "spawn-hidden-manager",
+      hidden: true,
+    },
   ];
 
   const verifiedManagers = new Set([
@@ -221,7 +320,12 @@ describe("verified manager seats are never filtered as subordinate workers", () 
   it("does not promote a manager-like name without verified seat provenance", () => {
     const fake: BrowserSession[] = [
       { id: "parent", title: "Omni Coordinator" },
-      { id: "unverified", title: "T3 Code Manager", parentSessionId: "parent" },
+      {
+        id: "unverified",
+        title: "T3 Code Manager",
+        parentSessionId: "parent",
+        spawnRequestId: "spawn-unverified",
+      },
       { id: "orphan", title: "Worker", parentSessionId: "missing" },
     ];
     const workers = linkedChatGPTWorkerIds(fake, new Set(["parent"]));
