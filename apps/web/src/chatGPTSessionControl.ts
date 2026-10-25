@@ -17,6 +17,7 @@ import { COMPOSER_SELECTOR } from "./chatGPTBrowserAutomation";
 import {
   CHATGPT_COMPOSER_PROBE_EXPRESSION,
   sameComposerProbe,
+  inspectChatGPTComposer,
   type ComposerProbe,
 } from "./chatGPTDraftInspection";
 import { readThreadPreviewState } from "./previewStateStore";
@@ -135,6 +136,153 @@ export function canReplaceGenericUnknown(
 /** Synchronous, non-consuming guard: an unknown send needs its guest for reconciliation. */
 export function hasUncertainChatGPTSend(environmentId: EnvironmentId, sessionId: string): boolean {
   return uncertainChatGPTSends.has(sendReceiptKey(environmentId, sessionId));
+}
+
+/**
+ * Recover a hibernated predecessor INSIDE its existing preview/browser slot.
+ * Unloading is normal: do not create a second browser or replace the guest.
+ * A transient inspection timeout is not proof that the old conversation is lost.
+ * No destructive reload/reset is permitted until its draft is verified and
+ * privately backed up by assertChatGPTRefreshSafe().
+ */
+export async function wakeChatGPTRefreshPredecessor(
+  environmentId: EnvironmentId,
+  session: BrowserSession,
+  conversationId: string,
+  timeoutMs = 45_000,
+): Promise<void> {
+  if (session.hidden) throw new Error("Hidden refresh predecessor must be restored first.");
+  const original = guestFor(environmentId, session.id);
+  if (!original.runtimeId) {
+    throw new Error(
+      "Original browser preview is not attached yet; recover its existing preview before refreshing.",
+    );
+  }
+  const persistedUrl = (() => {
+    try {
+      return JSON.parse(
+        window.localStorage.getItem(chatGPTBrowserLastUrlKey(environmentId, session.id)) ?? "null",
+      ) as unknown;
+    } catch {
+      return null;
+    }
+  })();
+  const known = original.nav?._tag === "Success" ? original.nav.url : persistedUrl;
+  if (chatGPTConversationIdFromUrl(typeof known === "string" ? known : null) !== conversationId) {
+    throw new Error(
+      "Saved predecessor conversation differs; refresh would replace unknown history.",
+    );
+  }
+  // A wake only mounts an unloaded guest. It does not navigate/reload an
+  // already-mounted document, so drafts and uncertain sends remain untouched.
+  wakeChatGPTGuest(original.runtimeId);
+  touchChatGPTGuest(original.runtimeId);
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const guest = guestFor(environmentId, session.id);
+    if (guest.runtimeId !== original.runtimeId)
+      throw new Error("Existing browser runtime changed during refresh recovery.");
+    if (isLoadedChatGPTBrowserGuest(environmentId, session)) {
+      try {
+        const observed = await readGuest(environmentId, session.id, "end", 1, false);
+        if (observed && chatGPTConversationIdFromUrl(observed.url) !== conversationId) {
+          throw new Error(
+            "Recovered guest contains a different conversation; preserve its contents.",
+          );
+        }
+        if (observed?.activity === "idle" && !observed.stuck && !observed.connectionInterrupted)
+          return;
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("Recovered guest contains"))
+          throw error;
+        // ChatGPT may be throttled or still hydrating; keep the same browser.
+      }
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise<void>((resolve) => setTimeout(resolve, 500));
+  } while (true);
+  throw new Error(
+    "Predecessor is still recovering in its existing browser; refresh has not navigated or sent.",
+  );
+}
+
+/** Destructive same-container navigation requires a loaded, backed-up empty
+ * composer and a completed predecessor. Wake is performed before this guard. */
+export async function assertChatGPTRefreshSafe(
+  environmentId: EnvironmentId,
+  session: BrowserSession,
+  conversationId: string | null,
+): Promise<string> {
+  if (
+    !isLoadedChatGPTBrowserGuest(environmentId, session) ||
+    hasUncertainChatGPTSend(environmentId, session.id)
+  )
+    throw new Error("Refresh requires a loaded guest without UNKNOWN sends.");
+  const original = guestFor(environmentId, session.id);
+  const snapshot = (await runChatGPTSessionControl({
+    environmentId,
+    sessions: [session],
+    action: "snapshot",
+    sessionId: session.id,
+  })) as { status?: string; uncertainSendPresent?: boolean };
+  if (snapshot.status !== "backed_up_empty" || snapshot.uncertainSendPresent === true)
+    throw new Error("Refresh requires a verified empty private draft backup.");
+  const page = await readGuest(environmentId, session.id, "end", 1, false);
+  const probe = (await original.webview!.executeJavaScript(
+    CHATGPT_COMPOSER_PROBE_EXPRESSION,
+  )) as ComposerProbe;
+  if (
+    !page ||
+    page.activity !== "idle" ||
+    page.stuck ||
+    page.connectionInterrupted ||
+    (conversationId
+      ? chatGPTConversationIdFromUrl(page.url) !== conversationId ||
+        page.lastRole !== "assistant" ||
+        !page.assistantHasContent
+      : !isChatGPTHomeUrl(page.url) || page.totalTurns !== 0) ||
+    probe.status !== "empty" ||
+    probe.url !== page.url ||
+    hasUncertainChatGPTSend(environmentId, session.id) ||
+    guestFor(environmentId, session.id).webview !== original.webview ||
+    !isLoadedChatGPTBrowserGuest(environmentId, session)
+  )
+    throw new Error("Guest, conversation, generation or draft changed before refresh.");
+  return original.runtimeId!;
+}
+
+/** Last generation/composer guard and navigation execute in one guest task so
+ * a newly started assistant or newly typed draft cannot be lost between them. */
+export async function navigateChatGPTRefreshSafe(
+  environmentId: EnvironmentId,
+  session: BrowserSession,
+  runtimeId: string,
+  conversationId: string | null,
+  url: string,
+): Promise<void> {
+  const guest = guestFor(environmentId, session.id);
+  if (
+    guest.runtimeId !== runtimeId ||
+    !guest.webview ||
+    !isLoadedChatGPTBrowserGuest(environmentId, session) ||
+    hasUncertainChatGPTSend(environmentId, session.id)
+  )
+    throw new Error("Refresh runtime or UNKNOWN send changed before navigation.");
+  const result = await guest.webview.executeJavaScript(`(() => {
+    const page = (${inspectChatGPTPage.toString()})({from:'end',count:1,includeMessages:false});
+    const draft = (${inspectChatGPTComposer.toString()})(document, location.href);
+    const expected = ${JSON.stringify(conversationId)};
+    const current = /^\\/c\\/([a-f0-9-]{36})(?:\\/|$)/i.exec(location.pathname)?.[1] ?? null;
+    const home = location.hostname === 'chatgpt.com' && location.pathname === '/';
+    if (draft.status !== 'empty' || page.activity !== 'idle' || page.stuck || page.connectionInterrupted ||
+        (${hasChatGPTLoadFailure.toString()})() ||
+        (expected ? (current !== expected || page.lastRole !== 'assistant' || !page.assistantHasContent) :
+          (!home || page.totalTurns !== 0))) return false;
+    location.assign(${JSON.stringify(url)});
+    return true;
+  })()`);
+  if (result !== true)
+    throw new Error("Guest declined refresh navigation; preserve its current conversation.");
 }
 
 function sendReceiptKey(environmentId: EnvironmentId, sessionId: string): string {

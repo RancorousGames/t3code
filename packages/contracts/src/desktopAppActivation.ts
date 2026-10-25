@@ -88,6 +88,15 @@ export const DesktopAppActivationRequest = Schema.Union([
   }),
   Schema.Struct({
     ...DesktopAppActivationBase,
+    type: Schema.Literal("chatgpt.refresh"),
+    requestId: NativeOperationId,
+    sessionId: NativeOperationId,
+    priorConversationId: ChatGPTConversationId,
+    prompt: Schema.optional(TrimmedNonEmptyString),
+    phase: Schema.Literals(["begin", "status", "restore", "finalize"]),
+  }),
+  Schema.Struct({
+    ...DesktopAppActivationBase,
     type: Schema.Literal("chatgpt.spawn"),
     title: TrimmedNonEmptyString,
     prompt: Schema.String.check(Schema.isNonEmpty()),

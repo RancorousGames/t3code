@@ -11,6 +11,7 @@ import {
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
 
 import { sendInitialChatGPTPrompt } from "../../chatGPTBrowserAutomation";
+import { refreshChatGPTDesktop } from "../../chatGPTSameBrowserRefreshDesktop";
 import { recordChatGPTSpawnCreated, readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
 import {
   chatGPTBrowserLastUrlKey,
@@ -972,6 +973,34 @@ export function DesktopAppActivationCoordinator() {
             requestId: request.requestId,
             ok: false,
             code: "internal-error",
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+      if (request.type === "chatgpt.refresh") {
+        const environmentId = primaryEnvironment?.environmentId;
+        try {
+          if (!environmentId) throw new Error("Connect the refresh environment first.");
+          const receipt = await refreshChatGPTDesktop({
+            environmentId,
+            operationId: request.requestId,
+            sessionId: request.sessionId,
+            priorConversationId: request.priorConversationId,
+            prompt: request.prompt,
+            phase: request.phase,
+          });
+          return {
+            version: 1,
+            requestId: request.requestId,
+            ok: true,
+            data: { action: "refresh", ...receipt, retrySafe: false },
+          };
+        } catch (error) {
+          return {
+            version: 1,
+            requestId: request.requestId,
+            ok: false,
+            code: "chatgpt-send-failed",
             message: error instanceof Error ? error.message : String(error),
           };
         }
