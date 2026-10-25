@@ -14,6 +14,11 @@ import {
 import { readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { sendInitialChatGPTPrompt } from "./chatGPTBrowserAutomation";
+import {
+  inspectErroredRefreshPredecessor,
+  navigateOfflineChatGPTRefresh,
+  type OfflineRefreshPredecessor,
+} from "./chatGPTRefreshOffline";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 
 async function hash(text: string) {
@@ -57,6 +62,8 @@ export async function refreshChatGPTDesktop(input: {
   };
   let runtimeId: string | null = null;
   let guardedConversationId: string | null = null;
+  let offlinePredecessor: OfflineRefreshPredecessor | null = null;
+  let offlineDraftBackedUp = false;
   const existing = read().find((r) => r.operationId === input.operationId);
   if (!input.prompt && (input.phase === "begin" || !existing))
     throw new Error("Initial refresh requires a prompt.");
@@ -65,11 +72,16 @@ export async function refreshChatGPTDesktop(input: {
         buildChatGPTSessionHandoffPrompt(input.prompt, session.id, session.parentSessionId),
       )
     : existing!.bootstrapHash;
-  // Unloaded/hibernated is a normal browser lifecycle state, not a reason to
-  // allocate another T3 session. Recovery precedes the durable navigation
-  // intent; an unrecovered guest leaves the predecessor completely untouched.
+  // A positively verified editor-free error can be replaced in this same
+  // browser slot. Ordinary unloaded/unknown guests retain the safe wake path.
   if (input.phase === "begin" && !existing) {
-    await wakeChatGPTRefreshPredecessor(input.environmentId, session, input.priorConversationId);
+    offlinePredecessor = await inspectErroredRefreshPredecessor(
+      input.environmentId,
+      session,
+      input.priorConversationId,
+    );
+    if (!offlinePredecessor)
+      await wakeChatGPTRefreshPredecessor(input.environmentId, session, input.priorConversationId);
   }
   return refreshSameBrowser({ ...input, bootstrapHash }, input.phase, {
     read,
@@ -79,6 +91,40 @@ export async function refreshChatGPTDesktop(input: {
         JSON.stringify(readChatGPTBrowserSessions(input.environmentId)) !== JSON.stringify(sessions)
       )
         throw new Error("Browser hierarchy changed during refresh.");
+      if (offlinePredecessor) {
+        if (id !== input.priorConversationId)
+          throw new Error("Offline predecessor identity changed.");
+        const current = await inspectErroredRefreshPredecessor(input.environmentId, session, id);
+        if (
+          !current ||
+          current.runtimeId !== offlinePredecessor.runtimeId ||
+          current.webview !== offlinePredecessor.webview
+        )
+          throw new Error("Offline predecessor changed before refresh.");
+        if (!offlineDraftBackedUp) {
+          const backup = window.desktopBridge?.savePrivateChatGPTDraftSnapshot;
+          if (!backup) throw new Error("Private draft backup unavailable for offline refresh.");
+          const saved = await backup({
+            sessionId: session.id,
+            url: `https://chatgpt.com/c/${id}`,
+            draft: "",
+            uncertainSend: null,
+          });
+          if (
+            saved.uncertainSendPresent ||
+            !saved.path ||
+            saved.url !== `https://chatgpt.com/c/${id}`
+          )
+            throw new Error("Offline empty-draft backup could not be verified.");
+          offlineDraftBackedUp = true;
+          const after = await inspectErroredRefreshPredecessor(input.environmentId, session, id);
+          if (!after || after.webview !== current.webview || after.runtimeId !== current.runtimeId)
+            throw new Error("Offline predecessor changed during private draft backup.");
+        }
+        runtimeId = current.runtimeId;
+        guardedConversationId = id;
+        return;
+      }
       const checked = await assertChatGPTRefreshSafe(input.environmentId, session, id);
       if (runtimeId && checked !== runtimeId) throw new Error("Refresh browser runtime changed.");
       runtimeId = checked;
@@ -86,6 +132,16 @@ export async function refreshChatGPTDesktop(input: {
     },
     navigate: async (url) => {
       if (!runtimeId) throw new Error("No safe refresh runtime.");
+      if (offlinePredecessor) {
+        await navigateOfflineChatGPTRefresh(
+          input.environmentId,
+          session,
+          input.priorConversationId,
+          offlinePredecessor,
+          url,
+        );
+        return;
+      }
       await navigateChatGPTRefreshSafe(
         input.environmentId,
         session,
