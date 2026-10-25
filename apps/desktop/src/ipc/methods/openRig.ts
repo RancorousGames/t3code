@@ -52,6 +52,17 @@ import {
   type DesktopOpenRigSessionTarget,
   type DesktopOpenRigBindInput,
   type DesktopOpenRigSendInput,
+  decodeOpenRigReviewGate,
+  safeOpenRigReviewUrl,
+  DesktopOpenRigReviewGateSelectionSchema,
+  DesktopOpenRigReviewGateResolveInputSchema,
+  DesktopOpenRigReviewGateResolveResultSchema,
+  OPENRIG_REVIEW_GATE_VERDICTS,
+  type OpenRigReviewGate,
+  type DesktopOpenRigInboxItem,
+  type DesktopOpenRigReviewGateSelection,
+  type DesktopOpenRigReviewGateResolveInput,
+  type DesktopOpenRigReviewGateResolveResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as NodeChildProcess from "node:child_process";
@@ -66,6 +77,7 @@ import * as Schema from "effect/Schema";
 
 import * as IpcChannels from "../channels.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
+import * as ElectronShell from "../../electron/ElectronShell.ts";
 import {
   getNativeSpawnApproval,
   listPendingNativeSpawnApprovals,
@@ -1564,6 +1576,296 @@ export const reconcileOpenRigOperatorReply = DesktopIpc.makeIpcMethod({
   payload: DesktopOpenRigOperatorReplyInputSchema,
   result: DesktopOpenRigOperatorReplyResultSchema,
   handler: (input) => Effect.tryPromise(() => lookupOpenRigOperatorReply(input)),
+});
+
+// TaskBoard review gates. A gate release is a separate human decision route,
+// never an ordinary queue reply. The renderer only names the selected inbox
+// item; MAIN re-reads the item and the OpenRig link, then asks natively.
+const REVIEW_GATES_BASE_URL = "http://127.0.0.1:7433/api/integrations/taskboard-review-gates";
+const REVIEW_GATE_WAKES = ["verified", "queued", "indeterminate", "failed"];
+
+function reviewGateSelectionValid(input: DesktopOpenRigReviewGateSelection): boolean {
+  return (
+    input.destination === "human@kernel" &&
+    /^qitem-[A-Za-z0-9_-]{1,100}$/u.test(input.qitemId) &&
+    /^qitem-[A-Za-z0-9_-]{1,100}$/u.test(input.gateQitemId)
+  );
+}
+
+function reviewGateResolveValid(input: DesktopOpenRigReviewGateResolveInput): boolean {
+  return (
+    reviewGateSelectionValid(input) &&
+    /^[A-Za-z0-9._:-]{1,128}$/u.test(input.reviewId) &&
+    /^[A-Za-z0-9._:-]{1,128}$/u.test(input.reviewRevision) &&
+    OPENRIG_REVIEW_GATE_VERDICTS.includes(input.verdict) &&
+    /^[A-Za-z0-9_-]{8,128}$/u.test(input.requestId) &&
+    (input.note === undefined || input.note.length <= 2_000)
+  );
+}
+
+/** The exact current inbox item and its decoded gate, from MAIN's own read. */
+async function readSelectedReviewGate(
+  selection: DesktopOpenRigReviewGateSelection,
+  fetchImpl: typeof fetch,
+): Promise<{ item: DesktopOpenRigInboxItem; gate: OpenRigReviewGate } | null> {
+  const inbox = await fetchOpenRigOperatorInbox(selection.destination, fetchImpl);
+  if (!inbox.available) return null;
+  const matches = inbox.items.filter(
+    (item) => item.id === selection.qitemId && item.recipient === selection.destination,
+  );
+  const gate = matches.length === 1 ? decodeOpenRigReviewGate(matches[0]!.reviewGate) : null;
+  return gate && gate.gateQitemId === selection.gateQitemId ? { item: matches[0]!, gate } : null;
+}
+
+/** OpenRig bearer-protected single gate status must match this current open review binding. */
+async function reviewGateLinkConfirmed(
+  gate: OpenRigReviewGate,
+  fetchImpl: typeof fetch,
+): Promise<boolean> {
+  const bearer = NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim();
+  const response = await fetchImpl(
+    `${REVIEW_GATES_BASE_URL}/${encodeURIComponent(gate.gateQitemId)}`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+      },
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) return false;
+  const body = (await response.json()) as unknown;
+  const status = record(body);
+  const link = record(status?.link);
+  return status?.available === true && status?.gateQitemId === gate.gateQitemId &&
+    status.gateState === "blocked" && status.resolved === false &&
+    link?.gateQitemId === gate.gateQitemId && link.reviewId === gate.reviewId &&
+    link.reviewRevision === gate.reviewRevision && link.authorityVerified === false;
+}
+
+function reviewGateReleased(
+  payload: unknown,
+  input: DesktopOpenRigReviewGateResolveInput,
+): DesktopOpenRigReviewGateResolveResult | null {
+  const value = record(payload);
+  if (
+    value?.version !== 1 ||
+    value.requestId !== input.requestId ||
+    value.gateQitemId !== input.gateQitemId ||
+    value.reviewId !== input.reviewId ||
+    value.reviewRevision !== input.reviewRevision ||
+    value.verdict !== input.verdict ||
+    value.gateReleased !== true ||
+    !["recorded", "idempotent"].includes(String(value.status)) ||
+    value.wakeIntentDurable !== true ||
+    !REVIEW_GATE_WAKES.includes(String(value.delivery))
+  )
+    return null;
+  return {
+    outcome: "released",
+    requestId: input.requestId,
+    gateQitemId: input.gateQitemId,
+    reviewId: input.reviewId,
+    reviewRevision: input.reviewRevision,
+    verdict: input.verdict,
+    status: value.status as "recorded" | "idempotent",
+    gateReleased: true,
+    delivery: value.delivery as "verified" | "queued" | "indeterminate" | "failed",
+    wakeIntentDurable: true,
+  };
+}
+
+export async function lookupOpenRigReviewGateReceipt(
+  input: DesktopOpenRigReviewGateResolveInput,
+  fetchImpl: typeof fetch = fetch,
+): Promise<DesktopOpenRigReviewGateResolveResult> {
+  if (!reviewGateResolveValid(input))
+    return { outcome: "not_sent", reason: "Invalid review gate or request identity." };
+  const headers = operatorReplyHeaders();
+  if (!headers)
+    return { outcome: "unknown", reason: "MAIN human-answer token unavailable for reconciliation." };
+  try {
+    const response = await fetchImpl(
+      `${REVIEW_GATES_BASE_URL}/${encodeURIComponent(input.gateQitemId)}/receipts/${encodeURIComponent(input.requestId)}`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+      },
+    );
+    const body = (await response.json()) as unknown;
+    if (response.status === 404 && record(body)?.outcome === "unconfirmed")
+      return {
+        outcome: "unconfirmed",
+        reason: "No confirmed gate receipt yet. A release may still be in flight.",
+      };
+    const released = response.ok ? reviewGateReleased(body, input) : null;
+    return released ?? { outcome: "unknown", reason: "OpenRig gate receipt was not conclusive." };
+  } catch {
+    return { outcome: "unknown", reason: "OpenRig gate receipt lookup unavailable." };
+  }
+}
+
+export type ReviewGateConfirm = (
+  gate: OpenRigReviewGate,
+  input: DesktopOpenRigReviewGateResolveInput,
+) => Promise<boolean>;
+
+export async function postOpenRigReviewGateResolve(
+  input: DesktopOpenRigReviewGateResolveInput,
+  confirm: ReviewGateConfirm,
+  fetchImpl: typeof fetch = fetch,
+): Promise<DesktopOpenRigReviewGateResolveResult> {
+  if (!reviewGateResolveValid(input))
+    return { outcome: "not_sent", reason: "Invalid review gate or request identity." };
+  const headers = operatorReplyHeaders();
+  if (!headers)
+    return {
+      outcome: "not_sent",
+      reason: "OpenRig human-answer token is not available in desktop MAIN.",
+    };
+  let gate: OpenRigReviewGate;
+  try {
+    const selected = await readSelectedReviewGate(input, fetchImpl);
+    if (
+      !selected ||
+      selected.item.sourceType !== "human_gate" ||
+      selected.item.state !== "blocked" ||
+      selected.gate.reviewId !== input.reviewId ||
+      selected.gate.reviewRevision !== input.reviewRevision
+    )
+      return {
+        outcome: "not_sent",
+        reason: "Selected review gate is not the current pending gate for this review revision.",
+      };
+    gate = selected.gate;
+    if (!(await reviewGateLinkConfirmed(gate, fetchImpl)))
+      return { outcome: "not_sent", reason: "OpenRig did not confirm the review gate link." };
+  } catch {
+    return { outcome: "not_sent", reason: "Could not verify the review gate before release." };
+  }
+  // Renderer invocation is not human intent. Only the native MAIN dialog is.
+  const confirmed = await confirm(gate, input).catch(() => false);
+  if (!confirmed)
+    return { outcome: "cancelled", reason: "Gate release cancelled. Nothing was sent." };
+  // After fetch begins an error is indeterminate: keep requestId, NEVER re-POST.
+  try {
+    const response = await fetchImpl(
+      `${REVIEW_GATES_BASE_URL}/${encodeURIComponent(input.gateQitemId)}/resolve`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          version: 1,
+          requestId: input.requestId,
+          reviewId: input.reviewId,
+          reviewRevision: input.reviewRevision,
+          verdict: input.verdict,
+          ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+        }),
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+      },
+    );
+    const body = (await response.json()) as unknown;
+    if (!response.ok && record(body)?.outcome === "not_sent")
+      return {
+        outcome: "not_sent",
+        reason: String(record(body)?.error ?? "OpenRig declined this gate release."),
+      };
+    const released = response.ok ? reviewGateReleased(body, input) : null;
+    if (released) return released;
+  } catch {
+    /* fall through to read-only reconciliation */
+  }
+  const reconciled = await lookupOpenRigReviewGateReceipt(input, fetchImpl);
+  return reconciled.outcome === "released"
+    ? reconciled
+    : {
+        outcome: "unknown",
+        reason: "Gate release unconfirmed. Nothing will be resent; check status to reconcile.",
+      };
+}
+
+/** Opens only the review URL MAIN itself re-read for the selected gate. */
+export async function openOpenRigReviewGateUrl(
+  selection: DesktopOpenRigReviewGateSelection,
+  open: (url: string) => Promise<boolean>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  if (!reviewGateSelectionValid(selection)) return false;
+  const selected = await readSelectedReviewGate(selection, fetchImpl);
+  const url = safeOpenRigReviewUrl(selected?.gate.reviewUrl);
+  return url ? open(url) : false;
+}
+
+const verdictLabels = {
+  approved: "Approved",
+  changes_requested: "Changes requested",
+  rejected: "Rejected",
+} as const;
+
+export const resolveOpenRigReviewGate = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPENRIG_REVIEW_GATE_RESOLVE_CHANNEL,
+  payload: DesktopOpenRigReviewGateResolveInputSchema,
+  result: DesktopOpenRigReviewGateResolveResultSchema,
+  handler: (input) =>
+    Effect.gen(function* () {
+      const dialog = yield* ElectronDialog.ElectronDialog;
+      const runPromise = Effect.runPromiseWith(
+        yield* Effect.context<ElectronDialog.ElectronDialog>(),
+      );
+      return yield* Effect.tryPromise(() =>
+        postOpenRigReviewGateResolve(input, async (gate, request) => {
+          const choice = await runPromise(
+            dialog.showMessageBox({
+              type: "question",
+              noLink: true,
+              title: "Release TaskBoard review gate",
+              message: `Release the review gate as "${verdictLabels[request.verdict]}"?`,
+              detail: [
+                gate.title ?? `Review ${gate.reviewId}`,
+                `Review ${gate.reviewId} · revision ${gate.reviewRevision}`,
+                `Gate ${gate.gateQitemId}`,
+                request.note?.trim() ? `Note: ${request.note.trim().slice(0, 300)}` : "",
+              ]
+                .filter(Boolean)
+                .join("\n"),
+              buttons: ["Cancel", "Release gate"],
+              defaultId: 0,
+              cancelId: 0,
+            }),
+          );
+          return choice.response === 1;
+        }),
+      );
+    }),
+});
+
+export const reconcileOpenRigReviewGate = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPENRIG_REVIEW_GATE_RECEIPT_CHANNEL,
+  payload: DesktopOpenRigReviewGateResolveInputSchema,
+  result: DesktopOpenRigReviewGateResolveResultSchema,
+  handler: (input) => Effect.tryPromise(() => lookupOpenRigReviewGateReceipt(input)),
+});
+
+export const openOpenRigReviewGate = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPENRIG_REVIEW_GATE_OPEN_CHANNEL,
+  payload: DesktopOpenRigReviewGateSelectionSchema,
+  result: Schema.Boolean,
+  handler: (selection) =>
+    Effect.gen(function* () {
+      const shell = yield* ElectronShell.ElectronShell;
+      return yield* Effect.tryPromise(() =>
+        openOpenRigReviewGateUrl(selection, (url) => Effect.runPromise(shell.openExternal(url))),
+      );
+    }),
 });
 
 export const readOpenRigOperatorInbox = DesktopIpc.makeIpcMethod({

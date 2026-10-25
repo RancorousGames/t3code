@@ -1,4 +1,8 @@
-import type { DesktopOpenRigInbox, DesktopOpenRigInboxItem } from "@t3tools/contracts";
+import {
+  decodeOpenRigReviewGate,
+  type DesktopOpenRigInbox,
+  type DesktopOpenRigInboxItem,
+} from "@t3tools/contracts";
 import {
   AlertCircleIcon,
   BellIcon,
@@ -23,6 +27,7 @@ import { OpenRigFloatingWindow, type FloatingSize } from "./OpenRigFloatingWindo
 import { OpenRigHumanReplyComposer, type HumanReplyRequest } from "./OpenRigHumanReplyComposer";
 import { OpenRigHumanSendTab } from "./OpenRigHumanSendTab";
 import { OpenRigRichInboxMessage, isNativeInboxDecision } from "./OpenRigRichInboxMessage";
+import { OpenRigReviewGatePanel } from "./OpenRigReviewGatePanel";
 import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
 import { observeResize } from "../../lib/observeResize";
 
@@ -1102,7 +1107,8 @@ export function OpenRigOperatorInbox() {
                         </div>
                       </div>
                       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 text-sm leading-7">
-                        {inboxAttentionKind(chosen, address) === "approval" && (
+                        {inboxAttentionKind(chosen, address) === "approval" &&
+                          !decodeOpenRigReviewGate(chosen.reviewGate) && (
                           <div
                             role="status"
                             className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
@@ -1124,6 +1130,12 @@ export function OpenRigOperatorInbox() {
                             No reply or approval has been sent.
                           </div>
                         )}
+                        <OpenRigReviewGatePanel
+                          key={"gate:" + inboxKey(address, chosen)}
+                          item={chosen}
+                          address={address}
+                          onAnnouncement={setAnnouncement}
+                        />
                         <OpenRigRichInboxMessage
                           key={inboxKey(address, chosen)}
                           item={chosen}

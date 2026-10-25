@@ -15,6 +15,9 @@ export const installOpenRigIpcHandlers = Effect.fn("desktop.ipc.installOpenRigHa
     yield* ipc.handle(OpenRigIpc.submitOpenRigHumanResponse);
     yield* ipc.handle(OpenRigIpc.sendOpenRigOperatorReply);
     yield* ipc.handle(OpenRigIpc.reconcileOpenRigOperatorReply);
+    yield* ipc.handle(OpenRigIpc.openOpenRigReviewGate);
+    yield* ipc.handle(OpenRigIpc.resolveOpenRigReviewGate);
+    yield* ipc.handle(OpenRigIpc.reconcileOpenRigReviewGate);
     yield* ipc.handle(OpenRigIpc.listOpenRigSessions);
     yield* ipc.handle(OpenRigIpc.listOpenRigManagedSessions);
     yield* ipc.handle(OpenRigIpc.discoverOpenRigSeats);
