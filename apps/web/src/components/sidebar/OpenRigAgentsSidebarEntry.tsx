@@ -110,10 +110,10 @@ export function OpenRigAgentsSidebarEntry() {
   }, [live]);
   const workspaceAgent = live ?? (selectedAgent?.id === selectedId ? selectedAgent : null);
 
-  const close = useCallback(() => {
+  const close = useCallback((restoreFocus = true) => {
     const opener = selectedId ? rowRefs.current.get(selectedId) : undefined;
     setSelectedId(null);
-    opener?.focus();
+    if (restoreFocus) opener?.focus();
   }, [selectedId]);
   const select = (agent: DesktopOpenRigAgent) => {
     if (selectedId === agent.id) return close();
@@ -134,9 +134,9 @@ export function OpenRigAgentsSidebarEntry() {
     });
     setSelectedId(seatId);
   };
-  const closeNetwork = () => {
+  const closeNetwork = (restoreFocus = true) => {
     setNetworkOpen(false);
-    networkButtonRef.current?.focus();
+    if (restoreFocus) networkButtonRef.current?.focus();
   };
   const updateMemory = useCallback((seatId: string, update: (current: SeatMemory) => SeatMemory) => {
     setMemory((prior) => ({ ...prior, [seatId]: update(prior[seatId] ?? EMPTY_SEAT_MEMORY) }));
@@ -230,7 +230,8 @@ export function OpenRigAgentsSidebarEntry() {
           memory={memory[workspaceAgent.id] ?? EMPTY_SEAT_MEMORY}
           onMemoryChange={(update) => updateMemory(workspaceAgent.id, update)}
           onAgentsChanged={refresh}
-          onClose={close}
+          onClose={() => close()}
+          onOutsideClose={() => close(false)}
           seatNode={seatNodes.get(workspaceAgent.id) ?? null}
           topologyAvailable={topology !== null}
           seatName={seatName}
@@ -246,7 +247,8 @@ export function OpenRigAgentsSidebarEntry() {
           topologyError={topologyError}
           onRefreshAgents={refresh}
           onOpenAgent={openSeat}
-          onClose={closeNetwork}
+          onClose={() => closeNetwork()}
+          onOutsideClose={() => closeNetwork(false)}
         />,
         document.body,
       )}

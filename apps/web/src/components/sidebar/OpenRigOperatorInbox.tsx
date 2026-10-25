@@ -598,12 +598,12 @@ export function OpenRigOperatorInbox() {
     },
     [address, markRead],
   );
-  const closeInbox = useCallback(() => {
+  const closeInbox = useCallback((restoreFocus = true) => {
     openRef.current = false;
     setMenu(null);
     setConfirmDelete(null);
     setOpen(false);
-    buttonRef.current?.focus();
+    if (restoreFocus) buttonRef.current?.focus();
   }, []);
   const openMessage = (item: InboxItem) => {
     const key = inboxKey(address, item);
@@ -691,6 +691,10 @@ export function OpenRigOperatorInbox() {
           compactBelow={640}
           panelRef={panelRef}
           onEscape={escapeInbox}
+          onOutsidePointerDown={() => {
+            // Keep the separate context-menu backdrop and confirmation in control.
+            if (!menu && !confirmDelete) closeInbox(false);
+          }}
           onKeyDown={(event) => {
             if (event.key === "/" && !isEditable(event.target)) {
               event.preventDefault();
@@ -725,7 +729,7 @@ export function OpenRigOperatorInbox() {
                 type="button"
                 aria-label="Close human inbox"
                 className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={closeInbox}
+                onClick={() => closeInbox()}
               >
                 <XIcon className="size-5" />
               </button>

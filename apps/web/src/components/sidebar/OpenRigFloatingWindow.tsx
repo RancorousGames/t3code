@@ -30,6 +30,9 @@ export interface FloatingSize {
 
 const MARGIN = 8;
 const BASE_Z_INDEX = 60;
+// The three nonmodal windows share a click boundary, including React-portaled descendants.
+// Mark during React capture; the document bubble listener observes it afterwards.
+const floatingWindowPointerEvents = new WeakSet<Event>();
 
 export function clampFloatingGeometry(
   preferred: FloatingGeometry,
@@ -133,6 +136,7 @@ export function OpenRigFloatingWindow({
   header,
   children,
   onEscape,
+  onOutsidePointerDown,
   onKeyDown,
   panelRef,
   initialFocusRef,
@@ -148,6 +152,8 @@ export function OpenRigFloatingWindow({
   children: (state: FloatingWindowState) => ReactNode;
   /** Escape pressed inside the window and not already handled by a descendant. */
   onEscape?: () => void;
+  /** Dismiss on an actual click in the host app, not OS blur or focus changes. */
+  onOutsidePointerDown?: () => void;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void;
   panelRef?: RefObject<HTMLElement | null>;
   initialFocusRef?: RefObject<HTMLElement | null>;
@@ -158,6 +164,9 @@ export function OpenRigFloatingWindow({
   );
   const interaction = useRef<Interaction | null>(null);
   const ownRef = useRef<HTMLElement | null>(null);
+  const outsideDismissRef = useRef(onOutsidePointerDown);
+  outsideDismissRef.current = onOutsidePointerDown;
+  const dismissible = onOutsidePointerDown !== undefined;
   const zIndex = useFloatingLayer(id);
   const geometry = clampFloatingGeometry(preferred, viewport, minSize);
 
@@ -166,6 +175,18 @@ export function OpenRigFloatingWindow({
     window.addEventListener?.("resize", resize);
     return () => window.removeEventListener?.("resize", resize);
   }, []);
+
+  useEffect(() => {
+    if (!dismissible) return;
+    const dismissOutside = (event: PointerEvent) => {
+      if (event.button !== 0 || floatingWindowPointerEvents.has(event)) return;
+      if (ownRef.current?.contains(event.target as Node)) return;
+      // Do not prevent the underlying click or move focus back to the opener.
+      outsideDismissRef.current?.();
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    return () => document.removeEventListener("pointerdown", dismissOutside);
+  }, [dismissible]);
 
   useEffect(() => {
     // Nonmodal: take focus once on open so Escape and keyboard navigation work,
@@ -231,7 +252,10 @@ export function OpenRigFloatingWindow({
       data-compact={state.compact ? "true" : undefined}
       className="fixed flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground shadow-2xl outline-none"
       style={{ ...geometry, zIndex }}
-      onPointerDownCapture={() => raiseLayer(id)}
+      onPointerDownCapture={(event) => {
+        floatingWindowPointerEvents.add(event.nativeEvent);
+        raiseLayer(id);
+      }}
       onFocusCapture={() => raiseLayer(id)}
       onKeyDown={(event) => {
         onKeyDown?.(event);

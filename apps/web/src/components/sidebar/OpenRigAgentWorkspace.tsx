@@ -227,6 +227,7 @@ export function OpenRigAgentWorkspace({
   onMemoryChange,
   onAgentsChanged,
   onClose,
+  onOutsideClose,
   seatNode,
   topologyAvailable,
   seatName,
@@ -243,6 +244,7 @@ export function OpenRigAgentWorkspace({
   onMemoryChange: (update: (current: SeatMemory) => SeatMemory) => void;
   onAgentsChanged: () => Promise<void>;
   onClose: () => void;
+  onOutsideClose: () => void;
   /** This seat in OpenRig's RigSpec topology; null when absent or unavailable. */
   seatNode: DesktopOpenRigSeatNode | null;
   topologyAvailable: boolean;
@@ -300,6 +302,7 @@ export function OpenRigAgentWorkspace({
       minSize={MIN_SIZE}
       compactBelow={780}
       onEscape={onClose}
+      onOutsidePointerDown={onOutsideClose}
       header={() => (
         <header className="flex items-start gap-3 border-b border-border px-4 py-3">
           <span
