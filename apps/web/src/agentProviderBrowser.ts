@@ -22,6 +22,8 @@ export async function executeAgentProviderBrowserWork(
 ): Promise<WorkResult> {
   if (work.environmentId !== environmentId)
     return { ok: false, code: "Unavailable", message: "Desktop environment changed." };
+  if (work.action === "create" || !work.browserSessionId || !work.expectedConversationId)
+    return { ok: false, code: "InvalidInput", message: "Browser history/submit requires exact session and conversation." };
   const sessions = readChatGPTBrowserSessions(environmentId);
   // Only exact original T3 browser session UUIDs resolve here. Never create,
   // navigate, infer from conversation IDs, or wake an unloaded guest.

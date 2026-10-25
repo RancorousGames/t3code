@@ -141,10 +141,15 @@ export const AgentProviderV1DesktopSnapshot = Schema.Struct({
 export const AgentProviderV1DesktopWork = Schema.Struct({
   jobId: OpaqueId,
   environmentId: OpaqueId,
-  browserSessionId: OpaqueId,
-  expectedConversationId: OpaqueId,
-  action: Schema.Literals(["history", "submit"]),
+  browserSessionId: Schema.optional(OpaqueId),
+  expectedConversationId: Schema.optional(OpaqueId),
+  action: Schema.Literals(["history", "submit", "create"]),
   text: Schema.optional(Schema.String),
+  clientRequestId: Schema.optional(RequestId),
+  title: Schema.optional(Schema.String),
+  prompt: Schema.optional(Schema.String),
+  project: Schema.optional(Schema.String),
+  parentSessionId: Schema.optional(OpaqueId),
 });
 export type AgentProviderV1DesktopWork = typeof AgentProviderV1DesktopWork.Type;
 export const AgentProviderV1DesktopWorkResult = Schema.Struct({
@@ -228,6 +233,41 @@ export const AgentProviderV1Submit = Schema.Struct({
 });
 export type AgentProviderV1Submit = typeof AgentProviderV1Submit.Type;
 
+export const AgentProviderV1QueueRequest = Schema.Struct({
+  session: AgentProviderV1SessionRef,
+  expectedEnvironmentId: OpaqueId,
+});
+export const AgentProviderV1InterruptRequest = Schema.Struct({
+  session: AgentProviderV1SessionRef,
+  expectedEnvironmentId: OpaqueId,
+  clientRequestId: RequestId,
+  runId: Schema.optional(OpaqueId),
+});
+export const AgentProviderV1CreateRequest = Schema.Struct({
+  kind: AgentProviderV1SessionKind,
+  expectedEnvironmentId: OpaqueId,
+  clientRequestId: RequestId,
+  title: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(180)),
+  initialMessage: Schema.optional(Schema.String.check(Schema.isMaxLength(30_000))),
+  project: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
+  parentSessionId: Schema.optional(OpaqueId),
+});
+export const AgentProviderV1CreateReceipt = Schema.Struct({
+  operationId: OpaqueId,
+  clientRequestId: RequestId,
+  state: Schema.Literals(["Created", "NotCreated", "Unknown"]),
+  session: Schema.NullOr(AgentProviderV1SessionRef),
+  conversationId: Schema.NullOr(OpaqueId),
+  initialPromptDelivery: Schema.Literals(["Delivered", "Unknown", "NotSent"]),
+  parentConfirmed: Schema.Boolean,
+  observedAt: Schema.String,
+  reason: Schema.optional(Schema.String),
+});
+export const AgentProviderV1CreateGet = Schema.Struct({
+  operationId: OpaqueId,
+  clientRequestId: RequestId,
+  expectedEnvironmentId: OpaqueId,
+});
 export const AgentProviderV1Update = Schema.Struct({
   id: OpaqueId,
   kind: Schema.String,
@@ -270,6 +310,8 @@ export const AgentProviderV1Method = Schema.Literals([
   "sessions.updates",
   "sessions.subscribe",
   "sessions.submit",
+  "sessions.create",
+  "sessions.create.get",
   "sessions.queue",
   "sessions.queue.edit",
   "sessions.interrupt",

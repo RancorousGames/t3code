@@ -1,4 +1,8 @@
 import {
+  AgentProviderV1CreateRequest,
+  AgentProviderV1CreateGet,
+  AgentProviderV1QueueRequest,
+  AgentProviderV1InterruptRequest,
   AgentProviderV1DesktopSnapshot,
   AgentProviderV1DesktopWorkResult,
   AgentProviderV1HistoryPage,
@@ -16,6 +20,7 @@ import {
   readDesktopCatalog,
   disconnectDesktopCatalog,
   dispatchBrowserWork,
+  hasUniqueDesktopCreator,
   takeDesktopWork,
   finishDesktopWork,
 } from "./agentProviderBridge.ts";
@@ -33,8 +38,10 @@ import {
   nativeUpdateCursor,
   parseNativeUpdateCursor,
 } from "./agentProviderOperations.ts";
+import { startBrowserCreate, getCreateReceipt, hasBrowserCreateRequest } from "./agentProviderCreate.ts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import { queuedRunsInDeliveryOrder } from "./orchestration-v2/QueuedRunOrder.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1909,9 +1916,49 @@ const layerWsRpc = (
                 environmentId,
                 epoch: agentProviderEpoch,
                 supportedKinds: ["t3/thread", "t3/chatgpt"],
-                capabilities: ["ReadHistory", "Submit", "IdempotentSubmit"],
+                capabilities: [
+                  "ReadHistory", "Submit", "IdempotentSubmit",
+                  ...(hasUniqueDesktopCreator(environmentId) ? ["CreateSession"] : []),
+                ],
                 sourceUpdatesComplete: false,
               });
+            }
+            if (request.method === "sessions.create" || request.method === "sessions.create.get") {
+              if (request.method === "sessions.create.get") {
+                const decoded = yield* Effect.result(
+                  Schema.decodeUnknownEffect(AgentProviderV1CreateGet)(request.params),
+                );
+                if (Result.isFailure(decoded)) return error("InvalidInput", "Invalid create receipt identity.");
+                const input = decoded.success;
+                if (input.expectedEnvironmentId !== environmentId)
+                  return error("EnvironmentChanged", "Create receipt belongs to a different environment.");
+                const found = getCreateReceipt(environmentId, input.clientRequestId, input.operationId);
+                return found ? reply(yield* Effect.promise(() => found))
+                  : error("NotFound", "Create receipt unavailable in this server epoch; reconcile desktop receipts.");
+              }
+              const decoded = yield* Effect.result(
+                Schema.decodeUnknownEffect(AgentProviderV1CreateRequest)(request.params),
+              );
+              if (Result.isFailure(decoded)) return error("InvalidInput", "Invalid create request.");
+              const input = decoded.success;
+              if (input.kind !== "t3/chatgpt")
+                return error("Unsupported", "Native T3 MAIN CreateSession is not permitted.");
+              if (input.expectedEnvironmentId !== environmentId)
+                return error("EnvironmentChanged", "Create environment does not match.");
+              if (!hasUniqueDesktopCreator(environmentId) &&
+                  !hasBrowserCreateRequest(environmentId, input.clientRequestId))
+                return error("Unavailable", "No unique active desktop ChatGPT creator.");
+              const started = startBrowserCreate({
+                environmentId, clientRequestId: input.clientRequestId,
+                title: input.title,
+                ...(input.initialMessage !== undefined ? { initialMessage: input.initialMessage } : {}),
+                ...(input.project !== undefined ? { project: input.project } : {}),
+                ...(input.parentSessionId !== undefined ? { parentSessionId: input.parentSessionId } : {}),
+              });
+              if (started.kind === "conflict") return error("Conflict", "The clientRequestId belongs to different create parameters.");
+              if (started.kind === "capacity") return error("Unavailable", "Create receipt ledger is full.");
+              if (!("receipt" in started)) return error("Unavailable", "Create receipt unexpectedly unavailable.");
+              return reply(yield* Effect.promise(() => started.receipt));
             }
             if (request.method === "desktop.sessions.publish") {
               // The existing authenticated WS operation scope and desktop
@@ -2049,7 +2096,7 @@ const layerWsRpc = (
                     },
                     // The native command queue already exists. No CreateSession,
                     // browser send, or management capabilities are implied.
-                    capabilities: ["ReadHistory", "Submit", "IdempotentSubmit"],
+                    capabilities: ["ReadHistory", "Submit", "IdempotentSubmit", "NativeQueue", "Interrupt"],
                     deliveryModes: ["Queue"],
                     // updatedAt may reflect titles or other metadata, not
                     // verified message activity; do not claim lastActivityAt.
@@ -2231,6 +2278,62 @@ const layerWsRpc = (
                   })),
                 gap: false,
                 complete: false, // Native cursor is resumable; mixed browser deltas are not.
+              });
+            }
+            if (request.method === "sessions.queue" || request.method === "sessions.interrupt") {
+              const isInterrupt = request.method === "sessions.interrupt";
+              const decoded = yield* Effect.result(
+                Schema.decodeUnknownEffect(
+                  isInterrupt ? AgentProviderV1InterruptRequest : AgentProviderV1QueueRequest,
+                )(request.params),
+              );
+              if (Result.isFailure(decoded)) return error("InvalidInput", "Invalid native queue/interrupt request.");
+              const input = decoded.success;
+              if (input.expectedEnvironmentId !== environmentId)
+                return error("EnvironmentChanged", "Native queue environment mismatch.");
+              const rawId = rawNativeThreadId(input.session);
+              if (rawId === null) return error("Unsupported", "Browser sessions do not have native queue/interrupt controls.");
+              const threadId = ThreadId.make(rawId);
+              const shell = yield* Effect.result(threadManagement.getThreadShell(threadId));
+              if (Result.isFailure(shell) || shell.success === null ||
+                  shell.success.deletedAt !== null || shell.success.archivedAt !== null)
+                return error("NotFound", "Native thread no longer active.");
+              if (!isInterrupt) {
+                const records = yield* Effect.result(threadManagement.getThreadRecords(threadId, ["runs", "messages"]));
+                if (Result.isFailure(records)) return error("Unavailable", "Native queue projection unavailable.");
+                const queued = queuedRunsInDeliveryOrder(records.success).map((run, position) => ({
+                  id: run.id, position, ordinal: run.ordinal, status: run.status,
+                  userMessageId: run.userMessageId,
+                  held: run.queueHeld === true,
+                  text: records.success.messages.find((m) => m.id === run.userMessageId)?.text ?? null,
+                }));
+                return reply({ items: queued, complete: true, source: "native_queue_projection" });
+              }
+              const mutation = input as typeof AgentProviderV1InterruptRequest.Type;
+              const seed = [environmentId, rawId, mutation.clientRequestId, mutation.runId ?? ""]
+                .map((v) => `${v.length}:${v}`).join("");
+              const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(seed)).pipe(Effect.orDie);
+              const id = Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
+              const interrupted = yield* Effect.result(threadManagement.interruptThread({
+                projectId: shell.success.projectId,
+                threadId,
+                commandId: CommandId.make("provider-v1-interrupt:" + id),
+                ...(mutation.runId ? { runId: mutation.runId as never } : {}),
+                reason: "Requested through authenticated T3 provider v1",
+              }));
+              if (Result.isFailure(interrupted))
+                return error("Conflict", "Native interrupt was refused by its run-state guard.");
+              const result = interrupted.success;
+              return reply({
+                operationId: "provider-v1-interrupt:" + id,
+                clientRequestId: mutation.clientRequestId,
+                session: mutation.session,
+                state: result.type === "interrupt_requested" ? "Accepted" : "Completed",
+                confirmedStage: result.type === "interrupt_requested" ? "Accepted" : "Completed",
+                observedAt: DateTime.formatIso(yield* DateTime.now),
+                receiptBasis: result.type === "interrupt_requested"
+                  ? "native_interrupt_command_accepted;run_terminal_not_observed"
+                  : result.type,
               });
             }
             if (request.method === "sessions.history" || request.method === "sessions.submit") {

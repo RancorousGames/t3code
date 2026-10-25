@@ -281,6 +281,7 @@ const requiredScopesForRpcCall = (
       "sessions.queue",
       "sessions.settings.get",
       "operations.get",
+      "sessions.create.get",
     ].includes(request.method)
       ? [AuthOrchestrationReadScope]
       : [AuthOrchestrationOperateScope];

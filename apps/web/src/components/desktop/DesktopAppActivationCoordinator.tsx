@@ -36,6 +36,7 @@ import {
   runChatGPTSessionControl,
 } from "../../chatGPTSessionControl";
 import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
+import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
 import { resolveChatGPTSessionAddress } from "../../chatGPTConversationRouting";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { handleOpenRigHumanInboxActivation } from "./openRigHumanInboxActivation";
@@ -58,7 +59,7 @@ import {
   inferProjectTitleFromPath,
   normalizeProjectPathForComparison,
 } from "../../lib/projectPaths";
-import { newProjectId } from "../../lib/utils";
+import { newProjectId, randomUUID } from "../../lib/utils";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
@@ -1211,7 +1212,7 @@ export function DesktopAppActivationCoordinator() {
         environmentId,
         input: {
           apiVersion: T3_AGENT_PROVIDER_VERSION,
-          requestId: globalThis.crypto.randomUUID(),
+          requestId: randomUUID(),
           method: "desktop.sessions.publish",
           params: { environmentId, sessions },
         },
@@ -1242,7 +1243,7 @@ export function DesktopAppActivationCoordinator() {
             environmentId,
             input: {
               apiVersion: T3_AGENT_PROVIDER_VERSION,
-              requestId: globalThis.crypto.randomUUID(),
+              requestId: randomUUID(),
               method: "desktop.sessions.next",
               params: { environmentId },
             },
@@ -1254,13 +1255,15 @@ export function DesktopAppActivationCoordinator() {
               : null;
           const work = response?.work;
           if (work && work.environmentId === environmentId) {
-            const result = await executeAgentProviderBrowserWork(environmentId, work);
+            const result = work.action === "create"
+              ? await executeProviderBrowserCreate(environmentId, work, createSession)
+              : await executeAgentProviderBrowserWork(environmentId, work);
             // Never re-execute a work item following failed acknowledgement.
             await publishAgentProvider({
               environmentId,
               input: {
                 apiVersion: T3_AGENT_PROVIDER_VERSION,
-                requestId: globalThis.crypto.randomUUID(),
+                requestId: randomUUID(),
                 method: "desktop.sessions.result",
                 params: { environmentId, jobId: work.jobId, result },
               },
