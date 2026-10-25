@@ -806,13 +806,17 @@ export function ChatGPTBrowserSidebarEntry({
             if (showingHidden || isSearching || !over || active.id === over.id) return;
             const dragged = String(active.id),
               target = String(over.id);
+            // Activity mode flattens projects into one status queue. Resolve
+            // drag destinations using actual project assignments, never the
+            // synthetic queue key (which would silently clear a project).
+            const projectGroups = sortMode === "activity" ? recognizedGroups : groupedSessions;
             const project = target.startsWith("group:")
               ? groupedSessions.find((group) => group.key === target.slice(6))
-              : groupedSessions.find((group) =>
+              : projectGroups.find((group) =>
                   group.rows.some(({ session }) => session.id === target),
                 );
             if (!project) return;
-            const from = groupedSessions.find((group) =>
+            const from = projectGroups.find((group) =>
               group.rows.some(({ session }) => session.id === dragged),
             );
             if (target.startsWith("group:") || from?.key !== project.key) {
