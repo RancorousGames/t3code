@@ -1155,6 +1155,12 @@ export function DesktopAppActivationCoordinator() {
         const environmentId = primaryEnvironment?.environmentId;
         try {
           if (!environmentId) throw new Error("Connect the Agent Reboot environment first.");
+          // Hidden or startup-unloaded sessions must be materialized in their
+          // existing browser slot; their previous ChatGPT state is irrelevant.
+          const predecessor = readChatGPTBrowserSessions(environmentId)
+            .find((item) => item.id === request.sessionId);
+          if (predecessor?.hidden) flushSync(() => setSessionHidden(request.sessionId, false));
+          requestChatGPTDeliveryMount(environmentId, request.sessionId);
           const receipt = await rebootChatGPTDesktop({
             environmentId,
             operationId: request.requestId,

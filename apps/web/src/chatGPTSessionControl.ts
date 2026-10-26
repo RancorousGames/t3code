@@ -148,6 +148,12 @@ export function canReplaceGenericUnknown(
   );
 }
 
+/** After the prior generation's UNKNOWN evidence is durably archived, let
+ * the newly rebooted conversation establish independent send receipts. */
+export function markChatGPTRebootGeneration(environmentId: EnvironmentId, sessionId: string): void {
+  uncertainChatGPTSends.delete(sendReceiptKey(environmentId, sessionId));
+}
+
 /** Synchronous, non-consuming guard: an unknown send needs its guest for reconciliation. */
 export function hasUncertainChatGPTSend(environmentId: EnvironmentId, sessionId: string): boolean {
   return (

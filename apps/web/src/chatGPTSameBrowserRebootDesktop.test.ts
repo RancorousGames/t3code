@@ -29,9 +29,11 @@ const read = vi.fn(async (..._args: unknown[]) => ({}));
 vi.mock("./chatGPTBrowserSessions", () => ({
   readChatGPTBrowserSessions: () => [session],
 }));
-vi.mock("./chatGPTRebootOffline", () => ({
-  inspectErroredRebootPredecessor: (...args: unknown[]) => offline(...args),
-  navigateOfflineChatGPTReboot: (...args: unknown[]) => reset(...args),
+vi.mock("./chatGPTRebootAnyState", () => ({
+  findRebootBrowserSlot: async () => "slot",
+  replaceRebootBrowserSlot: (...args: unknown[]) => reset(...args),
+  archivePriorRebootUnknownSend: () => true,
+  recordPriorRebootState: vi.fn(),
 }));
 vi.mock("./chatGPTSessionControl", () => ({
   wakeChatGPTRebootPredecessor: (...args: unknown[]) => wake(...args),
@@ -39,6 +41,7 @@ vi.mock("./chatGPTSessionControl", () => ({
   navigateChatGPTRebootSafe: vi.fn(),
   inspectBrowserSession: (...args: unknown[]) => observe(...args),
   runChatGPTSessionControl: (...args: unknown[]) => read(...args),
+  markChatGPTRebootGeneration: vi.fn(),
 }));
 vi.mock("./chatGPTBrowserAutomation", () => ({
   sendInitialChatGPTPrompt: (...args: unknown[]) => sent(...args),
@@ -90,14 +93,7 @@ describe("reboot coordinator without predecessor browser recovery", () => {
     expect(first.priorUrl).toBe(`https://chatgpt.com/c/${conversationId}`);
     expect(wake).not.toHaveBeenCalled();
     expect(loadedSafety).not.toHaveBeenCalled();
-    expect(backup).toHaveBeenCalledTimes(1);
-    expect(reset).toHaveBeenCalledExactlyOnceWith(
-      environmentId,
-      session,
-      conversationId,
-      guest,
-      "https://chatgpt.com/",
-    );
+    expect(reset).toHaveBeenCalledExactlyOnceWith("slot");
     expect(sent).toHaveBeenCalledTimes(1);
     const second = await rebootChatGPTDesktop(input);
     expect(second).toEqual(first);
@@ -105,38 +101,35 @@ describe("reboot coordinator without predecessor browser recovery", () => {
     expect(sent).toHaveBeenCalledTimes(1);
   });
 
-  it("fails before saving a reboot intent when private draft backup fails", async () => {
-    backup.mockRejectedValueOnce(new Error("disk full"));
-    await expect(
-      rebootChatGPTDesktop({
-        environmentId,
-        operationId,
-        sessionId,
-        priorConversationId: conversationId,
-        prompt: "Continue",
-        phase: "begin",
-      }),
-    ).rejects.toThrow("disk full");
-    expect(reset).not.toHaveBeenCalled();
-    expect(sent).not.toHaveBeenCalled();
-    expect(store.size).toBe(0);
+  it("reboots even if the old draft cannot be inspected", async () => {
+    read.mockRejectedValueOnce(new Error("Old conversation cannot load"));
+    const receipt = await rebootChatGPTDesktop({
+      environmentId,
+      operationId,
+      sessionId,
+      priorConversationId: conversationId,
+      prompt: "Continue",
+      phase: "begin",
+    });
+    expect(receipt.status).toBe("unknown");
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveBeenCalledTimes(1);
   });
 
-  it("does not bypass the normal safety path unless the predecessor is definitely errored", async () => {
-    offline.mockResolvedValue(null);
-    await expect(
-      rebootChatGPTDesktop({
-        environmentId,
-        operationId,
-        sessionId,
-        priorConversationId: conversationId,
-        prompt: "Continue",
-        phase: "begin",
-      }),
-    ).rejects.toThrow("Old conversation cannot load");
-    expect(wake).toHaveBeenCalledTimes(1);
-    expect(reset).not.toHaveBeenCalled();
-    expect(sent).not.toHaveBeenCalled();
+  it("reboots without checking whether the predecessor is idle or errored", async () => {
+    const receipt = await rebootChatGPTDesktop({
+      environmentId,
+      operationId,
+      sessionId,
+      priorConversationId: conversationId,
+      prompt: "Continue",
+      phase: "begin",
+    });
+    expect(receipt.status).toBe("unknown");
+    expect(wake).not.toHaveBeenCalled();
+    expect(loadedSafety).not.toHaveBeenCalled();
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -205,6 +198,6 @@ describe("same-browser UNKNOWN receipt reconciliation", () => {
     });
     expect(reset).toHaveBeenCalledTimes(1);
     expect(sent).toHaveBeenCalledTimes(1);
-    expect(read).toHaveBeenCalledTimes(3);
+    expect(read).toHaveBeenCalledTimes(4);
   });
 });
