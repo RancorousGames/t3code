@@ -20,6 +20,7 @@ import {
   recordPriorRebootState,
 } from "./chatGPTRebootAnyState";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
+import { resolveT3RebootPredecessor } from "./chatGPTRebootCurrentConversation";
 
 async function hash(text: string) {
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -32,13 +33,17 @@ export async function rebootChatGPTDesktop(input: {
   environmentId: EnvironmentId;
   operationId: string;
   sessionId: string;
-  priorConversationId: string;
+  priorConversationId?: string | undefined;
   prompt?: string | undefined;
   phase: "begin" | "status" | "restore" | "finalize";
 }) {
   const sessions = readChatGPTBrowserSessions(input.environmentId);
   const session = sessions.find((s) => s.id === input.sessionId);
   if (!session) throw new Error("Exact existing reboot browser required.");
+  // Stable-session callers provide no ChatGPT ID. T3 determines it locally.
+  const priorConversationId = input.priorConversationId ?? resolveT3RebootPredecessor({
+    environmentId: input.environmentId, session, requestId: input.operationId,
+  });
   const key = `t3code:chatgpt-browser:refresh:v1:${input.environmentId}`;
   const read = (): RebootReceipt[] => {
     const value: unknown = JSON.parse(window.localStorage.getItem(key) ?? "[]");
@@ -72,13 +77,13 @@ export async function rebootChatGPTDesktop(input: {
     : existing!.bootstrapHash;
   // Reboot never waits for the predecessor to become idle or load correctly.
   // Begin remains protected by a durable operation receipt before host mutation.
-  const receipt = await rebootSameBrowser({ ...input, bootstrapHash }, input.phase, {
+  const receipt = await rebootSameBrowser({ ...input, priorConversationId, bootstrapHash }, input.phase, {
     read,
     write: (receipts) => window.localStorage.setItem(key, JSON.stringify(receipts)),
     assertSafe: async (id) => {
       // A different canonical predecessor is a different operation, not merely
       // an unusual browser state.
-      if (id !== input.priorConversationId) throw new Error("Reboot predecessor identity changed.");
+      if (id !== priorConversationId) throw new Error("Reboot predecessor identity changed.");
       if (!readChatGPTBrowserSessions(input.environmentId).some((item) => item.id === session.id))
         throw new Error("Reboot browser slot no longer exists.");
       runtimeId = await findRebootBrowserSlot(input.environmentId, session.id);
@@ -116,7 +121,7 @@ export async function rebootChatGPTDesktop(input: {
       archivePriorRebootUnknownSend(
         input.environmentId,
         session.id,
-        input.priorConversationId,
+        priorConversationId,
         input.operationId,
       );
       markChatGPTRebootGeneration(input.environmentId, session.id);
@@ -139,7 +144,7 @@ export async function rebootChatGPTDesktop(input: {
     observe: async () => {
       const observed = await inspectBrowserSession(input.environmentId, session);
       const conversationId = chatGPTConversationIdFromUrl(observed.observedGuestUrl);
-      if (!conversationId || conversationId === input.priorConversationId)
+      if (!conversationId || conversationId === priorConversationId)
         return { conversationId, bootstrapHash: null, assistantReplied: false };
       const data = (await runChatGPTSessionControl({
         environmentId: input.environmentId,

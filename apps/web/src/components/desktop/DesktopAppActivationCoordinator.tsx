@@ -1174,8 +1174,12 @@ export function DesktopAppActivationCoordinator() {
             requestId: request.requestId,
             ok: true,
             data: {
-              action: request.type === "chatgpt.refresh" ? "refresh" : "reboot",
-              ...receipt,
+              ...(request.priorConversationId === undefined
+                ? {
+                    action: "reboot", sessionId: receipt.sessionId,
+                    rebootGeneration: receipt.generation, status: receipt.status,
+                  }
+                : { action: request.type === "chatgpt.refresh" ? "refresh" : "reboot", ...receipt }),
               retrySafe: false,
             },
           };

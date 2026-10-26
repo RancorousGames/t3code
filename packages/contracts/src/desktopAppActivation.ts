@@ -92,7 +92,8 @@ export const DesktopAppActivationRequest = Schema.Union([
     type: Schema.Literals(["chatgpt.reboot", "chatgpt.refresh"]),
     requestId: NativeOperationId,
     sessionId: NativeOperationId,
-    priorConversationId: ChatGPTConversationId,
+    // T3 resolves the old ChatGPT conversation for stable-session reboot requests.
+    priorConversationId: Schema.optional(ChatGPTConversationId),
     prompt: Schema.optional(TrimmedNonEmptyString),
     phase: Schema.Literals(["begin", "status", "restore", "finalize"]),
   }),
