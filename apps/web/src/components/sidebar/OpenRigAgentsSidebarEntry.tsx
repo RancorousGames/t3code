@@ -1,5 +1,8 @@
 import type { DesktopOpenRigAgent, DesktopOpenRigSeatTopology } from "@t3tools/contracts";
 import { ChevronDownIcon, ChevronUpIcon, NetworkIcon, RefreshCwIcon } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { readChatGPTBrowserSessions } from "../../chatGPTBrowserSessions";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 
@@ -23,6 +26,8 @@ const REFRESH_INTERVAL_MS = 20_000;
  * Agent Workspace that follows the selection.
  */
 export function OpenRigAgentsSidebarEntry() {
+  const navigate = useNavigate();
+  const environmentId = usePrimaryEnvironmentId();
   const [agents, setAgents] = useState<readonly DesktopOpenRigAgent[]>([]);
   const [snapshotAt, setSnapshotAt] = useState<string | null>(null);
   const [connection, setConnection] = useState<"checking" | "online" | "offline">("checking");
@@ -138,6 +143,14 @@ export function OpenRigAgentsSidebarEntry() {
     setNetworkOpen(false);
     if (restoreFocus) networkButtonRef.current?.focus();
   };
+  const openGraphSession = (sessionId: string) => {
+    // Route only to an exact existing T3 browser slot; never treat an OpenRig
+    // managed-session ID or ChatGPT conversation URL as a T3 sidebar ID.
+    if (!environmentId || !readChatGPTBrowserSessions(environmentId).some((s) => s.id === sessionId)) return;
+    setNetworkOpen(false);
+    setSelectedId(null); // Do not leave the Agent Workspace overlay obscuring the selected session.
+    void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: sessionId } });
+  };
   const updateMemory = useCallback((seatId: string, update: (current: SeatMemory) => SeatMemory) => {
     setMemory((prior) => ({ ...prior, [seatId]: update(prior[seatId] ?? EMPTY_SEAT_MEMORY) }));
   }, []);
@@ -246,7 +259,8 @@ export function OpenRigAgentsSidebarEntry() {
           topology={topology}
           topologyError={topologyError}
           onRefreshAgents={refresh}
-          onOpenAgent={openSeat}
+          onOpenAgent={(seatId) => { openSeat(seatId); closeNetwork(false); }}
+          onOpenSession={openGraphSession}
           onClose={() => closeNetwork()}
           onOutsideClose={() => closeNetwork(false)}
         />,

@@ -1,4 +1,7 @@
 import type { DesktopOpenRigAgent, DesktopOpenRigSeatTopology } from "@t3tools/contracts";
+import { useChatGPTBrowserSessions } from "../../chatGPTBrowserSessions";
+import { runChatGPTSessionControl } from "../../chatGPTSessionControl";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { ChevronDownIcon, ChevronRightIcon, NetworkIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -8,6 +11,7 @@ import { Button } from "../ui/button";
 import { OpenRigFloatingWindow, type FloatingSize } from "./OpenRigFloatingWindow";
 import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
 import { OpenRigAgentGraph } from "./OpenRigAgentGraph";
+import { exactGraphSeatBrowserSessions, graphWorkerDescendants } from "./openRigGraphSessionData";
 import { SEAT_STATUS_BADGE, explanation, formatTimestamp, seatStatusTone } from "./openRigAgentPresentation";
 import {
   isCostlyModel,
@@ -79,6 +83,7 @@ export function OpenRigAgentNetwork({
   topologyError,
   onRefreshAgents,
   onOpenAgent,
+  onOpenSession,
   onClose,
   onOutsideClose,
 }: {
@@ -87,6 +92,7 @@ export function OpenRigAgentNetwork({
   topologyError: string | null;
   onRefreshAgents: () => Promise<void>;
   onOpenAgent: (seatId: string) => void;
+  onOpenSession: (browserSessionId: string) => void;
   onClose: () => void;
   onOutsideClose: () => void;
 }) {
@@ -95,6 +101,8 @@ export function OpenRigAgentNetwork({
     [agents, topology],
   );
   const { ledgers, loading, loadedAt, reload } = useSeatLedgers(seatIds);
+  const environmentId = usePrimaryEnvironmentId();
+  const { sessions: browserSessions } = useChatGPTBrowserSessions(environmentId);
   const threads = useThreadShells(true);
   const [costlyPatterns, setCostlyPatterns] = useState(readCostlyPatterns);
   const [costlyDraft, setCostlyDraft] = useState(() => readCostlyPatterns().join(", "));
@@ -107,6 +115,7 @@ export function OpenRigAgentNetwork({
   const [showUnattributed, setShowUnattributed] = useState(false);
   const [unattributedLimit, setUnattributedLimit] = useState(UNATTRIBUTED_PAGE);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   const network = useMemo(
     () => buildAgentNetwork({ agents, topology, ledgers, threads, costlyPatterns }),
@@ -119,7 +128,33 @@ export function OpenRigAgentNetwork({
     () => flattenAgentTree(network, allSeats, { query, activeOnly, costlyOnly, rigId, model, costlyPatterns }),
     [network, allSeats, query, activeOnly, costlyOnly, rigId, model, costlyPatterns],
   );
+  const seatBrowserIds = useMemo(
+    () => exactGraphSeatBrowserSessions(network, ledgers, browserSessions),
+    [network, ledgers, browserSessions],
+  );
+  const childSessions = useMemo(
+    () => graphWorkerDescendants(network, selectedId, seatBrowserIds, browserSessions),
+    [network, selectedId, seatBrowserIds, browserSessions],
+  );
   const selectedSeat = selectedId ? (network.seats.get(selectedId) ?? null) : null;
+  const openExactSession = (sessionId: string) => {
+    if (browserSessions.some((session) => session.id === sessionId)) onOpenSession(sessionId);
+  };
+  // Existing T3 manual reload path checks mounted guest, busy status, UNKNOWN send,
+  // drafts, identity, and recovery mutex. The graph never requests force=true.
+  const reloadExactSession = async (sessionId: string) => {
+    if (!environmentId || !browserSessions.some((session) => session.id === sessionId)) return;
+    setActionNotice(null);
+    try {
+      await runChatGPTSessionControl({
+        environmentId, sessions: browserSessions, action: "reload", sessionId, force: false,
+      });
+      setActionNotice("Reloaded the selected T3 session.");
+    } catch (error) {
+      // An ordinary reload is intentionally refused when its guest is busy or unsafe.
+      setActionNotice(`Reload not performed: ${explanation(error)}`);
+    }
+  };
   const unattributed = network.unattributed.filter((session) => sessionMatches(session, filter));
   const rigs = useMemo(
     () => [...new Map(topology?.seats.map((seat) => [seat.rigId, seat.rigName || seat.rigId]) ?? []).entries()],
@@ -239,6 +274,15 @@ export function OpenRigAgentNetwork({
                 onToggle={toggle}
                 onSelect={setSelectedId}
                 onOpenAgent={onOpenAgent}
+                actionNotice={actionNotice}
+                childSessions={childSessions}
+                getSeatSessionId={(seatId) => seatBrowserIds.get(seatId)?.[0] ?? null}
+                onOpenSession={openExactSession}
+                onReloadSession={(sessionId) => { void reloadExactSession(sessionId); }}
+                onReloadSeatSession={(seatId) => {
+                  const id = seatBrowserIds.get(seatId)?.[0];
+                  if (id) void reloadExactSession(id);
+                }}
               />
               <section aria-label="Unattributed T3 threads" className="shrink-0 border-t border-dashed border-border">
                 <button
@@ -369,7 +413,7 @@ function SeatDetails({ seat, seatName, costlyPatterns, onSelect, onClear, onOpen
   if (!seat)
     return (
       <p className="rounded-xl border border-dashed border-border px-3 py-2.5 text-2xs text-muted-foreground">
-        Select a seat in the graph to see its links and sessions. Double-click or press Enter to open its workspace.
+        Select a seat to inspect it. Double-click or Enter opens its exact T3 session, if linked; right-click for Open workspace.
       </p>
     );
   const links = (label: string, ids: readonly string[]) =>
