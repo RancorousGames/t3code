@@ -27,6 +27,7 @@ import {
 import { COMPOSER_SELECTOR } from "./chatGPTBrowserAutomation";
 import {
   CHATGPT_COMPOSER_PROBE_EXPRESSION,
+  hasVerifiedEmptyChatGPTComposer,
   sameComposerProbe,
   inspectChatGPTComposer,
   type ComposerProbe,
@@ -1164,7 +1165,13 @@ export async function runChatGPTSessionControl(input: {
         throw error;
       }
     }
-    if (before.status === "working") throw new Error("Refusing to reload a working session.");
+    // An explicit force=true is the deliberate interruption decision for a
+    // working session. Automatic/ordinary reloads still cannot interrupt it.
+    const workingBefore = before.status === "working" || before.uiColor === "working";
+    if (workingBefore && !input.force)
+      throw new Error("Session is working. Pass force=true to deliberately interrupt generation and reload; unfinished assistant output may be lost.");
+    if (hasUncertainChatGPTSend(environmentId, entry.id))
+      throw new Error("Session has an UNKNOWN send; reconcile delivery before reloading.");
     // Orange means the same interrupted/delivery-timeout states rendered by the
     // sidebar. Explicit force is required only there, not for ordinary reloads.
     const orange = reloadRequiresForce(before.uiColor);
@@ -1252,15 +1259,32 @@ export async function runChatGPTSessionControl(input: {
     // The page can start generating or change conversation while a pipe request
     // waits. Recheck on every refresh, including ordinary healthy idle pages.
     const latest = await inspectBrowserSession(environmentId, entry);
-    if (latest.status === "working" || latest.uiColor === "working")
-      throw new Error("Refusing to reload a working session.");
+    const workingAtCommit = latest.status === "working" || latest.uiColor === "working";
+    if (workingAtCommit && !input.force)
+      throw new Error("Session began working before refresh. Pass force=true to deliberately interrupt generation.");
     if (
       latest.observedGuestUrl !== before.observedGuestUrl ||
       (!input.force && reloadRequiresForce(latest.uiColor))
     )
       throw new Error("Session URL or orange state changed before refresh; not reloading.");
-    const { runtimeId } = guestFor(environmentId, entry.id);
-    if (!runtimeId || !previewBridge) throw new Error("ChatGPT guest is not attached.");
+    const guest = guestFor(environmentId, entry.id);
+    const { runtimeId, webview } = guest;
+    if (!runtimeId || !webview || !previewBridge) throw new Error("ChatGPT guest is not attached.");
+    // A forced refresh may interrupt generation, never typed drafts, attachments
+    // or a pending/UNKNOWN send. Fail closed if the composer cannot be inspected.
+    if (!(await hasVerifiedEmptyChatGPTComposer(webview, latest.observedGuestUrl!)))
+      throw new Error("Composer draft is nonempty or uninspectable; refusing reload.");
+    const noAttachments = await chatGPTWebviewAutomation.evaluate(runtimeId, {
+      expression: `(() => { const composer = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"]');
+        const form = composer?.closest('form');
+        if (!form) return false;
+        if (form.querySelector('img,video,audio,[data-testid*="attachment"],[data-testid*="upload-preview"],[data-state="recording"],[data-state="uploading"],[aria-label^="Remove file"],[aria-label^="Remove attachment"]')) return false;
+        return !Array.from(form.querySelectorAll('input[type="file"]')).some(input => input.files?.length); })()`,
+    });
+    if (noAttachments !== true || hasUncertainChatGPTSend(environmentId, entry.id) ||
+        guestFor(environmentId, entry.id).webview !== webview ||
+        guestFor(environmentId, entry.id).runtimeId !== runtimeId)
+      throw new Error("Session changed, has attachments or an UNKNOWN send; refusing reload.");
     recordRecoveryAttempt(
       environmentId,
       entry.id,
@@ -1269,8 +1293,15 @@ export async function runChatGPTSessionControl(input: {
     );
     await previewBridge.refresh(runtimeId);
     recordChatGPTSessionRefreshedAt(environmentId, entry.id);
-    recordChatGPTRecoveryEvent(environmentId, entry.id, "manual-refresh-issued", before.status);
-    return { sessionId: entry.id, reloaded: true, previousStatus: before.status };
+    const forcedWorkingReload = input.force === true && (workingBefore || workingAtCommit);
+    recordChatGPTRecoveryEvent(environmentId, entry.id, "manual-refresh-issued", forcedWorkingReload ? "force-interrupt" : before.status);
+    return {
+      sessionId: entry.id, reloaded: true, previousStatus: before.status,
+      ...(forcedWorkingReload ? {
+        forcedWorkingReload: true,
+        warning: "Explicit forced reload interrupted or may have interrupted an unfinished assistant response.",
+      } : {}),
+    };
   }
   if (action === "send") {
     const prepared = prepareChatGPTSessionMessage(

@@ -9,6 +9,7 @@ const shared = vi.hoisted(() => ({
   safe: true,
   draft: "",
   unknownSend: false,
+  attachments: false,
 }));
 vi.mock("./browser/chatGPTGuestHibernation", () => ({
   isChatGPTGuestHibernated: () => false,
@@ -44,7 +45,9 @@ vi.mock("./chatGPTWebviewAutomation", () => ({
     evaluate: vi.fn(async (_runtime: string, options: { expression: string }) =>
       options.expression.startsWith("(() => {const el=document.querySelector(")
         ? shared.draft
-        : shared.safe,
+        : options.expression.includes("form.querySelector('img,video,audio")
+          ? !shared.attachments
+          : shared.safe,
     ),
   },
 }));
@@ -91,9 +94,12 @@ beforeEach(() => {
   shared.safe = true;
   shared.draft = "";
   shared.unknownSend = false;
+  shared.attachments = false;
   const guest = {
     dataset: { previewTab: "unit-runtime" },
-    executeJavaScript: async () => ({
+    executeJavaScript: async (expression: string) => expression.includes("inspectChatGPTComposer")
+      ? { status: shared.draft ? "nonempty" : "empty", url: shared.url, text: shared.draft }
+      : ({
       url: shared.url,
       activity: shared.activity,
       uiActivity: shared.uiActivity,
@@ -227,11 +233,40 @@ describe("existing blank ChatGPT homepage recovery through normal OMCP reload", 
     expect(previewBridge!.navigate).not.toHaveBeenCalled();
   });
 
-  it("refuses to disrupt active generation even when force is supplied", async () => {
+  it("requires deliberate force to interrupt a working canonical conversation", async () => {
+    shared.url = shared.saved;
     shared.activity = "working";
     shared.uiActivity = "working";
-    await expect(reload(true)).rejects.toThrow(/working session/);
-    expect(previewBridge!.navigate).not.toHaveBeenCalled();
+    await expect(reload()).rejects.toThrow(/force=true/);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
+    await expect(reload(true)).resolves.toMatchObject({
+      reloaded: true,
+      forcedWorkingReload: true,
+      warning: expect.stringMatching(/unfinished assistant response/),
+    });
+    expect(previewBridge!.refresh).toHaveBeenCalledExactlyOnceWith("unit-runtime");
+  });
+
+  it("never drops a typed draft, attachments or an UNKNOWN send, even with force", async () => {
+    shared.url = shared.saved;
+    shared.activity = "working";
+    shared.uiActivity = "working";
+    shared.draft = "unsent human text";
+    await expect(reload(true)).rejects.toThrow(/Composer draft/);
+    shared.draft = "";
+    shared.attachments = true;
+    await expect(reload(true)).rejects.toThrow(/attachments/);
+    shared.attachments = false;
+    shared.unknownSend = true;
+    await expect(reload(true)).rejects.toThrow(/UNKNOWN send/);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
+  });
+
+  it("also protects an idle session's human draft on an ordinary reload", async () => {
+    shared.url = shared.saved;
+    shared.draft = "unfinished text";
+    await expect(reload()).rejects.toThrow(/Composer draft/);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
   });
 
   it("requires force for an orange interrupted session while allowing a regular inactive reload", async () => {
