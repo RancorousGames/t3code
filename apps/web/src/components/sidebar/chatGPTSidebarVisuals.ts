@@ -13,7 +13,7 @@ export function verifiedManagerChatGPTTabIds(
   environmentId: string,
 ): ReadonlySet<string> {
   const managerSeatIds = new Set(
-    topology.source === "openrig-rigspec"
+    topology.source === "openrig-rigspec" || topology.source === "openrig-rigspec-and-managed-ledger"
       ? topology.seats.filter((seat) => isOpenRigManagerRole(seat.role)).map((seat) => seat.id)
       : [],
   );

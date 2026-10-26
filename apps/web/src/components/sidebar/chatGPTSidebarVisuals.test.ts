@@ -152,6 +152,16 @@ describe("verified OpenRig manager browser markers", () => {
     expect([...matches]).toEqual(["browser-session-1"]);
   });
 
+  it("accepts the live OpenRig rigspec-and-managed-ledger topology source", () => {
+    const enriched = { ...topology, source: "openrig-rigspec-and-managed-ledger" as const };
+    const matches = verifiedManagerChatGPTTabIds(
+      enriched,
+      [ledger("seat-manager", [session()])],
+      "env-1",
+    );
+    expect([...matches]).toEqual(["browser-session-1"]);
+  });
+
   it("does not treat a manager-looking title or agent/worker seat as authority", () => {
     const matches = verifiedManagerChatGPTTabIds(
       topology,
