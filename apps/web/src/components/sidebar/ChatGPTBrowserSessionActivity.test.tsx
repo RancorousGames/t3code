@@ -14,13 +14,18 @@ import {
   wakeChatGPTGuest,
 } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
+import { chatGPTSessionDisplayRole } from "./chatGPTSidebarVisuals";
+import { layoutChatGPTSessions } from "../../chatGPTSessionGrouping";
+import { filterChatGPTWorkerGroups } from "../../chatGPTWorkerVisibility";
 import {
   chatGPTBrowserLastWorkingKey,
+  chatGPTBrowserSessionsKey,
   chatGPTBrowserThreadRef,
+  readChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
 
 const mocks = vi.hoisted(() => ({
-  execute: vi.fn<(expression: string) => Promise<string>>(),
+  execute: vi.fn<(expression: string) => Promise<string | boolean>>(),
   nav: { _tag: "Success" as string, url: "https://chatgpt.com/c/1" },
   overlay: { loading: false },
 }));
@@ -213,6 +218,87 @@ describe("ChatGPT guest hibernation", () => {
 });
 
 describe("ChatGPT browser session activity persistence", () => {
+  it("promotes a verified human-touched backend worker without changing lineage or spawn provenance, durably", async () => {
+    const parent = { id: "manager", title: "Manager" };
+    const worker = {
+      id: sessionId,
+      title: "Worker",
+      parentSessionId: "manager",
+      creationOrigin: "backend" as const,
+      spawnRequestId: "spawn-verification",
+    };
+    window.localStorage.setItem(
+      chatGPTBrowserSessionsKey(environmentId),
+      JSON.stringify([parent, worker]),
+    );
+    // Even during stale cached navigation the preload has witnessed an actual
+    // trusted submit and a *new* user turn in the guest DOM.
+    mocks.nav._tag = "Loading";
+    mocks.execute.mockImplementation(async (expression) =>
+      expression.includes("data-t3code-human-chat-verified-at") ? true : "idle",
+    );
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    const saved = readChatGPTBrowserSessions(environmentId);
+    expect(saved.find((entry) => entry.id === sessionId)).toMatchObject({
+      humanControlled: true,
+      autoCloseExempt: true,
+      parentSessionId: "manager",
+      spawnRequestId: "spawn-verification",
+      creationOrigin: "backend",
+    });
+    expect(chatGPTSessionDisplayRole(saved[1]!, false)).toBe("human");
+    const groups = layoutChatGPTSessions(saved, [], "started", {});
+    const hideable = new Set(
+      saved
+        .filter((entry) => chatGPTSessionDisplayRole(entry, false) === "worker")
+        .map((entry) => entry.id),
+    );
+    expect(
+      filterChatGPTWorkerGroups(groups, hideable, false, new Set()).flatMap((group) =>
+        group.rows.map((row) => row.session.id),
+      ),
+    ).toContain(sessionId);
+    await act(async () => {
+      renderer?.unmount();
+    });
+    renderer = undefined;
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(readChatGPTBrowserSessions(environmentId)[1]?.humanControlled).toBe(true);
+  });
+
+  it("does not adopt a worker following a programmatic send without preload human verification", async () => {
+    window.localStorage.setItem(
+      chatGPTBrowserSessionsKey(environmentId),
+      JSON.stringify([
+        {
+          id: sessionId,
+          title: "Injected worker",
+          creationOrigin: "backend",
+          parentSessionId: "manager",
+          spawnRequestId: "spawn-robot",
+        },
+      ]),
+    );
+    mocks.execute.mockImplementation(async (expression) =>
+      expression.includes("data-t3code-human-chat-verified-at") ? false : "working",
+    );
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(readChatGPTBrowserSessions(environmentId)[0]).toMatchObject({
+      parentSessionId: "manager",
+      spawnRequestId: "spawn-robot",
+    });
+    expect(readChatGPTBrowserSessions(environmentId)[0]?.humanControlled).toBeUndefined();
+    expect(chatGPTSessionDisplayRole(readChatGPTBrowserSessions(environmentId)[0]!, false)).toBe(
+      "worker",
+    );
+  });
+
   it("detects the conversation error while cached navigation is still Loading", async () => {
     mocks.nav._tag = "Loading";
     mocks.overlay.loading = true;

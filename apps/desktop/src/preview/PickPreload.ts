@@ -15,6 +15,7 @@ import type {
 } from "@t3tools/contracts";
 
 import { resolveAnnotationSubmission } from "./AnnotationKeyboard.ts";
+import { installChatGPTHumanSendObserver } from "./ChatGPTHumanSendObserver.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
 import { installRecordingCursor } from "./RecordingCursor.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS } from "./RecordingInput.ts";
@@ -188,72 +189,8 @@ const reportHumanKeyInput = (event: KeyboardEvent): void => {
 window.addEventListener("pointerdown", reportHumanPointerInput, true);
 window.addEventListener("keydown", reportHumanKeyInput, true);
 
-// Mark only trusted composer submissions for the host's worker adoption check.
-// Automated DOM clicks/keyboard events are not trusted, so do not promote AI
-// workers merely because another agent sends a message through their guest.
-const markHumanChatGPTSend = (): void => {
-  if (!["chatgpt.com", "www.chatgpt.com"].includes(location.hostname)) return;
-  const root = document.documentElement;
-  if (!root) return;
-  // Capture the current user-turn count. T3 adopts only after a new turn
-  // actually appears, not merely because somebody clicked a Send button.
-  root.setAttribute(
-    "data-t3code-human-chat-send-count",
-    String(document.querySelectorAll('[data-message-author-role="user"]').length),
-  );
-  root.setAttribute("data-t3code-human-chat-send-at", String(Date.now()));
-};
-const hasChatGPTComposerText = (): boolean => {
-  const composer = document.querySelector<HTMLElement>(
-    '#prompt-textarea, [data-testid="prompt-textarea"], form textarea, [contenteditable="true"][role="textbox"]',
-  );
-  return !!(
-    composer &&
-    ("value" in composer && typeof composer.value === "string"
-      ? composer.value.trim()
-      : composer.textContent?.trim())
-  );
-};
-window.addEventListener(
-  "keydown",
-  (event) => {
-    if (
-      !event.isTrusted ||
-      event.key !== "Enter" ||
-      event.shiftKey ||
-      event.isComposing ||
-      event.altKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      !hasChatGPTComposerText()
-    )
-      return;
-    const target = event.target;
-    if (
-      target instanceof Element &&
-      target.closest(
-        '#prompt-textarea, [data-testid="prompt-textarea"], form textarea, [contenteditable="true"][role="textbox"]',
-      )
-    )
-      markHumanChatGPTSend();
-  },
-  true,
-);
-window.addEventListener(
-  "click",
-  (event) => {
-    if (!event.isTrusted || !hasChatGPTComposerText()) return;
-    const target = event.target;
-    const button =
-      target instanceof Element
-        ? target.closest<HTMLButtonElement>(
-            'button[data-testid="send-button"], button[data-testid="composer-send-button"], button[aria-label="Send prompt"], button[aria-label="Send message"]',
-          )
-        : null;
-    if (button && !button.disabled) markHumanChatGPTSend();
-  },
-  true,
-);
+// Only a trusted, rendered human send can adopt a backend worker session.
+installChatGPTHumanSendObserver(window, document);
 
 // Mouse thumb buttons: `button === 3` is Back, `button === 4` is Forward.
 const MOUSE_BUTTON_BACK = 3;

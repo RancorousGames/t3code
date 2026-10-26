@@ -123,20 +123,18 @@ export function useChatGPTBrowserSessionActivity(
               (element) => element.dataset.previewTab === runtimeTabId,
             );
             if (webview) {
-              // Check the guest preload's trusted-send marker against the actual
-              // user-turn count. Do not adopt on a mere click or local navigation.
+              // Guest preload confirms a new rendered user turn after a trusted
+              // composer submission. No sidebar visibility or cached URL needed.
               const session = readChatGPTBrowserSessions(environmentId).find(
                 (entry) => entry.id === sessionId,
               );
-              if (session && !session.humanControlled && isOnConversation()) {
+              if (session && !session.humanControlled) {
                 try {
                   const observed: unknown = await webview.executeJavaScript(
                     `(() => {
                       const root = document.documentElement;
-                      const at = Number(root.getAttribute("data-t3code-human-chat-send-at"));
-                      const before = Number(root.getAttribute("data-t3code-human-chat-send-count"));
-                      const now = document.querySelectorAll('[data-message-author-role="user"]').length;
-                      return at > 0 && Number.isFinite(before) && now > before;
+                      const verified = Number(root.getAttribute("data-t3code-human-chat-verified-at"));
+                      return Number.isFinite(verified) && verified > 0;
                     })()`,
                   );
                   if (observed === true) markHumanControlled(sessionId);
