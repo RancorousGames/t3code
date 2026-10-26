@@ -54,6 +54,11 @@ export function tryAcquireChatGPTRecoveryMutation(
 }
 
 /** Metadata-only health gate. The actual mutation must still check exact guest/draft/send identity. */
+/** Test isolation only: simulates replacing the entire renderer process. Never call from app flows. */
+export function clearChatGPTRecoveryMutationGateForTests(): void {
+  activeByEnvironment.clear();
+}
+
 export function activeChatGPTRecoveryMutation(
   environmentId: string,
 ): Readonly<Pick<ActiveMutation, "sessionId" | "origin" | "action">> | null {

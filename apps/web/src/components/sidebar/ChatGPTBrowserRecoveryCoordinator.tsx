@@ -20,6 +20,7 @@ import {
 } from "../../chatGPTBrowserSessions";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { recordChatGPTRecoveryEvent } from "../../chatGPTRecoveryDiagnostics";
+import { tryAcquireChatGPTRecoveryMutation } from "../../chatGPTRecoveryMutationGate";
 import {
   readChatGPTRecoveryMetrics,
   recordChatGPTRecoveryMetric,
@@ -490,11 +491,16 @@ async function inspectFailure(
 async function refreshWithDeadline(
   bridge: NonNullable<typeof previewBridge>,
   runtimeId: string,
+  onBridgeSettled: () => void,
 ): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // The deadline bounds UI waiting, NOT the underlying bridge action. Keep its
+  // exclusive mutation lease until the bridge promise actually settles.
+  const operation = Promise.resolve().then(() => bridge.refresh(runtimeId));
+  void operation.then(onBridgeSettled, onBridgeSettled);
   try {
     const finished = await Promise.race([
-      bridge.refresh(runtimeId).then(() => true),
+      operation.then(() => true),
       new Promise<false>((resolve) => {
         timer = setTimeout(() => resolve(false), RECOVERY_REFRESH_TIMEOUT_MS);
       }),
@@ -593,6 +599,27 @@ export function ChatGPTBrowserRecoveryCoordinator({
       if (disposed || activeRecoveryScans.has(envId)) return;
       const settings = readChatGPTRecoverySettings();
       if (settings.paused) return;
+      // Cross-path exclusion: manual reload and automated recovery share the
+      // same environment lease, including all potentially pending guest mutations.
+      const mutationLease = tryAcquireChatGPTRecoveryMutation(
+        envId,
+        "background-scanner",
+        "automatic",
+        "reload",
+      );
+      if (!mutationLease) return;
+      let scanEnded = false;
+      let underlyingBridgeActions = 0;
+      const retainBridge = () => {
+        underlyingBridgeActions += 1;
+        let ended = false;
+        return () => {
+          if (ended) return;
+          ended = true;
+          underlyingBridgeActions -= 1;
+          if (scanEnded && underlyingBridgeActions === 0) mutationLease.release();
+        };
+      };
       const RECOVERY_GLOBAL_MS = settings.globalSeconds * 1000;
       const RECOVERY_PER_SESSION_MS = settings.perSessionSeconds * 1000;
       const RECOVERY_ORANGE_GRACE_MS = settings.orangeGraceMinutes * 60000;
@@ -872,9 +899,14 @@ export function ChatGPTBrowserRecoveryCoordinator({
               canAttempt = false;
               phase(sessionId, "refreshing");
               let navigationTimer: ReturnType<typeof setTimeout> | undefined;
+              const navigation = Promise.resolve().then(() =>
+                bridge.navigate(runtimeId, expectedUrl),
+              );
+              const routeSettled = retainBridge();
+              void navigation.then(routeSettled, routeSettled);
               try {
                 await Promise.race([
-                  bridge.navigate(runtimeId, expectedUrl),
+                  navigation,
                   new Promise<never>((_, reject) => {
                     navigationTimer = setTimeout(
                       () => reject(new Error("Lost-route navigation timed out")),
@@ -1475,7 +1507,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   problem,
                   "reload",
                 );
-                const finished = await refreshWithDeadline(bridge, runtimeId);
+                const finished = await refreshWithDeadline(bridge, runtimeId, retainBridge());
                 recordChatGPTRecoveryEvent(
                   envId,
                   sessionId,
@@ -1541,6 +1573,10 @@ export function ChatGPTBrowserRecoveryCoordinator({
       } finally {
         if (activeRecoveryScans.get(envId) === scanToken) activeRecoveryScans.delete(envId);
         if (activeScanToken === scanToken) activeScanToken = null;
+        scanEnded = true;
+        // If an IPC deadline fired, the original host mutation can still finish
+        // later. Never release this lease until that action actually settles.
+        if (underlyingBridgeActions === 0) mutationLease.release();
       }
     };
 
@@ -1557,7 +1593,8 @@ export function ChatGPTBrowserRecoveryCoordinator({
     const unsubscribe = subscribeChatGPTRecoverySettings(schedule);
     return () => {
       disposed = true;
-      // An in-flight, unmounted probe may never settle; it must not block a new mounted scanner.
+      // Cancel passive scan ownership on unmount but do NOT release its
+      // mutation lease: an unresolved refresh/STOP/Continue may still execute.
       if (activeScanToken && activeRecoveryScans.get(envId) === activeScanToken)
         activeRecoveryScans.delete(envId);
       cancelIndicatorWait?.();

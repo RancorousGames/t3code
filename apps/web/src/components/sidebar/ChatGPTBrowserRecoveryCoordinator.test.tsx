@@ -63,6 +63,10 @@ import {
   aggregateChatGPTRecoveryMetrics,
 } from "../../chatGPTRecoveryMetrics";
 import { useBrowserSurfaceStore } from "../../browser/browserSurfaceStore";
+import {
+  tryAcquireChatGPTRecoveryMutation,
+  clearChatGPTRecoveryMutationGateForTests,
+} from "../../chatGPTRecoveryMutationGate";
 
 let renderer: ReactTestRenderer | undefined;
 const phaseChanges = vi.fn<(id: string, phase: ChatGPTRecoveryPhase | null) => void>();
@@ -166,9 +170,65 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   dom.window.close();
+  // A test with a never-settling bridge models a renderer teardown. The real
+  // renderer process would discard these in-memory reservations entirely.
+  clearChatGPTRecoveryMutationGateForTests();
 });
 
 describe("serialized ChatGPT browser recovery", () => {
+  it("keeps the mutation lease through remount and an ambiguous refresh bridge timeout", async () => {
+    let finishBridge: (() => void) | undefined;
+    mocks.refresh
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishBridge = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+    await mount(["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      renderer?.unmount();
+      renderer = undefined;
+    });
+    document.body.innerHTML = "";
+    await mount(["comit"]);
+    // The old bridge promise remains unresolved even after its 8-second UI deadline.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(55_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(tryAcquireChatGPTRecoveryMutation("local", "comit", "manual", "reload")).toBeNull();
+    // Positive settlement (not merely timeout/unmount) releases the environment lease.
+    finishBridge!();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(75_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("never starts background recovery during an active manual reload lease", async () => {
+    const manual = tryAcquireChatGPTRecoveryMutation("local", "comit", "manual", "reload");
+    expect(manual).not.toBeNull();
+    try {
+      await mount(["comit"]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(42_000);
+      });
+      expect(mocks.refresh).not.toHaveBeenCalled();
+    } finally {
+      manual?.release();
+    }
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(42_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+  });
+
   it("counts actual automatic attempts and closes only after observed assistant progress", async () => {
     await mount(["comit"], [], ["comit"]);
     await act(async () => {
@@ -523,9 +583,15 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
-  it("unblocks other sessions if the refresh bridge never settles", async () => {
+  it("does not dispatch another mutation after bridge timeout until its original action settles", async () => {
+    let finishBridge: (() => void) | undefined;
     mocks.refresh
-      .mockImplementationOnce(() => new Promise<void>(() => {}))
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishBridge = resolve;
+          }),
+      )
       .mockResolvedValue(undefined);
     await mount();
     await act(async () => {
@@ -536,6 +602,12 @@ describe("serialized ChatGPT browser recovery", () => {
       await vi.advanceTimersByTimeAsync(8_000);
     });
     expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+    // Timeout is an UNKNOWN host outcome, not permission to run a new reload.
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    finishBridge!();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(45_000);
     });
@@ -963,16 +1035,16 @@ describe("red error panel without an editor", () => {
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(40_000);
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(40_000);
     });
-    // An unsuccessful reload must not cause a 20-second infinite refresh loop.
+    // A reload must respect the fixed 120-second cooldown, not a 20-second loop.
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(40_000);
+      await vi.advanceTimersByTimeAsync(100_000);
     });
     expect(mocks.refresh).toHaveBeenCalledTimes(2);
   });
