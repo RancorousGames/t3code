@@ -65,6 +65,7 @@ import {
   recordChatGPTRecoveryEvent,
 } from "./chatGPTRecoveryDiagnostics";
 import { recordChatGPTSessionRefreshedAt } from "./chatGPTSessionTimestamps";
+import { tryAcquireChatGPTRecoveryMutation } from "./chatGPTRecoveryMutationGate";
 import { validChatGPTCompletion } from "./chatGPTSessionCompletion";
 import { assertArchivableSession, descendantSessions } from "./chatGPTSessionArchivePolicy";
 
@@ -1122,6 +1123,14 @@ export async function runChatGPTSessionControl(input: {
     };
   }
   if (action === "reload") {
+    // Manual force reload and the background scanner must never mutate an
+    // environment concurrently. Fail before any guest inspection or action.
+    const mutationLease = tryAcquireChatGPTRecoveryMutation(
+      environmentId, entry.id, "manual", "reload",
+    );
+    if (!mutationLease)
+      throw new Error("Another browser recovery is in progress; retry after it settles.");
+    try {
     recordChatGPTRecoveryEvent(
       environmentId,
       entry.id,
@@ -1318,6 +1327,11 @@ export async function runChatGPTSessionControl(input: {
         warning: "Explicit forced reload interrupted or may have interrupted an unfinished assistant response.",
       } : {}),
     };
+    } finally {
+      // Even a rejected/ambiguous manual action must not leave a stale lease;
+      // awaited browser actions retain it until they actually settle.
+      mutationLease.release();
+    }
   }
   if (action === "send") {
     const prepared = prepareChatGPTSessionMessage(
