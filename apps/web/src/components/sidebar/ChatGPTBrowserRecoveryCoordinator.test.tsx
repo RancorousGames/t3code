@@ -58,6 +58,10 @@ import {
   type ChatGPTRecoveryPhase,
 } from "./ChatGPTBrowserRecoveryCoordinator";
 import { recordSessionClick } from "./chatGPTConversationRecovery";
+import {
+  readChatGPTRecoveryMetrics,
+  aggregateChatGPTRecoveryMetrics,
+} from "../../chatGPTRecoveryMetrics";
 import { useBrowserSurfaceStore } from "../../browser/browserSurfaceStore";
 
 let renderer: ReactTestRenderer | undefined;
@@ -123,6 +127,8 @@ beforeEach(() => {
   vi.stubGlobal("document", dom.window.document);
   vi.stubGlobal("location", dom.window.location);
   vi.stubGlobal("localStorage", dom.window.localStorage);
+  vi.stubGlobal("sessionStorage", dom.window.sessionStorage);
+  vi.stubGlobal("CustomEvent", dom.window.CustomEvent);
   vi.stubGlobal("Element", dom.window.Element);
   vi.stubGlobal("HTMLElement", dom.window.HTMLElement);
   vi.stubGlobal("Node", dom.window.Node);
@@ -163,6 +169,39 @@ afterEach(async () => {
 });
 
 describe("serialized ChatGPT browser recovery", () => {
+  it("counts actual automatic attempts and closes only after observed assistant progress", async () => {
+    await mount(["comit"], [], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(22_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    let episode = readChatGPTRecoveryMetrics("local").ledger?.episodes[0];
+    expect(episode).toMatchObject({
+      category: "red",
+      source: "automatic",
+      outcome: "active",
+      attemptCount: 1,
+      actions: { reload: 1, stop: 0, continue: 0 },
+    });
+    expect(aggregateChatGPTRecoveryMetrics("local").successRate).toBeNull();
+    // An acknowledged refresh is not an assistant response. Only a verified
+    // same-conversation activity progression can close the incident.
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "working",
+      url: `https://chatgpt.com/c/${id}`,
+      lastRole: "assistant",
+      assistantHasContent: true,
+      lastText: "assistant advanced",
+    }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(22_000);
+    });
+    episode = readChatGPTRecoveryMetrics("local").ledger?.episodes[0];
+    expect(episode?.outcome).toBe("recovered");
+    expect(episode?.attemptCount).toBe(1);
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("recovers confirmed red sessions every 20 seconds globally with no per-session cooldown", async () => {
     await mount();
     await act(async () => {
@@ -927,10 +966,14 @@ describe("red error panel without an editor", () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
-    await act(async () => { await vi.advanceTimersByTimeAsync(40_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
     // An unsuccessful reload must not cause a 20-second infinite refresh loop.
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(40_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
     expect(mocks.refresh).toHaveBeenCalledTimes(2);
   });
 
@@ -943,15 +986,23 @@ describe("red error panel without an editor", () => {
       stopVisible: false,
     }));
     await mount(["comit"], ["comit"], ["comit"]);
-    await act(async () => { await vi.advanceTimersByTimeAsync(42_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(42_000);
+    });
     expect(mocks.refresh).not.toHaveBeenCalled();
     activity = "idle";
-    await act(async () => { await vi.advanceTimersByTimeAsync(100_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100_000);
+    });
     expect(mocks.refresh).not.toHaveBeenCalled();
     activity = "invalid: the ChatGPT composer is unavailable";
-    await act(async () => { await vi.advanceTimersByTimeAsync(40_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
     expect(mocks.refresh).not.toHaveBeenCalled();
-    await act(async () => { await vi.advanceTimersByTimeAsync(40_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
   });
 
@@ -963,7 +1014,9 @@ describe("red error panel without an editor", () => {
       stopVisible: false,
     }));
     await mount(["comit"], ["comit"], ["comit"]);
-    await act(async () => { await vi.advanceTimersByTimeAsync(150_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150_000);
+    });
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
