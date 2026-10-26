@@ -298,8 +298,8 @@ function noteRecoveryConcern(
   recordChatGPTRecoveryEvent(environmentId, sessionId, "diagnostic", reason);
 }
 export function nextRedRetryDelay(_sessionId: string, _attempts: number): number {
-  // Red load failures use the global queue cadence, not a per-tab cooldown.
-  return 0;
+  // Fixed per-session retry cadence, regardless of attempt count; no exponential backoff.
+  return readChatGPTRecoverySettings().perSessionSeconds * 1_000;
 }
 function assistantSignature(snapshot: RecoverySnapshot): number {
   let hash = 2166136261;
@@ -1452,7 +1452,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   envId,
                   sessionId,
                   "retry-scheduled",
-                  `attempt:${persistent.red[sessionId]?.attempts},global-cadence`,
+                  `attempt:${persistent.red[sessionId]?.attempts},fixed-per-session-cadence`,
                 );
               // A replaced/rehydrating guest must demonstrate the full sustained
               // missing-composer failure again before another automatic reload.

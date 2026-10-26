@@ -779,7 +779,7 @@ describe("orange delivery ambiguity and retry bounds", () => {
       nextRedRetryDelay("other", 50),
       nextRedRetryDelay("comit", 100_000),
     ];
-    expect(values).toEqual([0, 0, 0, 0]);
+    expect(values).toEqual([120_000, 120_000, 120_000, 120_000]);
   });
 });
 
