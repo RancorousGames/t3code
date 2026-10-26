@@ -79,6 +79,8 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 contextBridge.exposeInMainWorld("desktopBridge", {
   readOmniHubKeepAwakeMonitors: (input) =>
     ipcRenderer.invoke(IpcChannels.OMNIHUB_KEEP_AWAKE_READ_CHANNEL, input),
+  controlOmniHubKeepAwakeMonitor: (input) =>
+    ipcRenderer.invoke(IpcChannels.OMNIHUB_KEEP_AWAKE_CONTROL_CHANNEL, input),
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

@@ -1866,6 +1866,10 @@ export interface DesktopBridge {
   readOmniHubKeepAwakeMonitors?: (
     input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeQuery,
   ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeReadResult>;
+  /** Applies owner-token-authorized changes through OmniHub Tools; tokens never enter UI. */
+  controlOmniHubKeepAwakeMonitor?: (
+    input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeControlQuery,
+  ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeControlReceipt>;
   /** Read-only local TaskBoard Done evidence; unavailable on non-desktop clients. */
   readTaskBoardWorkerClaims?: () => Promise<
     readonly {

@@ -38,6 +38,7 @@ export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
 export const PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL = "desktop:private-chatgpt-draft-snapshot";
 export const TASKBOARD_WORKER_CLAIMS_CHANNEL = "desktop:taskboard-worker-claims";
 export const OMNIHUB_KEEP_AWAKE_READ_CHANNEL = "desktop:omnihub-keep-awake-read";
+export const OMNIHUB_KEEP_AWAKE_CONTROL_CHANNEL = "desktop:omnihub-keep-awake-control";
 export const OPENRIG_LIST_AGENTS_CHANNEL = "desktop:openrig-list-agents";
 export const OPENRIG_NATIVE_APPROVAL_PENDING_CHANNEL = "desktop:openrig-native-approval-pending";
 export const OPENRIG_NATIVE_APPROVAL_GET_CHANNEL = "desktop:openrig-native-approval-get";

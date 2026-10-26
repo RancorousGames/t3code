@@ -84,3 +84,27 @@ export const DesktopOmniHubKeepAwakeReadResultSchema = Schema.Union([
 ]);
 export type DesktopOmniHubKeepAwakeReadResult =
   typeof DesktopOmniHubKeepAwakeReadResultSchema.Type;
+
+/** Trusted desktop operator controls, applied by OmniHub Tools using its own owner token. */
+export const DesktopOmniHubKeepAwakeControlQuerySchema = Schema.Struct({
+  monitorId: Schema.String,
+  action: Schema.Literals(["wake_in_one_minute", "cancel"]),
+  clientRequestId: Schema.String,
+  confirmedTargetId: Schema.optional(Schema.String),
+});
+export type DesktopOmniHubKeepAwakeControlQuery =
+  typeof DesktopOmniHubKeepAwakeControlQuerySchema.Type;
+
+export const DesktopOmniHubKeepAwakeControlReceiptSchema = Schema.Struct({
+  ok: Schema.Boolean,
+  monitorId: Schema.String,
+  action: Schema.Literals(["wake_in_one_minute", "cancel"]),
+  clientRequestId: Schema.String,
+  code: Schema.Literals(["applied", "unavailable", "denied", "conflict", "unknown"]),
+  detail: Schema.String,
+  state: Schema.optional(Schema.String),
+  nextDueMs: Schema.optional(Schema.Number),
+  sendMayAlreadyBeInFlight: Schema.optional(Schema.Boolean),
+});
+export type DesktopOmniHubKeepAwakeControlReceipt =
+  typeof DesktopOmniHubKeepAwakeControlReceiptSchema.Type;

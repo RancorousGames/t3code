@@ -1,6 +1,8 @@
 import type {
   DesktopOmniHubKeepAwakeReadResult,
   DesktopOmniHubKeepAwakeTargetSession,
+  DesktopOmniHubKeepAwakeControlQuery,
+  DesktopOmniHubKeepAwakeControlReceipt,
   EnvironmentId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -34,6 +36,14 @@ export function readOmniHubKeepAwakeBrowserTargets(
       url,
     };
   });
+}
+
+/** Exact monitor-ID control through trusted desktop main and the real scheduler. */
+export async function controlOmniHubKeepAwakeForT3(
+  input: DesktopOmniHubKeepAwakeControlQuery,
+): Promise<DesktopOmniHubKeepAwakeControlReceipt | null> {
+  const method = window.desktopBridge?.controlOmniHubKeepAwakeMonitor;
+  return method ? method(input) : null;
 }
 
 /**
