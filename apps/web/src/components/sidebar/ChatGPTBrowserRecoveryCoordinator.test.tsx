@@ -202,7 +202,7 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("recovers confirmed red sessions every 20 seconds globally with no per-session cooldown", async () => {
+  it("recovers confirmed red sessions with 30-second global spacing and 120-second per-session cooldown", async () => {
     await mount();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(22_000);
@@ -212,12 +212,12 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(phaseChanges).toHaveBeenCalledWith("comit", "refreshing");
     expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(19_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
     expect(mocks.refresh).toHaveBeenCalledTimes(2);
     expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:other");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(95_000);
     });
     expect(mocks.refresh).toHaveBeenCalledTimes(3);
     expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:comit");
@@ -282,7 +282,7 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
     expect(phaseChanges).toHaveBeenCalledWith("other", "queued");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
     expect(mocks.refresh).toHaveBeenCalledTimes(2);
     expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:other");
@@ -359,18 +359,18 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(useBrowserSurfaceStore.getState().activityByTabId["runtime:comit"]).toBeUndefined();
   });
 
-  it("tries the most recently clicked broken tab first, then rotates red retries", async () => {
+  it("rotates equally recent failures by oldest previous attempt", async () => {
     recordSessionClick("local", "comit", ["comit", "other"]);
     recordSessionClick("local", "other", ["comit", "other"]);
     await mount(["comit", "other"], [], ["comit", "other"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
-    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:other");
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
-    expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:comit");
+    expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:other");
   });
 
   it("never inspects a hidden session even if it was the most recently clicked", async () => {
@@ -537,7 +537,7 @@ describe("serialized ChatGPT browser recovery", () => {
     });
     expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(12_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
     expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:other");
   });
@@ -559,12 +559,12 @@ describe("persistent orange recovery safety", () => {
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(24_000);
     });
     expect(mocks.stop).toHaveBeenCalledExactlyOnceWith("comit");
     expect(mocks.type).not.toHaveBeenCalled();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(24_000);
     });
     expect(mocks.type).toHaveBeenCalledExactlyOnceWith("comit", "Continue.");
     expect(mocks.press).toHaveBeenCalledExactlyOnceWith("comit", {
@@ -920,7 +920,7 @@ describe("recovering lost ChatGPT conversation routes", () => {
     });
     expect(mocks.navigate).toHaveBeenCalledTimes(1);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
     expect(mocks.navigate).toHaveBeenCalledTimes(2);
   });

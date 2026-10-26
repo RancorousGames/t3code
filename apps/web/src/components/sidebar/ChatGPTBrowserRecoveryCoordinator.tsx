@@ -414,8 +414,8 @@ export type ChatGPTRecoveryPhase = "queued" | "checking" | "refreshing";
 const BACKGROUND_PROBES_PER_SCAN = 4;
 const BACKGROUND_PROBE_SETTLE_MS = 1_000;
 
-// A single scan across all ChatGPT tabs avoids concurrent reload storms.
-let scanning = false;
+// One active scanner per environment. A disconnected component must release its slot.
+const activeRecoveryScans = new Map<string, symbol>();
 const NO_DEFERRED_IDS: readonly string[] = [];
 
 // A preview can remain in Loading even after the guest has rendered the
@@ -563,6 +563,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
     // Records live in localStorage rather than the React component lifecycle.
     // This prevents remounts from replaying a STOP or an ambiguous Continue.
     let cancelIndicatorWait: (() => void) | null = null;
+    let activeScanToken: symbol | null = null;
     const context = (): RecoveryQueueContext => ({
       eligibleIds: currentSessionIds(),
       failingIds: currentRedIds(),
@@ -589,7 +590,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
     };
 
     const scan = async () => {
-      if (disposed || scanning) return;
+      if (disposed || activeRecoveryScans.has(envId)) return;
       const settings = readChatGPTRecoverySettings();
       if (settings.paused) return;
       const RECOVERY_GLOBAL_MS = settings.globalSeconds * 1000;
@@ -597,7 +598,9 @@ export function ChatGPTBrowserRecoveryCoordinator({
       const RECOVERY_ORANGE_GRACE_MS = settings.orangeGraceMinutes * 60000;
       const RECOVERY_MISSING_COMPOSER_GRACE_MS = settings.missingComposerSeconds * 1000;
       const RECOVERY_SCAN_MS = settings.scanSeconds * 1000;
-      scanning = true;
+      const scanToken = Symbol("recovery-scan");
+      activeRecoveryScans.set(envId, scanToken);
+      activeScanToken = scanToken;
       recordRecoveryScan(envId);
       try {
         const now = Date.now();
@@ -1536,7 +1539,8 @@ export function ChatGPTBrowserRecoveryCoordinator({
       } catch (error) {
         console.warn("[ChatGPT recovery] Scanner failed:", error);
       } finally {
-        scanning = false;
+        if (activeRecoveryScans.get(envId) === scanToken) activeRecoveryScans.delete(envId);
+        if (activeScanToken === scanToken) activeScanToken = null;
       }
     };
 
@@ -1553,6 +1557,9 @@ export function ChatGPTBrowserRecoveryCoordinator({
     const unsubscribe = subscribeChatGPTRecoverySettings(schedule);
     return () => {
       disposed = true;
+      // An in-flight, unmounted probe may never settle; it must not block a new mounted scanner.
+      if (activeScanToken && activeRecoveryScans.get(envId) === activeScanToken)
+        activeRecoveryScans.delete(envId);
       cancelIndicatorWait?.();
       for (const id of trackedPhases.keys()) reportPhase(id, null);
       if (timer !== undefined) clearTimeout(timer);
