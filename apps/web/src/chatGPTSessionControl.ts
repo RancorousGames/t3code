@@ -1382,14 +1382,11 @@ export async function runChatGPTSessionControl(input: {
       throw new Error(
         "Unrelated or unverifiable UNKNOWN send remains; manual reconciliation required.",
       );
-    if (
-      before.status === "working" ||
-      before.status === "stuck" ||
-      before.status === "stuck_connecting" ||
-      before.status === "unavailable" ||
-      before.status === "loading"
-    )
-      throw new Error(`Cannot send while session is ${before.status}: ${before.statusReason}`);
+    // In particular pending_or_stalled is NOT a confirmed idle recipient:
+    // a prior human turn may still be awaiting an assistant response.
+    if (!["done_or_idle", "waiting_for_input"].includes(before.status) ||
+        before.activity !== "idle")
+      throw new Error("Conversation is not confirmed idle before typing; no message sent.");
     const { runtimeId } = guestFor(environmentId, entry.id);
     if (!runtimeId) throw new Error("ChatGPT guest is not attached.");
     const inputExpression = `(() => {const el=document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
@@ -1491,11 +1488,8 @@ export async function runChatGPTSessionControl(input: {
     }
     if (
       refreshed.observedGuestUrl !== before.observedGuestUrl ||
-      refreshed.status === "working" ||
-      refreshed.status === "stuck" ||
-      refreshed.status === "stuck_connecting" ||
-      refreshed.status === "unavailable" ||
-      refreshed.status === "loading" ||
+      !["done_or_idle", "waiting_for_input"].includes(refreshed.status) ||
+      refreshed.activity !== "idle" ||
       guestFor(environmentId, entry.id).runtimeId !== runtimeId
     ) {
       throw new Error("Session URL, generation or guest changed before typing; refusing send.");

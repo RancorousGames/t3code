@@ -133,12 +133,44 @@ export const chatGPTWebviewAutomation = {
       if (!(el instanceof HTMLElement))
         return { ok: false, reason: "PreviewAutomationTargetNotFoundError" };
       const value = ${JSON.stringify(text)};
-      // One synchronous guest JS turn: NEVER erase a draft typed during async policy intake.
+      // User focus is ownership, even while the draft is empty. The guest may
+      // remain mounted while its human is about to type; never steal that editor.
       if (${Boolean(requireEmptyComposer)}) {
         const current = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement
           ? el.value : (el.innerText || el.textContent || "");
         if (current.trim()) return { ok: false, reason: "Composer contains an existing draft; refusing to overwrite it." };
+        if (document.hasFocus() && (document.activeElement === el || el.contains(document.activeElement)))
+          return { ok: false, reason: "User-focused composer before typing; no message sent." };
+        const previous = window[Symbol.for('t3.chatgpt.composerOwner')];
+        if (previous?.active) return { ok: false, reason: "Automated composer ownership still active before typing; no message sent." };
       }
+      // The ownership token only exists between inserting automation text and
+      // clicking Send. Trusted human input invalidates it rather than being sent.
+      const markOwned = () => {
+        if (!${Boolean(requireEmptyComposer)} || !${JSON.stringify(expectedConversationId ?? null)}) return;
+        const key = Symbol.for('t3.chatgpt.composerOwner');
+        const owner = {
+          editor: el, conversationId: ${JSON.stringify(expectedConversationId ?? null)},
+          active: true, interrupted: false, expiresAt: Date.now() + 9000
+        };
+        const events = ['keydown', 'beforeinput', 'input', 'paste', 'drop', 'compositionstart', 'pointerdown'];
+        const onInput = event => { if (event.isTrusted) owner.interrupted = true; };
+        events.forEach(name => document.addEventListener(name, onInput, true));
+        owner.finish = () => {
+          if (!owner.active) return;
+          owner.active = false;
+          events.forEach(name => document.removeEventListener(name, onInput, true));
+          if (window[key] === owner) delete window[key];
+        };
+        window[key] = owner;
+        // Keep an expired tombstone until the next type or the acknowledged
+        // click: a delayed press must not mistake a missing token for safety.
+        setTimeout(() => {
+          if (!owner.active) return;
+          owner.active = false;
+          events.forEach(name => document.removeEventListener(name, onInput, true));
+        }, 9100);
+      };
       el.focus();
       if (el.isContentEditable) {
         if (${Boolean(clear)}) {
@@ -153,15 +185,16 @@ export const chatGPTWebviewAutomation = {
         // concatenate those nodes without separators, so compare innerText
         // using normalized whitespace rather than rejecting multiline prompts.
         const normalize = (text) => (text || "").replace(/\\s+/g, " ").trim();
-        return {
-          ok: inserted && normalize(el.innerText || el.textContent).includes(normalize(value)),
-          reason: "Contenteditable rejected text",
-        };
+        const ok = inserted && normalize(el.innerText || el.textContent) === normalize(value);
+        if (ok) markOwned();
+        return { ok, reason: "Contenteditable rejected or changed text" };
       }
       if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
         if (${Boolean(clear)}) el.select();
         const inserted = document.execCommand("insertText", false, value);
-        return { ok: inserted && el.value.includes(value), reason: "Input rejected text" };
+        const ok = inserted && el.value === value;
+        if (ok) markOwned();
+        return { ok, reason: "Input rejected or changed text" };
       }
       return { ok: false, reason: "PreviewAutomationTargetNotFoundError" };
     })()`;
@@ -179,7 +212,10 @@ export const chatGPTWebviewAutomation = {
 
   async press(
     runtimeId: string,
-    { key, expectedConversationId }: { key: string; expectedConversationId?: string | undefined },
+    { key, expectedConversationId, expectedComposerText, sendExpiresAt }: {
+      key: string; expectedConversationId?: string | undefined;
+      expectedComposerText?: string | undefined; sendExpiresAt?: number | undefined;
+    },
   ): Promise<void> {
     const webview = findWebview(runtimeId);
     if (key === "Enter") {
@@ -192,11 +228,33 @@ export const chatGPTWebviewAutomation = {
           webview,
           `(() => {
           ${guestConversationGuardExpression(expectedConversationId)}
+          if (${JSON.stringify(sendExpiresAt ?? null)} !== null &&
+              Date.now() >= ${JSON.stringify(sendExpiresAt ?? null)})
+            return { expired: true };
           const editor = [
             '#prompt-textarea', '[data-testid="prompt-textarea"]',
             '[data-testid="composer-input"]', '[contenteditable="true"][role="textbox"]',
             'div[contenteditable="true"]', 'textarea'
           ].map((selector) => document.querySelector(selector)).find(Boolean);
+          if (${JSON.stringify(expectedComposerText ?? null)} !== null) {
+            const current = editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement
+              ? editor.value : (editor?.innerText || editor?.textContent || '');
+            const normalize = value => (value || '').replace(/\\s+/g, ' ').trim();
+            if (normalize(current) !== normalize(${JSON.stringify(expectedComposerText ?? null)}))
+              return { composerMismatch: true };
+            const owner = window[Symbol.for('t3.chatgpt.composerOwner')];
+            // A manually edited automation draft can coincidentally match the
+            // expected text again. The trusted input event still vetoes submit.
+            if (owner && (!owner.active || owner.interrupted ||
+                owner.expiresAt <= Date.now() || owner.editor !== editor ||
+                owner.conversationId !== ${JSON.stringify(expectedConversationId ?? null)}))
+              return { composerMismatch: true };
+            // Recovery of a previously staged UNKNOWN has no live ownership
+            // token. It must not click a currently human-focused draft.
+            if (!owner && document.hasFocus() && editor &&
+                (document.activeElement === editor || editor.contains(document.activeElement)))
+              return { composerMismatch: true };
+          }
           const selectors = [
             '[data-testid="send-button"]', '[data-testid="composer-submit-button"]',
             'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]',
@@ -213,6 +271,7 @@ export const chatGPTWebviewAutomation = {
             !node.matches('[data-testid="stop-button"]'));
           if (button) {
             button.click();
+            window[Symbol.for('t3.chatgpt.composerOwner')]?.finish?.();
             return { clicked: true };
           }
           const form = editor?.closest('form');
@@ -220,6 +279,7 @@ export const chatGPTWebviewAutomation = {
           // the editor's own form invokes the same handler as clicking Send.
           if (form instanceof HTMLFormElement && form.querySelector('button[type="submit"]:not([disabled])')) {
             form.requestSubmit();
+            window[Symbol.for('t3.chatgpt.composerOwner')]?.finish?.();
             return { clicked: true };
           }
           return {
@@ -239,10 +299,14 @@ export const chatGPTWebviewAutomation = {
         })()`,
         )) as {
           clicked?: boolean;
+          expired?: boolean;
+          composerMismatch?: boolean;
           guardMismatch?: boolean;
           actualConversationId?: string | null;
         } | null;
         assertGuestGuard(state);
+        if (state?.expired) throw new Error("Queued attempt expired before submitting; no click issued.");
+        if (state?.composerMismatch) throw new Error("Composer changed before submitting; refusing to click Send.");
         if (state?.clicked) return;
         lastState = state;
         await new Promise<void>((resolve) => setTimeout(resolve, 150));

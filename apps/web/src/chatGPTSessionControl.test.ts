@@ -150,7 +150,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
           return visible && !!expected && typed === JSON.parse(expected[1]!);
         }
         if (script.includes("Boolean(document.querySelector(")) return true; // composer waitFor
-        if (script.includes("Contenteditable rejected text")) {
+        if (script.includes("Contenteditable rejected or changed text")) {
           expect(script).toContain("Composer contains an existing draft");
           const match = script.match(/const value = ("(?:\\.|[^"\\])*");/);
           if (!match) throw new Error("No literal text in one guest editor operation");
@@ -373,6 +373,30 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
           fixture.guest.remove();
         }
       }
+    }
+  });
+
+  it("refuses a second automated send while the prior user turn is pending_or_stalled", async () => {
+    const fixture = guestFixture(async () => { throw new Error("offline"); });
+    const base = {
+      environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3" }] as never,
+      action: "send" as const,
+      sessionId: browserId,
+      expectedConversationId: conversationId,
+    };
+    try {
+      const first = await runChatGPTSessionControl({ ...base, message: "first queued turn" });
+      expect(first).toMatchObject({ messageSent: true });
+      const observed = await runChatGPTSessionControl({
+        ...base, action: "read", sessionId: browserId,
+      }) as { session: { status: string } };
+      expect(observed.session.status).toBe("pending_or_stalled");
+      await expect(runChatGPTSessionControl({ ...base, message: "second queued turn" }))
+        .rejects.toThrow("Conversation is not confirmed idle before typing");
+      expect(fixture.presses).toBe(1);
+    } finally {
+      fixture.guest.remove();
     }
   });
 

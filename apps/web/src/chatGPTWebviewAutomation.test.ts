@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { COMPOSER_SELECTOR } from "./chatGPTBrowserAutomation";
+// Keep this Electron guest test isolated from the unrelated browser/provider stack.
+const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]';
 import { chatGPTWebviewAutomation } from "./chatGPTWebviewAutomation";
 
 const runtimeTabId = "browser:test";
@@ -14,7 +15,7 @@ beforeEach(() => {
   Object.defineProperty(guest, "executeJavaScript", {
     value: vi.fn(async (script: string) => {
       if (script.includes("Boolean(document.querySelector(")) return true;
-      if (script.includes("Contenteditable rejected text")) return { ok: true };
+      if (script.includes("Contenteditable rejected or changed text")) return { ok: true };
       if (script.includes("const selectors = [")) return { clicked: true };
       if (script === "1 + 1") return 2;
       return true;
@@ -205,6 +206,164 @@ describe("local ChatGPT Electron webview automation", () => {
     }
     const send = (guest as never as { sendInputEvent: ReturnType<typeof vi.fn> }).sendInputEvent;
     expect(send).not.toHaveBeenCalled();
+  });
+
+
+  it("refuses an empty but human-focused composer without editing or clicking", async () => {
+    const editor = document.createElement("textarea");
+    editor.id = "prompt-textarea";
+    document.body.appendChild(editor);
+    editor.focus();
+    const focused = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const exec = vi.fn();
+    const oldExec = document.execCommand;
+    Object.defineProperty(document, "execCommand", { configurable: true, value: exec });
+    const execute = (guest as never as { executeJavaScript: ReturnType<typeof vi.fn> }).executeJavaScript;
+    execute.mockImplementation(async (script: string) => window.eval(script));
+    try {
+      await expect(chatGPTWebviewAutomation.type(runtimeTabId, {
+        selector: "#prompt-textarea", text: "robot", clear: true,
+        requireEmptyComposer: true,
+      })).rejects.toThrow("User-focused composer before typing");
+      expect(editor.value).toBe("");
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      focused.mockRestore();
+      if (oldExec === undefined) Reflect.deleteProperty(document, "execCommand");
+      else Object.defineProperty(document, "execCommand", { configurable: true, value: oldExec });
+      editor.remove();
+    }
+  });
+
+  it("vetoes Send if human input interrupts an already staged automated draft", async () => {
+    const conversation = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    const url = "https://chatgpt.com/c/" + conversation;
+    const editor = document.createElement("textarea");
+    editor.id = "prompt-textarea";
+    const button = document.createElement("button");
+    button.dataset.testid = "send-button";
+    document.body.append(editor, button);
+    const clicked = vi.fn();
+    button.addEventListener("click", clicked);
+    const focused = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const oldExec = document.execCommand;
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn((_command: string, _showUI: boolean, value: string) => {
+        editor.value = value;
+        return true;
+      }),
+    });
+    const execute = (guest as never as { executeJavaScript: ReturnType<typeof vi.fn> }).executeJavaScript;
+    execute.mockImplementation(async (script: string) =>
+      window.eval(script.replaceAll("location.href", JSON.stringify(url))));
+    try {
+      await chatGPTWebviewAutomation.type(runtimeTabId, {
+        selector: "#prompt-textarea", text: "robot", clear: true,
+        requireEmptyComposer: true, expectedConversationId: conversation,
+      });
+      const owner = (window as unknown as Record<symbol, {
+        active: boolean; interrupted: boolean; finish: () => void;
+      }>)[Symbol.for("t3.chatgpt.composerOwner")];
+      expect(owner?.active).toBe(true);
+      // Simulate the human's trusted key event during React's async Send-button wait.
+      owner.interrupted = true;
+      editor.value = "robot + human draft";
+      await expect(chatGPTWebviewAutomation.press(runtimeTabId, {
+        key: "Enter", expectedConversationId: conversation,
+        expectedComposerText: "robot",
+      })).rejects.toThrow("Composer changed before submitting");
+      expect(clicked).not.toHaveBeenCalled();
+      expect(editor.value).toBe("robot + human draft");
+      // Even if the user deletes their edit back to the exact automation text,
+      // the previously observed human interaction must still veto Send.
+      editor.value = "robot";
+      await expect(chatGPTWebviewAutomation.press(runtimeTabId, {
+        key: "Enter", expectedConversationId: conversation,
+        expectedComposerText: "robot",
+      })).rejects.toThrow("Composer changed before submitting");
+      expect(clicked).not.toHaveBeenCalled();
+      owner.finish();
+    } finally {
+      focused.mockRestore();
+      if (oldExec === undefined) Reflect.deleteProperty(document, "execCommand");
+      else Object.defineProperty(document, "execCommand", { configurable: true, value: oldExec });
+      editor.remove();
+      button.remove();
+    }
+  });
+
+  it("submits exactly once when the composer owner and conversation stay unchanged", async () => {
+    const conversation = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    const url = "https://chatgpt.com/c/" + conversation;
+    const editor = document.createElement("textarea");
+    editor.id = "prompt-textarea";
+    const button = document.createElement("button");
+    button.dataset.testid = "send-button";
+    document.body.append(editor, button);
+    const clicked = vi.fn();
+    button.addEventListener("click", clicked);
+    const originalExec = document.execCommand;
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn((_command: string, _showUI: boolean, value: string) => {
+        editor.value = value;
+        return true;
+      }),
+    });
+    const execute = (guest as never as { executeJavaScript: ReturnType<typeof vi.fn> }).executeJavaScript;
+    execute.mockImplementation(async (script: string) =>
+      window.eval(script.replaceAll("location.href", JSON.stringify(url))));
+    try {
+      await chatGPTWebviewAutomation.type(runtimeTabId, {
+        selector: "#prompt-textarea", text: "robot", clear: true,
+        requireEmptyComposer: true, expectedConversationId: conversation,
+      });
+      await chatGPTWebviewAutomation.press(runtimeTabId, {
+        key: "Enter", expectedConversationId: conversation,
+        expectedComposerText: "robot",
+      });
+      expect(clicked).toHaveBeenCalledOnce();
+      expect((window as unknown as Record<symbol, unknown>)[Symbol.for("t3.chatgpt.composerOwner")])
+        .toBeUndefined();
+    } finally {
+      (window as unknown as Record<symbol, { finish?: () => void }>)[
+        Symbol.for("t3.chatgpt.composerOwner")]?.finish?.();
+      if (originalExec === undefined) Reflect.deleteProperty(document, "execCommand");
+      else Object.defineProperty(document, "execCommand", { configurable: true, value: originalExec });
+      editor.remove();
+      button.remove();
+    }
+  });
+
+
+  it("does not submit a previously staged UNKNOWN draft while a human has focused it", async () => {
+    const conversation = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    const editor = document.createElement("textarea");
+    editor.id = "prompt-textarea";
+    editor.value = "staged automation";
+    const button = document.createElement("button");
+    button.dataset.testid = "send-button";
+    document.body.append(editor, button);
+    editor.focus();
+    const focused = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const clicked = vi.fn();
+    button.addEventListener("click", clicked);
+    const execute = (guest as never as { executeJavaScript: ReturnType<typeof vi.fn> }).executeJavaScript;
+    execute.mockImplementation(async (script: string) =>
+      window.eval(script.replaceAll("location.href", JSON.stringify("https://chatgpt.com/c/" + conversation))));
+    try {
+      await expect(chatGPTWebviewAutomation.press(runtimeTabId, {
+        key: "Enter", expectedConversationId: conversation,
+        expectedComposerText: "staged automation",
+      })).rejects.toThrow("Composer changed before submitting");
+      expect(clicked).not.toHaveBeenCalled();
+      expect(editor.value).toBe("staged automation");
+    } finally {
+      focused.mockRestore();
+      editor.remove();
+      button.remove();
+    }
   });
 
   it("refuses to send when the expected guest isn't present", async () => {
