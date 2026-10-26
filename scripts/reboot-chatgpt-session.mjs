@@ -50,8 +50,9 @@ export function parseRebootArgs(argv) {
   }
   if (!["begin", "status", "finalize"].includes(out.phase))
     throw new Error("--phase must be begin, status or finalize");
-  if (out.sessionId && !UUID.test(out.sessionId))
-    throw new Error("--session-id must be an exact existing T3 browser UUID");
+  // Older, still valid T3 sessions use the literal ID "chatgpt", not a UUID.
+  if (out.sessionId && !/^[a-z0-9][\w.:-]{0,255}$/i.test(out.sessionId))
+    throw new Error("--session-id must be an exact existing T3 browser session identifier");
   if (out.conversationUrl) {
     const id = conversationIdFromUrl(out.conversationUrl);
     if (!id) throw new Error("--conversation-url must be an exact ChatGPT /c/<uuid> URL");
@@ -100,8 +101,8 @@ export async function rebootExistingT3Session(
       throw new Error("Exact current ChatGPT conversation does not map to ONE T3 session.");
     sessionId = matches[0].id;
   }
-  if (!UUID.test(sessionId ?? ""))
-    throw new Error("Resolved T3 browser session ID is not canonical.");
+  if (!/^[a-z0-9][\w.:-]{0,255}$/i.test(sessionId ?? ""))
+    throw new Error("Resolved T3 browser session ID is invalid.");
   const requestId = args.requestId ?? randomUUID();
   const input = {
     version: 1, requestId, type: "chatgpt.reboot",

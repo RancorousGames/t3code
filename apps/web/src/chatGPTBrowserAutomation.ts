@@ -49,6 +49,8 @@ export async function sendInitialChatGPTPrompt(input: {
   sessionId: string;
   requestId: string;
   prompt: string;
+  /** Reboots are not new managed workers; do not inject worker onboarding. */
+  newManagedWorker?: boolean;
   readSessions?: typeof readChatGPTBrowserSessions;
   automation?: ChatGPTPromptAutomation;
   readState?: typeof readThreadPreviewState;
@@ -73,6 +75,7 @@ export async function sendInitialChatGPTPrompt(input: {
     input.prompt,
     session.id,
     session.parentSessionId,
+    { newManagedWorker: input.newManagedWorker !== false, ...(session.project === undefined ? {} : { project: session.project }) },
   );
   const readState = input.readState ?? readThreadPreviewState;
   const now = input.now ?? Date.now;

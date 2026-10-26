@@ -132,6 +132,7 @@ export async function rebootChatGPTDesktop(input: {
         ...input,
         prompt: input.prompt!,
         requestId: input.operationId,
+        newManagedWorker: false,
         // A reboot reservation is distinct from the immutable creation receipt.
         readSessions: () =>
           readChatGPTBrowserSessions(input.environmentId).map((s) =>

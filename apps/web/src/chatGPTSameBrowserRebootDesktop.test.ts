@@ -95,6 +95,9 @@ describe("reboot coordinator without predecessor browser recovery", () => {
     expect(loadedSafety).not.toHaveBeenCalled();
     expect(reset).toHaveBeenCalledExactlyOnceWith("slot");
     expect(sent).toHaveBeenCalledTimes(1);
+    // Reboot must never turn an existing ordinary/child chat into a freshly
+    // onboarding OpenRig worker (which also changes the bootstrap hash).
+    expect(sent).toHaveBeenCalledWith(expect.objectContaining({ newManagedWorker: false }));
     const second = await rebootChatGPTDesktop(input);
     expect(second).toEqual(first);
     expect(reset).toHaveBeenCalledTimes(1);

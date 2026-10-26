@@ -91,7 +91,9 @@ export const DesktopAppActivationRequest = Schema.Union([
     // Legacy wire name remains accepted for in-flight operator requests.
     type: Schema.Literals(["chatgpt.reboot", "chatgpt.refresh"]),
     requestId: NativeOperationId,
-    sessionId: NativeOperationId,
+    // Historical default T3 browser session id is "chatgpt" (not a UUID).
+    // It must be rebootable too, independent of OpenRig enrollment.
+    sessionId: TrimmedNonEmptyString,
     // T3 resolves the old ChatGPT conversation for stable-session reboot requests.
     priorConversationId: Schema.optional(ChatGPTConversationId),
     prompt: Schema.optional(TrimmedNonEmptyString),

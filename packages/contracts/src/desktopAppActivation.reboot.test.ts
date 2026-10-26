@@ -30,7 +30,13 @@ describe("same browser reboot contract", () => {
       Schema.decodeUnknownSync(DesktopAppActivationRequest)({ ...status, phase: "status" }),
     ).toMatchObject({ phase: "status" });
   });
-  it.each(["requestId", "sessionId", "priorConversationId"])(
+  it("supports legacy standalone T3 session ID chatgpt without OpenRig", () => {
+    const { priorConversationId: _, ...managedFree } = request;
+    expect(Schema.decodeUnknownSync(DesktopAppActivationRequest)({
+      ...managedFree, sessionId: "chatgpt",
+    })).toMatchObject({ sessionId: "chatgpt" });
+  });
+  it.each(["requestId", "priorConversationId"])(
     "requires an exact UUID for %s",
     (field) => {
       expect(() =>

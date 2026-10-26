@@ -94,3 +94,15 @@ test("invalid or ambiguous instructions cannot reboot a different session", () =
     "--message", "hello",
   ]), /ChatGPT/);
 });
+
+test("older standalone T3 browser session id 'chatgpt' can reboot without OpenRig", async () => {
+  const args = parseRebootArgs(["--session-id", "chatgpt", "--message", "Resume the same task."]);
+  const result = await rebootExistingT3Session(args, { exchange: async (_address, request) => {
+    assert.equal(request.sessionId, "chatgpt");
+    assert.equal(request.type, "chatgpt.reboot");
+    return { requestId: request.requestId, version: 1, ok: true, data: {
+      action: "reboot", sessionId: "chatgpt", rebootGeneration: 1, status: "submitted",
+    } };
+  } });
+  assert.equal(result.sessionId, "chatgpt");
+});
