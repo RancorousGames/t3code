@@ -5,6 +5,10 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  EMPTY_MANUAL_CHAT_MAX_IDLE_MS,
+  emptyManualChatEligibility,
+} from "./chatGPTUnusedManualSessionPolicy";
+import {
   CHATGPT_HIDDEN_EXPIRY_MS,
   chatGPTBrowserLastUrlKey,
   chatGPTBrowserRemovalAuditKey,
@@ -90,6 +94,50 @@ afterEach(async () => {
 });
 
 describe("durable T3 ChatGPT local browser removal audit", () => {
+  it("uses persisted manual origin, a synthetic 30-minute boundary, and an auditable local-only disposition", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    let id = "";
+    await act(async () => {
+      id = harness.createSession(undefined, { explicitlyUserCreated: true });
+    });
+    await act(async () => harness.markManualPinClicked(id));
+    const stored = readChatGPTBrowserSessions(env);
+    const session = stored.find((s) => s.id === id)!;
+    expect(session).toMatchObject({
+      creationOrigin: "manual",
+      manualEmptyCandidateCreatedAt: 100_000,
+      manualPinUntilClicked: false,
+    });
+    const eligibleAt = (now: number) =>
+      emptyManualChatEligibility({
+        session,
+        sessions: stored,
+        now,
+        lastTouchedAt: 160_000, // Selecting a row delays expiry, not adoption.
+        activeSessionId: undefined,
+        managerIds: new Set(),
+        hasUncertainSend: false,
+        recoveryPending: false,
+        hasConversationUrl: false,
+      });
+    expect(eligibleAt(100_000 + EMPTY_MANUAL_CHAT_MAX_IDLE_MS)).toBe("not-idle-for-30-minutes");
+    clock.mockReturnValue(160_000 + EMPTY_MANUAL_CHAT_MAX_IDLE_MS);
+    expect(eligibleAt(Date.now())).toBe("eligible");
+
+    // The separately verified guest-close preflight must succeed before this local removal.
+    await remove(id, "unused-empty-manual");
+    expect(readChatGPTBrowserSessions(env).some((s) => s.id === id)).toBe(false);
+    expect(audit().filter((receipt) => receipt.sessionId === id)).toMatchObject([
+      {
+        source: "unused-empty-manual",
+        conversationId: null,
+        persistence: "local-session-list-verified",
+      },
+    ]);
+    await unmount();
+    await mount();
+    expect(harness.sessions.some((s) => s.id === id)).toBe(false);
+  });
   it("keeps auto-close exemption after unsnooze and clearing a highlighted border", async () => {
     const worker = await add("Worker");
     await act(async () => harness.setSessionSnooze([worker], Date.now() + 3600_000));
