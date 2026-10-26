@@ -14,10 +14,12 @@ export interface TaskBoardClaim {
   completedAt: number | null;
 }
 
-const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const DEFAULT_VAULT = "B:/GDrive/SharedWithPhone/Obsidian/jjj";
 
-/** Only frontmatter is authoritative; prose/AI notes must never trigger deletion. */
+/** Read only frontmatter. An unclaimed task still matters if its ID appears in
+ * a worker title; legacy claim labels may use short UUIDs instead of exact ones.
+ * No prose/AI Notes are interpreted as evidence of completion.
+ */
 export function parseTaskBoardClaim(contents: string): TaskBoardClaim | null {
   if (!contents.startsWith("---\n") && !contents.startsWith("---\r\n")) return null;
   const end = contents.indexOf("\n---", 4);
@@ -25,17 +27,12 @@ export function parseTaskBoardClaim(contents: string): TaskBoardClaim | null {
   const header = contents.slice(0, end);
   const read = (key: string) => {
     const line = header.split(/\r?\n/).find((row) => row.startsWith(`${key}:`));
-    return (
-      line
-        ?.slice(key.length + 1)
-        .trim()
-        .replace(/^['"]|['"]$/g, "") ?? ""
-    );
+    return (line?.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, "") ?? "");
   };
   const claimedBy = read("claimed_by");
   const taskId = read("id");
   const column = read("column").toLowerCase();
-  if (!UUID.test(claimedBy) || !/^[A-Z][A-Z0-9]*-\d+$/.test(taskId) || !column) return null;
+  if (!/^[A-Z][A-Z0-9]*-\d+$/.test(taskId) || !column) return null;
   const completedAt = Date.parse(read("completed_at"));
   return {
     taskId,
@@ -45,7 +42,7 @@ export function parseTaskBoardClaim(contents: string): TaskBoardClaim | null {
   };
 }
 
-/** This is read-only and fail-closed: missing/unavailable boards never prove Done. */
+/** A read error never proves a worker has no tasks: propagate it to skip cleanup. */
 export async function readTaskBoardClaims(
   vault = NodeProcess.env.T3_TASKBOARD_VAULT ?? DEFAULT_VAULT,
 ): Promise<TaskBoardClaim[]> {
@@ -65,9 +62,12 @@ export async function readTaskBoardClaims(
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
       const file = NodePath.join(active, entry.name);
       const info = await NodeFS.stat(file);
-      if (info.size > 128 * 1024) continue; // oversized/unparseable claims can never authorize close
+      // An unreadable/oversized task could hide a worker association; don't
+      // infer "unassigned" from a silently skipped card.
+      if (info.size > 128 * 1024) throw new Error(`Oversized TaskBoard card: ${file}`);
       const claim = parseTaskBoardClaim(await NodeFS.readFile(file, "utf8"));
-      if (claim) claims.push(claim);
+      if (!claim) throw new Error(`Unparseable TaskBoard frontmatter: ${file}`);
+      claims.push(claim);
     }
   }
   return claims;
