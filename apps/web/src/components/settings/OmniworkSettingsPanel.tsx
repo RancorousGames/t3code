@@ -3,6 +3,7 @@ import { useMemo } from "react";
 
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
+import { OmniworkToolsSection } from "./OmniworkToolsSection";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 const UNLOAD_PROFILES = [
@@ -89,6 +90,7 @@ export function OmniworkSettingsPanel() {
           }
         />
       </SettingsSection>
+      <OmniworkToolsSection />
     </SettingsPageContainer>
   );
 }

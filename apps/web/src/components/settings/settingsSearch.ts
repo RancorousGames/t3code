@@ -597,14 +597,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "diagnostics",
     title: "Diagnostics",
-    to: "/settings/general",
+    to: "/settings/omniwork",
     searchTerms: ["logs traces processes resource history failures spans cpu memory"],
   },
   {
     id: "omnihub-keep-awake",
     title: "OmniHub Keep Awake",
-    to: "/settings/general",
-    searchTerms: ["temporary keepawake wake session monitor alive retry omnihub"],
+    to: "/settings/omniwork",
+    searchTerms: ["temporary keepawake wake session monitor alive retry omnihub cancel sooner"],
     desktopOnly: true,
   },
   {

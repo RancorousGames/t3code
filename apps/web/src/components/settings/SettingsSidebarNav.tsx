@@ -343,8 +343,12 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                   const isGeneralDetailPage =
                     item.to === "/settings/general" &&
                     pathname === "/settings/open-source-licenses";
+                  const isOmniworkDetailPage =
+                    item.to === "/settings/omniwork" &&
+                    (pathname === "/settings/diagnostics" || pathname === "/settings/keep-awake");
                   const isActive =
                     isGeneralDetailPage ||
+                    isOmniworkDetailPage ||
                     pathname === item.to ||
                     pathname.startsWith(`${item.to}/`);
                   return (

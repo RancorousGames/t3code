@@ -1,9 +1,10 @@
 /**
- * Read-only view model for OmniHub temporary Keep Awake monitors.
+ * View model for OmniHub temporary Keep Awake monitors.
  *
  * These are OmniHub keep-awake wakes for agent sessions, not T3 scheduled
- * tasks. The page only reads a snapshot; it never issues, cancels, or edits a
- * keep-awake and never sees scheduler control tokens.
+ * tasks. The page reads snapshots and can request the two real scheduler
+ * controls (wake in one minute, cancel) by exact monitor ID through trusted
+ * desktop main. It never sees scheduler control tokens.
  *
  * The types below are a structural mirror of `DesktopOmniHubKeepAwakeReadResult`
  * in `packages/contracts` (desktop IPC `readOmniHubKeepAwakeMonitors`). The
@@ -178,4 +179,84 @@ export function formatKeepAwakeInterval(intervalMinutes: number | null): string 
   const hours = Math.floor(total / 60);
   const minutes = total % 60;
   return [hours ? `${hours}h` : "", minutes ? `${minutes}m` : ""].filter(Boolean).join(" ");
+}
+
+export type KeepAwakeControlAction = "wake_in_one_minute" | "cancel";
+
+/** Mirror of `DesktopOmniHubKeepAwakeControlReceipt` in `packages/contracts`. */
+export interface OmniHubKeepAwakeControlReceipt {
+  readonly ok: boolean;
+  readonly monitorId: string;
+  readonly action: KeepAwakeControlAction;
+  readonly clientRequestId: string;
+  readonly code: "applied" | "unavailable" | "denied" | "conflict" | "unknown";
+  readonly detail: string;
+  readonly state?: string | undefined;
+  readonly nextDueMs?: number | undefined;
+  readonly sendMayAlreadyBeInFlight?: boolean | undefined;
+}
+
+/** Exact-monitor control. Resolves `null` when the desktop control bridge is missing. */
+export type OmniHubKeepAwakeController = (query: {
+  monitorId: string;
+  action: KeepAwakeControlAction;
+  clientRequestId: string;
+  confirmedTargetId?: string | undefined;
+}) => Promise<OmniHubKeepAwakeControlReceipt | null>;
+
+/** Why mutating controls are disabled for this monitor; `null` when they may be offered. */
+export function keepAwakeControlBlockedReason(monitor: OmniHubKeepAwakeMonitor): string | null {
+  if (!monitor.activeOrPending) return "This keep-awake has already ended.";
+  if (monitor.status === "unknown") return "Monitor state is unverified. Refresh first.";
+  return null;
+}
+
+const ACTION_LABEL: Record<KeepAwakeControlAction, string> = {
+  wake_in_one_minute: "Wake sooner",
+  cancel: "Cancel",
+};
+
+/**
+ * One visible receipt line per invocation. Only an ok `applied` reads as
+ * success; `unknown` is never auto-retried and asks the user to verify.
+ */
+export function describeKeepAwakeControlOutcome(
+  action: KeepAwakeControlAction,
+  outcome:
+    | { kind: "receipt"; receipt: OmniHubKeepAwakeControlReceipt | null }
+    | { kind: "error"; message: string },
+): { tone: "success" | "warning" | "error"; message: string } {
+  const label = ACTION_LABEL[action];
+  if (outcome.kind === "error") {
+    return {
+      tone: "warning",
+      message: `${label}: outcome unknown (${outcome.message}). Not retried; check the refreshed state.`,
+    };
+  }
+  const receipt = outcome.receipt;
+  if (!receipt) {
+    return { tone: "error", message: `${label}: keep-awake controls are unavailable here.` };
+  }
+  const detail = receipt.detail ? ` ${receipt.detail}` : "";
+  const inFlight = receipt.sendMayAlreadyBeInFlight
+    ? " A wake may already be in flight; it was not stopped."
+    : "";
+  switch (receipt.code) {
+    case "applied":
+      return receipt.ok
+        ? { tone: "success", message: `${label}: applied.${detail}${inFlight}` }
+        : {
+            tone: "warning",
+            message: `${label}: not confirmed.${detail} Check the refreshed state.${inFlight}`,
+          };
+    case "unknown":
+      return {
+        tone: "warning",
+        message: `${label}: outcome unknown.${detail} Not retried; check the refreshed state.${inFlight}`,
+      };
+    case "denied":
+    case "conflict":
+    case "unavailable":
+      return { tone: "error", message: `${label}: ${receipt.code}.${detail}${inFlight}` };
+  }
 }

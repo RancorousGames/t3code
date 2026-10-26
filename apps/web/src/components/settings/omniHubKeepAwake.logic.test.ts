@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  describeKeepAwakeControlOutcome,
+  keepAwakeControlBlockedReason,
+  type OmniHubKeepAwakeControlReceipt,
   formatKeepAwakeInterval,
   formatKeepAwakeRawValue,
   groupKeepAwakeMonitors,
@@ -54,6 +57,70 @@ describe("groupKeepAwakeMonitors", () => {
     ]);
     expect(active.map((m) => m.id)).toEqual(["final", "unknown"]);
     expect(history.map((m) => m.id)).toEqual(["done", "gone"]);
+  });
+});
+
+describe("keepAwakeControlBlockedReason", () => {
+  it("allows controls on active and overdue-final monitors, blocks ended and unverified ones", () => {
+    expect(keepAwakeControlBlockedReason(monitor({}))).toBeNull();
+    expect(
+      keepAwakeControlBlockedReason(
+        monitor({ status: "final_pending", finalWakePending: true, endAtMs: NOW - 1 }),
+      ),
+    ).toBeNull();
+    expect(
+      keepAwakeControlBlockedReason(monitor({ status: "completed", activeOrPending: false })),
+    ).not.toBeNull();
+    expect(keepAwakeControlBlockedReason(monitor({ status: "unknown" }))).not.toBeNull();
+  });
+});
+
+describe("describeKeepAwakeControlOutcome", () => {
+  const receipt = (overrides: Partial<OmniHubKeepAwakeControlReceipt>) => ({
+    ok: true,
+    monitorId: "m",
+    action: "cancel" as const,
+    clientRequestId: "r",
+    code: "applied" as const,
+    detail: "",
+    ...overrides,
+  });
+
+  it("only reports success for an ok applied receipt", () => {
+    expect(
+      describeKeepAwakeControlOutcome("cancel", { kind: "receipt", receipt: receipt({}) }).tone,
+    ).toBe("success");
+    expect(
+      describeKeepAwakeControlOutcome("cancel", {
+        kind: "receipt",
+        receipt: receipt({ ok: false }),
+      }).tone,
+    ).toBe("warning");
+  });
+
+  it("treats unknown and transport failures as unverified, not retried", () => {
+    const unknown = describeKeepAwakeControlOutcome("wake_in_one_minute", {
+      kind: "receipt",
+      receipt: receipt({ ok: false, code: "unknown", sendMayAlreadyBeInFlight: true }),
+    });
+    expect(unknown.tone).toBe("warning");
+    expect(unknown.message).toMatch(/Not retried/);
+    expect(unknown.message).toMatch(/in flight/);
+    const failed = describeKeepAwakeControlOutcome("cancel", { kind: "error", message: "IPC" });
+    expect(failed.tone).toBe("warning");
+    expect(failed.message).toMatch(/outcome unknown/);
+  });
+
+  it("surfaces denied (protected manager) and missing bridge as errors", () => {
+    expect(
+      describeKeepAwakeControlOutcome("cancel", {
+        kind: "receipt",
+        receipt: receipt({ ok: false, code: "denied", detail: "Manager monitor is protected." }),
+      }),
+    ).toEqual({ tone: "error", message: "Cancel: denied. Manager monitor is protected." });
+    expect(
+      describeKeepAwakeControlOutcome("cancel", { kind: "receipt", receipt: null }).tone,
+    ).toBe("error");
   });
 });
 

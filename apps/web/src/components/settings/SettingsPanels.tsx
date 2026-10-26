@@ -3377,38 +3377,6 @@ export function GeneralSettingsPanel() {
             </Button>
           }
         />
-      </SettingsSection>
-      <SettingsSection title="Diagnostics">
-        <SettingsRow
-          {...searchableSetting("diagnostics")}
-          description={
-            isEnvironmentScope
-              ? "Inspect processes, resource use, and logs on this environment."
-              : "Inspect processes, resource use, and logs on one environment at a time."
-          }
-          control={
-            <Button
-              render={
-                <Link to="/settings/diagnostics" search={{ machine: environmentId ?? undefined }} />
-              }
-              size="sm"
-              variant="outline"
-            >
-              View diagnostics
-            </Button>
-          }
-        />
-        {isElectron ? (
-          <SettingsRow
-            {...searchableSetting("omnihub-keep-awake")}
-            description="Monitor OmniHub's temporary keep-awake wakes for agent sessions. Not T3 scheduled tasks."
-            control={
-              <Button render={<Link to="/settings/keep-awake" />} size="sm" variant="outline">
-                View monitors
-              </Button>
-            }
-          />
-        ) : null}
         <SettingsRow
           {...searchableSetting("open-source-licenses")}
           description="Notices for dependencies, assets, and optional tools used by T3 Code."
