@@ -69,6 +69,7 @@ vi.mock("./chatGPTSessionCompletion", () => ({
 import { runChatGPTSessionControl } from "./chatGPTSessionControl";
 import { previewBridge } from "./components/preview/previewBridge";
 import { chatGPTWebviewAutomation } from "./chatGPTWebviewAutomation";
+import { tryAcquireChatGPTRecoveryMutation } from "./chatGPTRecoveryMutationGate";
 
 const session = { id: "existing-inactive-session", title: "Inactive" };
 const changeState = (state: "hidden" | "unhidden" | "closed") =>
@@ -110,18 +111,18 @@ beforeEach(() => {
       }
       if (expression.includes("inspectChatGPTComposer"))
         return { status: shared.draft ? "nonempty" : "empty", url: shared.url, text: shared.draft };
-      return ({
-      url: shared.url,
-      activity: shared.activity,
-      uiActivity: shared.uiActivity,
-      lastText: "",
-      lastRole: null,
-      assistantHasContent: false,
-      totalTurns: 0,
-      messages: [],
-      stuck: false,
-      connectionInterrupted: false,
-    });
+      return {
+        url: shared.url,
+        activity: shared.activity,
+        uiActivity: shared.uiActivity,
+        lastText: "",
+        lastRole: null,
+        assistantHasContent: false,
+        totalTurns: 0,
+        messages: [],
+        stuck: false,
+        connectionInterrupted: false,
+      };
     },
   };
   vi.stubGlobal("document", { querySelectorAll: () => [guest] });
@@ -210,6 +211,20 @@ describe("exact-session state changes", () => {
 });
 
 describe("existing blank ChatGPT homepage recovery through normal OMCP reload", () => {
+  it("refuses manual force reload while automatic recovery owns an in-flight mutation lease", async () => {
+    const automatic = tryAcquireChatGPTRecoveryMutation("local", session.id, "automatic", "reload");
+    expect(automatic).not.toBeNull();
+    try {
+      await expect(reload(true)).rejects.toThrow("Another browser recovery is in progress");
+      expect(shared.reloads).toBe(0);
+      expect(previewBridge.navigate).not.toHaveBeenCalled();
+    } finally {
+      automatic?.release();
+    }
+    await expect(reload()).resolves.toMatchObject({ requestedNavigation: true });
+    expect(previewBridge.navigate).toHaveBeenCalledTimes(1);
+  });
+
   it("navigates exactly the attached inactive session to its saved canonical URL without force", async () => {
     const result = await reload();
     expect(result).toMatchObject({
