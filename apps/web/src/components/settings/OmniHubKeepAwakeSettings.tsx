@@ -1,8 +1,10 @@
 import { AlertTriangleIcon, CheckIcon, CopyIcon, ExternalLinkIcon, InfoIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { ensureLocalApi } from "../../localApi";
+import { readOmniHubKeepAwakeForT3 } from "../../omniwork/omniHubKeepAwakeClient";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { formatRelativeTimeLabel, formatRelativeTimeUntil } from "../../timestampFormat";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -10,7 +12,6 @@ import { RefreshIcon } from "../ui/refresh-icon";
 import {
   formatKeepAwakeInterval,
   formatKeepAwakeRawValue,
-  getOmniHubKeepAwakeReader,
   groupKeepAwakeMonitors,
   isFinalWakeOverdue,
   keepAwakeHasIssue,
@@ -26,21 +27,38 @@ import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./s
 // polling hard. Polling pauses while the window is hidden.
 const AUTO_REFRESH_MS = 15_000;
 
-/** `failed` is the reader rejecting (e.g. IPC error), distinct from an `unavailable` result. */
+/**
+ * `failed` is the reader rejecting (e.g. IPC error), distinct from an `unavailable` result.
+ * `not-connected` means there is no reader, or the reader resolved `null` (no desktop bridge).
+ */
 type LoadState =
   | { kind: "loading" }
   | { kind: "not-connected" }
   | { kind: "failed"; message: string }
   | { kind: "ready"; result: OmniHubKeepAwakeReadResult };
 
+const NOT_CONNECTED: LoadState = { kind: "not-connected" };
+
+/**
+ * Live reader for this T3 instance: the primary (local) environment, whose
+ * persisted ChatGPT browser sessions, hidden ones included, are sent along so
+ * the desktop can resolve targets. `null` until the primary environment is known.
+ */
+function useT3KeepAwakeReader(): OmniHubKeepAwakeReader | null {
+  const environmentId = usePrimaryEnvironmentId();
+  return useMemo(
+    () => (environmentId ? () => readOmniHubKeepAwakeForT3(environmentId) : null),
+    [environmentId],
+  );
+}
+
 /**
  * Reads keep-awake snapshots while mounted: on open, every AUTO_REFRESH_MS
  * while the document is visible, on becoming visible again, and on demand.
- * `reader` defaults to the one registered by the desktop bridge integration.
  */
 function useKeepAwakeSnapshot(reader: OmniHubKeepAwakeReader | null) {
   const [state, setState] = useState<LoadState>(() =>
-    reader ? { kind: "loading" } : { kind: "not-connected" },
+    reader ? { kind: "loading" } : NOT_CONNECTED,
   );
   const [refreshing, setRefreshing] = useState(false);
   const inFlight = useRef(false);
@@ -49,8 +67,11 @@ function useKeepAwakeSnapshot(reader: OmniHubKeepAwakeReader | null) {
     if (!reader || inFlight.current) return;
     inFlight.current = true;
     setRefreshing(true);
+    // A reader that arrives after mount (primary environment resolved) loads, not "unavailable".
+    setState((current) => (current.kind === "not-connected" ? { kind: "loading" } : current));
     try {
-      setState({ kind: "ready", result: await reader() });
+      const result = await reader();
+      setState(result ? { kind: "ready", result } : NOT_CONNECTED);
     } catch (error) {
       setState({ kind: "failed", message: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -75,7 +96,7 @@ function useKeepAwakeSnapshot(reader: OmniHubKeepAwakeReader | null) {
     };
   }, [reader, refresh]);
 
-  return { state, refreshing, refresh };
+  return { state: reader ? state : NOT_CONNECTED, refreshing, refresh };
 }
 
 const relativeLabel = (ms: number) => formatRelativeTimeLabel(new Date(ms).toISOString());
@@ -283,13 +304,16 @@ function MessageRow({ tone, children }: { tone: "info" | "error"; children: Reac
 
 /**
  * Settings > OmniHub Keep Awake. A read-only monitor of OmniHub's temporary
- * keep-awake wakes. It never starts, stops, or edits one.
+ * keep-awake wakes. It never starts, stops, or edits one. `reader` is injectable
+ * for tests; omitted, it reads this T3 instance through the desktop bridge.
  */
 export function OmniHubKeepAwakeSettingsPanel({
-  reader = getOmniHubKeepAwakeReader(),
+  reader: injectedReader,
 }: {
   reader?: OmniHubKeepAwakeReader | null;
 }) {
+  const liveReader = useT3KeepAwakeReader();
+  const reader = injectedReader === undefined ? liveReader : injectedReader;
   const { state, refreshing, refresh } = useKeepAwakeSnapshot(reader);
   const nowMs = useRelativeTimeTick(30_000);
 
@@ -321,8 +345,8 @@ export function OmniHubKeepAwakeSettingsPanel({
       <SettingsSection title="Active" headerAction={refreshButton}>
         {state.kind === "not-connected" ? (
           <MessageRow tone="error">
-            Keep-awake data is unavailable: this build does not connect the OmniHub keep-awake
-            reader. It is only available in the desktop app once the bridge is wired up.
+            Keep-awake data is unavailable here, so monitor state is unknown. It can only be read
+            from the T3 desktop app on the machine running OmniHub.
           </MessageRow>
         ) : state.kind === "loading" ? (
           <MessageRow tone="info">Loading keep-awake monitors…</MessageRow>

@@ -71,26 +71,12 @@ export type OmniHubKeepAwakeReadResult =
       readonly error: string;
     };
 
-/** Async source of snapshots; supplied by the desktop bridge owner. */
-export type OmniHubKeepAwakeReader = () => Promise<OmniHubKeepAwakeReadResult>;
-
-let registeredReader: OmniHubKeepAwakeReader | null = null;
-
 /**
- * Integration point for the IPC owner. Call once at startup with a function
- * that returns the desktop IPC result unchanged; until then the page shows
- * "not connected". Returns an unregister function.
+ * Async source of snapshots. Resolves `null` when this client has no desktop
+ * keep-awake bridge (web, mobile, older desktop builds), which the page shows
+ * as unavailable rather than as an empty list.
  */
-export function setOmniHubKeepAwakeReader(reader: OmniHubKeepAwakeReader | null): () => void {
-  registeredReader = reader;
-  return () => {
-    if (registeredReader === reader) registeredReader = null;
-  };
-}
-
-export function getOmniHubKeepAwakeReader(): OmniHubKeepAwakeReader | null {
-  return registeredReader;
-}
+export type OmniHubKeepAwakeReader = () => Promise<OmniHubKeepAwakeReadResult | null>;
 
 /**
  * Splits monitors by the projection's own `activeOrPending` flag, so nothing is
