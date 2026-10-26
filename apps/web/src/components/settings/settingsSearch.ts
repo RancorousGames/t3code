@@ -601,6 +601,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["logs traces processes resource history failures spans cpu memory"],
   },
   {
+    id: "omnihub-keep-awake",
+    title: "OmniHub Keep Awake",
+    to: "/settings/general",
+    searchTerms: ["temporary keepawake wake session monitor alive retry omnihub"],
+    desktopOnly: true,
+  },
+  {
     id: "open-source-licenses",
     title: "Open source licenses",
     to: "/settings/general",

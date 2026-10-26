@@ -26,6 +26,7 @@ import { Route as SettingsProjectsRouteImport } from './routes/settings.projects
 import { Route as SettingsOpenSourceLicensesRouteImport } from './routes/settings.open-source-licenses'
 import { Route as SettingsOmniworkRouteImport } from './routes/settings.omniwork'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
+import { Route as SettingsKeepAwakeRouteImport } from './routes/settings.keep-awake'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
@@ -126,6 +127,11 @@ const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   path: '/keybindings',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsKeepAwakeRoute = SettingsKeepAwakeRouteImport.update({
+  id: '/keep-awake',
+  path: '/keep-awake',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsIntegrationsRoute = SettingsIntegrationsRouteImport.update({
   id: '/integrations',
   path: '/integrations',
@@ -217,6 +223,7 @@ export interface FileRoutesByFullPath {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
+  '/settings/keep-awake': typeof SettingsKeepAwakeRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/omniwork': typeof SettingsOmniworkRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
@@ -247,6 +254,7 @@ export interface FileRoutesByTo {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
+  '/settings/keep-awake': typeof SettingsKeepAwakeRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/omniwork': typeof SettingsOmniworkRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
@@ -281,6 +289,7 @@ export interface FileRoutesById {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
+  '/settings/keep-awake': typeof SettingsKeepAwakeRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/omniwork': typeof SettingsOmniworkRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
@@ -316,6 +325,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/integrations'
+    | '/settings/keep-awake'
     | '/settings/keybindings'
     | '/settings/omniwork'
     | '/settings/open-source-licenses'
@@ -346,6 +356,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/integrations'
+    | '/settings/keep-awake'
     | '/settings/keybindings'
     | '/settings/omniwork'
     | '/settings/open-source-licenses'
@@ -379,6 +390,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/integrations'
+    | '/settings/keep-awake'
     | '/settings/keybindings'
     | '/settings/omniwork'
     | '/settings/open-source-licenses'
@@ -527,6 +539,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsKeybindingsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/keep-awake': {
+      id: '/settings/keep-awake'
+      path: '/keep-awake'
+      fullPath: '/settings/keep-awake'
+      preLoaderRoute: typeof SettingsKeepAwakeRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/integrations': {
       id: '/settings/integrations'
       path: '/integrations'
@@ -669,6 +688,7 @@ interface SettingsRouteChildren {
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
+  SettingsKeepAwakeRoute: typeof SettingsKeepAwakeRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsOmniworkRoute: typeof SettingsOmniworkRoute
   SettingsOpenSourceLicensesRoute: typeof SettingsOpenSourceLicensesRoute
@@ -687,6 +707,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
+  SettingsKeepAwakeRoute: SettingsKeepAwakeRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsOmniworkRoute: SettingsOmniworkRoute,
   SettingsOpenSourceLicensesRoute: SettingsOpenSourceLicensesRoute,

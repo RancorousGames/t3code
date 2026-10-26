@@ -3398,6 +3398,17 @@ export function GeneralSettingsPanel() {
             </Button>
           }
         />
+        {isElectron ? (
+          <SettingsRow
+            {...searchableSetting("omnihub-keep-awake")}
+            description="Monitor OmniHub's temporary keep-awake wakes for agent sessions. Not T3 scheduled tasks."
+            control={
+              <Button render={<Link to="/settings/keep-awake" />} size="sm" variant="outline">
+                View monitors
+              </Button>
+            }
+          />
+        ) : null}
         <SettingsRow
           {...searchableSetting("open-source-licenses")}
           description="Notices for dependencies, assets, and optional tools used by T3 Code."
