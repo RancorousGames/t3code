@@ -217,12 +217,12 @@ describe("existing blank ChatGPT homepage recovery through normal OMCP reload", 
     try {
       await expect(reload(true)).rejects.toThrow("Another browser recovery is in progress");
       expect(shared.reloads).toBe(0);
-      expect(previewBridge.navigate).not.toHaveBeenCalled();
+      expect(previewBridge!.navigate).not.toHaveBeenCalled();
     } finally {
       automatic?.release();
     }
     await expect(reload()).resolves.toMatchObject({ requestedNavigation: true });
-    expect(previewBridge.navigate).toHaveBeenCalledTimes(1);
+    expect(previewBridge!.navigate).toHaveBeenCalledTimes(1);
   });
 
   it("navigates exactly the attached inactive session to its saved canonical URL without force", async () => {
