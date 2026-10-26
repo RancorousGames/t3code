@@ -52,6 +52,38 @@ describe("OpenRig nonmodal floating window", () => {
     expect(escape).toHaveBeenCalledTimes(1);
   });
 
+  it("dismisses an already-focused embedded guest press via the desktop relay, without claiming guest input", async () => {
+    const dismiss = vi.fn();
+    const unsubscribe = vi.fn();
+    let relay: ((action: string) => void) | undefined;
+    vi.stubGlobal("window", {
+      ...window,
+      desktopBridge: {
+        onMenuAction(listener: (action: string) => void) {
+          relay = listener;
+          return unsubscribe;
+        },
+      },
+    });
+    await act(async () => {
+      renderer = create(<OpenRigFloatingWindow
+        id="qa-guest" label="Agent network" storageKey="geometry"
+        defaultGeometry={() => ({ left: 200, top: 60, width: 850, height: 540 })}
+        minSize={{ width: 360, height: 420 }} compactBelow={640}
+        onOutsidePointerDown={dismiss}
+        header={() => <span>Header</span>}
+      >{() => <span>Content</span>}</OpenRigFloatingWindow>);
+    });
+    expect(relay).toBeDefined();
+    await act(async () => relay?.("open-settings"));
+    expect(dismiss).not.toHaveBeenCalled();
+    await act(async () => relay?.("openrig.floating-window.guest-pointerdown"));
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    await act(async () => renderer?.unmount());
+    renderer = null;
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it("dismisses only real outside primary clicks, without consuming the app click or window focus", async () => {
     const dismiss = vi.fn();
     await act(async () => {

@@ -1600,6 +1600,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     let lastDirectGestureAt = -Infinity;
     const beforeMouse = (_event: Electron.Event, mouse: Electron.MouseInputEvent): void => {
       if (mouse.type === "mouseUp") lastDirectGestureAt = performance.now();
+      // Native webview input does not bubble to the host document. Relay only
+      // physical primary presses; never synthesize or consume a guest click.
+      if (mouse.type === "mouseDown" && mouse.button === "left") {
+        const host = currentMainWindow;
+        if (host && !host.isDestroyed() && !host.webContents.isDestroyed()) {
+          host.webContents.send(MENU_ACTION_CHANNEL, "openrig.floating-window.guest-pointerdown");
+        }
+      }
     };
     const willNavigate = (
       event: Electron.Event<Electron.WebContentsWillNavigateEventParams>,
