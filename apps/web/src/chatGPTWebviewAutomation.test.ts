@@ -265,7 +265,8 @@ describe("local ChatGPT Electron webview automation", () => {
       const owner = (window as unknown as Record<symbol, {
         active: boolean; interrupted: boolean; finish: () => void;
       }>)[Symbol.for("t3.chatgpt.composerOwner")];
-      expect(owner?.active).toBe(true);
+      if (!owner) throw new Error("Expected active composer owner");
+      expect(owner.active).toBe(true);
       // Simulate the human's trusted key event during React's async Send-button wait.
       owner.interrupted = true;
       editor.value = "robot + human draft";
