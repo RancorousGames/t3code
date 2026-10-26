@@ -4,7 +4,7 @@
 
 The operator command is `rig seat reboot <exact-seat-id>`; the OpenRig MCP action is `reboot_agent`. T3's internal desktop activation is `chatgpt.reboot`.
 
-If the previous conversation is errored, T3 can proceed without reopening it _only_ when its failed page is positively known to contain no editable draft. If a message may still be sending, an unsaved draft cannot be ruled out, the browser identity differs, or the outcome is UNKNOWN, T3 refuses a destructive replacement. Reconcile the **original operation ID** rather than sending the reboot again.
+Agent Reboot is explicitly allowed from **working, pending, stalled, errored, hidden or unloaded** sessions. T3 mounts the existing browser slot and starts a new ChatGPT conversation without waiting for the old conversation to become idle. The old URL and prior UNKNOWN delivery evidence are retained; an available private draft snapshot is attempted. **Forcing a reboot can interrupt active generation or lose an unreadable, unsent draft.** Reconcile the **original reboot operation ID** after an ambiguous outcome; never replay its initial send.
 
 Browser **reload/refresh** is a different recovery operation: it stays in the same ChatGPT conversation. In the session tooltip, **Last browser reload** and **Last Agent Reboot** are intentionally separate timestamps.
 
