@@ -1269,7 +1269,7 @@ export async function runChatGPTSessionControl(input: {
       throw new Error("Session URL or orange state changed before refresh; not reloading.");
     const guest = guestFor(environmentId, entry.id);
     const { runtimeId, webview } = guest;
-    if (!runtimeId || !webview || !previewBridge) throw new Error("ChatGPT guest is not attached.");
+    if (!runtimeId || !webview) throw new Error("ChatGPT guest is not attached.");
     // A forced refresh may interrupt generation, never typed drafts, attachments
     // or a pending/UNKNOWN send. Fail closed if the composer cannot be inspected.
     if (!(await hasVerifiedEmptyChatGPTComposer(webview, latest.observedGuestUrl!)))
@@ -1291,7 +1291,23 @@ export async function runChatGPTSessionControl(input: {
       Date.now(),
       sessions.map((s) => s.id),
     );
-    await previewBridge.refresh(runtimeId);
+    // The final draft/attachment/identity check and reload share ONE guest JS
+    // turn; a user typing after the earlier asynchronous checks cannot lose a
+    // newly entered draft between a separate preflight and host refresh IPC.
+    const issued = await webview.executeJavaScript(`(() => {
+      if (location.href !== ${JSON.stringify(latest.observedGuestUrl)}) return false;
+      const draft = (${inspectChatGPTComposer.toString()})(document, location.href);
+      if (draft.status !== 'empty') return false;
+      const composer = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"]');
+      const form = composer?.closest('form');
+      if (!form || form.querySelector('img,video,audio,[data-testid*="attachment"],[data-testid*="upload-preview"],[data-state="recording"],[data-state="uploading"],[aria-label^="Remove file"],[aria-label^="Remove attachment"]') ||
+          Array.from(form.querySelectorAll('input[type="file"]')).some(input => input.files?.length)) return false;
+      const page = (${inspectChatGPTPage.toString()})({from:'end',count:1,includeMessages:false});
+      if (!${input.force === true} && page.activity !== 'idle') return false;
+      location.reload();
+      return true;
+    })()`);
+    if (issued !== true) throw new Error("Guest changed or contains a draft/attachment; refusing reload.");
     recordChatGPTSessionRefreshedAt(environmentId, entry.id);
     const forcedWorkingReload = input.force === true && (workingBefore || workingAtCommit);
     recordChatGPTRecoveryEvent(environmentId, entry.id, "manual-refresh-issued", forcedWorkingReload ? "force-interrupt" : before.status);

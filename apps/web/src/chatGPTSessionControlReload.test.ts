@@ -10,6 +10,8 @@ const shared = vi.hoisted(() => ({
   draft: "",
   unknownSend: false,
   attachments: false,
+  draftAtCommit: false,
+  reloads: 0,
 }));
 vi.mock("./browser/chatGPTGuestHibernation", () => ({
   isChatGPTGuestHibernated: () => false,
@@ -95,11 +97,20 @@ beforeEach(() => {
   shared.draft = "";
   shared.unknownSend = false;
   shared.attachments = false;
+  shared.draftAtCommit = false;
+  shared.reloads = 0;
   const guest = {
     dataset: { previewTab: "unit-runtime" },
-    executeJavaScript: async (expression: string) => expression.includes("inspectChatGPTComposer")
-      ? { status: shared.draft ? "nonempty" : "empty", url: shared.url, text: shared.draft }
-      : ({
+    executeJavaScript: async (expression: string) => {
+      if (expression.includes("location.reload();")) {
+        if (shared.draftAtCommit) shared.draft = "user typed between checks";
+        if (shared.draft || shared.attachments || shared.url !== shared.saved) return false;
+        shared.reloads++;
+        return true;
+      }
+      if (expression.includes("inspectChatGPTComposer"))
+        return { status: shared.draft ? "nonempty" : "empty", url: shared.url, text: shared.draft };
+      return ({
       url: shared.url,
       activity: shared.activity,
       uiActivity: shared.uiActivity,
@@ -110,7 +121,8 @@ beforeEach(() => {
       messages: [],
       stuck: false,
       connectionInterrupted: false,
-    }),
+    });
+    },
   };
   vi.stubGlobal("document", { querySelectorAll: () => [guest] });
   const storage = {
@@ -244,7 +256,8 @@ describe("existing blank ChatGPT homepage recovery through normal OMCP reload", 
       forcedWorkingReload: true,
       warning: expect.stringMatching(/unfinished assistant response/),
     });
-    expect(previewBridge!.refresh).toHaveBeenCalledExactlyOnceWith("unit-runtime");
+    expect(shared.reloads).toBe(1);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
   });
 
   it("never drops a typed draft, attachments or an UNKNOWN send, even with force", async () => {
@@ -269,6 +282,16 @@ describe("existing blank ChatGPT homepage recovery through normal OMCP reload", 
     expect(previewBridge!.refresh).not.toHaveBeenCalled();
   });
 
+  it("preserves text entered between preflight and the atomic guest reload", async () => {
+    shared.url = shared.saved;
+    shared.activity = "working";
+    shared.uiActivity = "working";
+    shared.draftAtCommit = true;
+    await expect(reload(true)).rejects.toThrow(/Guest changed or contains a draft/);
+    expect(shared.draft).toBe("user typed between checks");
+    expect(shared.reloads).toBe(0);
+  });
+
   it("requires force for an orange interrupted session while allowing a regular inactive reload", async () => {
     shared.uiActivity = "interrupted";
     await expect(reload()).rejects.toThrow(/orange/);
@@ -278,7 +301,8 @@ describe("existing blank ChatGPT homepage recovery through normal OMCP reload", 
   it("refreshes a healthy idle canonical conversation normally without force", async () => {
     shared.url = shared.saved;
     await expect(reload()).resolves.toMatchObject({ reloaded: true, sessionId: session.id });
-    expect(previewBridge!.refresh).toHaveBeenCalledExactlyOnceWith("unit-runtime");
+    expect(shared.reloads).toBe(1);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
     expect(previewBridge!.navigate).not.toHaveBeenCalled();
   });
 
