@@ -145,6 +145,25 @@ describe("OmniHub temporary keep-awake read-only projection", () => {
     expect(badUrl.target.url).toBeNull();
   });
 
+  it("only marks absent targets missing when their kind was enumerated", () => {
+    const native = monitor({ target: { kind: "t3/native_thread", sessionId: sid } });
+    const browserOnly = projectOmniHubKeepAwakeSnapshot(
+      snapshot(native),
+      now,
+      sessions,
+      ["t3/chatgpt_browser"],
+    ).monitors[0]!;
+    expect(browserOnly.target.visibility).toBe("unchecked");
+    expect(browserOnly.explanation).not.toContain("absent");
+    const nativeChecked = projectOmniHubKeepAwakeSnapshot(
+      snapshot(native),
+      now,
+      sessions,
+      ["t3/chatgpt_browser", "t3/native_thread"],
+    ).monitors[0]!;
+    expect(nativeChecked.target.visibility).toBe("missing");
+  });
+
   it("fails closed on invalid store or invalid monitor instead of reporting zero active", () => {
     expect(projectOmniHubKeepAwakeSnapshot({ version: 2, monitors: {} }, now).availability).toBe(
       "unavailable",

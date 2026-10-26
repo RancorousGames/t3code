@@ -99,6 +99,7 @@ export function projectOmniHubKeepAwakeSnapshot(
   source: unknown,
   nowMs: number,
   sessions?: readonly KeepAwakeTargetSession[],
+  checkedKinds?: readonly KeepAwakeTargetSession["kind"][],
 ): KeepAwakeReadResult {
   const base = { source: OMNIHUB_KEEP_AWAKE_SOURCE, observedAtMs: nowMs };
   const store = record(source);
@@ -139,14 +140,18 @@ export function projectOmniHubKeepAwakeSnapshot(
         ? target.kind
         : "unknown";
     const match = sessions?.find((s) => s.id === targetId && s.kind === kind);
-    const visibility: KeepAwakeTarget["visibility"] =
-      sessions === undefined
-        ? "unchecked"
-        : !match
-          ? "missing"
-          : match.hidden
-            ? "hidden"
-            : "visible";
+    // A renderer may only know browser sessions; do not claim a native target is missing.
+    const kindWasChecked =
+      kind !== "unknown" &&
+      sessions !== undefined &&
+      (checkedKinds === undefined || checkedKinds.includes(kind));
+    const visibility: KeepAwakeTarget["visibility"] = !kindWasChecked
+      ? "unchecked"
+      : !match
+        ? "missing"
+        : match.hidden
+          ? "hidden"
+          : "visible";
 
     // Link only a previously observed T3 URL, never a guessed URL from the target UUID.
     const url =
@@ -259,6 +264,7 @@ export async function readLocalOmniHubKeepAwake(
   options: {
     localAppData?: string;
     sessions?: readonly KeepAwakeTargetSession[];
+    checkedKinds?: readonly KeepAwakeTargetSession["kind"][];
     nowMs?: number;
     readText?: (path: string) => Promise<string>;
   } = {},
@@ -277,7 +283,12 @@ export async function readLocalOmniHubKeepAwake(
     const content = await (options.readText ?? ((p: string) => readFile(p, "utf8")))(path);
     if (content.length > 5_000_000)
       return { ...base, error: "OmniHub keep-awake snapshot exceeds the size limit." };
-    return projectOmniHubKeepAwakeSnapshot(JSON.parse(content) as unknown, nowMs, options.sessions);
+    return projectOmniHubKeepAwakeSnapshot(
+      JSON.parse(content) as unknown,
+      nowMs,
+      options.sessions,
+      options.checkedKinds,
+    );
   } catch {
     return {
       ...base,

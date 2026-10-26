@@ -1862,6 +1862,10 @@ export interface DesktopChatGPTDraftSnapshotReceipt {
 }
 
 export interface DesktopBridge {
+  /** One-shot read of OmniHub's locally persisted temporary keep-awake monitors. */
+  readOmniHubKeepAwakeMonitors?: (
+    input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeQuery,
+  ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeReadResult>;
   /** Read-only local TaskBoard Done evidence; unavailable on non-desktop clients. */
   readTaskBoardWorkerClaims?: () => Promise<
     readonly {
