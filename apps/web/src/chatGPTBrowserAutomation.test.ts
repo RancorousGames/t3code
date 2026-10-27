@@ -29,7 +29,11 @@ function fixture() {
     type: vi.fn(async () => undefined),
     press: vi.fn(async () => undefined),
     evaluate: vi.fn(async (_runtime: string, { expression }: { expression: string }) =>
-      expression.includes("const el = document.querySelector") ? true : false,
+      expression.includes("const draftEditor =") || expression.includes("const expectedDraft =")
+        ? { ok: true }
+        : expression.includes("const el = document.querySelector")
+          ? true
+          : false,
     ),
   };
   const input = {
@@ -97,6 +101,19 @@ describe("initial ChatGPT prompt delivery receipt", () => {
       const result = await sendInitialChatGPTPrompt({ ...input, newManagedWorker });
       // No user turn is rendered in this fixture, so the submission is UNKNOWN.
       expect(result).toMatchObject({ delivery: "unknown", sendAttempted: true });
+      expect(automation.evaluate).toHaveBeenCalledWith(
+        "runtime",
+        expect.objectContaining({
+          expression: expect.stringContaining("document.execCommand('delete', false)"),
+        }),
+      );
+      const clearedAt = automation.evaluate.mock.invocationCallOrder[0];
+      const typedAt = automation.type.mock.invocationCallOrder[0];
+      const verifiedAt = automation.evaluate.mock.invocationCallOrder[1];
+      const pressedAt = automation.press.mock.invocationCallOrder[0];
+      expect(clearedAt).toBeLessThan(typedAt!);
+      expect(typedAt).toBeLessThan(verifiedAt!);
+      expect(verifiedAt).toBeLessThan(pressedAt!);
       expect(automation.type).toHaveBeenCalledWith(
         "runtime",
         expect.objectContaining({
@@ -113,6 +130,36 @@ describe("initial ChatGPT prompt delivery receipt", () => {
       );
     }
   });
+  it("never types or sends when an inherited draft could not be cleared", async () => {
+    const { input, automation } = fixture();
+    automation.evaluate.mockResolvedValueOnce({
+      ok: false,
+      reason: "Could not clear restored ChatGPT draft.",
+    });
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result.delivery).toBe("not_sent");
+    expect(result.reason).toContain("Could not clear restored ChatGPT draft");
+    expect(automation.type).not.toHaveBeenCalled();
+    expect(automation.press).not.toHaveBeenCalled();
+  });
+
+  it("never sends if stale text reappears after typing the startup prompt", async () => {
+    const { input, automation } = fixture();
+    automation.evaluate.mockImplementation(
+      async (_runtime: string, { expression }: { expression: string }) =>
+        expression.includes("const draftEditor =")
+          ? { ok: true }
+          : expression.includes("const expectedDraft =")
+            ? { ok: false, reason: "Automatic startup composer differs from intended prompt." }
+            : false,
+    );
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result.delivery).toBe("not_sent");
+    expect(result.reason).toContain("composer differs from intended prompt");
+    expect(automation.type).toHaveBeenCalledTimes(1);
+    expect(automation.press).not.toHaveBeenCalled();
+  });
+
   it("refuses to type into an already opened conversation instead of assuming it is fresh", async () => {
     const { input, automation } = fixture();
     automation.status.mockResolvedValue({
@@ -130,8 +177,10 @@ describe("initial ChatGPT prompt delivery receipt", () => {
     const { input, automation } = fixture();
     automation.evaluate.mockImplementation(
       async (_runtime: string, { expression }: { expression: string }) =>
-        expression.includes("const el = document.querySelector") ||
-        expression.includes("data-message-author-role"),
+        expression.includes("const draftEditor =") || expression.includes("const expectedDraft =")
+          ? { ok: true }
+          : expression.includes("const el = document.querySelector") ||
+            expression.includes("data-message-author-role"),
     );
     const result = await sendInitialChatGPTPrompt(input);
     expect(result).toEqual({ delivery: "user_turn_observed", sendAttempted: true });

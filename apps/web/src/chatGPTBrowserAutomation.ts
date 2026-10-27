@@ -75,7 +75,10 @@ export async function sendInitialChatGPTPrompt(input: {
     input.prompt,
     session.id,
     session.parentSessionId,
-    { newManagedWorker: input.newManagedWorker !== false, ...(session.project === undefined ? {} : { project: session.project }) },
+    {
+      newManagedWorker: input.newManagedWorker !== false,
+      ...(session.project === undefined ? {} : { project: session.project }),
+    },
   );
   const readState = input.readState ?? readThreadPreviewState;
   const now = input.now ?? Date.now;
@@ -135,7 +138,53 @@ export async function sendInitialChatGPTPrompt(input: {
               rejectedGuest = true;
               throw new Error("ChatGPT spawn reservation changed before dispatch.");
             }
+            // The ChatGPT home composer may contain a draft restored from an
+            // unrelated empty chat. Clear that exact guest editor first, rather
+            // than relying on an insert to replace the old text. This is only
+            // used for an owned automatic spawn/reboot, never for manual chats.
+            // Treat a partial clear as an attempted mutation; do not retry it
+            // against a potentially different guest.
             startedTyping = true;
+            const cleared = await automation.evaluate(runtimeId, {
+              expression: `(() => {
+                if (!['chatgpt.com', 'chat.openai.com'].includes(location.hostname) ||
+                    location.pathname !== '/')
+                  return { ok: false, reason: 'Guest left the new-chat home before clearing draft.' };
+                const draftEditor = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+                if (!(draftEditor instanceof HTMLElement) ||
+                    (!draftEditor.isContentEditable &&
+                     !(draftEditor instanceof HTMLTextAreaElement)))
+                  return { ok: false, reason: 'New-chat composer is not editable.' };
+                const read = () => draftEditor instanceof HTMLTextAreaElement
+                  ? draftEditor.value : (draftEditor.innerText || draftEditor.textContent || '');
+                if (!read().trim()) return { ok: true };
+                draftEditor.focus();
+                if (draftEditor.isContentEditable) {
+                  const selection = document.getSelection();
+                  const range = document.createRange();
+                  range.selectNodeContents(draftEditor);
+                  selection?.removeAllRanges();
+                  selection?.addRange(range);
+                } else {
+                  draftEditor.select();
+                }
+                document.execCommand('delete', false);
+                // The command's boolean return is unreliable across browser
+                // versions; the editor's actual content is the safety check.
+                return { ok: !read().trim(),
+                  reason: 'Could not clear restored ChatGPT draft.' };
+              })()`,
+            });
+            if (
+              typeof cleared !== "object" ||
+              cleared === null ||
+              !("ok" in cleared) ||
+              cleared.ok !== true
+            ) {
+              throw new Error(
+                `ChatGPT automatic startup draft clear failed: ${JSON.stringify(cleared)}`,
+              );
+            }
             try {
               await automation.type(runtimeId, {
                 selector: COMPOSER_SELECTOR,
@@ -192,6 +241,36 @@ export async function sendInitialChatGPTPrompt(input: {
                   cause: error,
                 });
               }
+            }
+            // A draft can be restored again after clearing, or a type helper
+            // can append instead of replace. Never press Send unless this
+            // exact new-chat editor contains only the intended handoff.
+            const verified = await automation.evaluate(runtimeId, {
+              expression: `(() => {
+                if (!['chatgpt.com', 'chat.openai.com'].includes(location.hostname) ||
+                    location.pathname !== '/')
+                  return { ok: false, reason: 'Guest left the new-chat home before dispatch.' };
+                const editor = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+                if (!(editor instanceof HTMLElement) ||
+                    (!editor.isContentEditable && !(editor instanceof HTMLTextAreaElement)))
+                  return { ok: false, reason: 'New-chat composer is not editable before dispatch.' };
+                const expectedDraft = ${JSON.stringify(prompt)};
+                const actualDraft = editor instanceof HTMLTextAreaElement
+                  ? editor.value : (editor.innerText || editor.textContent || '');
+                const normalize = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+                return { ok: normalize(actualDraft) === normalize(expectedDraft),
+                  reason: 'Automatic startup composer differs from intended prompt.' };
+              })()`,
+            });
+            if (
+              typeof verified !== "object" ||
+              verified === null ||
+              !("ok" in verified) ||
+              verified.ok !== true
+            ) {
+              throw new Error(
+                `ChatGPT automatic startup prompt verification failed: ${JSON.stringify(verified)}`,
+              );
             }
             // Dispatch through ChatGPT's enabled Send control in the guest DOM.
             sendAttempted = true;
