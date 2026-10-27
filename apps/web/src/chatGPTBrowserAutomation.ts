@@ -120,20 +120,9 @@ export async function sendInitialChatGPTPrompt(input: {
               selector: COMPOSER_SELECTOR,
               timeoutMs: Math.min(COMPOSER_WAIT_MS, Math.max(1, deadline - now())),
             });
-            // Even a freshly reserved guest might be opened by the user before
-            // dispatch. Never clear or replace anything already in its composer.
-            const emptyComposer = await automation.evaluate(runtimeId, {
-              expression: `(() => {
-                const el = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
-                if (!(el instanceof HTMLElement)) return false;
-                const text = el instanceof HTMLTextAreaElement ? el.value : (el.innerText || el.textContent || '');
-                return text.trim().length === 0;
-              })()`,
-            });
-            if (emptyComposer !== true) {
-              rejectedGuest = true;
-              throw new Error("ChatGPT composer was not empty; preserving the existing draft.");
-            }
+            // ChatGPT can restore a stale draft from another empty chat here.
+            // Automatic spawn/reboot replaces it with the intended bootstrap;
+            // exact guest, reservation and home-URL checks remain in place.
             // Prevent a removed/replaced reservation from writing to an orphaned guest.
             if (
               !(input.readSessions ?? readChatGPTBrowserSessions)(input.environmentId).some(
@@ -206,7 +195,7 @@ export async function sendInitialChatGPTPrompt(input: {
             }
             // Dispatch through ChatGPT's enabled Send control in the guest DOM.
             sendAttempted = true;
-            await automation.press(runtimeId, { key: "Enter" });
+            await automation.press(runtimeId, { key: "Enter", expectedComposerText: prompt });
 
             // Neither a new conversation URL nor an empty composer confirms
             // delivery. Require the exact rendered user turn before acknowledging.

@@ -91,16 +91,28 @@ describe("initial ChatGPT prompt delivery receipt", () => {
     expect(automation.press).not.toHaveBeenCalled();
   });
 
-  it("preserves an existing draft without clearing it or sending", async () => {
-    const { input, automation } = fixture();
-    automation.evaluate.mockResolvedValueOnce(false);
-    const result = await sendInitialChatGPTPrompt(input);
-    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
-    expect(result.reason).toContain("preserving the existing draft");
-    expect(automation.type).not.toHaveBeenCalled();
-    expect(automation.press).not.toHaveBeenCalled();
+  it("replaces a restored draft when starting an automated worker or reboot", async () => {
+    for (const newManagedWorker of [true, false]) {
+      const { input, automation } = fixture();
+      const result = await sendInitialChatGPTPrompt({ ...input, newManagedWorker });
+      // No user turn is rendered in this fixture, so the submission is UNKNOWN.
+      expect(result).toMatchObject({ delivery: "unknown", sendAttempted: true });
+      expect(automation.type).toHaveBeenCalledWith(
+        "runtime",
+        expect.objectContaining({
+          clear: true,
+          text: expect.stringContaining("Do exactly one job"),
+        }),
+      );
+      expect(automation.press).toHaveBeenCalledWith(
+        "runtime",
+        expect.objectContaining({
+          key: "Enter",
+          expectedComposerText: expect.stringContaining("Do exactly one job"),
+        }),
+      );
+    }
   });
-
   it("refuses to type into an already opened conversation instead of assuming it is fresh", async () => {
     const { input, automation } = fixture();
     automation.status.mockResolvedValue({
