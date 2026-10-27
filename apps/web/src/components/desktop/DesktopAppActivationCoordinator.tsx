@@ -37,7 +37,10 @@ import {
 } from "../../chatGPTSessionControl";
 import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
 import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
-import { resolveChatGPTSessionAddress } from "../../chatGPTConversationRouting";
+import {
+  resolveExistingChatGPTSessionAddress,
+  resolveExplicitChatGPTConversationAddress,
+} from "../../chatGPTConversationRouting";
 import {
   releaseChatGPTDeliveryMount,
   requestChatGPTDeliveryMount,
@@ -570,28 +573,21 @@ export function DesktopAppActivationCoordinator() {
           };
         let deliveryMountSessionId: string | undefined;
         try {
-          let sessionSnapshot = readChatGPTBrowserSessions(environmentId);
+          const sessionSnapshot = readChatGPTBrowserSessions(environmentId);
           let resolvedSessionId = request.sessionId;
           let exactConversationId = request.expectedConversationId;
-          let openedConversationSession = false;
           if (
-            (request.action === "read" ||
-              request.action === "send" ||
-              request.action === "reconcile_send") &&
-            request.sessionId
+            request.action === "open" ||
+            request.action === "read" ||
+            request.action === "send" ||
+            request.action === "reconcile_send"
           ) {
-            if (
-              request.expectedConversationId &&
-              request.sessionId !== request.expectedConversationId &&
-              !sessionSnapshot.some((session) => session.id === request.sessionId)
-            ) {
-              if (!getChatGPTSessionPersistedStore(environmentId).persist.hasHydrated())
-                throw new Error("ChatGPT session registry is not hydrated; no message sent.");
-              throw new Error(
-                "T3 browser session is missing; original recipient retained, no message sent.",
-              );
-            }
-            const address = resolveChatGPTSessionAddress(
+            if (!getChatGPTSessionPersistedStore(environmentId).persist.hasHydrated())
+              throw new Error("ChatGPT session registry is not hydrated; no message sent.");
+          }
+          if (request.action === "open") {
+            if (!request.sessionId) throw new Error("Explicit conversation ID required.");
+            const address = resolveExplicitChatGPTConversationAddress(
               request.sessionId,
               sessionSnapshot,
               (id) => {
@@ -601,33 +597,54 @@ export function DesktopAppActivationCoordinator() {
                   chatGPTBrowserLastUrlKey(environmentId, id),
                   Schema.String,
                 );
-                const entry = sessionSnapshot.find((session) => session.id === id);
-                // A recovery owner is seeded with /c/<id> before the preview
-                // mounts. Keep that durable hint through its initial homepage
-                // or loading transitions, so retries do not create duplicates.
-                if (
-                  entry?.title.startsWith("Conversation ") &&
-                  saved &&
-                  !chatGPTConversationIdFromUrl(current?._tag === "Success" ? current.url : null)
-                )
-                  return saved;
-                return current?._tag === "Success" ? current.url : saved;
+                return current?._tag === "Success" && chatGPTConversationIdFromUrl(current.url)
+                  ? current.url
+                  : saved;
               },
+            );
+            if (address.create) {
+              flushSync(() => {
+                resolvedSessionId = createSession(
+                  `Conversation ${address.conversationId.slice(0, 8)}`,
+                  { initialConversationUrl: `https://chatgpt.com/c/${address.conversationId}` },
+                );
+              });
+            } else {
+              resolvedSessionId = address.sessionId;
+            }
+            return {
+              version: 1,
+              requestId: request.requestId,
+              ok: true,
+              data: {
+                action: "open",
+                sessionId: resolvedSessionId,
+                conversationId: address.conversationId,
+                created: address.create,
+              },
+            };
+          }
+          if (
+            request.action === "read" ||
+            request.action === "send" ||
+            request.action === "reconcile_send"
+          ) {
+            if (!request.sessionId) throw new Error("Existing T3 browser session ID required.");
+            const address = resolveExistingChatGPTSessionAddress(
+              request.sessionId,
+              sessionSnapshot,
               request.expectedConversationId,
             );
             // Direct T3 session sends often omit expectedConversationId. For an
             // existing unloaded session, recover its exact persisted conversation
             // reference before requesting a targeted mount. Sending still waits
             // for an independently observed matching guest URL below.
-            const savedConversation =
-              !address.create && address.sessionId
-                ? chatGPTConversationIdFromUrl(
-                    getLocalStorageItem(
-                      chatGPTBrowserLastUrlKey(environmentId, address.sessionId),
-                      Schema.String,
-                    ),
-                  )
-                : null;
+            const savedConversation = chatGPTConversationIdFromUrl(
+              getLocalStorageItem(
+                chatGPTBrowserLastUrlKey(environmentId, address.sessionId),
+                Schema.String,
+              ),
+            );
             exactConversationId =
               address.conversationId ??
               (request.action === "send" ||
@@ -635,33 +652,9 @@ export function DesktopAppActivationCoordinator() {
               (request.action === "read" && request.wakeForSend === true)
                 ? (savedConversation ?? undefined)
                 : undefined);
-            let needsNewSession = address.create;
-            if (request.action === "reconcile_send" && needsNewSession)
-              throw new Error(
-                "Reconciliation requires an existing exact conversation; no browser was created.",
-              );
-            // A saved URL is only a routing hint, not permission to send.
-            // Keep the existing T3 owner even when its guest is unloaded; a
-            // failed early read must not create a duplicate browser session.
-            // The actual loaded conversation is verified below before sending.
-            if (needsNewSession) {
-              const conversationId = address.conversationId;
-              if (!conversationId) throw new Error("Unknown conversation ID cannot be opened.");
-              const conversationUrl = `https://chatgpt.com/c/${conversationId}`;
-              // Explicit user-directed lookup: create a T3 browser owner, never
-              // create a new ChatGPT conversation or send to a guessed tab.
-              flushSync(() => {
-                resolvedSessionId = createSession(`Conversation ${conversationId.slice(0, 8)}`, {
-                  initialConversationUrl: conversationUrl,
-                });
-              });
-              openedConversationSession = true;
-            } else {
-              if (!address.sessionId)
-                throw new Error("Existing ChatGPT session ID was not resolved.");
-              resolvedSessionId = address.sessionId;
-            }
-            sessionSnapshot = readChatGPTBrowserSessions(environmentId);
+            // Saved URLs are hints, never permission to create or retarget a
+            // message. The loaded guest's identity is verified before delivery.
+            resolvedSessionId = address.sessionId;
             // The direct T3 CLI first performs a guarded READ before SEND.
             // That read must wake its exact unloaded recipient as well; otherwise
             // the CLI rejects before the queued/durable send can begin.
@@ -680,11 +673,7 @@ export function DesktopAppActivationCoordinator() {
               requestChatGPTDeliveryMount(environmentId, resolvedSessionId);
               deliveryMountSessionId = resolvedSessionId;
             }
-            if (
-              (openedConversationSession || deliveryNeedsGuest) &&
-              resolvedSessionId &&
-              exactConversationId
-            ) {
+            if (deliveryNeedsGuest && resolvedSessionId && exactConversationId) {
               // Confirm the physical guest URL; the send service checks composer
               // availability and repeats the exact-recipient guard before typing.
               const deadline = Date.now() + 55_000;

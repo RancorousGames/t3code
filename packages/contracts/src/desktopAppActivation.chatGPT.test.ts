@@ -8,14 +8,25 @@ const common = { version: 1, requestId: "local-id" } as const;
 
 describe("ChatGPT local desktop bridge protocol", () => {
   it("recognizes the explicit two-session rollover finalization without accepting invented conversation IDs", () => {
-    const old="385e7c81-23f5-48f3-89de-c1f9c63893d2";
-    const next="e47e787b-d36f-4043-9bf0-a4cdf3e2b3ee";
-    const action={...common,type:"chatgpt.sessions",action:"rollover_finalize",sessionId:old,
-      successorSessionId:next,priorConversationId:"6adad460-5cf4-83ed-b576-b7020f7da0a8",
-      successorConversationId:"6adbe8bc-26f4-83ed-aee4-c3aaed20c87c"};
+    const old = "385e7c81-23f5-48f3-89de-c1f9c63893d2";
+    const next = "e47e787b-d36f-4043-9bf0-a4cdf3e2b3ee";
+    const action = {
+      ...common,
+      type: "chatgpt.sessions",
+      action: "rollover_finalize",
+      sessionId: old,
+      successorSessionId: next,
+      priorConversationId: "6adad460-5cf4-83ed-b576-b7020f7da0a8",
+      successorConversationId: "6adbe8bc-26f4-83ed-aee4-c3aaed20c87c",
+    };
     expect(valid(action)).toBe(true);
-    expect(valid({...action,priorConversationId:"not-a-uuid"})).toBe(false);
-    expect(valid({...action,successorConversationId:"https://chatgpt.com/c/6adbe8bc-26f4-83ed-aee4-c3aaed20c87c"})).toBe(false);
+    expect(valid({ ...action, priorConversationId: "not-a-uuid" })).toBe(false);
+    expect(
+      valid({
+        ...action,
+        successorConversationId: "https://chatgpt.com/c/6adbe8bc-26f4-83ed-aee4-c3aaed20c87c",
+      }),
+    ).toBe(false);
   });
 
   it("accepts source/recipient T3 IDs on sends without requiring a sender", () => {
@@ -80,7 +91,9 @@ describe("ChatGPT local desktop bridge protocol", () => {
     const threadId = "f39d2467-d783-4578-8ba9-ccac017b1871";
     const clientRequestId = "6ad41909-57c8-43ed-a20f-742a43cd06a6";
     expect(valid({ ...common, type: "t3.threads", action: "list" })).toBe(true);
-    expect(valid({ ...common, type: "t3.threads", action: "providers", environmentId: "t3-env" })).toBe(true);
+    expect(
+      valid({ ...common, type: "t3.threads", action: "providers", environmentId: "t3-env" }),
+    ).toBe(true);
     expect(
       valid({
         ...common,
@@ -125,29 +138,70 @@ describe("ChatGPT local desktop bridge protocol", () => {
     ];
     for (const threadId of accepted) {
       for (const action of ["read", "send"] as const) {
-        expect(valid({
-          ...common, type: "t3.threads", action, environmentId: "t3-env", threadId,
-          ...(action === "send" ? { message: "Proceed", clientRequestId: messageId } : { count: 2 }),
-        })).toBe(true);
+        expect(
+          valid({
+            ...common,
+            type: "t3.threads",
+            action,
+            environmentId: "t3-env",
+            threadId,
+            ...(action === "send"
+              ? { message: "Proceed", clientRequestId: messageId }
+              : { count: 2 }),
+          }),
+        ).toBe(true);
       }
-      expect(valid({
-        ...common, type: "t3.threads", action: "create", environmentId: "t3-env",
-        threadId,
-      })).toBe(false);
+      expect(
+        valid({
+          ...common,
+          type: "t3.threads",
+          action: "create",
+          environmentId: "t3-env",
+          threadId,
+        }),
+      ).toBe(false);
     }
     for (const threadId of [
-      "", "mcp:", "mcp:non-uuid", "thread:mcp:", "thread:mcp:foo%2", "thread:mcp:foo%QQ",
-      "thread:mcp:foo%FF", "thread:mcp:foo%0A", "thread:mcp:foo%20bar",
-      "thread:mcp:foo/bar", "thread:mcp:foo?bar", " thread:mcp:foo",
+      "",
+      "mcp:",
+      "mcp:non-uuid",
+      "thread:mcp:",
+      "thread:mcp:foo%2",
+      "thread:mcp:foo%QQ",
+      "thread:mcp:foo%FF",
+      "thread:mcp:foo%0A",
+      "thread:mcp:foo%20bar",
+      "thread:mcp:foo/bar",
+      "thread:mcp:foo?bar",
+      " thread:mcp:foo",
       "thread:mcp:" + "x".repeat(241),
     ]) {
       for (const action of ["read", "send"] as const) {
-        expect(valid({
-          ...common, type: "t3.threads", action, threadId,
-          ...(action === "send" ? { message: "Proceed", clientRequestId: messageId } : { count: 2 }),
-        }), `Malformed recipient ${JSON.stringify(threadId)} was accepted for ${action}`).toBe(false);
+        expect(
+          valid({
+            ...common,
+            type: "t3.threads",
+            action,
+            threadId,
+            ...(action === "send"
+              ? { message: "Proceed", clientRequestId: messageId }
+              : { count: 2 }),
+          }),
+          `Malformed recipient ${JSON.stringify(threadId)} was accepted for ${action}`,
+        ).toBe(false);
       }
     }
+  });
+
+  it("admits an explicit conversation open separately from read/send", () => {
+    expect(
+      valid({
+        ...common,
+        type: "chatgpt.sessions",
+        action: "open",
+        sessionId: "6ada88be-7e48-83eb-a735-75dbd1161d46",
+      }),
+    ).toBe(true);
   });
 
   it("accepts completion declarations but not an unbounded renderer wait request", () => {
@@ -171,22 +225,43 @@ describe("ChatGPT local desktop bridge protocol", () => {
   });
 
   it("accepts explicit hidden-list opt-in and exact session state transitions", () => {
-    expect(valid({
-      ...common, type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
-    })).toBe(true);
-    expect(valid({
-      ...common, type: "chatgpt.sessions", action: "list", includeHidden: "yes",
-    })).toBe(false);
+    expect(
+      valid({
+        ...common,
+        type: "chatgpt.sessions",
+        action: "list",
+        which: "all",
+        includeHidden: true,
+      }),
+    ).toBe(true);
+    expect(
+      valid({
+        ...common,
+        type: "chatgpt.sessions",
+        action: "list",
+        includeHidden: "yes",
+      }),
+    ).toBe(false);
     for (const state of ["hidden", "unhidden", "closed"] as const) {
-      expect(valid({
-        ...common, type: "chatgpt.sessions", action: "change_state",
-        sessionId: "exact-session", state,
-      })).toBe(true);
+      expect(
+        valid({
+          ...common,
+          type: "chatgpt.sessions",
+          action: "change_state",
+          sessionId: "exact-session",
+          state,
+        }),
+      ).toBe(true);
     }
-    expect(valid({
-      ...common, type: "chatgpt.sessions", action: "change_state",
-      sessionId: "exact-session", state: "delete",
-    })).toBe(false);
+    expect(
+      valid({
+        ...common,
+        type: "chatgpt.sessions",
+        action: "change_state",
+        sessionId: "exact-session",
+        state: "delete",
+      }),
+    ).toBe(false);
   });
 
   it("accepts archive/restore and typed explicit manager decisions", () => {
@@ -249,7 +324,6 @@ describe("ChatGPT local desktop bridge protocol", () => {
   });
 });
 
-
 describe("managed native thread-create protocol", () => {
   const baseCreate = {
     ...common,
@@ -266,12 +340,14 @@ describe("managed native thread-create protocol", () => {
   } as const;
   it("accepts a standalone deterministic create with explicit provider and no prompt", () => {
     expect(valid(baseCreate)).toBe(true);
-    expect(valid({
-      ...baseCreate,
-      projectId: "c5b2d999-7c69-4709-93c9-735d76b463c7",
-      firstMessage: "Review the code",
-      initialMessageId: "763df61c-87b0-48b4-a771-01d72a303516",
-    })).toBe(true);
+    expect(
+      valid({
+        ...baseCreate,
+        projectId: "c5b2d999-7c69-4709-93c9-735d76b463c7",
+        firstMessage: "Review the code",
+        initialMessageId: "763df61c-87b0-48b4-a771-01d72a303516",
+      }),
+    ).toBe(true);
   });
   it("accepts explicit OpenCode root creation and exact DeepSeek catalog selection without fallback", () => {
     const opencodeRoot = {
@@ -292,8 +368,14 @@ describe("managed native thread-create protocol", () => {
   });
   it("requires runtime, instance, model, mode, root and operation ID", () => {
     for (const key of [
-      "environmentId", "workspaceRoot", "runtime", "providerInstanceId",
-      "modelSelection", "runtimeMode", "title", "clientRequestId",
+      "environmentId",
+      "workspaceRoot",
+      "runtime",
+      "providerInstanceId",
+      "modelSelection",
+      "runtimeMode",
+      "title",
+      "clientRequestId",
     ] as const) {
       const invalid = { ...baseCreate };
       delete (invalid as Record<string, unknown>)[key];
@@ -306,6 +388,7 @@ describe("managed native thread-create protocol", () => {
       { clientRequestId: "ambiguous" },
       { firstMessage: "  " },
       { initialMessageId: "not-a-uuid" },
-    ]) expect(valid({ ...baseCreate, ...mutation })).toBe(false);
+    ])
+      expect(valid({ ...baseCreate, ...mutation })).toBe(false);
   });
 });

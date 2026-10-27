@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   mount: vi.fn(),
   releaseMount: vi.fn(),
   savedUrl: null as string | null,
+  hydrated: true,
   navigate: vi.fn(),
   createProject: vi.fn(),
   openThread: vi.fn(),
@@ -48,6 +49,9 @@ vi.mock("@t3tools/client-runtime/state/runtime", () => ({
 vi.mock("../../hooks/useLocalStorage", () => ({
   getLocalStorageItem: vi.fn(() => mocks.savedUrl),
   setLocalStorageItem: vi.fn(),
+}));
+vi.mock("../../chatGPTSessionPersistedStore", () => ({
+  getChatGPTSessionPersistedStore: () => ({ persist: { hasHydrated: () => mocks.hydrated } }),
 }));
 vi.mock("../../chatGPTSessionControl", () => ({
   runChatGPTSessionControl: mocks.runControl,
@@ -221,6 +225,7 @@ describe("background ChatGPT activation", () => {
     mocks.mount.mockReset();
     mocks.releaseMount.mockReset();
     mocks.savedUrl = null;
+    mocks.hydrated = true;
     mocks.navigate.mockClear();
     mocks.createNativeThread.mockClear();
     mocks.startNativeTurn.mockClear();
@@ -244,6 +249,120 @@ describe("background ChatGPT activation", () => {
     renderer = undefined;
     Reflect.deleteProperty(window, "desktopBridge");
     vi.unstubAllGlobals();
+  });
+
+  it("refuses missing T3 recipients without creating, mounting or sending, regardless of ID shape or guard", async () => {
+    const missing = "8844dff8-f152-4f3c-8d4f-f0d6c6997c9a";
+    const conversation = "6ada88be-7e48-83eb-a735-75dbd1161d46";
+    await act(async () => {
+      renderer = create(<DesktopAppActivationCoordinator />);
+    });
+    for (const action of ["read", "send", "reconcile_send"] as const) {
+      for (const sessionId of [missing, conversation]) {
+        await act(async () =>
+          onRequest?.({
+            version: 1,
+            type: "chatgpt.sessions",
+            action,
+            sessionId,
+            requestId: `${action}-${sessionId}`,
+            expectedConversationId: sessionId,
+            ...(action !== "read" ? { message: "Should not be sent" } : {}),
+          }),
+        );
+        expect(complete.mock.lastCall?.[0]).toMatchObject({
+          ok: false,
+          message: "T3 browser session is missing; original recipient retained, no message sent.",
+        });
+      }
+    }
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    expect(mocks.mount).not.toHaveBeenCalled();
+    expect(mocks.inspect).not.toHaveBeenCalled();
+    expect(mocks.runControl).not.toHaveBeenCalled();
+  });
+
+  it("refuses unhydrated or hidden recipients before any delivery side effects", async () => {
+    const id = "b5fc0249-28e7-48c6-9591-6761b3fa3748";
+    mocks.browserSessions = [{ id, title: "Hidden", hidden: true }];
+    await act(async () => {
+      renderer = create(<DesktopAppActivationCoordinator />);
+    });
+    await act(async () =>
+      onRequest?.({
+        version: 1,
+        type: "chatgpt.sessions",
+        action: "send",
+        requestId: "hidden-send",
+        sessionId: id,
+        message: "Never typed",
+      }),
+    );
+    expect(complete.mock.lastCall?.[0]).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("T3 browser session is missing"),
+    });
+    mocks.hydrated = false;
+    mocks.browserSessions = [{ id, title: "Available" }];
+    await act(async () =>
+      onRequest?.({
+        version: 1,
+        type: "chatgpt.sessions",
+        action: "read",
+        requestId: "unhydrated-read",
+        sessionId: id,
+      }),
+    );
+    expect(complete.mock.lastCall?.[0]).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("not hydrated"),
+    });
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    expect(mocks.mount).not.toHaveBeenCalled();
+    expect(mocks.runControl).not.toHaveBeenCalled();
+  });
+
+  it("resolves deliberate conversation opening without causing any message send", async () => {
+    const id = "b5fc0249-28e7-48c6-9591-6761b3fa3748";
+    const conversation = "6ada88be-7e48-83eb-a735-75dbd1161d46";
+    mocks.browserSessions = [{ id, title: "Existing" }];
+    mocks.savedUrl = `https://chatgpt.com/c/${conversation}`;
+    await act(async () => {
+      renderer = create(<DesktopAppActivationCoordinator />);
+    });
+    await act(async () =>
+      onRequest?.({
+        version: 1,
+        type: "chatgpt.sessions",
+        action: "open",
+        requestId: "open-existing",
+        sessionId: conversation,
+      }),
+    );
+    expect(complete.mock.lastCall?.[0]).toMatchObject({
+      ok: true,
+      data: { action: "open", sessionId: id, conversationId: conversation, created: false },
+    });
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    mocks.savedUrl = null;
+    await act(async () =>
+      onRequest?.({
+        version: 1,
+        type: "chatgpt.sessions",
+        action: "open",
+        requestId: "open-new",
+        sessionId: conversation,
+      }),
+    );
+    expect(mocks.createSession).toHaveBeenCalledExactlyOnceWith("Conversation 6ada88be", {
+      initialConversationUrl: `https://chatgpt.com/c/${conversation}`,
+    });
+    expect(complete.mock.lastCall?.[0]).toMatchObject({
+      ok: true,
+      data: { action: "open", sessionId: "spawned-session", created: true },
+    });
+    expect(mocks.mount).not.toHaveBeenCalled();
+    expect(mocks.runControl).not.toHaveBeenCalled();
   });
 
   it("wakes an unloaded recipient for guarded read preflight before a direct send", async () => {

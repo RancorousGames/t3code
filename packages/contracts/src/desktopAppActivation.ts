@@ -130,6 +130,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     type: Schema.Literal("chatgpt.sessions"),
     action: Schema.Literals([
       "list",
+      "open",
       "snapshot",
       "read",
       "send",
