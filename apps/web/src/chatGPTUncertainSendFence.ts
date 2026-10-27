@@ -2,10 +2,30 @@ import type { EnvironmentId } from "@t3tools/contracts";
 
 const PREFIX = "t3code:chatgpt-unknown-send-fence:v1:";
 const ARCHIVED_LEGACY_PREFIX = "t3code:chatgpt-legacy-unknown-archive:v1:";
+const CONFIRMED_PREFIX = "t3code:chatgpt-confirmed-delivery:v1:";
+const confirmedKey = (environmentId: EnvironmentId, sessionId: string) =>
+  `${CONFIRMED_PREFIX}${environmentId}:${sessionId}`;
+const deliveryMarker = (text: string) => /^\[T3-MSG:([a-f0-9-]{36})\]/i.exec(text)?.[1]?.toLowerCase();
+
+/** A lost IPC reply must not erase a positively observed send when its UNKNOWN fence is released. */
+export function wasDurableChatGPTSendConfirmed(
+  environmentId: EnvironmentId, sessionId: string, conversationUrl: string, original: string,
+): boolean {
+  const id = deliveryMarker(original);
+  if (!id) return false;
+  const raw = window.localStorage.getItem(confirmedKey(environmentId, sessionId));
+  if (!raw) return false;
+  const entries = JSON.parse(raw) as { messageId: string; url: string }[];
+  if (!Array.isArray(entries)) throw new Error("Unreadable confirmed send receipts.");
+  return entries.some((item) => item.messageId === id && item.url === conversationUrl);
+}
+
 const keyFor = (environmentId: EnvironmentId, sessionId: string) =>
   `${PREFIX}${environmentId}:${sessionId}`;
 
 export interface DurableChatGPTSend {
+  /** Persisted before typing; changed to undefined before invoking Send. */
+  readonly staged?: boolean;
   readonly text: string;
   readonly original: string;
   readonly url: string;
@@ -112,12 +132,78 @@ export function archiveLegacyUnknownChatGPTSend(
   return true;
 }
 
+
+/**
+ * Preserve a stale, irreconcilable receipt without holding all later independent
+ * messages hostage. The caller must establish the same idle conversation and
+ * empty draft twice. The old delivery remains UNKNOWN in a permanent archive:
+ * no click/replay of that old message is attempted.
+ */
+export function quarantineDurableUnknownChatGPTSend(
+  environmentId: EnvironmentId,
+  sessionId: string,
+  exactUrl: string,
+  now = Date.now(),
+): boolean {
+  const key = keyFor(environmentId, sessionId);
+  const current = readDurableUnknownChatGPTSend(environmentId, sessionId);
+  if (!current || current.conversationUrl !== exactUrl ||
+      now - current.reservedAt < 120_000) return false;
+  const archiveKey = ARCHIVED_LEGACY_PREFIX + environmentId + ":" + sessionId;
+  const previous = window.localStorage.getItem(archiveKey);
+  const archived = JSON.stringify({
+    ...current, reason: "stale_uncertain_send_quarantined; delivery_unproven",
+    archivedAt: now,
+  });
+  const updated = previous ? previous + "\n" + archived : archived;
+  window.localStorage.setItem(archiveKey, updated);
+  if (window.localStorage.getItem(archiveKey) !== updated)
+    throw new Error("Could not persist quarantined UNKNOWN evidence.");
+  window.localStorage.removeItem(key);
+  if (window.localStorage.getItem(key) !== null)
+    throw new Error("Quarantined receipt could not be released.");
+  return true;
+}
+
 /** Only invoke after observing the original exact sent turn. */
+export function recordDurableChatGPTSendConfirmed(
+  environmentId: EnvironmentId,
+  sessionId: string,
+  conversationUrl: string,
+  original: string,
+): void {
+  const id = deliveryMarker(original);
+  if (!id) return;
+  const key = confirmedKey(environmentId, sessionId);
+  const existing = window.localStorage.getItem(key);
+  const parsed = existing ? JSON.parse(existing) as { messageId: string; url: string }[] : [];
+  if (!Array.isArray(parsed)) throw new Error("Unreadable confirmed send receipts.");
+  const data = JSON.stringify([...parsed.filter((item) => item.messageId !== id || item.url !== conversationUrl),
+    { messageId: id, url: conversationUrl }].slice(-256));
+  window.localStorage.setItem(key, data);
+  if (window.localStorage.getItem(key) !== data)
+    throw new Error("Could not persist confirmed send receipt; preserve UNKNOWN fence.");
+}
+
+/** A provable pre-submit abort must not manufacture a confirmed delivery. */
+export function discardDurableUnsubmittedChatGPTSend(
+  environmentId: EnvironmentId, sessionId: string,
+): void {
+  const receipt = readDurableUnknownChatGPTSend(environmentId, sessionId);
+  if (!receipt?.attempt?.staged) throw new Error("Cannot discard a possibly submitted send.");
+  window.localStorage.removeItem(keyFor(environmentId, sessionId));
+  if (hasDurableUnknownChatGPTSend(environmentId, sessionId))
+    throw new Error("Could not release unsubmitted send reservation.");
+}
+
 export function releaseDurableUnknownChatGPTSend(
   environmentId: EnvironmentId,
   sessionId: string,
 ): void {
   const key = keyFor(environmentId, sessionId);
+  const receipt = readDurableUnknownChatGPTSend(environmentId, sessionId);
+  if (receipt?.attempt)
+    recordDurableChatGPTSendConfirmed(environmentId, sessionId, receipt.conversationUrl, receipt.attempt.original);
   window.localStorage.removeItem(key);
   if (window.localStorage.getItem(key) !== null) {
     throw new Error("Uncertain send tombstone remains; refuse destructive refresh.");
@@ -130,7 +216,7 @@ export function clearDurableUnknownChatGPTSendsForTests(): void {
   const keys: string[] = [];
   for (let index = 0; index < storage.length; index++) {
     const key = storage.key(index);
-    if (key?.startsWith(PREFIX)) keys.push(key);
+    if (key?.startsWith(PREFIX) || key?.startsWith(CONFIRMED_PREFIX)) keys.push(key);
   }
   for (const key of keys) storage.removeItem(key);
 }

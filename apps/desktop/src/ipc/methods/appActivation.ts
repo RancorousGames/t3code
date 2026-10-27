@@ -16,6 +16,26 @@ export const setReady = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const enqueueChatGPT = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.DESKTOP_CHATGPT_DELIVERY_ENQUEUE_CHANNEL,
+  payload: Schema.Struct({
+    messageId: Schema.String,
+    sessionId: Schema.String,
+    conversationId: Schema.String,
+    body: Schema.String,
+  }),
+  result: Schema.Struct({
+    messageId: Schema.String, sessionId: Schema.String,
+    conversationId: Schema.String, status: Schema.String,
+    attempts: Schema.Number, createdAt: Schema.Number, updatedAt: Schema.Number,
+    lastError: Schema.optional(Schema.String),
+  }),
+  handler: Effect.fn("desktop.ipc.appActivation.enqueueChatGPT")(function* (input) {
+    const activation = yield* DesktopAppActivation.DesktopAppActivation;
+    return yield* activation.enqueueChatGPT(input);
+  }),
+});
+
 export const complete = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.DESKTOP_APP_ACTIVATION_COMPLETE_CHANNEL,
   payload: DesktopAppActivationResponse,

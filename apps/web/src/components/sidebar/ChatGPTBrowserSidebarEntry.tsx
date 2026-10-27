@@ -50,6 +50,7 @@ import {
   type ChatGPTSessionSortMode,
   type ChatGPTPermanentProject,
 } from "../../chatGPTSessionGrouping";
+import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { searchChatGPTSessionGroups } from "../../chatGPTSessionSearch";
 import {
@@ -230,6 +231,7 @@ export function ChatGPTBrowserSidebarEntry({
 }: {
   showCreateAction?: boolean;
 }) {
+  const requiredForDelivery = useChatGPTDeliveryMountRequests((state) => state.required);
   const navigate = useNavigate();
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
@@ -906,11 +908,11 @@ export function ChatGPTBrowserSidebarEntry({
       />
       {visibleSessions.map((session) => (
         <Fragment key={session.id}>
-          <ChatGPTBrowserSessionRuntime
+          {!requiredForDelivery[`${environmentId}:${session.id}`] && <ChatGPTBrowserSessionRuntime
             environmentId={environmentId}
             sessionId={session.id}
             suspended={closingId === session.id || isSnoozed(session)}
-          />
+          />}
           <BrowserSessionActivityMonitor
             id={session.id}
             environmentId={environmentId}

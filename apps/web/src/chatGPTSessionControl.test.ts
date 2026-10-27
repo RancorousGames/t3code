@@ -10,6 +10,7 @@ import {
   isDuplicateSafeGenericWake,
   canReplaceGenericUnknown,
   matchesSessionWhich,
+  matchesObservedChatGPTSend,
   reloadRequiresForce,
   resetUncertainChatGPTSendsForTests,
   runChatGPTSessionControl,
@@ -24,6 +25,17 @@ const autoWake = (id: string) =>
   "[AUTOMATED TEMPORARY OMNIHUB KEEP-AWAKE; not a human message] If you have already been assigned work that is still authorized and unfinished, please resume it and report meaningful progress or blockers. If you are blocked on a human decision, finished, or awaiting input, do not invent work; state that fact. This monitor is a temporary bootstrap to be replaced by OpenRig's canonical scheduler. [Monitor attempt: " +
   id +
   "]";
+
+describe("collapsed user turn delivery acknowledgement", () => {
+  it("recognizes unique leading markers and substantial legacy excerpts", () => {
+    const id = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const body = "[T3-MSG:" + id + "]\n" + "long prompt ".repeat(900);
+    expect(matchesObservedChatGPTSend("[T3-MSG:" + id + "] Show more", body)).toBe(true);
+    expect(matchesObservedChatGPTSend("[T3-MSG:bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb]", body)).toBe(false);
+    const legacy = "legacy message with distinctive content ".repeat(100);
+    expect(matchesObservedChatGPTSend(legacy.slice(0, 130) + " Show more", legacy)).toBe(true);
+  });
+});
 
 describe("OMNI-0033 generic UNKNOWN exact-scope duplicate policy", () => {
   const a = autoWake("00000000-0000-4000-8000-000000000001");
@@ -102,7 +114,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
   const browserId = "b5fc0249-28e7-48c6-9591-6761b3fa3748";
   function guestFixture(
     readPolicy: (input: { browserSessionId: string; conversationId: string }) => Promise<unknown>,
-    options: { virtualized?: boolean; delayed?: boolean; pressThrows?: boolean } = {},
+    options: { virtualized?: boolean; delayed?: boolean; pressThrows?: boolean; composerTampered?: boolean } = {},
   ) {
     const guest = document.createElement("webview");
     guest.dataset.previewTab = "c05:test-runtime";
@@ -125,15 +137,15 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
             totalTurns: visible && !options.virtualized ? 2 : 1,
             lastRole: visible ? "assistant" : "assistant",
             lastText: visible ? "" : "Previous response",
-            lastUserTurnKey: visible ? "new-key" : "old-key",
+            lastUserTurnKey: visible ? `new-key-${presses}` : "old-key",
             lastUserTurn: visible ? 1 : 0,
             assistantHasContent: !visible,
             connectionInterrupted: false,
             stuck: false,
             messages: visible
               ? [
-                  { role: "user", text: typed, turn: 1, turnKey: "new-key" },
-                  { role: "assistant", text: "", turn: 1, turnKey: "new-key" },
+                  { role: "user", text: typed, turn: 1, turnKey: `new-key-${presses}` },
+                  { role: "assistant", text: "", turn: 1, turnKey: `new-key-${presses}` },
                 ]
               : [],
           };
@@ -146,7 +158,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
           }; // read-only composer probe, no guest focus or transcript
         if (script.includes("const el=document.querySelector(")) return composerDraft; // existing draft check
         if (script.includes("Array.from(document.querySelectorAll('[data-message-author-role")) {
-          const expected = script.match(/=== ("(?:\\.|[^"\\])*")/);
+          const expected = script.match(/(?:=== |const expected = )("(?:\\.|[^"\\])*")/);
           return visible && !!expected && typed === JSON.parse(expected[1]!);
         }
         if (script.includes("Boolean(document.querySelector(")) return true; // composer waitFor
@@ -163,6 +175,10 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
           return { ok: true }; // atomic edit check is independently tested in guard suite
         }
         if (script.includes("const selectors = [")) {
+          if (options.composerTampered) {
+            expect(script).toContain("composerMismatch");
+            return { composerMismatch: true };
+          }
           presses++;
           sent = true;
           if (!options.delayed) visible = true;
@@ -376,30 +392,6 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     }
   });
 
-  it("refuses a second automated send while the prior user turn is pending_or_stalled", async () => {
-    const fixture = guestFixture(async () => { throw new Error("offline"); });
-    const base = {
-      environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const,
-      sessionId: browserId,
-      expectedConversationId: conversationId,
-    };
-    try {
-      const first = await runChatGPTSessionControl({ ...base, message: "first queued turn" });
-      expect(first).toMatchObject({ messageSent: true });
-      const observed = await runChatGPTSessionControl({
-        ...base, action: "read", sessionId: browserId,
-      }) as { session: { status: string } };
-      expect(observed.session.status).toBe("pending_or_stalled");
-      await expect(runChatGPTSessionControl({ ...base, message: "second queued turn" }))
-        .rejects.toThrow("Conversation is not confirmed idle before typing");
-      expect(fixture.presses).toBe(1);
-    } finally {
-      fixture.guest.remove();
-    }
-  });
-
   it("preserves empty-composer guards both before and after optional policy intake", async () => {
     const message = "Original work";
     const policy = {
@@ -453,7 +445,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     }
   });
 
-  it("rechecks guest identity and generation after async intake, refusing original send if changed", async () => {
+  it("rechecks guest identity after async intake while allowing generation", async () => {
     for (const change of ["url", "generation"] as const) {
       let fixture!: ReturnType<typeof guestFixture>;
       fixture = guestFixture(async () => {
@@ -467,18 +459,20 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
         };
       });
       try {
-        await expect(
-          runChatGPTSessionControl({
-            environmentId: "local" as never,
-            sessions: [{ id: browserId, title: "M3" }] as never,
-            action: "send",
-            sessionId: browserId,
-            expectedConversationId: conversationId,
-            message: "Original work",
-          }),
-        ).rejects.toThrow(/conversation guard mismatch|generation or guest changed/);
-        expect(fixture.typed).toBe("");
-        expect(fixture.presses).toBe(0);
+        const send = runChatGPTSessionControl({
+          environmentId: "local" as never,
+          sessions: [{ id: browserId, title: "M3" }] as never,
+          action: "send", sessionId: browserId, expectedConversationId: conversationId,
+          message: "Original work",
+        });
+        if (change === "url") {
+          await expect(send).rejects.toThrow(/conversation guard mismatch/);
+          expect(fixture.typed).toBe("");
+          expect(fixture.presses).toBe(0);
+        } else {
+          await expect(send).resolves.toMatchObject({ messageSent: true });
+          expect(fixture.presses).toBe(1);
+        }
       } finally {
         fixture.guest.remove();
       }
@@ -561,6 +555,148 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     }
   });
 
+  it("attempts sends while the prior user turn is pending or working", async () => {
+    const fixture = guestFixture(async () => { throw new Error("offline"); });
+    const base = {
+      environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3" }] as never,
+      action: "send" as const,
+      sessionId: browserId,
+      expectedConversationId: conversationId,
+    };
+    try {
+      const first = await runChatGPTSessionControl({ ...base, message: "first queued turn" });
+      expect(first).toMatchObject({ messageSent: true });
+      const observed = await runChatGPTSessionControl({
+        ...base, action: "read", sessionId: browserId,
+      }) as { session: { status: string } };
+      expect(observed.session.status).toBe("pending_or_stalled");
+      await runChatGPTSessionControl({ ...base, message: "second queued turn" });
+      expect(fixture.presses).toBe(2);
+      fixture.setGenerating(true);
+      await runChatGPTSessionControl({ ...base, message: "third queued turn" });
+      expect(fixture.presses).toBe(3);
+    } finally {
+      fixture.guest.remove();
+    }
+  });
+
+  it("proves an expired queued attempt never reached Enter before allowing resubmission", async () => {
+    const fixture = guestFixture(async () => { throw new Error("offline"); });
+    const original = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\\nTest";
+    const input = {
+      environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3" }] as never,
+      sessionId: browserId,
+      expectedConversationId: conversationId,
+      message: original,
+    };
+    try {
+      await expect(runChatGPTSessionControl({
+        ...input, action: "send", sendExpiresAt: Date.now() - 1,
+      })).rejects.toThrow(/expired before dispatch/);
+      expect(fixture.presses).toBe(0);
+      expect(fixture.typed).toBe("");
+      expect(await runChatGPTSessionControl({
+        ...input, action: "reconcile_send", sendExpiresAt: Date.now() - 6_000,
+      })).toMatchObject({
+        delivery: "pre_submit_aborted", messageSent: false, sendAttempted: false,
+        verifiedConversationId: conversationId,
+      });
+      await expect(runChatGPTSessionControl({
+        ...input, action: "reconcile_send",
+      })).rejects.toThrow("not observable");
+      fixture.setComposerDraft("User typing a draft");
+      await expect(runChatGPTSessionControl({
+        ...input, action: "reconcile_send", sendExpiresAt: Date.now() - 6_000,
+      })).rejects.toThrow("not observable");
+      expect(fixture.presses).toBe(0);
+      expect(fixture.typed).toBe("");
+    } finally {
+      fixture.guest.remove();
+    }
+  });
+
+  it("does not click Send when human typing changes the composer after automation filled it", async () => {
+    const fixture = guestFixture(async () => { throw Error("offline"); },
+      { composerTampered: true });
+    try {
+      const result = await runChatGPTSessionControl({
+        environmentId: "local" as never,
+        sessions: [{ id: browserId, title: "M3" }] as never,
+        action: "send", sessionId: browserId,
+        expectedConversationId: conversationId,
+        sendExpiresAt: Date.now() + 70_000,
+        message: "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\\nTest",
+      });
+      expect(result).toMatchObject({ delivery: "pre_submit_aborted", sendAttempted: false });
+      expect(fixture.presses).toBe(0);
+    } finally { fixture.guest.remove(); }
+  });
+
+  it("finishes only an exact staged automated draft, never a human-edited composer", async () => {
+    const id = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const original = "[T3-MSG:" + id + "]\nQueued message";
+    const prefixed = "[T3-MSG:" + id + "]\n[POTENTIALLY DUPLICATE: delivery unconfirmed]\nQueued message";
+    const fixture = guestFixture(async () => { throw Error("offline"); },
+      { delayed: true, pressThrows: true });
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const input = { environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3" }] as never,
+      action: "send" as const, sessionId: browserId,
+      expectedConversationId: conversationId };
+    try {
+      await runChatGPTSessionControl({ ...input, message: original });
+      expect(fixture.presses).toBe(1);
+      fixture.setComposerDraft("Human is writing");
+      now += 5 * 60_000;
+      await expect(runChatGPTSessionControl({ ...input, message: prefixed,
+        allowPossibleDuplicate: true, sendExpiresAt: now + 70_000,
+      })).rejects.toThrow("UNKNOWN send");
+      expect(fixture.presses).toBe(1);
+      fixture.setComposerDraft(original);
+      expect(await runChatGPTSessionControl({ ...input, message: prefixed,
+        allowPossibleDuplicate: true, sendExpiresAt: now + 70_000,
+      })).toMatchObject({ delivery: "unknown", sendAttempted: true });
+      expect(fixture.presses).toBe(2);
+      expect(fixture.typed).toBe(original); // Didn't overwrite the existing draft.
+    } finally { clock.mockRestore(); fixture.guest.remove(); }
+  });
+
+  it("can resend an UNKNOWN queued message only after a long gap, preserving marker and old evidence", async () => {
+    const id = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const original = "[T3-MSG:" + id + "]\\nPlay safely";
+    const retried = "[T3-MSG:" + id + "]\\n[POTENTIALLY DUPLICATE: earlier delivery unconfirmed. If already received, ignore this repeat.]\\nPlay safely";
+    const fixture = guestFixture(async () => { throw Error("offline"); }, { delayed: true, pressThrows: true });
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const base = { environmentId: "local" as never,
+      sessions: [{ id: browserId, title: "M3" }] as never,
+      action: "send" as const, sessionId: browserId,
+      expectedConversationId: conversationId };
+    try {
+      expect(await runChatGPTSessionControl({ ...base, message: original })).toMatchObject({
+        delivery: "unknown", sendAttempted: true,
+      });
+      now += 5 * 60_000;
+      expect(await runChatGPTSessionControl({ ...base,
+        message: retried, allowPossibleDuplicate: true, sendExpiresAt: now + 70_000,
+      })).toMatchObject({ delivery: "unknown", sendAttempted: true });
+      expect(fixture.presses).toBe(2);
+      // The original message can reconcile a retried message because the stable
+      // [T3-MSG] identity remains unchanged despite the duplicate warning.
+      fixture.revealTurn();
+      expect(await runChatGPTSessionControl({
+        ...base, action: "reconcile_send", message: original,
+      })).toMatchObject({ delivery: "user_turn_observed", reconciled: true });
+      expect(fixture.presses).toBe(2);
+    } finally {
+      clock.mockRestore();
+      fixture.guest.remove();
+    }
+  });
+
   it("reconciles after post-click transport failure and refuses an unconfirmed duplicate", async () => {
     const fixture = guestFixture(
       async () => {
@@ -618,7 +754,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
       expect(fixture.presses).toBe(1);
     } finally { fixture.guest.remove(); }
   });
-  it("resolves a legacy marker only at an explicitly supplied, observed history checkpoint", async () => {
+  it("preserves an unrelated legacy receipt when a requested history turn is observed", async () => {
     const fixture = guestFixture(async () => { throw new Error("offline"); }, { pressThrows: true });
     const input = { environmentId: "local" as never,
       sessions: [{ id: browserId, title: "M3" }] as never,
@@ -634,10 +770,10 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
       expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
       expect(await runChatGPTSessionControl({ ...input, action: "reconcile_send" })).toMatchObject({
         reconciled: true, legacyReceipt: true, sendAttempted: false,
-        delivery: "legacy_unknown_resolved_at_observed_checkpoint",
+        delivery: "user_turn_observed",
       });
       expect(fixture.presses).toBe(1);
-      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(false);
+      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
     } finally { fixture.guest.remove(); }
   });
   it("returns UNKNOWN after a clicked but unobserved message times out without replay", async () => {

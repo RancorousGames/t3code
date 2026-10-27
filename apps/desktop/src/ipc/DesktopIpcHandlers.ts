@@ -93,6 +93,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(AppActivationIpc.setReady);
   yield* ipc.handle(AppActivationIpc.complete);
+  yield* ipc.handle(AppActivationIpc.enqueueChatGPT);
   yield* ipc.handle(WebLinksIpc.setReady);
 
   yield* ipc.handleSync(takeLegacyLocalStorage);

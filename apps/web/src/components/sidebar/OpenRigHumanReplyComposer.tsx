@@ -100,6 +100,7 @@ export function OpenRigHumanReplyComposer({
   item,
   address,
   onSend,
+  onRetry,
   onReconcile,
   unavailableReason,
   onAnnouncement,
@@ -107,6 +108,7 @@ export function OpenRigHumanReplyComposer({
   item: InboxItem;
   address: string;
   onSend?: HumanReplySend;
+  onRetry?: HumanReplySend;
   onReconcile?: HumanReplyReconcile;
   unavailableReason?: string;
   onAnnouncement?: (text: string) => void;
@@ -117,6 +119,7 @@ export function OpenRigHumanReplyComposer({
       item={item}
       address={address}
       {...(onSend ? { onSend } : {})}
+      {...(onRetry ? { onRetry } : {})}
       {...(onReconcile ? { onReconcile } : {})}
       {...(unavailableReason ? { unavailableReason } : {})}
       {...(onAnnouncement ? { onAnnouncement } : {})}
@@ -128,6 +131,7 @@ function ReplyComposer({
   item,
   address,
   onSend,
+  onRetry,
   onReconcile,
   unavailableReason,
   onAnnouncement,
@@ -135,6 +139,7 @@ function ReplyComposer({
   item: InboxItem;
   address: string;
   onSend?: HumanReplySend;
+  onRetry?: HumanReplySend;
   onReconcile?: HumanReplyReconcile;
   unavailableReason?: string;
   onAnnouncement?: (text: string) => void;
@@ -227,10 +232,29 @@ function ReplyComposer({
         setDraft(retryable);
         setNotice("Not sent (before POST or authoritative rejection): " + receipt.reason);
       } else {
-        setNotice("Outcome unknown. No repeat POST. Check the exact recorded operation.");
+        setNotice("Outcome unknown. Retry the saved reply or check its receipt.");
       }
     } catch {
-      setNotice("Reply outcome unknown. No repeat POST; check the exact operation.");
+      setNotice("Reply outcome unknown. Retry the saved reply or check its receipt.");
+    } finally {
+      busy.current = false;
+      setSending(false);
+    }
+  }
+
+  async function retry() {
+    if (!draft.attempt || draft.attempt.state !== "unknown" || !onRetry || busy.current) return;
+    busy.current = true;
+    setSending(true);
+    const request = requestFor(draft.attempt.operationId);
+    try {
+      const receipt = await onRetry(request);
+      if (receiptMatches(request, receipt)) accept(request.operationId, request.body);
+      else if (receipt.outcome === "not_sent") {
+        setNotice("Saved reply was not accepted: " + receipt.reason);
+      } else setNotice("Outcome still unknown. You can retry the same saved reply.");
+    } catch {
+      setNotice("Outcome still unknown. You can retry the same saved reply.");
     } finally {
       busy.current = false;
       setSending(false);
@@ -256,7 +280,7 @@ function ReplyComposer({
 
   const blocked =
     draft.attempt?.state === "unknown"
-      ? "Outcome unknown — do not resend until the exact operation is reconciled."
+      ? "Outcome unknown — retry the saved reply using the same operation."
       : draft.attempt?.state === "accepted"
         ? "Reply recorded by OpenRig. Agent delivery is not implied."
         : !onSend
@@ -313,9 +337,15 @@ function ReplyComposer({
             Check receipt (read-only)
           </button>
         )}
-        <span className="text-2xs text-muted-foreground">
-          {stored ? "Draft saved on this device" : "Storage unavailable — copy your draft"}
-        </span>
+        {draft.attempt?.state === "unknown" && onRetry && (
+          <button type="button" disabled={sending} onClick={() => void retry()}
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs hover:bg-muted">
+            Retry saved reply
+          </button>
+        )}
+        {!stored && (
+          <span className="text-2xs text-warning">Storage unavailable — copy your draft</span>
+        )}
       </div>
       <p role="status" className="text-xs text-muted-foreground">
         {notice || blocked}

@@ -15,6 +15,13 @@ interface PendingActivation {
 
 type RendererSender = (request: DesktopAppActivationRequest) => void;
 
+function recipientLane(request: DesktopAppActivationRequest): string | undefined {
+  return request.type === "chatgpt.sessions" &&
+    ["read", "send", "reconcile_send"].includes(request.action)
+    ? request.sessionId || undefined
+    : undefined;
+}
+
 function failure(
   requestId: string,
   code: DesktopAppActivationFailure["code"],
@@ -35,6 +42,7 @@ export class DesktopAppActivationBroker {
   readonly #requestTimeoutMs: number;
   readonly #chatGPTRequestTimeoutMs: number;
   readonly #activate: () => void;
+  readonly #trace: (stage: string, requestId: string, detail?: string) => void;
   #renderer: RendererSender | null = null;
   #closed = false;
 
@@ -42,10 +50,12 @@ export class DesktopAppActivationBroker {
     readonly requestTimeoutMs: number;
     readonly chatGPTRequestTimeoutMs?: number;
     readonly activate: () => void;
+    readonly trace?: (stage: string, requestId: string, detail?: string) => void;
   }) {
     this.#requestTimeoutMs = input.requestTimeoutMs;
     this.#chatGPTRequestTimeoutMs = input.chatGPTRequestTimeoutMs ?? input.requestTimeoutMs;
     this.#activate = input.activate;
+    this.#trace = input.trace ?? (() => undefined);
   }
 
   request(request: DesktopAppActivationRequest): Promise<DesktopAppActivationResponse> {
@@ -75,6 +85,7 @@ export class DesktopAppActivationBroker {
       const timeout = setTimeout(
         () => {
           const pending = this.#pending.get(request.requestId);
+          if (request.type === "chatgpt.sessions") this.#trace("broker-timeout", request.requestId, pending?.dispatched ? "dispatched" : "queued");
           const uncertain =
             pending?.dispatched &&
             (request.type === "chatgpt.reboot" ||
@@ -115,7 +126,7 @@ export class DesktopAppActivationBroker {
       request.type !== "chatgpt.reboot" &&
       request.type !== "chatgpt.refresh" &&
       request.type !== "chatgpt.spawn" &&
-      request.type !== "chatgpt.sessions" &&
+      (request.type !== "chatgpt.sessions" || request.action === "open") &&
       request.type !== "openrig.human_inbox"
     )
       this.#activate();
@@ -154,6 +165,7 @@ export class DesktopAppActivationBroker {
   }
 
   complete(response: DesktopAppActivationResponse): void {
+    this.#trace("broker-complete", response.requestId, this.#pending.has(response.requestId) ? "pending" : "late");
     this.#settle(response);
   }
 
@@ -189,13 +201,20 @@ export class DesktopAppActivationBroker {
   #flush(): void {
     const renderer = this.#renderer;
     if (renderer === null) return;
-    if ([...this.#pending.values()].some((pending) => pending.dispatched)) return;
-
+    const active = [...this.#pending.values()].filter((pending) => pending.dispatched);
+    if (active.some((pending) => !recipientLane(pending.request))) return;
     for (const pending of this.#pending.values()) {
       if (pending.dispatched) continue;
+      const lane = recipientLane(pending.request);
+      // Global operations remain barriers; independent recipient operations can
+      // reach the renderer together, where the per-browser lanes are enforced.
+      if (!lane && active.length) return;
+      if (lane && active.some((entry) => recipientLane(entry.request) === lane)) continue;
       try {
         pending.dispatched = true;
+        if (pending.request.type === "chatgpt.sessions") this.#trace("broker-dispatch", pending.request.requestId, pending.request.action);
         renderer(pending.request);
+        active.push(pending);
       } catch {
         // A synchronous bridge failure does not prove that a side-effecting
         // request was not handed off. Only ordinary workspace requests may be
@@ -210,7 +229,7 @@ export class DesktopAppActivationBroker {
           pending.dispatched = false;
         this.#renderer = null;
       }
-      return;
+      if (!lane || this.#renderer === null) return;
     }
   }
 

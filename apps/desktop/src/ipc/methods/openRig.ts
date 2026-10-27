@@ -1494,34 +1494,8 @@ export async function postOpenRigOperatorReply(
       outcome: "not_sent",
       reason: "OpenRig operator reply token is not available in desktop MAIN.",
     };
-  // Pre-POST authoritative read, not renderer metadata: original must still be
-  // a replyable direct queue message addressed to the operator.
-  try {
-    const inbox = await fetchOpenRigOperatorInbox(input.destination, fetchImpl);
-    const original = inbox.items.find(
-      (item) =>
-        item.id === input.qitemId &&
-        item.sourceType === "queue" &&
-        item.recipient === input.destination,
-    );
-    if (
-      !inbox.available ||
-      inbox.replyWriteAvailable !== true ||
-      original?.replyEligible !== true ||
-      original.sender !== input.expectedRecipient
-    )
-      return {
-        outcome: "not_sent",
-        reason: "Original item or live reply capability not confirmed.",
-      };
-  } catch {
-    return {
-      outcome: "not_sent",
-      reason: "Could not verify original OpenRig queue item before POST.",
-    };
-  }
-  // After fetch begins, an error/timeout/invalid response is indeterminate.
-  // Preserve requestId, NEVER retry POST. Only a read-only GET may resolve it.
+  // The daemon validates the exact original and selected recipient on first
+  // write and replays a committed receipt before consulting mutable routes.
   let uncertain = false;
   try {
     const response = await fetchImpl(`${operatorReplyPath(input)}/reply`, {
@@ -1532,6 +1506,7 @@ export async function postOpenRigOperatorReply(
         destination: input.destination,
         requestId: input.requestId,
         message: input.message,
+        expectedRecipient: input.expectedRecipient,
       }),
       cache: "no-store",
       redirect: "error",
@@ -1559,7 +1534,7 @@ export async function postOpenRigOperatorReply(
       ? reconciled
       : {
           outcome: "unknown",
-          reason: "POST result unconfirmed. No duplicate send; use read-only reconciliation.",
+          reason: "POST result unconfirmed. Retry the same saved reply safely.",
         };
   }
   return { outcome: "unknown", reason: "OpenRig did not confirm the exact durable reply." };

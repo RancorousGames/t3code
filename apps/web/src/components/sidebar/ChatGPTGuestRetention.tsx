@@ -20,6 +20,8 @@ import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import { readChatGPTRecoveryState } from "../../chatGPTRecoveryDiagnostics";
 import { useOpenRigManagerChatGPTSessions } from "./useOpenRigManagerChatGPTSessions";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
+import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
 
 const CachedManagerIds = Schema.Struct({
   observedAt: Schema.Number,
@@ -42,6 +44,7 @@ function recoverableSession(environmentId: string, sessionId: string): boolean {
 export function ChatGPTGuestRetention() {
   const environmentId = usePrimaryEnvironmentId();
   const { sessions } = useChatGPTBrowserSessions(environmentId);
+  const deliveryRequests = useChatGPTDeliveryMountRequests((state) => state.required);
   const managerIds = useOpenRigManagerChatGPTSessions(environmentId);
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
   const touchedAt = useChatGPTGuestHibernation((state) => state.touchedAt);
@@ -95,6 +98,7 @@ export function ChatGPTGuestRetention() {
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
       const important =
+        deliveryRequests[`${environmentId}:${session.id}`] === true ||
         activeSessionId === session.id ||
         !!session.borderColor ||
         protectedManagers?.has(session.id) ||
@@ -129,8 +133,21 @@ export function ChatGPTGuestRetention() {
       ];
     });
     return recentChatGPTGuestKeys(candidates, protectedKeys);
-  }, [activeSessionId, environmentId, managerIds, sessions, touchedAt, now, unloadProfile]);
+  }, [activeSessionId, environmentId, managerIds, sessions, touchedAt, now, unloadProfile, deliveryRequests]);
 
   useEffect(() => retainChatGPTGuests(retainedKeys), [retainedKeys]);
-  return null;
+  // This owner stays mounted on Settings and when the sidebar is collapsed.
+  return isElectron && environmentId
+    ? sessions
+        .filter((session) => deliveryRequests[`${environmentId}:${session.id}`])
+        .map((session) => (
+          <ChatGPTBrowserSessionRuntime
+            key={session.id}
+            environmentId={environmentId}
+            sessionId={session.id}
+            suspended={false}
+            quiet
+          />
+        ))
+    : null;
 }

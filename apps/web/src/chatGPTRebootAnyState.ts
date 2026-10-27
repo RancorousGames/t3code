@@ -4,7 +4,7 @@ import { wakeChatGPTGuest } from "./browser/chatGPTGuestHibernation";
 import { resetHostedBrowserGuest } from "./browser/hostedBrowserGuestReset";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { chatGPTBrowserLastUrlKey, chatGPTBrowserThreadRef } from "./chatGPTBrowserSessions";
-import { requestChatGPTDeliveryMount } from "./chatGPTDeliveryMountRequest";
+import { releaseChatGPTDeliveryMount, requestChatGPTDeliveryMount } from "./chatGPTDeliveryMountRequest";
 import { readDurableUnknownChatGPTSend } from "./chatGPTUncertainSendFence";
 import { readThreadPreviewState } from "./previewStateStore";
 
@@ -19,25 +19,29 @@ export async function findRebootBrowserSlot(
   timeoutMs = 20_000,
 ): Promise<string> {
   requestChatGPTDeliveryMount(environmentId, sessionId);
-  const ref = chatGPTBrowserThreadRef(environmentId, sessionId);
-  const deadline = Date.now() + timeoutMs;
-  do {
-    const state = readThreadPreviewState(ref);
-    const tabId = state.activeTabId ?? state.snapshot?.tabId;
-    if (tabId && state.serverEpoch) {
-      const runtimeId = previewRuntimeTabId(ref, state.serverEpoch, tabId);
-      wakeChatGPTGuest(runtimeId);
-      if (
-        Array.from(document.querySelectorAll("webview")).some(
-          (guest) => guest.dataset.previewTab === runtimeId,
+  try {
+    const ref = chatGPTBrowserThreadRef(environmentId, sessionId);
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const state = readThreadPreviewState(ref);
+      const tabId = state.activeTabId ?? state.snapshot?.tabId;
+      if (tabId && state.serverEpoch) {
+        const runtimeId = previewRuntimeTabId(ref, state.serverEpoch, tabId);
+        wakeChatGPTGuest(runtimeId);
+        if (
+          Array.from(document.querySelectorAll("webview")).some(
+            (guest) => guest.dataset.previewTab === runtimeId,
+          )
         )
-      )
-        return runtimeId;
-    }
-    if (Date.now() >= deadline) break;
-    await new Promise<void>((resolve) => setTimeout(resolve, 150));
-  } while (true);
-  throw new Error("T3 could not mount the existing browser slot for Agent Reboot.");
+          return runtimeId;
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    } while (true);
+    throw new Error("T3 could not mount the existing browser slot for Agent Reboot.");
+  } finally {
+    releaseChatGPTDeliveryMount(environmentId, sessionId);
+  }
 }
 
 /**

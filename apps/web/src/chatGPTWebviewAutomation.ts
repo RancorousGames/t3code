@@ -133,14 +133,10 @@ export const chatGPTWebviewAutomation = {
       if (!(el instanceof HTMLElement))
         return { ok: false, reason: "PreviewAutomationTargetNotFoundError" };
       const value = ${JSON.stringify(text)};
-      // User focus is ownership, even while the draft is empty. The guest may
-      // remain mounted while its human is about to type; never steal that editor.
       if (${Boolean(requireEmptyComposer)}) {
         const current = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement
           ? el.value : (el.innerText || el.textContent || "");
         if (current.trim()) return { ok: false, reason: "Composer contains an existing draft; refusing to overwrite it." };
-        if (document.hasFocus() && (document.activeElement === el || el.contains(document.activeElement)))
-          return { ok: false, reason: "User-focused composer before typing; no message sent." };
         const previous = window[Symbol.for('t3.chatgpt.composerOwner')];
         if (previous?.active) return { ok: false, reason: "Automated composer ownership still active before typing; no message sent." };
       }
@@ -149,15 +145,18 @@ export const chatGPTWebviewAutomation = {
       const markOwned = () => {
         if (!${Boolean(requireEmptyComposer)} || !${JSON.stringify(expectedConversationId ?? null)}) return;
         const key = Symbol.for('t3.chatgpt.composerOwner');
+        window[key]?.finish?.();
         const owner = {
           editor: el, conversationId: ${JSON.stringify(expectedConversationId ?? null)},
           active: true, interrupted: false, expiresAt: Date.now() + 9000
         };
-        const events = ['keydown', 'beforeinput', 'input', 'paste', 'drop', 'compositionstart', 'pointerdown'];
-        const onInput = event => { if (event.isTrusted) owner.interrupted = true; };
+        const events = ['keydown', 'beforeinput', 'input', 'paste', 'drop', 'compositionstart'];
+        const onInput = event => {
+          if (!event.isTrusted) return;
+          owner.interrupted = true;
+        };
         events.forEach(name => document.addEventListener(name, onInput, true));
         owner.finish = () => {
-          if (!owner.active) return;
           owner.active = false;
           events.forEach(name => document.removeEventListener(name, onInput, true));
           if (window[key] === owner) delete window[key];
@@ -168,7 +167,8 @@ export const chatGPTWebviewAutomation = {
         setTimeout(() => {
           if (!owner.active) return;
           owner.active = false;
-          events.forEach(name => document.removeEventListener(name, onInput, true));
+          // Keep watching human edits on the expired draft. Recovery must know
+          // if a person changed it and later restored the same text.
         }, 9100);
       };
       el.focus();
@@ -212,9 +212,10 @@ export const chatGPTWebviewAutomation = {
 
   async press(
     runtimeId: string,
-    { key, expectedConversationId, expectedComposerText, sendExpiresAt }: {
+    { key, expectedConversationId, expectedComposerText, sendExpiresAt, recoverStagedComposer }: {
       key: string; expectedConversationId?: string | undefined;
       expectedComposerText?: string | undefined; sendExpiresAt?: number | undefined;
+      recoverStagedComposer?: boolean;
     },
   ): Promise<void> {
     const webview = findWebview(runtimeId);
@@ -245,14 +246,9 @@ export const chatGPTWebviewAutomation = {
             const owner = window[Symbol.for('t3.chatgpt.composerOwner')];
             // A manually edited automation draft can coincidentally match the
             // expected text again. The trusted input event still vetoes submit.
-            if (owner && (!owner.active || owner.interrupted ||
-                owner.expiresAt <= Date.now() || owner.editor !== editor ||
+            if (owner && (owner.interrupted ||
+                (!${Boolean(recoverStagedComposer)} && (!owner.active || owner.expiresAt <= Date.now())) || owner.editor !== editor ||
                 owner.conversationId !== ${JSON.stringify(expectedConversationId ?? null)}))
-              return { composerMismatch: true };
-            // Recovery of a previously staged UNKNOWN has no live ownership
-            // token. It must not click a currently human-focused draft.
-            if (!owner && document.hasFocus() && editor &&
-                (document.activeElement === editor || editor.contains(document.activeElement)))
               return { composerMismatch: true };
           }
           const selectors = [
@@ -269,9 +265,17 @@ export const chatGPTWebviewAutomation = {
             node.getAttribute('aria-disabled') !== 'true' &&
             node.getAttribute('aria-label') !== 'Stop' &&
             !node.matches('[data-testid="stop-button"]'));
+          const finishSend = () => {
+            const owner = window[Symbol.for('t3.chatgpt.composerOwner')];
+            // Release only focus we acquired for this uninterrupted staged send.
+            // A human interaction or an unrelated focus target must be preserved.
+            if (owner?.active && !owner.interrupted && owner.editor === editor &&
+                document.activeElement === editor) editor.blur();
+            owner?.finish?.();
+          };
           if (button) {
             button.click();
-            window[Symbol.for('t3.chatgpt.composerOwner')]?.finish?.();
+            finishSend();
             return { clicked: true };
           }
           const form = editor?.closest('form');
@@ -279,7 +283,7 @@ export const chatGPTWebviewAutomation = {
           // the editor's own form invokes the same handler as clicking Send.
           if (form instanceof HTMLFormElement && form.querySelector('button[type="submit"]:not([disabled])')) {
             form.requestSubmit();
-            window[Symbol.for('t3.chatgpt.composerOwner')]?.finish?.();
+            finishSend();
             return { clicked: true };
           }
           return {

@@ -209,13 +209,13 @@ describe("local ChatGPT Electron webview automation", () => {
   });
 
 
-  it("refuses an empty but human-focused composer without editing or clicking", async () => {
+  it("types into an empty focused composer", async () => {
     const editor = document.createElement("textarea");
     editor.id = "prompt-textarea";
     document.body.appendChild(editor);
     editor.focus();
     const focused = vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    const exec = vi.fn();
+    const exec = vi.fn((_command: string, _ui: boolean, value: string) => { editor.value = value; return true; });
     const oldExec = document.execCommand;
     Object.defineProperty(document, "execCommand", { configurable: true, value: exec });
     const execute = (guest as never as { executeJavaScript: ReturnType<typeof vi.fn> }).executeJavaScript;
@@ -224,9 +224,9 @@ describe("local ChatGPT Electron webview automation", () => {
       await expect(chatGPTWebviewAutomation.type(runtimeTabId, {
         selector: "#prompt-textarea", text: "robot", clear: true,
         requireEmptyComposer: true,
-      })).rejects.toThrow("User-focused composer before typing");
-      expect(editor.value).toBe("");
-      expect(exec).not.toHaveBeenCalled();
+      })).resolves.toBeUndefined();
+      expect(editor.value).toBe("robot");
+      expect(exec).toHaveBeenCalled();
     } finally {
       focused.mockRestore();
       if (oldExec === undefined) Reflect.deleteProperty(document, "execCommand");
@@ -338,7 +338,7 @@ describe("local ChatGPT Electron webview automation", () => {
   });
 
 
-  it("does not submit a previously staged UNKNOWN draft while a human has focused it", async () => {
+  it("submits a matching staged draft even when focused", async () => {
     const conversation = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
     const editor = document.createElement("textarea");
     editor.id = "prompt-textarea";
@@ -356,9 +356,9 @@ describe("local ChatGPT Electron webview automation", () => {
     try {
       await expect(chatGPTWebviewAutomation.press(runtimeTabId, {
         key: "Enter", expectedConversationId: conversation,
-        expectedComposerText: "staged automation",
-      })).rejects.toThrow("Composer changed before submitting");
-      expect(clicked).not.toHaveBeenCalled();
+        expectedComposerText: "staged automation", recoverStagedComposer: true,
+      })).resolves.toBeUndefined();
+      expect(clicked).toHaveBeenCalledOnce();
       expect(editor.value).toBe("staged automation");
     } finally {
       focused.mockRestore();

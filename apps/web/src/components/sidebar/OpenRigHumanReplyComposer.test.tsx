@@ -224,6 +224,28 @@ describe("ordinary OpenRig human Reply composer", () => {
     expect(send).toHaveBeenCalledOnce();
   });
 
+  it("retries an uncertain reply with the original ID and text after remount", async () => {
+    const send = vi.fn(async (_request: HumanReplyRequest) => ({ outcome: "unknown" as const, reason: "lost response" }));
+    await mount(item, "human@kernel", send);
+    await edit("Please proceed");
+    await click("Submit reply");
+    const original = send.mock.calls[0]![0];
+    await act(async () => rendered!.unmount());
+    rendered = undefined;
+    const retry = vi.fn(async (request: HumanReplyRequest) => ({
+      outcome: "accepted" as const, requestId: request.operationId, qitemId: request.sourceId,
+      replyQitemId: "qitem-reply", recipient: request.to, source: "human@kernel" as const,
+      messageSha256: "verified-in-MAIN", acceptedIntoQueue: true as const,
+      deliveredToAgent: false as const, status: "idempotent" as const, delivery: "queued" as const,
+    }));
+    await act(async () => { rendered = create(
+      <OpenRigHumanReplyComposer item={item} address="human@kernel" onRetry={retry} />,
+    ); });
+    await click("Retry saved reply");
+    expect(retry).toHaveBeenCalledWith(original);
+    expect(output()).toContain("durably accepted");
+  });
+
   it("restores definite not-sent drafts and reconciles unknown by read-only operation ID", async () => {
     const send = vi.fn(async () => ({ outcome: "not_sent" as const, reason: "Writer offline" }));
     const lookup = vi.fn(async (request: HumanReplyRequest) => ({

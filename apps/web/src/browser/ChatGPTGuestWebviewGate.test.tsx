@@ -27,6 +27,11 @@ vi.mock("./HostedBrowserWebview", () => ({
   },
 }));
 
+import {
+  requestChatGPTDeliveryMount,
+  releaseChatGPTDeliveryMount,
+  useChatGPTDeliveryMountRequests,
+} from "../chatGPTDeliveryMountRequest";
 import { AuthorizedBrowserWebview } from "./ChatGPTGuestWebviewGate";
 import { useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { useChatGPTGuestHibernation } from "./chatGPTGuestHibernation";
@@ -57,6 +62,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   mocks.sessions = [{ id: "session", snoozedUntil: undefined }];
   mocks.liveGuests.clear();
+  useChatGPTDeliveryMountRequests.setState({ required: {} });
   useChatGPTGuestHibernation.setState({
     hibernated: {},
     woken: { [guestKey]: true },
@@ -102,4 +108,23 @@ it("keeps a restored snoozed guest unmounted until its snooze expires", async ()
     await vi.advanceTimersByTimeAsync(60_000);
   });
   expect(mocks.liveGuests.has(runtimeTabId)).toBe(true);
+});
+
+it("mounts a cold snoozed background recipient for delivery without selecting it", async () => {
+  mocks.sessions[0]!.snoozedUntil = Date.now() + 60_000;
+  useBrowserSurfaceStore.getState().release(runtimeTabId, owner);
+  useChatGPTGuestHibernation.setState({
+    hibernated: { [guestKey]: true },
+    woken: {},
+    retained: {},
+  });
+  await act(async () => {
+    renderer = create(renderGuest());
+  });
+  expect(mocks.liveGuests.size).toBe(0);
+  await act(async () => requestChatGPTDeliveryMount("env", "session"));
+  expect(mocks.liveGuests.has(runtimeTabId)).toBe(true);
+  expect(useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible).not.toBe(true);
+  await act(async () => releaseChatGPTDeliveryMount("env", "session"));
+  expect(mocks.liveGuests.size).toBe(0);
 });

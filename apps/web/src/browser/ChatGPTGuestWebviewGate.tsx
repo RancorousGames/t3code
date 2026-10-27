@@ -3,6 +3,8 @@
 import { AuthPreviewOperateScope } from "@t3tools/contracts";
 import { type ComponentProps, useEffect, useState } from "react";
 
+import { useChatGPTDeliveryMountRequests } from "../chatGPTDeliveryMountRequest";
+
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { useEnvironmentScope } from "~/state/session";
 
@@ -22,8 +24,8 @@ import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { useChatGPTSessionSnoozed } from "./useChatGPTSessionSnoozed";
 
 // Keep desktop guest attachment/retention separate from the upstream host's
-// preview-session rendering. A hibernated guest is never reattached just to
-// display the host; selecting it performs the existing explicit wake.
+// preview-session rendering. Selection or a targeted delivery request can
+// attach a hibernated guest; ordinary background hosts remain unloaded.
 export function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {
   const canOperatePreview = useEnvironmentScope(
     props.threadRef.environmentId,
@@ -31,6 +33,15 @@ export function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrow
   );
   const profileId = useTabProfileId(props.profileId);
   const snoozed = useChatGPTSessionSnoozed(props.threadRef);
+  const prefix = "t3-browser-session:";
+  const sessionId = props.threadRef.threadId.startsWith(prefix)
+    ? props.threadRef.threadId.slice(prefix.length)
+    : null;
+  const deliveryRequired = useChatGPTDeliveryMountRequests(
+    (state) =>
+      sessionId !== null &&
+      state.required[`${props.threadRef.environmentId}:${sessionId}`] === true,
+  );
   const selected = useBrowserSurfaceStore(
     (state) => state.byTabId[props.runtimeTabId]?.visible === true,
   );
@@ -62,7 +73,8 @@ export function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrow
     if (stagger && selected) chatGPTGuestHydrationLimiter.prioritize(props.runtimeTabId);
   }, [stagger, selected, props.runtimeTabId]);
 
-  return canOperatePreview && (guestMayAttach || !stagger) && !hibernated && !snoozed ? (
+  return canOperatePreview &&
+    (deliveryRequired || ((guestMayAttach || !stagger) && !hibernated && !snoozed)) ? (
     <HostedBrowserWebview {...props} profileId={profileId} />
   ) : null;
 }

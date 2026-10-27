@@ -32,6 +32,7 @@ vi.mock("./chatGPTBrowserSessions", () => ({
 }));
 vi.mock("./chatGPTDeliveryMountRequest", () => ({
   requestChatGPTDeliveryMount: (...a: unknown[]) => requestMount(...a),
+  releaseChatGPTDeliveryMount: vi.fn(),
 }));
 vi.mock("./previewStateStore", () => ({
   readThreadPreviewState: () => ({

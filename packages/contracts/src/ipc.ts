@@ -2085,6 +2085,11 @@ export interface DesktopBridge {
   appActivation?: {
     setReady: (ready: boolean) => Promise<void>;
     complete: (response: DesktopAppActivationResponse) => Promise<void>;
+    enqueueChatGPT: (input: { messageId: string; sessionId: string;
+      conversationId: string; body: string }) => Promise<{
+        messageId: string; sessionId: string; conversationId: string; status: string;
+        attempts: number; createdAt: number; updatedAt: number; lastError?: string;
+      }>;
     onRequest: (listener: (request: DesktopAppActivationRequest) => void) => () => void;
   };
   /**

@@ -362,6 +362,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_READY_CHANNEL, ready),
     complete: (response) =>
       ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_COMPLETE_CHANNEL, response),
+    enqueueChatGPT: (input) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_CHATGPT_DELIVERY_ENQUEUE_CHANNEL, input),
     onRequest: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
         if (typeof request !== "object" || request === null) return;

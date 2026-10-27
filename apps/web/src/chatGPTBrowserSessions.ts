@@ -2,6 +2,8 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { useCallback } from "react";
+import { useStore } from "zustand";
+import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
@@ -76,10 +78,9 @@ export const chatGPTBrowserSessionsKey = (environmentId: EnvironmentId | null) =
 export function readChatGPTBrowserSessions(
   environmentId: EnvironmentId,
 ): readonly BrowserSession[] {
-  return (
-    getLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), BrowserSessions) ??
-    INITIAL_SESSIONS
-  );
+  if (typeof window === "undefined") return INITIAL_SESSIONS;
+  const sessions = getChatGPTSessionPersistedStore(environmentId).getState().sessions;
+  return sessions.length ? sessions : INITIAL_SESSIONS;
 }
 const INITIAL_SESSIONS: readonly BrowserSession[] = [{ id: "chatgpt", title: "ChatGPT 1" }];
 const DEFAULT_SESSION_TITLE = /^ChatGPT \d+$/;
@@ -365,10 +366,17 @@ export function expiredHiddenSessionIds(
 }
 
 export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
-  const [sessions, setSessions] = useLocalStorage(
-    chatGPTBrowserSessionsKey(environmentId),
-    INITIAL_SESSIONS,
-    BrowserSessions,
+  const sessionStore = getChatGPTSessionPersistedStore(environmentId ?? "unconnected");
+  const storedSessions = useStore(sessionStore, (state) => state.sessions);
+  const sessions = storedSessions.length ? storedSessions : INITIAL_SESSIONS;
+  const setSessions = useCallback(
+    (update: readonly BrowserSession[] | ((current: readonly BrowserSession[]) => readonly BrowserSession[])) => {
+      const current = sessionStore.getState().sessions;
+      const next = typeof update === "function" ? update(current.length ? current : INITIAL_SESSIONS) : update;
+      setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), next, BrowserSessions);
+      sessionStore.setState({ sessions: next });
+    },
+    [sessionStore, environmentId],
   );
   const [prewarmedSessionId, setPrewarmedSessionId] = useLocalStorage(
     chatGPTPrewarmKey(environmentId ?? "unconnected"),

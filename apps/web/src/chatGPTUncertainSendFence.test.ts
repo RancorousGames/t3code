@@ -4,6 +4,8 @@ import {
   hasDurableUnknownChatGPTSend,
   readDurableUnknownChatGPTSend,
   reserveDurableUnknownChatGPTSend,
+  wasDurableChatGPTSendConfirmed,
+  releaseDurableUnknownChatGPTSend,
 } from "./chatGPTUncertainSendFence";
 
 const environment = "test-delivery" as never;
@@ -26,6 +28,26 @@ beforeEach(() => {
   vi.stubGlobal("window", { localStorage: store });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+describe("confirmed durable delivery receipts", () => {
+  it("stores a verified message before clearing the unknown fence for lost ACK reconciliation", () => {
+    const id = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const original = "[T3-MSG:" + id + "]\nHello";
+    const attempt = {
+      original, text: original, url,
+      before: { totalTurns: 1, lastUserTurnKey: null },
+      policyEnrichment: { schema: "t3-c05-browser-optional/v1" as const, status: "not_eligible" as const },
+    };
+    reserveDurableUnknownChatGPTSend(environment, session, url, false, attempt);
+    expect(wasDurableChatGPTSendConfirmed(environment, session, url, original)).toBe(false);
+    releaseDurableUnknownChatGPTSend(environment, session);
+    expect(hasDurableUnknownChatGPTSend(environment, session)).toBe(false);
+    expect(wasDurableChatGPTSendConfirmed(environment, session, url, original)).toBe(true);
+    expect(wasDurableChatGPTSendConfirmed(environment, session, url + "-other", original)).toBe(false);
+    expect(wasDurableChatGPTSendConfirmed(environment, session, url,
+      "[T3-MSG:bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb]\nHello")).toBe(false);
+  });
+});
 
 describe("durable legacy UNKNOWN quarantine", () => {
   it("retains original v1 evidence and unblocks only the exact old conversation after a minimum age", () => {

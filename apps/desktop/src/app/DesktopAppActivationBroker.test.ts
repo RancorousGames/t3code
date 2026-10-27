@@ -12,6 +12,94 @@ const request: DesktopAppActivationRequest = {
 };
 
 describe("DesktopAppActivationBroker", () => {
+  it("skips a busy recipient without passing a later global barrier", async () => {
+    const send = vi.fn();
+    const broker = new DesktopAppActivationBroker({ requestTimeoutMs: 10_000, activate: vi.fn() });
+    broker.registerRenderer(send);
+    const a1 = {
+      version: 1,
+      requestId: "a1",
+      type: "chatgpt.sessions",
+      action: "send",
+      sessionId: "a",
+    } as const;
+    const a2 = { ...a1, requestId: "a2" };
+    const b = { ...a1, requestId: "b", sessionId: "b" };
+    const c = { ...a1, requestId: "c", sessionId: "c" };
+    const responses = [
+      broker.request(a1),
+      broker.request(a2),
+      broker.request(b),
+      broker.request(request),
+      broker.request(c),
+    ];
+    const dispatched = () => send.mock.calls.map(([entry]) => entry.requestId);
+    const complete = (requestId: string) =>
+      broker.complete({
+        version: 1,
+        requestId,
+        ok: false,
+        code: "renderer-unavailable",
+        message: "done",
+      });
+
+    expect(dispatched()).toEqual(["a1", "b"]);
+    complete("b");
+    expect(dispatched()).toEqual(["a1", "b"]);
+    complete("a1");
+    expect(dispatched()).toEqual(["a1", "b", "a2"]);
+    complete("a2");
+    expect(dispatched()).toEqual(["a1", "b", "a2", request.requestId]);
+    complete(request.requestId);
+    expect(dispatched()).toEqual(["a1", "b", "a2", request.requestId, "c"]);
+    broker.close();
+    await Promise.all(responses);
+  });
+
+  it("dispatches independent recipient requests concurrently while keeping global barriers", async () => {
+    const send = vi.fn();
+    const broker = new DesktopAppActivationBroker({ requestTimeoutMs: 10_000, activate: vi.fn() });
+    broker.registerRenderer(send);
+    const a = {
+      version: 1,
+      requestId: "a",
+      type: "chatgpt.sessions",
+      action: "send",
+      sessionId: "a",
+    } as const;
+    const b = { ...a, requestId: "b", sessionId: "b" };
+    const first = broker.request(a);
+    const second = broker.request(b);
+    const barrier = broker.request(request);
+    const later = broker.request({ ...a, requestId: "c", sessionId: "c" });
+    expect(send.mock.calls.map(([r]) => r.requestId)).toEqual(["a", "b"]);
+    broker.complete({
+      version: 1,
+      requestId: "a",
+      ok: false,
+      code: "renderer-unavailable",
+      message: "done",
+    });
+    expect(send).toHaveBeenCalledTimes(2);
+    broker.complete({
+      version: 1,
+      requestId: "b",
+      ok: false,
+      code: "renderer-unavailable",
+      message: "done",
+    });
+    expect(send.mock.calls.map(([r]) => r.requestId)).toEqual(["a", "b", request.requestId]);
+    broker.complete({
+      version: 1,
+      requestId: request.requestId,
+      ok: false,
+      code: "renderer-unavailable",
+      message: "done",
+    });
+    expect(send).toHaveBeenCalledTimes(4);
+    broker.close();
+    await Promise.all([first, second, barrier, later]);
+  });
   it("focuses immediately and waits for renderer readiness", async () => {
     const activate = vi.fn();
     const send = vi.fn();

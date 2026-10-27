@@ -1169,6 +1169,15 @@ export function OpenRigOperatorInbox() {
                             item={chosen}
                             address={address}
                             onAnnouncement={setAnnouncement}
+                            {...(chosen.sourceType === "queue" && address === "human@kernel" &&
+                            window.desktopBridge?.sendOpenRigOperatorReply
+                              ? { onRetry: (request: HumanReplyRequest) =>
+                                  window.desktopBridge!.sendOpenRigOperatorReply!({
+                                    sourceType: "queue", qitemId: request.sourceId,
+                                    destination: "human@kernel", requestId: request.operationId,
+                                    expectedRecipient: request.to, message: request.body,
+                                  }) }
+                              : {})}
                             unavailableReason={
                               chosen.replyUnavailableReason
                                 ? "Reply unavailable: " +

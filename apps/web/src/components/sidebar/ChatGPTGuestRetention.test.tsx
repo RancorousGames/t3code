@@ -55,6 +55,33 @@ vi.mock("../../chatGPTRecoveryDiagnostics", () => ({
     escalationReason: null,
   }),
 }));
+vi.mock("~/hooks/useSettings", () => ({ useClientSettingsHydrated: () => true }));
+vi.mock("~/state/session", () => ({ useEnvironmentScope: () => true }));
+vi.mock("../../browser/browserDefaults", () => ({
+  useBrowserDefaults: () => ({ profileId: "default" }),
+}));
+vi.mock("../../browser/HostedBrowserWebview", () => ({
+  HostedBrowserWebview: () => <div data-fake-guest="attached" />,
+}));
+vi.mock("./ChatGPTBrowserSessionRuntime", () => ({
+  ChatGPTBrowserSessionRuntime: ({ sessionId }: { sessionId: string }) => (
+    <div data-delivery-runtime={sessionId}>
+      <AuthorizedBrowserWebview
+        threadRef={{
+          environmentId: "env" as never,
+          threadId: `t3-browser-session:${sessionId}` as never,
+        }}
+        tabId="tab"
+        runtimeTabId={JSON.stringify(["env", `t3-browser-session:${sessionId}`, "epoch", "tab"])}
+        initialUrl="https://chatgpt.com/"
+        viewport={{ _tag: "fill" }}
+        pictureInPicture={false}
+        profileId="default"
+        zoomFactor={1}
+      />
+    </div>
+  ),
+}));
 vi.mock("./useOpenRigManagerChatGPTSessions", () => ({
   useOpenRigManagerChatGPTSessions: () => mocks.managerIds,
 }));
@@ -64,6 +91,12 @@ import {
   useChatGPTGuestHibernation,
 } from "../../browser/chatGPTGuestHibernation";
 import { ChatGPTGuestRetention } from "./ChatGPTGuestRetention";
+import { AuthorizedBrowserWebview } from "../../browser/ChatGPTGuestWebviewGate";
+import {
+  requestChatGPTDeliveryMount,
+  releaseChatGPTDeliveryMount,
+  useChatGPTDeliveryMountRequests,
+} from "../../chatGPTDeliveryMountRequest";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 
 const key = (id: string) => JSON.stringify(["env", `t3-browser-session:${id}`]);
@@ -71,6 +104,7 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  useChatGPTDeliveryMountRequests.setState({ required: {} });
   mocks.activeSessionId = undefined;
   mocks.managerIds = null;
   mocks.cachedManagers = null;
@@ -94,6 +128,21 @@ afterEach(async () => {
 });
 
 describe("ChatGPT recent guest retention", () => {
+  it("starts a targeted cold runtime without changing the selected session and releases it", async () => {
+    mocks.activeSessionId = "7";
+    mocks.sessions[0]!.snoozedUntil = Date.now() + 60_000;
+    await act(async () => {
+      renderer = create(<ChatGPTGuestRetention />);
+    });
+    expect(renderer!.root.findAllByProps({ "data-delivery-runtime": "0" })).toHaveLength(0);
+    await act(async () => requestChatGPTDeliveryMount("env", "0"));
+    expect(renderer!.root.findAllByProps({ "data-delivery-runtime": "0" })).toHaveLength(1);
+    expect(renderer!.root.findAllByProps({ "data-fake-guest": "attached" })).toHaveLength(1);
+    expect(isChatGPTGuestHibernated(key("0"))).toBe(false);
+    expect(mocks.activeSessionId).toBe("7");
+    await act(async () => releaseChatGPTDeliveryMount("env", "0"));
+    expect(renderer!.root.findAllByProps({ "data-delivery-runtime": "0" })).toHaveLength(0);
+  });
   it("restores the latest five after restart and updates the set when an old session is selected", async () => {
     await act(async () => {
       renderer = create(<ChatGPTGuestRetention />);

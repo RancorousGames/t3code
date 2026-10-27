@@ -113,21 +113,34 @@ NodeTest.test(
 );
 
 NodeTest.test(
-  "send forwards a message and optional caller-reported sender through the same local pipe",
+  "direct send wakes one cold recipient and persists the message instead of clicking its composer",
   async () => {
-    await controlSessions(
-      {
-        action: "send",
-        sessionId: "id-123",
-        message: "Continue implementing.",
-        senderSessionId: "source-id",
+    const conversation = "6ad4addb-8fc0-83eb-832c-47b147adffb2";
+    const seen = [];
+    const result = await controlSessions({
+      action: "send", sessionId: "id-123", message: "Continue implementing.",
+      senderSessionId: "source-id",
+    }, {
+      home: ".t3",
+      exchange: async (_address, request) => {
+        seen.push(request);
+        if (request.action === "read") return { ok: true, data: {
+          conversationGuardValidated: true, verifiedConversationId: conversation,
+        } };
+        return { ok: true, data: {
+          messageId: request.messageId, sessionId: request.sessionId,
+          conversationId: conversation, status: "queued",
+        } };
       },
-      options,
-    );
-    NodeAssert.equal(calls.at(-1).request.message, "Continue implementing.");
-    NodeAssert.equal(calls.at(-1).request.senderSessionId, "source-id");
-    await controlSessions({ action: "send", sessionId: "id-123", message: "Legacy" }, options);
-    NodeAssert.equal(calls.at(-1).request.senderSessionId, undefined);
+    });
+    NodeAssert.deepEqual(seen.map(x => x.action), ["read", "enqueue"]);
+    NodeAssert.equal(seen[0].wakeForSend, true);
+    NodeAssert.equal(seen[1].expectedConversationId, conversation);
+    NodeAssert.equal(seen[1].message, "Continue implementing.");
+    NodeAssert.equal(result.status, "queued");
+    NodeAssert.equal(result.messageSent, false);
+    NodeAssert.equal(result.delivery, "queued");
+    NodeAssert.equal(result.messageId, seen[1].messageId);
   },
 );
 
@@ -196,9 +209,8 @@ NodeTest.test(
               verifiedConversationId: conversationId,
               ...(request.action === "read"
                 ? { session: { id: request.sessionId } }
-                : {
-                    messageSent: true,
-                  }),
+                : { messageId: request.messageId, sessionId: request.sessionId,
+                    conversationId, status: "queued" }),
             },
           };
         },
@@ -206,9 +218,10 @@ NodeTest.test(
     );
     NodeAssert.deepEqual(
       seen.map((call) => call.action),
-      ["read", "send"],
+      ["read", "enqueue"],
     );
-    NodeAssert.equal(result.messageSent, true);
+    NodeAssert.equal(result.messageSent, false);
+    NodeAssert.equal(result.status, "queued");
   },
 );
 
@@ -237,7 +250,7 @@ NodeTest.test(
             },
           },
         ),
-        /refusing send/,
+        /did not verify the exact mounted conversation|did not confirm expectedConversationId|rejected read/,
       );
       NodeAssert.deepEqual(seen, ["read"]);
     }
@@ -266,7 +279,7 @@ NodeTest.test(
           },
         },
       ),
-      /did not confirm expectedConversationId/,
+      /did not acknowledge the exact durable message/,
     );
     NodeAssert.equal(calls, 2);
   },

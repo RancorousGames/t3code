@@ -38,6 +38,11 @@ import {
 import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
 import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
 import { resolveChatGPTSessionAddress } from "../../chatGPTConversationRouting";
+import {
+  releaseChatGPTDeliveryMount,
+  requestChatGPTDeliveryMount,
+} from "../../chatGPTDeliveryMountRequest";
+import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { handleOpenRigHumanInboxActivation } from "./openRigHumanInboxActivation";
 import { resolveExplicitChatGPTParent } from "../../chatGPTSessionLineage";
@@ -105,6 +110,7 @@ export function DesktopAppActivationCoordinator() {
     refresh: true,
   });
   const queueRef = useRef(Promise.resolve());
+  const deliveryLanesRef = useRef(new Map<string, Promise<void>>());
   const activation = window.desktopBridge?.appActivation;
   const shell = useEnvironmentQuery(
     primaryEnvironment === null
@@ -538,6 +544,21 @@ export function DesktopAppActivationCoordinator() {
         return handleOpenRigHumanInboxActivation(request);
       }
       if (request.type === "chatgpt.sessions") {
+        // These actions are owned by the durable desktop-main queue, not the renderer.
+        if (
+          request.action === "enqueue" ||
+          request.action === "delivery_status" ||
+          request.action === "delivery_list" ||
+          request.action === "cancel_delivery"
+        ) {
+          return {
+            version: 1,
+            requestId: request.requestId,
+            ok: false,
+            code: "invalid-request",
+            message: "Delivery queue action reached renderer instead of desktop main.",
+          };
+        }
         const environmentId = primaryEnvironment?.environmentId;
         if (!environmentId)
           return {
@@ -547,6 +568,7 @@ export function DesktopAppActivationCoordinator() {
             code: "environment-unavailable",
             message: "Connect an environment first.",
           };
+        let deliveryMountSessionId: string | undefined;
         try {
           let sessionSnapshot = readChatGPTBrowserSessions(environmentId);
           let resolvedSessionId = request.sessionId;
@@ -558,6 +580,17 @@ export function DesktopAppActivationCoordinator() {
               request.action === "reconcile_send") &&
             request.sessionId
           ) {
+            if (
+              request.expectedConversationId &&
+              request.sessionId !== request.expectedConversationId &&
+              !sessionSnapshot.some((session) => session.id === request.sessionId)
+            ) {
+              if (!getChatGPTSessionPersistedStore(environmentId).persist.hasHydrated())
+                throw new Error("ChatGPT session registry is not hydrated; no message sent.");
+              throw new Error(
+                "T3 browser session is missing; original recipient retained, no message sent.",
+              );
+            }
             const address = resolveChatGPTSessionAddress(
               request.sessionId,
               sessionSnapshot,
@@ -582,46 +615,35 @@ export function DesktopAppActivationCoordinator() {
               },
               request.expectedConversationId,
             );
-            exactConversationId = address.conversationId ?? undefined;
+            // Direct T3 session sends often omit expectedConversationId. For an
+            // existing unloaded session, recover its exact persisted conversation
+            // reference before requesting a targeted mount. Sending still waits
+            // for an independently observed matching guest URL below.
+            const savedConversation =
+              !address.create && address.sessionId
+                ? chatGPTConversationIdFromUrl(
+                    getLocalStorageItem(
+                      chatGPTBrowserLastUrlKey(environmentId, address.sessionId),
+                      Schema.String,
+                    ),
+                  )
+                : null;
+            exactConversationId =
+              address.conversationId ??
+              (request.action === "send" ||
+              request.action === "reconcile_send" ||
+              (request.action === "read" && request.wakeForSend === true)
+                ? (savedConversation ?? undefined)
+                : undefined);
             let needsNewSession = address.create;
             if (request.action === "reconcile_send" && needsNewSession)
               throw new Error(
                 "Reconciliation requires an existing exact conversation; no browser was created.",
               );
-            if (
-              !address.create &&
-              address.conversationId &&
-              address.sessionId !== request.sessionId
-            ) {
-              // A saved last-URL is only a discovery hint. Prove that the
-              // actual loaded guest still owns this exact conversation. A
-              // stale hint must not cause a wrong-recipient send or status.
-              const existing = sessionSnapshot.find((entry) => entry.id === address.sessionId);
-              if (
-                existing?.title.startsWith(`Conversation ${address.conversationId.slice(0, 8)}`)
-              ) {
-                // This recovery session may still be loading; reuse its
-                // durable owner rather than creating duplicate browser tabs.
-                needsNewSession = false;
-                openedConversationSession = true;
-              } else {
-                try {
-                  const observed = (await runChatGPTSessionControl({
-                    environmentId,
-                    sessions: sessionSnapshot,
-                    action: "read",
-                    sessionId: address.sessionId,
-                    expectedConversationId: address.conversationId,
-                    count: 1,
-                  })) as { conversationGuardValidated?: boolean; verifiedConversationId?: string };
-                  needsNewSession =
-                    observed.conversationGuardValidated !== true ||
-                    observed.verifiedConversationId !== address.conversationId;
-                } catch {
-                  needsNewSession = true;
-                }
-              }
-            }
+            // A saved URL is only a routing hint, not permission to send.
+            // Keep the existing T3 owner even when its guest is unloaded; a
+            // failed early read must not create a duplicate browser session.
+            // The actual loaded conversation is verified below before sending.
             if (needsNewSession) {
               const conversationId = address.conversationId;
               if (!conversationId) throw new Error("Unknown conversation ID cannot be opened.");
@@ -640,65 +662,87 @@ export function DesktopAppActivationCoordinator() {
               resolvedSessionId = address.sessionId;
             }
             sessionSnapshot = readChatGPTBrowserSessions(environmentId);
-            if (openedConversationSession && resolvedSessionId) {
-              // Wait for the new guest's ACTUAL DOM URL and non-loading page,
-              // not merely for localStorage/preview creation. Never auto-send
-              // if sign-in, an unavailable transcript or a redirect intervenes.
+            // The direct T3 CLI first performs a guarded READ before SEND.
+            // That read must wake its exact unloaded recipient as well; otherwise
+            // the CLI rejects before the queued/durable send can begin.
+            const deliveryNeedsGuest =
+              request.action === "send" ||
+              request.action === "reconcile_send" ||
+              (request.action === "read" &&
+                (!!exactConversationId || request.wakeForSend === true));
+            if (deliveryNeedsGuest && resolvedSessionId) {
+              if (!exactConversationId)
+                throw new Error(
+                  "Cannot wake and send: target has no exact saved ChatGPT conversation. No message sent.",
+                );
+              // Targeted wake, including sessions deferred by startup policy.
+              // A rejected attempt stays queued in the desktop delivery journal.
+              requestChatGPTDeliveryMount(environmentId, resolvedSessionId);
+              deliveryMountSessionId = resolvedSessionId;
+            }
+            if (
+              (openedConversationSession || deliveryNeedsGuest) &&
+              resolvedSessionId &&
+              exactConversationId
+            ) {
+              // Confirm the physical guest URL; the send service checks composer
+              // availability and repeats the exact-recipient guard before typing.
               const deadline = Date.now() + 55_000;
               let ready = false;
-              let exactUrlFirstSeenAt: number | null = null;
               while (Date.now() < deadline) {
                 const entry = readChatGPTBrowserSessions(environmentId).find(
                   (candidate) => candidate.id === resolvedSessionId,
                 );
-                if (!entry || entry.hidden)
-                  throw new Error("New ChatGPT session disappeared before routing.");
-                const status = await inspectBrowserSession(environmentId, entry, "end", 1, true);
-                if (chatGPTConversationIdFromUrl(status.observedGuestUrl) === exactConversationId) {
-                  exactUrlFirstSeenAt ??= Date.now();
-                  if (
-                    ["done_or_idle", "waiting_for_input", "working", "pending_or_stalled"].includes(
-                      status.status,
-                    ) ||
-                    (request.action === "read" &&
-                      Date.now() - exactUrlFirstSeenAt >= 3_000 &&
-                      !["loading", "hibernated"].includes(status.status))
-                  ) {
-                    // For a status read, a guest may have loaded the exact URL
-                    // yet require sign-in or expose no readable transcript.
-                    // Return that truthful unavailable status, never invent
-                    // readiness. Sends still need a later verified idle read.
-                    ready = true;
-                    break;
-                  }
+                if (!entry) {
+                  if (!getChatGPTSessionPersistedStore(environmentId).persist.hasHydrated())
+                    throw new Error("ChatGPT session registry is not hydrated; no message sent.");
+                  throw new Error(
+                    "T3 browser session is missing; original recipient retained, no message sent.",
+                  );
+                }
+                const status = await inspectBrowserSession(
+                  environmentId,
+                  entry.hidden ? { ...entry, hidden: false } : entry,
+                  "end",
+                  1,
+                  true,
+                );
+                if (status.recoveryProblem)
+                  throw new Error("ChatGPT page is unavailable before typing; no message sent.");
+                const observed = chatGPTConversationIdFromUrl(status.observedGuestUrl);
+                if (observed === exactConversationId) {
+                  ready = true;
+                  break;
+                }
+                const saved = chatGPTConversationIdFromUrl(
+                  getLocalStorageItem(
+                    chatGPTBrowserLastUrlKey(environmentId, resolvedSessionId),
+                    Schema.String,
+                  ),
+                );
+                if (observed && saved === observed && observed !== exactConversationId) {
+                  console.info(
+                    `[t3-delivery] ${request.requestId} original conversation replaced; dropping delivery`,
+                  );
+                  throw new Error(
+                    "T3 browser session is missing; original recipient retained, no message sent.",
+                  );
                 }
                 await new Promise<void>((resolve) => setTimeout(resolve, 500));
               }
               if (!ready)
                 throw new Error(
-                  "ChatGPT conversation did not load with verified messages; session retained for manual recovery, no message sent.",
+                  "ChatGPT conversation not yet mounted with verified messages; original session retained, no message sent.",
                 );
             }
-            if (request.action === "send" && exactConversationId && resolvedSessionId) {
-              // The guarded READ confirms the target before any prompt mutation;
-              // T3's SEND still atomically checks URL and empty composer.
-              const prior = (await runChatGPTSessionControl({
-                environmentId,
-                sessions: readChatGPTBrowserSessions(environmentId),
-                action: "read",
-                sessionId: resolvedSessionId,
-                expectedConversationId: exactConversationId,
-                count: 1,
-              })) as { session?: { status?: string; activity?: string } };
-              if (
-                prior.session?.activity !== "idle" ||
-                !["done_or_idle", "waiting_for_input"].includes(prior.session.status ?? "")
-              ) {
-                throw new Error(
-                  "Conversation is not confirmed idle; refusing to send into pending/working/blocked thread.",
-                );
-              }
-            }
+            if (
+              request.action === "send" &&
+              request.sendExpiresAt &&
+              Date.now() >= request.sendExpiresAt
+            )
+              throw new Error(
+                "Queued delivery expired during renderer preflight; no message sent.",
+              );
           }
           if (request.action === "rollover_finalize") {
             const priorId = request.sessionId;
@@ -863,6 +907,7 @@ export function DesktopAppActivationCoordinator() {
               },
             };
           }
+          console.info(`[t3-delivery-trace] ${request.requestId} ${request.action} control-start`);
           const data = await runChatGPTSessionControl({
             environmentId,
             sessions: sessionSnapshot,
@@ -875,12 +920,15 @@ export function DesktopAppActivationCoordinator() {
             count: request.count,
             maxMessageChars: request.maxMessageChars,
             message: request.message,
+            sendExpiresAt: request.sendExpiresAt,
+            allowPossibleDuplicate: request.allowPossibleDuplicate,
             senderSessionId: request.senderSessionId,
             expectedConversationId: exactConversationId,
             force: request.force,
             managerDecision: request.managerDecision,
             reason: request.reason,
           });
+          console.info(`[t3-delivery-trace] ${request.requestId} ${request.action} control-end`);
           if (request.action === "change_state") {
             const confirmation = data as {
               action: "change_state";
@@ -1149,6 +1197,9 @@ export function DesktopAppActivationCoordinator() {
             code: "internal-error",
             message: error instanceof Error ? error.message : String(error),
           };
+        } finally {
+          if (deliveryMountSessionId)
+            releaseChatGPTDeliveryMount(environmentId, deliveryMountSessionId);
         }
       }
       if (request.type === "chatgpt.reboot" || request.type === "chatgpt.refresh") {
@@ -1157,18 +1208,24 @@ export function DesktopAppActivationCoordinator() {
           if (!environmentId) throw new Error("Connect the Agent Reboot environment first.");
           // Hidden or startup-unloaded sessions must be materialized in their
           // existing browser slot; their previous ChatGPT state is irrelevant.
-          const predecessor = readChatGPTBrowserSessions(environmentId)
-            .find((item) => item.id === request.sessionId);
+          const predecessor = readChatGPTBrowserSessions(environmentId).find(
+            (item) => item.id === request.sessionId,
+          );
           if (predecessor?.hidden) flushSync(() => setSessionHidden(request.sessionId, false));
           requestChatGPTDeliveryMount(environmentId, request.sessionId);
-          const receipt = await rebootChatGPTDesktop({
-            environmentId,
-            operationId: request.requestId,
-            sessionId: request.sessionId,
-            priorConversationId: request.priorConversationId,
-            prompt: request.prompt,
-            phase: request.phase,
-          });
+          let receipt: Awaited<ReturnType<typeof rebootChatGPTDesktop>>;
+          try {
+            receipt = await rebootChatGPTDesktop({
+              environmentId,
+              operationId: request.requestId,
+              sessionId: request.sessionId,
+              priorConversationId: request.priorConversationId,
+              prompt: request.prompt,
+              phase: request.phase,
+            });
+          } finally {
+            releaseChatGPTDeliveryMount(environmentId, request.sessionId);
+          }
           return {
             version: 1,
             requestId: request.requestId,
@@ -1176,10 +1233,15 @@ export function DesktopAppActivationCoordinator() {
             data: {
               ...(request.priorConversationId === undefined
                 ? {
-                    action: "reboot", sessionId: receipt.sessionId,
-                    rebootGeneration: receipt.generation, status: receipt.status,
+                    action: "reboot",
+                    sessionId: receipt.sessionId,
+                    rebootGeneration: receipt.generation,
+                    status: receipt.status,
                   }
-                : { action: request.type === "chatgpt.refresh" ? "refresh" : "reboot", ...receipt }),
+                : {
+                    action: request.type === "chatgpt.refresh" ? "refresh" : "reboot",
+                    ...receipt,
+                  }),
               retrySafe: false,
             },
           };
@@ -1475,11 +1537,58 @@ export function DesktopAppActivationCoordinator() {
 
     let subscribed = true;
     const unsubscribe = activation.onRequest((request) => {
-      queueRef.current = queueRef.current.then(async () => {
+      const trace = (stage: string) => {
+        if (request.type === "chatgpt.sessions")
+          console.info(`[t3-delivery-trace] ${request.requestId} ${request.action} ${stage}`);
+      };
+      trace("received-v1");
+      const run = async () => {
+        trace("started");
         const response = await processRequest(request);
+        trace("complete-called");
         await activation.complete(response);
-      });
-      queueRef.current = queueRef.current.catch(() => undefined);
+        trace("complete-returned");
+      };
+      const lanes = deliveryLanesRef.current;
+      const environmentId = primaryEnvironment?.environmentId;
+      // Existing-recipient operations serialize per browser. A cold/slow guest
+      // must not consume every other recipient's finite delivery deadline.
+      // Creation and global mutations remain barriers across all active lanes.
+      const sessions = environmentId ? readChatGPTBrowserSessions(environmentId) : [];
+      const recipient =
+        request.type === "chatgpt.sessions" &&
+        ["read", "send", "reconcile_send"].includes(request.action) &&
+        request.sessionId
+          ? (sessions.find((session) => session.id === request.sessionId) ??
+            sessions.find(
+              (session) =>
+                chatGPTConversationIdFromUrl(
+                  getLocalStorageItem(
+                    chatGPTBrowserLastUrlKey(environmentId!, session.id),
+                    Schema.String,
+                  ),
+                ) === request.sessionId,
+            ))
+          : undefined;
+      const recipientId =
+        request.type === "chatgpt.sessions" &&
+        ["read", "send", "reconcile_send"].includes(request.action)
+          ? request.sessionId
+          : undefined;
+      if (recipientId) {
+        const key = `${environmentId}:${recipient?.id ?? recipientId}`;
+        const pending = Promise.all([queueRef.current, lanes.get(key)])
+          .then(run)
+          .catch(() => undefined);
+        lanes.set(key, pending);
+        void pending.then(() => {
+          if (lanes.get(key) === pending) lanes.delete(key);
+        });
+      } else {
+        queueRef.current = Promise.all([queueRef.current, ...lanes.values()])
+          .then(run)
+          .catch(() => undefined);
+      }
     });
     // Skip readiness if React runs cleanup before this subscription can receive requests.
     queueMicrotask(() => {
@@ -1490,7 +1599,7 @@ export function DesktopAppActivationCoordinator() {
       void activation.setReady(false).catch(() => undefined);
       unsubscribe();
     };
-  }, [activation, ready]);
+  }, [activation, ready, primaryEnvironment?.environmentId]);
 
   return null;
 }

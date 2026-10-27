@@ -10,7 +10,7 @@ export async function controlSessions(
   input,
   { home = NodePath.resolve(import.meta.dirname, "../.t3"), exchange = sendAppControlRequest } = {},
 ) {
-  const allowed = ["list", "read", "send", "reconcile_send", "reload", "complete", "archive", "restore", "change_state", "rollover_finalize", "wait"];
+  const allowed = ["list", "read", "send", "reconcile_send", "enqueue", "delivery_status", "delivery_list", "cancel_delivery", "reload", "complete", "archive", "restore", "change_state", "rollover_finalize", "wait"];
   if (input?.action === "wait") return waitForChatGPTSessions(input, { home, exchange });
   if (!input || !allowed.includes(input.action))
     throw new Error("action must be list, read, send, reconcile_send, reload, complete, archive, restore, change_state, rollover_finalize or wait.");
@@ -22,7 +22,7 @@ export async function controlSessions(
     throw new Error(
       "which applies only to list and must be visible, recent, working, blocked or all.",
     );
-  if (input.action !== "list" && !(typeof input.sessionId === "string" && input.sessionId.trim()))
+  if (!["list", "delivery_status", "delivery_list", "cancel_delivery"].includes(input.action) && !(typeof input.sessionId === "string" && input.sessionId.trim()))
     throw new Error("sessionId is required for read, send, reload, complete, archive, restore and change_state.");
   if (input.includeHidden !== undefined &&
       (input.action !== "list" || typeof input.includeHidden !== "boolean"))
@@ -31,10 +31,62 @@ export async function controlSessions(
       !["hidden", "unhidden", "closed"].includes(input.state) :
       input.state !== undefined)
     throw new Error("state=hidden|unhidden|closed is required only for change_state.");
-  if (["send", "reconcile_send"].includes(input.action) && !(typeof input.message === "string" && input.message.trim()))
+  if (["send", "reconcile_send", "enqueue"].includes(input.action) && !(typeof input.message === "string" && input.message.trim()))
     throw new Error("Nonempty original message required for send or reconcile_send.");
+  if (input.action === "enqueue" && !(typeof input.expectedConversationId === "string" && typeof input.messageId === "string"))
+    throw new Error("enqueue requires expectedConversationId and caller-stable messageId.");
+  if (["enqueue", "delivery_status", "cancel_delivery"].includes(input.action) && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(input.messageId ?? ""))
+    throw new Error("A stable UUID messageId is required.");
   if (input.action === "reconcile_send" && !input.expectedConversationId)
     throw new Error("reconcile_send requires expectedConversationId.");
+  if (input.wakeForSend !== undefined &&
+      (input.action !== "read" || input.wakeForSend !== true))
+    throw new Error("wakeForSend=true is only valid for one direct-send read preflight.");
+  if (input.action === "send") {
+    if (input.senderSessionId !== undefined &&
+        (typeof input.senderSessionId !== "string" || !input.senderSessionId.trim()))
+      throw new Error("senderSessionId must be a nonempty source ID.");
+    if (input.expectedConversationId !== undefined &&
+        (typeof input.expectedConversationId !== "string" ||
+          !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.expectedConversationId)))
+      throw new Error("expectedConversationId must be a canonical lowercase ChatGPT conversation UUID.");
+    if (input.messageId !== undefined &&
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(input.messageId))
+      throw new Error("Optional direct-send messageId must be a stable UUID.");
+    // Legacy/direct T3 sends are durable too. A busy, recovering or cold guest
+    // must NOT turn an instruction into a transient rejected click.
+    // Resolve/wake only the exact addressed session, then persist the payload.
+    // T3's desktop delivery queue owns ordered retries, not this CLI.
+    const observed = await controlSessions({
+      action: "read", sessionId: input.sessionId,
+      count: 1, wakeForSend: true,
+      ...(input.expectedConversationId ? {
+        expectedConversationId: input.expectedConversationId,
+      } : {}),
+    }, { home, exchange });
+    const conversationId = observed.verifiedConversationId;
+    if (observed.conversationGuardValidated !== true ||
+        typeof conversationId !== "string" ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(conversationId) ||
+        (input.expectedConversationId && input.expectedConversationId !== conversationId))
+      throw new Error("T3 did not verify the exact mounted conversation; no direct send enqueued.");
+    const messageId = input.messageId ?? NodeCrypto.randomUUID();
+    const accepted = await controlSessions({
+      action: "enqueue", messageId, sessionId: input.sessionId,
+      expectedConversationId: conversationId, message: input.message,
+    }, { home, exchange });
+    if (accepted.messageId !== messageId ||
+        accepted.conversationId !== conversationId ||
+        accepted.sessionId !== input.sessionId || !accepted.status)
+      throw new Error("T3 did not acknowledge the exact durable message and recipient.");
+    return {
+      ...accepted, action: "send",
+      messageSent: accepted.status === "delivered",
+      delivery: accepted.status === "delivered" ? "user_turn_observed" : "queued",
+      conversationGuardValidated: true,
+      verifiedConversationId: conversationId,
+    };
+  }
   if (
     input.senderSessionId !== undefined &&
     (input.action !== "send" ||
@@ -44,7 +96,7 @@ export async function controlSessions(
     throw new Error("senderSessionId is a nonempty source ID used only with send.");
   if (
     input.expectedConversationId !== undefined &&
-    (!["read", "send", "reconcile_send"].includes(input.action) ||
+    (!["read", "send", "reconcile_send", "enqueue"].includes(input.action) ||
       typeof input.expectedConversationId !== "string" ||
       !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.expectedConversationId))
   ) {
@@ -103,6 +155,8 @@ export async function controlSessions(
     ...(input.count !== undefined ? { count: input.count } : {}),
     ...(input.maxMessageChars !== undefined ? { maxMessageChars: input.maxMessageChars } : {}),
     ...(input.message !== undefined ? { message: input.message } : {}),
+    ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
+    ...(input.wakeForSend === true ? { wakeForSend: true } : {}),
     ...(input.senderSessionId !== undefined ? { senderSessionId: input.senderSessionId } : {}),
     ...(input.expectedConversationId !== undefined
       ? { expectedConversationId: input.expectedConversationId }
@@ -158,7 +212,7 @@ export async function controlSessions(
     throw new Error(`Desktop has not confirmed persisted ${input.action}; no success assumed.`);
   }
   if (
-    input.expectedConversationId !== undefined &&
+    input.expectedConversationId !== undefined && input.action !== "enqueue" &&
     (response.data?.conversationGuardValidated !== true ||
       response.data?.verifiedConversationId !== input.expectedConversationId)
   ) {

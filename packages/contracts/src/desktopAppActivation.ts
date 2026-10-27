@@ -134,6 +134,10 @@ export const DesktopAppActivationRequest = Schema.Union([
       "read",
       "send",
       "reconcile_send",
+      "enqueue",
+      "delivery_status",
+      "delivery_list",
+      "cancel_delivery",
       "reload",
       "complete",
       "archive",
@@ -154,6 +158,13 @@ export const DesktopAppActivationRequest = Schema.Union([
     maxMessageChars: Schema.optional(Schema.Number),
     from: Schema.optional(Schema.Literals(["start", "end"])),
     message: Schema.optional(Schema.String),
+    messageId: Schema.optional(TrimmedNonEmptyString),
+    // Sent by the desktop queue: late preflight must never submit after this timestamp.
+    sendExpiresAt: Schema.optional(Schema.Number),
+    // A direct-send CLI preflight can request targeted loading of one unloaded guest.
+    wakeForSend: Schema.optional(Schema.Boolean),
+    // Durable queue only: same marker may be replayed with an explicit duplicate warning.
+    allowPossibleDuplicate: Schema.optional(Schema.Boolean),
     senderSessionId: Schema.optional(TrimmedNonEmptyString),
     expectedConversationId: Schema.optional(ChatGPTConversationId),
     force: Schema.optional(Schema.Boolean),
