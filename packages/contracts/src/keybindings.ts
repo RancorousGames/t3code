@@ -160,8 +160,11 @@ export const KeybindingShortcut = Schema.Struct({
 });
 export type KeybindingShortcut = typeof KeybindingShortcut.Type;
 
+/** Desktop-only Omniwork command: deliberately not a user-remappable keybinding. */
+export const CHATGPT_WORKER_VISIBILITY_MENU_ACTION = "omniwork.toggleWorkers";
+
 export const PreviewForwardedShortcut = Schema.Struct({
-  command: KeybindingCommand,
+  command: Schema.Union([KeybindingCommand, Schema.Literal(CHATGPT_WORKER_VISIBILITY_MENU_ACTION)]),
   shortcut: KeybindingShortcut,
 });
 export type PreviewForwardedShortcut = typeof PreviewForwardedShortcut.Type;

@@ -949,6 +949,66 @@ describe("PreviewManager", () => {
       ),
   );
 
+  effectIt.effect("forwards Ctrl+Shift+H exactly once from the selected ChatGPT guest, preserving native chords", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        const send = vi.fn();
+        const host = {
+          getURL: () => "t3code-dev://app/#/browser/selected",
+          isDestroyed: () => false,
+          send,
+        };
+        Object.assign(preview.webContents, { hostWebContents: host });
+        fromId.mockReturnValue(preview.webContents);
+        // Chromium may report host focus even as its child webview has keyboard focus.
+        getFocusedWebContents.mockReturnValue(null);
+        yield* manager.setMainWindow({
+          isDestroyed: () => false,
+          once: vi.fn(),
+          webContents: host,
+        } as never);
+        const tabId = '["local","t3-browser-session:selected","epoch","tab_1"]';
+        yield* manager.createTab(tabId);
+        yield* manager.registerWebview(tabId, 42);
+        yield* manager.setForwardedShortcuts([{
+          command: "omniwork.toggleWorkers",
+          shortcut: parseKeybindingShortcut("ctrl+shift+h")!,
+        }]);
+        const beforeInput = preview.listeners.get("before-input-event")!;
+        const input = {
+          type: "keyDown", key: "H", code: "KeyH", meta: false,
+          control: true, shift: true, alt: false, isAutoRepeat: false,
+        };
+        const preventDefault = vi.fn();
+        beforeInput({ preventDefault } as never, input as never);
+        expect(preventDefault).toHaveBeenCalledOnce();
+        expect(send).toHaveBeenCalledExactlyOnceWith("desktop:menu-action", "omniwork.toggleWorkers");
+        for (const override of [
+          { isAutoRepeat: true }, { type: "keyUp" }, { isComposing: true },
+          { shift: false }, { key: "l", code: "KeyL", shift: false },
+          { key: "h", code: "KeyH", control: false },
+        ]) {
+          beforeInput({ preventDefault: vi.fn() } as never, { ...input, ...override } as never);
+        }
+        expect(send).toHaveBeenCalledOnce();
+
+        // A regular preview must not lose its browser history shortcut.
+        const other = makeFaviconWebContents({ id: 43 });
+        Object.assign(other.webContents, { hostWebContents: host });
+        fromId.mockReturnValue(other.webContents);
+        getFocusedWebContents.mockReturnValue(other.webContents as never);
+        yield* manager.createTab("other-preview");
+        yield* manager.registerWebview("other-preview", 43);
+        const guestNative = vi.fn();
+        other.listeners.get("before-input-event")!({ preventDefault: guestNative } as never, input as never);
+        expect(guestNative).not.toHaveBeenCalled();
+        expect(send).toHaveBeenCalledOnce();
+      }),
+      "win32",
+    ),
+  );
+
   effectIt.effect("keeps preview shortcuts out of the host window", () =>
     withManager((manager) =>
       Effect.gen(function* () {

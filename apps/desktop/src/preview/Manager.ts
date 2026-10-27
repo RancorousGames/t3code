@@ -8,6 +8,7 @@
 import {
   DesktopPreviewRecordingInputSchema,
   DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
+  CHATGPT_WORKER_VISIBILITY_MENU_ACTION,
 } from "@t3tools/contracts";
 import type {
   DesktopPreviewAnnotationTheme,
@@ -1687,7 +1688,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           input.alt &&
           /^(?:[^a-zA-Z0-9]|Dead)$/u.test(input.key)
         ) &&
-        forwardedShortcuts.find(({ shortcut }) =>
+        forwardedShortcuts.find(({ command, shortcut }) =>
+          (command !== CHATGPT_WORKER_VISIBILITY_MENU_ACTION || selectedChatGPTGuest) &&
           matchesKeybindingShortcut(
             {
               key: input.key,

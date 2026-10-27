@@ -4,11 +4,14 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { CHATGPT_WORKER_VISIBILITY_MENU_ACTION, type ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
+import * as Schema from "effect/Schema";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { chatGPTWorkerVisibilityStorageKey } from "../chatGPTWorkerVisibility";
+import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useClosedViewStore } from "../closedViewStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { environmentCatalog } from "../connection/catalog";
@@ -31,6 +34,7 @@ import {
 } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readProject, readThreadShell } from "../state/entities";
+import { usePrimaryEnvironmentId } from "../state/environments";
 import { previewEnvironment } from "../state/preview";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentShell } from "../state/shell";
@@ -75,6 +79,12 @@ export function ReopenClosedViewShortcut() {
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const hasHistory = useClosedViewStore((state) => state.entries.length > 0);
+  // Share the same preference and change notification as ChatGPTBrowserSidebarEntry.
+  const [, setShowWorkers] = useLocalStorage(
+    chatGPTWorkerVisibilityStorageKey(usePrimaryEnvironmentId()),
+    true,
+    Schema.Boolean,
+  );
   const openPreview = useAtomCommand(previewEnvironment.open);
   const pending = useRef(Promise.resolve());
 
@@ -171,13 +181,15 @@ export function ReopenClosedViewShortcut() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     const unsubscribe = window.desktopBridge?.onMenuAction((action) => {
-      if (action === "view.reopenClosed" && !isCommandPaletteOpen()) enqueueReopen();
+      if (action === CHATGPT_WORKER_VISIBILITY_MENU_ACTION) {
+        setShowWorkers((current) => !current);
+      } else if (action === "view.reopenClosed" && !isCommandPaletteOpen()) enqueueReopen();
     });
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
       unsubscribe?.();
     };
-  }, [keybindings, previewOpen, terminalOpen]);
+  }, [keybindings, previewOpen, setShowWorkers, terminalOpen]);
 
   useEffect(() => {
     const preview = window.desktopBridge?.preview;
@@ -210,12 +222,22 @@ export function ReopenClosedViewShortcut() {
     // complete after the new registration and silently erase every shortcut.
     void preview
       .setForwardedShortcuts(
-        commands.flatMap((command) =>
-          effectiveShortcutsForCommand(keybindings, command, options).map((shortcut) => ({
-            command,
-            shortcut,
-          })),
-        ),
+        [
+          ...commands.flatMap((command) =>
+            effectiveShortcutsForCommand(keybindings, command, options).map((shortcut) => ({
+              command,
+              shortcut,
+            })),
+          ),
+          // Omniwork-owned shortcut: the guest may consume its keydown otherwise.
+          {
+            command: CHATGPT_WORKER_VISIBILITY_MENU_ACTION,
+            shortcut: {
+              key: "h", ctrlKey: true, shiftKey: true, metaKey: false, altKey: false,
+              modKey: false,
+            },
+          },
+        ],
       )
       .catch(() => undefined);
   }, [hasHistory, keybindings, terminalOpen]);

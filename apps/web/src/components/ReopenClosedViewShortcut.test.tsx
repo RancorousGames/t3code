@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   openPreview: vi.fn(),
   setShortcuts: vi.fn(async () => undefined),
+  storage: new Map<string, string>(),
   toast: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => state.params,
 }));
 vi.mock("../state/server", () => ({ primaryServerKeybindingsAtom: {} }));
+vi.mock("../state/environments", () => ({ usePrimaryEnvironmentId: () => "remote" }));
 vi.mock("../state/preview", () => ({ previewEnvironment: { open: state.openPreview } }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
 vi.mock("../state/shell", () => ({ environmentShell: { stateValueAtom: () => ({}) } }));
@@ -111,6 +113,7 @@ beforeEach(() => {
     workspaceAvailable: true,
   });
   state.navigate.mockResolvedValue(undefined);
+  state.storage.clear();
   state.openPreview.mockReset();
   useClosedViewStore.setState({ entries: [] });
   useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
@@ -124,6 +127,11 @@ beforeEach(() => {
   vi.stubGlobal(
     "window",
     Object.assign(new EventTarget(), {
+      localStorage: {
+        getItem: (key: string) => state.storage.get(key) ?? null,
+        setItem: (key: string, value: string) => { state.storage.set(key, value); },
+        removeItem: (key: string) => { state.storage.delete(key); },
+      },
       desktopBridge: {
         preview: { setForwardedShortcuts: state.setShortcuts },
         onMenuAction: (listener: typeof menuAction) => {
@@ -326,6 +334,32 @@ describe("root reopen shortcut", () => {
     });
     expect(useClosedViewStore.getState().entries).toEqual([]);
     expect(forwardedCommands()).not.toContain("view.reopenClosed");
+  });
+
+  it("toggles the shared sidebar preference from a guest menu action exactly once", async () => {
+    await render();
+    const storageKey = "t3code:chatgpt-browser:show-manager-workers:remote";
+    await act(() => { menuAction?.("omniwork.toggleWorkers"); });
+    expect(state.storage.get(storageKey)).toBe("false");
+    await act(() => { menuAction?.("omniwork.toggleWorkers"); });
+    expect(state.storage.get(storageKey)).toBe("true");
+    // Unowned browser chords do not dispatch a menu action or change the setting.
+    await act(() => { menuAction?.("browser.goBack"); });
+    expect(state.storage.get(storageKey)).toBe("true");
+  });
+
+  it("registers only the Omniwork-owned Ctrl+Shift+H chord for guest forwarding", async () => {
+    await render();
+    const shortcuts = (state.setShortcuts.mock.lastCall as unknown as [
+      Array<{ command: string; shortcut: { key: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean } }>,
+    ])[0];
+    const toggleWorkers = shortcuts.filter(({ command }) => command === "omniwork.toggleWorkers");
+    expect(toggleWorkers).toEqual([{
+      command: "omniwork.toggleWorkers",
+      shortcut: { key: "h", ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, modKey: false },
+    }]);
+    // Electron guest receives it; host renderer has no matching synthetic key event.
+    expect(state.navigate).not.toHaveBeenCalled();
   });
 
   it("forwards layout and new-session shortcuts from a focused desktop browser", async () => {
