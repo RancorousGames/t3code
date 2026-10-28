@@ -1,3 +1,4 @@
+import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { readChatGPTRecoverySettings } from "../../chatGPTRecoverySettings";
 /**
  * Desktop-only recovery scheduling. Session storage deliberately survives React
@@ -58,9 +59,17 @@ const empty = (): RecoveryQueueState => ({ targets: [], failures: {}, history: [
 
 export function readRecoveryQueue(environment: string): RecoveryQueueState {
   try {
-    const value: unknown = JSON.parse(
-      window.sessionStorage.getItem(queueKey(environment)) ?? "null",
-    );
+    // A recovery episode ends when window sessionStorage resets. Never resurrect
+    // a prior launch's persisted queue.
+    const raw = window.sessionStorage.getItem(queueKey(environment));
+    const decoded: unknown = raw === null ? null : JSON.parse(raw);
+    const store = getChatGPTSessionPersistedStore(environment);
+    if (JSON.stringify(store.getState().recovery.queue) !== JSON.stringify(decoded)) {
+      store.setState((previous) => ({
+        recovery: { ...previous.recovery, queue: decoded as RecoveryQueueState | null },
+      }));
+    }
+    const value: unknown = store.getState().recovery.queue;
     if (!value || typeof value !== "object") return empty();
     const data = value as Partial<RecoveryQueueState>;
     return {
@@ -87,6 +96,10 @@ export function readRecoveryQueue(environment: string): RecoveryQueueState {
 function save(environment: string, state: RecoveryQueueState): void {
   try {
     window.sessionStorage.setItem(queueKey(environment), JSON.stringify(state));
+    const store = getChatGPTSessionPersistedStore(environment);
+    store.setState((previous) => ({
+      recovery: { ...previous.recovery, queue: structuredClone(state) },
+    }));
     window.dispatchEvent(new CustomEvent("chatgpt-recovery-queue-updated"));
   } catch {
     // A lost journal must never cause an unsafe recovery mutation.

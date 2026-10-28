@@ -1,3 +1,4 @@
+import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 /**
  * Executed inside a ChatGPT webview. Only recognize the dedicated error panel:
  * a visible exact error string alongside a visible Retry button.
@@ -176,9 +177,7 @@ export const orderedCandidates = (
 
 export function readRecoveryHistory(environmentId: string): RecoveryHistory {
   try {
-    const parsed: unknown = JSON.parse(
-      window.localStorage.getItem(recoveryKey(environmentId)) ?? "null",
-    );
+    const parsed: unknown = getChatGPTSessionPersistedStore(environmentId).getState().recovery.history;
     if (!parsed || typeof parsed !== "object") throw new Error("Invalid history");
     const data = parsed as { lastAttemptAt?: unknown; bySession?: unknown };
     const bySession: Record<string, number> = {};
@@ -207,8 +206,8 @@ export function recordRecoveryAttempt(
     ids.filter((id) => id in previous.bySession).map((id) => [id, previous.bySession[id]]),
   );
   bySession[sessionId] = now;
-  window.localStorage.setItem(
-    recoveryKey(environmentId),
-    JSON.stringify({ lastAttemptAt: now, bySession }),
-  );
+  const history = { lastAttemptAt: now, bySession };
+  window.localStorage.setItem(recoveryKey(environmentId), JSON.stringify(history));
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  store.setState((previous) => ({ recovery: { ...previous.recovery, history } }));
 }

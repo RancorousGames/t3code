@@ -1,3 +1,4 @@
+import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import { useChatGPTRecoverySettings } from "../../chatGPTRecoverySettings";
@@ -72,9 +73,14 @@ export function ChatGPTRecoveryDashboard({
     };
     refresh();
     window.addEventListener("chatgpt-recovery-queue-updated", refresh);
-    const interval = setInterval(refresh, 2_000);
+    const unsubscribe = getChatGPTSessionPersistedStore(environmentId).subscribe(refresh);
+    window.addEventListener("chatgpt-recovery-diagnostics-updated", refresh);
+    // Data changes are subscription-driven; only relative time labels need a clock.
+    const interval = setInterval(() => setNow(Date.now()), 30_000);
     return () => {
+      unsubscribe();
       window.removeEventListener("chatgpt-recovery-queue-updated", refresh);
+      window.removeEventListener("chatgpt-recovery-diagnostics-updated", refresh);
       clearInterval(interval);
     };
   }, [environmentId, open]);

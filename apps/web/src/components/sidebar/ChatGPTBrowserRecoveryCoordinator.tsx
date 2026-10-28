@@ -1,3 +1,4 @@
+import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import {
   readChatGPTRecoverySettings,
   subscribeChatGPTRecoverySettings,
@@ -125,9 +126,7 @@ const recoveryStateKey = (environmentId: string) =>
   `t3code:chatgpt-browser:bounded-recovery:${environmentId}`;
 function readBoundedState(environmentId: string): PersistentRecovery {
   try {
-    const data: unknown = JSON.parse(
-      localStorage.getItem(recoveryStateKey(environmentId)) ?? "null",
-    );
+    const data: unknown = getChatGPTSessionPersistedStore(environmentId).getState().recovery.bounded;
     if (!data || typeof data !== "object") throw new Error("Invalid recovery record");
     const parsed = data as Partial<PersistentRecovery>;
     return {
@@ -150,6 +149,10 @@ function readBoundedState(environmentId: string): PersistentRecovery {
 function saveBoundedState(environmentId: string, state: PersistentRecovery): boolean {
   try {
     localStorage.setItem(recoveryStateKey(environmentId), JSON.stringify(state));
+    const store = getChatGPTSessionPersistedStore(environmentId);
+    store.setState((previous) => ({
+      recovery: { ...previous.recovery, bounded: structuredClone(state) },
+    }));
     return true;
   } catch {
     // Fail closed if the at-most-once marker cannot be persisted.
