@@ -21,6 +21,8 @@ export interface RecoveryQueueEntry {
   exhausted: boolean;
   /** Explicit user-requested queue rearm, not merely the selected tab. */
   manualPriority?: boolean;
+  /** Current failing selection outranks all other recovery tiers. */
+  selected?: boolean;
   /** Derived only from independently observed interrupted/delivery-timeout work. */
   interrupted?: boolean;
   /** A verified recent interaction; independent of title or collapsed project. */
@@ -125,6 +127,7 @@ function append(
 }
 /** Five fixed tiers; oldest actual attempt wins within each tier. */
 function tier(entry: RecoveryQueueEntry): number {
+  if (entry.selected) return -1;
   if (entry.manualPriority) return 0;
   if (entry.manager) return 1;
   if (entry.interrupted) return 2;
@@ -201,6 +204,7 @@ export function reconcileRecoveryQueue(
         id,
         reason: priorityReason(id, context),
         manager: context.managerIds?.includes(id) ?? false,
+        selected: id === context.selectedId,
         firstSeenAt: Date.now(),
         attempts: 0,
         lastAttemptAt: 0,
@@ -216,6 +220,11 @@ export function reconcileRecoveryQueue(
     const reason = priorityReason(entry.id, context);
     if (entry.reason !== reason) {
       entry.reason = reason;
+      changed = true;
+    }
+    const selected = entry.id === context.selectedId;
+    if (entry.selected !== selected) {
+      entry.selected = selected;
       changed = true;
     }
     const manager = context.managerIds?.includes(entry.id) ?? false;
@@ -258,6 +267,7 @@ export function noteRecoveryFailure(
     id,
     reason: priorityReason(id, context),
     manager: context.managerIds?.includes(id) ?? false,
+    selected: id === context.selectedId,
     firstSeenAt: Date.now(),
     attempts: 0,
     lastAttemptAt: 0,

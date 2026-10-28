@@ -118,12 +118,12 @@ describe("persistent three-target recovery queue", () => {
     manuallyRetryRecovery("local", "a");
     expect(recoveryPriorityOrder(readRecoveryQueue("local"))).toEqual(["a", "b", "c", "d", "e"]);
     expect(recoveryTargetOrder(readRecoveryQueue("local"))).toEqual(["a", "b", "c"]);
-    // Selecting another broken guest is a recent interaction, not a manual recovery request.
+    // Selecting another broken guest preempts every other tier.
     reconcileRecoveryQueue("local", context(["a", "b", "c", "d", "e"], "e", ["b"], ["d"], ["c"]));
-    expect(recoveryPriorityOrder(readRecoveryQueue("local"))).toEqual(["a", "b", "c", "d", "e"]);
+    expect(recoveryPriorityOrder(readRecoveryQueue("local"))).toEqual(["e", "a", "b", "c", "d"]);
     expect(beginRecoveryAttempt("local", "a", "refresh")).toBe(1);
     reconcileRecoveryQueue("local", context(["a", "b", "c", "d", "e"], "e", ["b"], ["d"], ["c"]));
-    expect(recoveryPriorityOrder(readRecoveryQueue("local"))[0]).toBe("b");
+    expect(recoveryPriorityOrder(readRecoveryQueue("local"))[0]).toBe("e");
   });
 
   it("rotates among ordinary failing sessions without starving queued peers", () => {

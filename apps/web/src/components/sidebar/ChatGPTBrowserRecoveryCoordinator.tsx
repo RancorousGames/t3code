@@ -650,7 +650,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
         const clicked = readRecentSessionClicks(envId);
         const queue = reconcileRecoveryQueue(envId, context());
         const targets = recoveryTargetOrder(queue, currentSelectedId());
-        const candidates = [
+        const allCandidates = [
           ...targets,
           ...orderedCandidates(
             currentSessionIds(),
@@ -660,6 +660,11 @@ export function ChatGPTBrowserRecoveryCoordinator({
             new Set(currentRedIds()),
           ).filter((id) => !targets.includes(id)),
         ];
+        // A selected red guest exclusively owns automatic recovery until it clears.
+        const selected = currentSelectedId();
+        const candidates = selected && currentRedIds().includes(selected)
+          ? [selected]
+          : allCandidates;
         const wakeupSet = new Set(currentWakeupIds());
         const toWake = candidates.filter((id) => wakeupSet.has(id));
         const wakeNow = new Set<string>();
@@ -669,6 +674,8 @@ export function ChatGPTBrowserRecoveryCoordinator({
         if (toWake.length) wakeupCursor = (wakeupCursor + wakeNow.size) % toWake.length;
         for (const sessionId of candidates) {
           if (disposed) return;
+          const prioritySelection = currentSelectedId();
+          if (prioritySelection && currentRedIds().includes(prioritySelection) && sessionId !== prioritySelection) continue;
           if (!currentSessionIds().includes(sessionId)) continue;
           // Missing/composer-less guests may have no inspectable DOM. Do not silently
           // drop red sessions from recovery just because the probe fails.
