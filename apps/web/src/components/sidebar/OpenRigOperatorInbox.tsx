@@ -28,6 +28,7 @@ import { OpenRigHumanReplyComposer, type HumanReplyRequest } from "./OpenRigHuma
 import { OpenRigHumanSendTab } from "./OpenRigHumanSendTab";
 import { OpenRigRichInboxMessage, isNativeInboxDecision } from "./OpenRigRichInboxMessage";
 import { OpenRigReviewGatePanel } from "./OpenRigReviewGatePanel";
+import { TaskBoardInboxItems } from "./TaskBoardInboxItems";
 import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
 import { observeResize } from "../../lib/observeResize";
 
@@ -800,6 +801,7 @@ export function OpenRigOperatorInbox() {
                 aria-label="Human Inbox Received panel"
                 className={activeTab === "inbox" ? "contents" : "hidden"}
               >
+                <TaskBoardInboxItems />
                 <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-1.5">
                   <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     Inbox

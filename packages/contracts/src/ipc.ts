@@ -1928,6 +1928,8 @@ export interface DesktopBridge {
   /** Opens an OS-native review; renderer supplies lookup ID only, never choice or proof. */
   requestOpenRigNativeReview?: (operationId: string) => Promise<DesktopOpenRigNativeReviewResult>;
   readOpenRigOperatorInbox?: (address: string) => Promise<DesktopOpenRigInbox>;
+  readTaskBoardHumanInbox?: () => Promise<{ items: Array<{ sourceKey: string; sourceId: string; boardRoot?: string; title: string; body?: string; createdAt?: string }>; sources: Array<{ source: "taskboard"; id: string; status: "available" | "unavailable"; error?: string }> }>;
+  openTaskBoardHumanItem?: (input: { boardRoot: string; taskId: string }) => Promise<{ launched: true; sourceKey: string }>;
   /** Runs the locally installed AISpeak preview (max 20 spoken words). */
   speakOpenRigPreview?: (text: string) => Promise<void>;
   submitOpenRigHumanResponse?: (
