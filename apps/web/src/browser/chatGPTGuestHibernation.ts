@@ -133,6 +133,7 @@ export function shouldHibernateChatGPTGuest(input: {
   readonly visible: boolean;
   /** Important managers, sessions with children, or queued recovery remain attached. */
   readonly protected?: boolean;
+  readonly longIdle?: boolean;
   /** Only an existing conversation can be reloaded; fresh home pages await a first prompt. */
   readonly onConversation: boolean;
   readonly activity: string;
@@ -145,6 +146,7 @@ export function shouldHibernateChatGPTGuest(input: {
   // invalid/red, interrupted/orange and working are not evidence of completion.
   if (input.activity !== "idle") return false;
   const lastUsedAt = Math.max(input.lastWorkingAt || 0, input.touchedAt || 0);
-  const idleMs = activeOmniworkUnloadPolicy().idleMs;
+  const baseIdleMs = activeOmniworkUnloadPolicy().idleMs;
+  const idleMs = input.longIdle && baseIdleMs !== null ? 4 * 60 * 60_000 : baseIdleMs;
   return idleMs !== null && input.now - lastUsedAt >= idleMs;
 }

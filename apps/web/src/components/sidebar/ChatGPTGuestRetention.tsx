@@ -97,20 +97,25 @@ export function ChatGPTGuestRetention() {
     const candidates = sessions.flatMap((session) => {
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
+      const recentUseAt = Math.max(
+        touchedAt[key] ?? 0,
+        session.lastDirectInteractionAt ?? 0,
+        getLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, session.id), Schema.Number) ?? 0,
+      );
+      const longIdle = session.humanControlled === true ||
+        (!session.markedAsWorkerAt && (protectedManagers?.has(session.id) === true ||
+          parents.has(session.id) || !session.parentSessionId));
+      const withinLongIdle = recentUseAt > now - 4 * 60 * 60_000;
       const important =
         deliveryRequests[`${environmentId}:${session.id}`] === true ||
         activeSessionId === session.id ||
-        !!session.borderColor ||
-        protectedManagers?.has(session.id) ||
-        (!session.completion && parents.has(session.id)) ||
+        (!!session.borderColor && (!longIdle || withinLongIdle)) ||
+        (longIdle && withinLongIdle) ||
         hasUncertainChatGPTSend(environmentId, session.id) ||
         recoverableSession(environmentId, session.id) ||
-        (getLocalStorageItem(
-          chatGPTBrowserLastWorkingKey(environmentId, session.id),
-          Schema.Number,
-        ) ?? 0) >
-          now - 60_000;
+        (!longIdle && recentUseAt > now - 60_000);
       if (important) protectedKeys.add(key);
+      if (longIdle && !withinLongIdle && !important && unloadProfile !== 'never') return [];
       // Hidden/snoozed ordinary sessions can be unloaded, but neither state
       // revokes manager, active, UNKNOWN-send or recovery protection.
       if (

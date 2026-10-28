@@ -183,12 +183,30 @@ export function useChatGPTBrowserSessionActivity(
       } else missingComposerObservations.current = 0;
 
       const observedAt = Date.now();
+      const sessions = readChatGPTBrowserSessions(environmentId);
+      const session = sessions.find((entry) => entry.id === sessionId);
+      const managerIds = (() => {
+        try {
+          const raw = localStorage.getItem(
+            `t3code:chatgpt-browser:verified-manager-retention:${environmentId}`,
+          );
+          const parsed: unknown = raw ? JSON.parse(raw) : null;
+          const ids = parsed && typeof parsed === 'object'
+            ? (parsed as { ids?: unknown }).ids : null;
+          return Array.isArray(ids) ? ids : [];
+        } catch { return []; }
+      })();
+      const longIdle = !!session && (session.humanControlled === true ||
+        (!session.markedAsWorkerAt && (managerIds.includes(sessionId) ||
+          sessions.some((entry) => entry.parentSessionId === sessionId) ||
+          !session.parentSessionId)));
       const touchedAt = chatGPTGuestTouchedAt(runtimeTabId);
       if (visible) touchChatGPTGuest(runtimeTabId, observedAt);
       else if (
         !hibernated &&
         shouldHibernateChatGPTGuest({
           visible,
+          longIdle,
           onConversation: isOnConversation(),
           activity: next,
           lastWorkingAt: lastWorkingAtRef.current,
