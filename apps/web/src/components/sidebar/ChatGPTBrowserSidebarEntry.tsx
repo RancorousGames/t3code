@@ -273,6 +273,7 @@ export function ChatGPTBrowserSidebarEntry({
     setSessionParent,
     setSessionSnooze,
     setSessionBorderColor,
+    setSessionWorker,
     markDirectInteraction,
     syncInferredMetadata,
     pruneExpiredHidden,
@@ -550,8 +551,8 @@ export function ChatGPTBrowserSidebarEntry({
     hideableWorkerIds.has(session.id),
   ).length;
   // Count every working session before applying Hide Workers to sidebar rows.
-  const activeSessionCount = visibleSessions.filter((session) =>
-    activities[session.id]?.age === "working",
+  const activeSessionCount = visibleSessions.filter(
+    (session) => activities[session.id]?.age === "working",
   ).length;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
@@ -1443,6 +1444,34 @@ export function ChatGPTBrowserSidebarEntry({
                     </button>
                   </>
                 )}
+                {contextMenu.sessionId &&
+                  (() => {
+                    const session = sessions.find((entry) => entry.id === contextMenu.sessionId);
+                    if (
+                      !session ||
+                      managerIds.has(session.id) ||
+                      /\b(manager|coordinator)\b/i.test(session.title) ||
+                      sessions.some((entry) => entry.parentSessionId === session.id) ||
+                      (chatGPTSessionCreationOrigin(session) !== "manual" &&
+                        session.markedAsWorkerAt === undefined)
+                    )
+                      return null;
+                    return (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                        onClick={() => {
+                          setSessionWorker(session.id, session.markedAsWorkerAt === undefined);
+                          setContextMenu(null);
+                        }}
+                      >
+                        {session.markedAsWorkerAt === undefined
+                          ? "Mark as worker"
+                          : "Mark as personal"}
+                      </button>
+                    );
+                  })()}
                 {contextMenu.sessionId && (
                   <div
                     className="relative"

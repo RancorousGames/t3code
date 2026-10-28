@@ -30,6 +30,8 @@ export const BrowserSession = Schema.Struct({
   // A backend-created worker becomes a personal chat after an actual human send
   // or a user-assigned highlight. Creation provenance remains unchanged.
   humanControlled: Schema.optional(Schema.Boolean),
+  // Explicit reversible user designation; timestamp starts worker cleanup grace.
+  markedAsWorkerAt: Schema.optional(Schema.Number),
   // An exact backend spawn reservation. Manual sessions and warm spares never carry it.
   spawnRequestId: Schema.optional(Schema.String),
   // Only explicit UI-created fresh chats carry this; legacy and backend guests do not.
@@ -783,6 +785,30 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
 
+  const setSessionWorker = useCallback(
+    (id: string, worker: boolean) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id !== id
+            ? session
+            : worker
+              ? {
+                  ...session,
+                  markedAsWorkerAt: Date.now(),
+                  humanControlled: false,
+                  autoCloseExempt: false,
+                }
+              : {
+                  ...session,
+                  markedAsWorkerAt: undefined,
+                  humanControlled: true,
+                  autoCloseExempt: true,
+                },
+        ),
+      ),
+    [setSessions],
+  );
+
   const setSessionArchived = useCallback(
     (id: string, archive: NonNullable<BrowserSession["archive"]>) =>
       setSessions((current) => setChatGPTSessionArchived(current, id, archive)),
@@ -800,6 +826,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     renameSessionFromPageTitle,
     removeSession,
     setSessionHidden,
+    setSessionWorker,
     setSessionArchived,
     setSessionProject,
     setSessionParent,

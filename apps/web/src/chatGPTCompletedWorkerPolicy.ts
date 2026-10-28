@@ -5,6 +5,7 @@ export interface TaskBoardWorkerClaim {
   claimedBy: string;
   column: string;
   completedAt: number | null;
+  handoffAt?: number | null;
 }
 
 export const WORKER_DONE_GRACE_MS = 2 * 60 * 60_000;
@@ -21,7 +22,7 @@ export interface WorkerCreationEvidence {
 export interface WorkerCloseCandidate {
   taskIds: string[];
   dueAt: number;
-  reason: "all-tasks-done" | "unassigned-two-hours" | "worker-24-hours";
+  reason: "all-tasks-done" | "all-tasks-handed-off" | "unassigned-two-hours" | "worker-24-hours";
 }
 
 const TASK_ID = /\b[A-Z][A-Z0-9]{1,7}-\d{3,6}\b/g;
@@ -34,10 +35,8 @@ function taskBelongsToWorker(task: TaskBoardWorkerClaim, session: BrowserSession
   // TaskBoard historically used labels such as T3-worker-67cbb8ca or
   // GPT6-WT0173-84708039. Never match a short ID inside a longer hex token.
   const shortId = id.slice(0, 8);
-  if (
-    UUID.test(id) &&
-    new RegExp(`(?:^|[^0-9a-f])${shortId}(?:$|[^0-9a-f])`, "i").test(claim)
-  ) return true;
+  if (UUID.test(id) && new RegExp(`(?:^|[^0-9a-f])${shortId}(?:$|[^0-9a-f])`, "i").test(claim))
+    return true;
   // A task mentioned explicitly in the worker title is an association even
   // when another worker holds the TaskBoard claim (e.g. UI delegates).
   const titledIds: string[] = session.title.toUpperCase().match(TASK_ID) ?? [];
@@ -51,6 +50,7 @@ function creationLowerBound(
 ): number | null {
   const valid = (value: number | undefined): value is number =>
     typeof value === "number" && Number.isFinite(value) && value > 0 && value <= now;
+  if (valid(session.markedAsWorkerAt)) return session.markedAsWorkerAt;
   if (valid(session.createdAt)) return session.createdAt;
   if (valid(evidence.spawnCreatedAt)) return evidence.spawnCreatedAt;
   // lastWorkingAt does not establish exact creation; it does prove a minimum
@@ -74,7 +74,8 @@ export function completedWorkerCandidate(
   // No manager-seat ledger means no automatic deletion.
   if (
     managerIds === null ||
-    chatGPTSessionCreationOrigin(session) !== "backend" ||
+    (session.markedAsWorkerAt === undefined &&
+      chatGPTSessionCreationOrigin(session) !== "backend") ||
     managerIds.has(session.id) ||
     /\b(manager|coordinator)\b/i.test(session.title) ||
     session.humanControlled === true ||
@@ -85,7 +86,8 @@ export function completedWorkerCandidate(
     !!session.borderColor ||
     session.snoozedUntil !== undefined ||
     session.id === activeSessionId
-  ) return null;
+  )
+    return null;
 
   // Detached/orphaned parent metadata cannot authorize a deletion.
   if (session.parentSessionId && !sessions.some((entry) => entry.id === session.parentSessionId))
@@ -95,19 +97,48 @@ export function completedWorkerCandidate(
   const owned = claims.filter((task) => taskBelongsToWorker(task, session));
   const allDone =
     owned.length > 0 &&
-    owned.every((task) =>
-      task.column === "done" &&
-      task.completedAt !== null &&
-      Number.isFinite(task.completedAt) &&
-      task.completedAt > 0 &&
-      task.completedAt <= now
+    owned.every(
+      (task) =>
+        task.column === "done" &&
+        task.completedAt !== null &&
+        Number.isFinite(task.completedAt) &&
+        task.completedAt > 0 &&
+        task.completedAt <= now,
     );
 
+  const handedOff =
+    owned.length > 0 &&
+    owned.every(
+      (task) =>
+        (task.column === "done" &&
+          task.completedAt !== null &&
+          Number.isFinite(task.completedAt) &&
+          task.completedAt > 0 &&
+          task.completedAt <= now) ||
+        (task.handoffAt !== null &&
+          task.handoffAt !== undefined &&
+          Number.isFinite(task.handoffAt) &&
+          task.handoffAt > 0 &&
+          task.handoffAt <= now),
+    );
   const due: WorkerCloseCandidate[] = [];
+  if (handedOff && !allDone) {
+    due.push({
+      taskIds: owned.map((task) => task.taskId),
+      dueAt:
+        Math.max(
+          ...owned.map((task) => (task.column === "done" ? task.completedAt! : task.handoffAt!)),
+          session.markedAsWorkerAt ?? 0,
+        ) + WORKER_DONE_GRACE_MS,
+      reason: "all-tasks-handed-off",
+    });
+  }
   if (allDone) {
     due.push({
       taskIds: owned.map((task) => task.taskId),
-      dueAt: Math.max(...owned.map((task) => task.completedAt!)) + WORKER_DONE_GRACE_MS,
+      dueAt:
+        Math.max(...owned.map((task) => task.completedAt!), session.markedAsWorkerAt ?? 0) +
+        WORKER_DONE_GRACE_MS,
       reason: "all-tasks-done",
     });
   }

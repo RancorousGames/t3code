@@ -12,23 +12,32 @@ export function verifiedManagerChatGPTTabIds(
   ledgers: readonly DesktopOpenRigSeatSessions[],
   environmentId: string,
 ): ReadonlySet<string> {
-  if (topology.source !== "openrig-rigspec" &&
-      topology.source !== "openrig-rigspec-and-managed-ledger") return new Set();
+  if (
+    topology.source !== "openrig-rigspec" &&
+    topology.source !== "openrig-rigspec-and-managed-ledger"
+  )
+    return new Set();
 
   const seatRoles = new Map(topology.seats.map((seat) => [seat.id, seat.role]));
   const byTab = new Map<string, { seatId: string; conversationId: string }[]>();
   const byConversation = new Map<string, Set<string>>();
   for (const ledger of ledgers) {
     if (!seatRoles.has(ledger.seatId) || !ledger.primarySessionId) continue;
-    const session = ledger.sessions.find((item) =>
-      item.id === ledger.primarySessionId && item.primary && item.seatId === ledger.seatId);
-    if (!session || session.status !== "active" ||
+    const session = ledger.sessions.find(
+      (item) =>
+        item.id === ledger.primarySessionId && item.primary && item.seatId === ledger.seatId,
+    );
+    if (
+      !session ||
+      session.status !== "active" ||
       (session.mode !== "chatgpt" && session.mode !== "adopt") ||
       session.target?.kind !== "chatgpt-conversation" ||
       !session.target.conversationId ||
       (session.conversationId && session.conversationId !== session.target.conversationId) ||
       (session.environmentId && session.environmentId !== environmentId) ||
-      !session.attachedTabUuid) continue;
+      !session.attachedTabUuid
+    )
+      continue;
 
     const owner = { seatId: ledger.seatId, conversationId: session.target.conversationId };
     byTab.set(session.attachedTabUuid, [...(byTab.get(session.attachedTabUuid) ?? []), owner]);
@@ -36,12 +45,15 @@ export function verifiedManagerChatGPTTabIds(
     owners.add(owner.seatId);
     byConversation.set(owner.conversationId, owners);
   }
-  return new Set([...byTab].flatMap(([tabId, claims]) =>
-    claims.length === 1 &&
-    isOpenRigManagerRole(seatRoles.get(claims[0]!.seatId) ?? null) &&
-    byConversation.get(claims[0]!.conversationId)?.size === 1
-      ? [tabId] : [],
-  ));
+  return new Set(
+    [...byTab].flatMap(([tabId, claims]) =>
+      claims.length === 1 &&
+      isOpenRigManagerRole(seatRoles.get(claims[0]!.seatId) ?? null) &&
+      byConversation.get(claims[0]!.conversationId)?.size === 1
+        ? [tabId]
+        : [],
+    ),
+  );
 }
 
 /** Use one stable project label for every child/row even in status-only groups. */
@@ -72,6 +84,7 @@ export function chatGPTSessionDisplayRole(
   verifiedManager: boolean,
 ): "manager" | "worker" | "human" {
   if (verifiedManager) return "manager";
+  if (session.markedAsWorkerAt !== undefined) return "worker";
   if (session.humanControlled || chatGPTSessionCreationOrigin(session) !== "backend")
     return "human";
   return "worker";
