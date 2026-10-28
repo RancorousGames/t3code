@@ -6,7 +6,10 @@ import { useStore } from "zustand";
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
-import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
+import {
+  CANONICAL_CHATGPT_CONVERSATION_ID,
+  chatGPTConversationIdFromUrl,
+} from "./chatGPTConversationIdentity";
 import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPTBrowserPrewarm";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { randomUUID } from "./lib/utils";
@@ -98,6 +101,22 @@ export function chatGPTSessionTitleFromPage(pageTitle: string | null): string | 
 }
 
 export const CHATGPT_DEFAULT_URL = "https://chatgpt.com";
+
+/** Resolve exact persisted conversation ownership; never infer it from titles or T3 session IDs. */
+export function findExistingChatGPTConversation(
+  sessions: readonly BrowserSession[],
+  targetUrl: string,
+  readUrl: (sessionId: string) => string | null,
+): BrowserSession | undefined {
+  const id = chatGPTConversationIdFromUrl(targetUrl);
+  if (!id || !CANONICAL_CHATGPT_CONVERSATION_ID.test(id)) return undefined;
+  return sessions.find(
+    (session) =>
+      chatGPTConversationIdFromUrl(
+        readUrl(session.id) ?? session.archive?.conversationUrl ?? null,
+      ) === id,
+  );
+}
 
 export function isChatGPTConversationUrl(url: string | null): boolean {
   return chatGPTConversationIdFromUrl(url) !== null;
@@ -370,9 +389,14 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   const storedSessions = useStore(sessionStore, (state) => state.sessions);
   const sessions = storedSessions.length ? storedSessions : INITIAL_SESSIONS;
   const setSessions = useCallback(
-    (update: readonly BrowserSession[] | ((current: readonly BrowserSession[]) => readonly BrowserSession[])) => {
+    (
+      update:
+        | readonly BrowserSession[]
+        | ((current: readonly BrowserSession[]) => readonly BrowserSession[]),
+    ) => {
       const current = sessionStore.getState().sessions;
-      const next = typeof update === "function" ? update(current.length ? current : INITIAL_SESSIONS) : update;
+      const next =
+        typeof update === "function" ? update(current.length ? current : INITIAL_SESSIONS) : update;
       setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), next, BrowserSessions);
       sessionStore.setState({ sessions: next });
     },
@@ -395,6 +419,41 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         explicitlyUserCreated?: boolean;
       },
     ) => {
+      // Opening a known /c/ conversation reuses the original T3 identity.
+      // Do not replace the guest or its composer draft, even for hidden/snoozed owners.
+      if (environmentId && metadata?.initialConversationUrl && !metadata.spawnRequestId) {
+        const requestedId = chatGPTConversationIdFromUrl(metadata.initialConversationUrl);
+        if (
+          !requestedId ||
+          metadata.initialConversationUrl !== `https://chatgpt.com/c/${requestedId}`
+        )
+          throw new Error("Only an exact canonical ChatGPT conversation URL may seed a session.");
+        const owner = findExistingChatGPTConversation(
+          readChatGPTBrowserSessions(environmentId),
+          metadata.initialConversationUrl,
+          (id) => getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id), Schema.String),
+        );
+        if (owner) {
+          setSessions((current) =>
+            current.map((session) =>
+              session.id === owner.id
+                ? {
+                    ...session,
+                    hidden: false,
+                    hiddenAt: undefined,
+                    snoozedUntil: undefined,
+                    ...(session.archive
+                      ? {
+                          archive: { ...session.archive, restoredAt: new Date().toISOString() },
+                        }
+                      : {}),
+                  }
+                : session,
+            ),
+          );
+          return owner.id;
+        }
+      }
       let id = randomUUID();
       // Read the current slot synchronously: multiple buttons, the palette and
       // desktop automation can request sessions without waiting for a render.

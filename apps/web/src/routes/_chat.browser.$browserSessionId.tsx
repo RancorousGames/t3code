@@ -4,6 +4,7 @@ import { useMemo } from "react";
 
 import { PreviewView } from "../components/preview/PreviewView";
 import { ChatGPTBrowserFindBar } from "../components/browser/ChatGPTBrowserFindBar";
+import { ChatGPTDuplicateConversationBanner } from "../components/browser/ChatGPTDuplicateConversationBanner";
 import {
   CHATGPT_DEFAULT_URL,
   chatGPTBrowserThreadRef,
@@ -62,6 +63,7 @@ function ChatGPTBrowserView({
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <ChatGPTDuplicateConversationBanner environmentId={environmentId} sessionId={sessionId} />
       <PreviewView
         threadRef={threadRef}
         visible
