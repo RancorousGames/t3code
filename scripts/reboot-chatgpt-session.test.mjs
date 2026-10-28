@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
-import { parseRebootArgs, rebootExistingT3Session } from "./reboot-chatgpt-session.mjs";
+import { parseRebootArgs, parseRebootJsonInput, rebootExistingT3Session } from "./reboot-chatgpt-session.mjs";
 
 test("generic T3 Agent Reboot requires no OpenRig seat, role, or ChatGPT UUID from OpenRig", async () => {
   const id = randomUUID();
@@ -105,4 +105,34 @@ test("older standalone T3 browser session id 'chatgpt' can reboot without OpenRi
     } };
   } });
   assert.equal(result.sessionId, "chatgpt");
+});
+
+
+test("OMCP JSON-stdin reboot requires an explicit exact identity and handoff", async () => {
+  const sessionId = randomUUID();
+  const requestId = randomUUID();
+  const args = parseRebootJsonInput({
+    action: "reboot", sessionId, requestId, message: "Continue the same work.",
+  });
+  const sent = [];
+  const result = await rebootExistingT3Session(args, { exchange: async (_address, request) => {
+    sent.push(request);
+    return { requestId, version: 1, ok: true,
+      data: { action: "reboot", sessionId, rebootGeneration: 2, status: "submitted" } };
+  } });
+  assert.equal(result.requestId, requestId);
+  assert.equal(sent[0].type, "chatgpt.reboot");
+  assert.equal(sent[0].prompt, "Continue the same work.");
+  assert.equal(sent.length, 1);
+
+  const status = parseRebootJsonInput({
+    action: "reboot", sessionId, phase: "status", requestId,
+  });
+  assert.equal(status.phase, "status");
+  assert.equal(status.message, undefined);
+  assert.throws(() => parseRebootJsonInput({ action: "reboot", message: "No target" }), /Specify --session-id/);
+  assert.throws(() => parseRebootJsonInput({ action: "reboot", sessionId, phase: "finalize" }), /require --request-id/);
+  assert.throws(() => parseRebootJsonInput({ action: "reboot", sessionId, phase: "status", requestId, message: "Duplicate" }), /never resend/);
+  assert.throws(() => parseRebootJsonInput({ action: "reload", sessionId, message: "Wrong action" }), /reboot action/);
+  assert.throws(() => parseRebootJsonInput({ action: "reboot", sessionId, message: "Resume", unrecognized: true }), /Unknown or invalid/);
 });

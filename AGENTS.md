@@ -164,3 +164,6 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 
 - Don't verify with browsers or computer use unless the user explicitly agrees or requests it.
 - Security is important, but should not be over-indexed on, especially for dev mode/maintainer-only features.
+
+## Local development workflow
+Use the existing main checkout and main branch directly for future T3 Code work. Do not create Git worktrees or feature branches unless the user explicitly reverses this policy.

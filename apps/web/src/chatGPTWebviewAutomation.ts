@@ -116,11 +116,13 @@ export const chatGPTWebviewAutomation = {
       clear,
       expectedConversationId,
       requireEmptyComposer,
+      replaceOwnedComposerText,
     }: {
       selector: string;
       text: string;
       clear?: boolean;
       requireEmptyComposer?: boolean;
+      replaceOwnedComposerText?: string | undefined;
       timeoutMs?: number;
       expectedConversationId?: string | undefined;
     },
@@ -136,9 +138,14 @@ export const chatGPTWebviewAutomation = {
       if (${Boolean(requireEmptyComposer)}) {
         const current = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement
           ? el.value : (el.innerText || el.textContent || "");
-        if (current.trim()) return { ok: false, reason: "Composer contains an existing draft; refusing to overwrite it." };
         const previous = window[Symbol.for('t3.chatgpt.composerOwner')];
-        if (previous?.active) return { ok: false, reason: "Automated composer ownership still active before typing; no message sent." };
+        const normalizeExact = value => value.replace(/\\r\\n/g, '\\n');
+        const replacement = ${JSON.stringify(replaceOwnedComposerText ?? null)};
+        const ownedResidue = replacement !== null && normalizeExact(current) === normalizeExact(replacement) &&
+          (!previous || (!previous.interrupted && previous.editor === el &&
+            previous.conversationId === ${JSON.stringify(expectedConversationId ?? null)}));
+        if (current.trim() && !ownedResidue) return { ok: false, reason: "Composer contains an existing draft; refusing to overwrite it." };
+        if (previous?.active && !ownedResidue) return { ok: false, reason: "Automated composer ownership still active before typing; no message sent." };
       }
       // The ownership token only exists between inserting automation text and
       // clicking Send. Trusted human input invalidates it rather than being sent.
@@ -240,7 +247,8 @@ export const chatGPTWebviewAutomation = {
           if (${JSON.stringify(expectedComposerText ?? null)} !== null) {
             const current = editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement
               ? editor.value : (editor?.innerText || editor?.textContent || '');
-            const normalize = value => (value || '').replace(/\\s+/g, ' ').trim();
+            const normalize = value => ${Boolean(recoverStagedComposer)}
+              ? (value || '').replace(/\\r\\n/g, '\\n') : (value || '').replace(/\\s+/g, ' ').trim();
             if (normalize(current) !== normalize(${JSON.stringify(expectedComposerText ?? null)}))
               return { composerMismatch: true };
             const owner = window[Symbol.for('t3.chatgpt.composerOwner')];

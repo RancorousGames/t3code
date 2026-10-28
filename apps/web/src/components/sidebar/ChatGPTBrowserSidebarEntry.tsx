@@ -38,7 +38,6 @@ import {
 import { isElectron } from "../../env";
 import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
 import {
-  readChatGPTSessionTimeline,
   formatChatGPTSessionDateTime,
   recordChatGPTSessionActiveAt,
 } from "../../chatGPTSessionTimestamps";
@@ -95,10 +94,6 @@ import {
   type ChatGPTRecoveryPhase,
 } from "./ChatGPTBrowserRecoveryCoordinator";
 import { recordSessionClick } from "./chatGPTConversationRecovery";
-import {
-  readChatGPTRecoveryEvents,
-  readChatGPTRecoveryState,
-} from "../../chatGPTRecoveryDiagnostics";
 import { chatGPTRecoveryHoverDetails } from "./chatGPTRecoveryHoverDetails";
 import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
 import { ChatGPTWorkerCleanupCoordinator } from "./ChatGPTWorkerCleanupCoordinator";
@@ -117,6 +112,8 @@ import { ChatGPTSessionIcon } from "./ChatGPTSessionIcon";
 import { SidebarHeaderIconButton } from "./SidebarThreadHeader";
 import { useChatGPTBrowserSessionActivity } from "./ChatGPTBrowserSessionActivity";
 import { chatGPTActivityColorClass } from "./chatGPTActivity";
+import { useChatGPTSession, type ChatGPTSessionModel } from "../../chatGPTSessionModel";
+import type { BrowserSession } from "../../chatGPTBrowserSessions";
 
 const VerifiedWorkerEvidenceSchema = Schema.Array(
   Schema.Struct({
@@ -151,18 +148,34 @@ export function ChatGPTBrowserNewSessionAction() {
 
 function SortableBrowserSessionRow({
   id,
+  session,
+  environmentId,
   activity,
+  recoveryPhase,
+  now,
+  verifiedSpawnCreatedAt,
   disabled,
   children,
 }: {
   id: string;
+  session: BrowserSession;
+  environmentId: NonNullable<ReturnType<typeof usePrimaryEnvironmentId>>;
   activity: ReturnType<typeof useChatGPTBrowserSessionActivity>;
+  recoveryPhase: ChatGPTRecoveryPhase | null;
+  now: number;
+  verifiedSpawnCreatedAt?: number;
   disabled: boolean;
   children: (
     dragHandleProps: ReturnType<typeof useSortable>,
     activity: ReturnType<typeof useChatGPTBrowserSessionActivity>,
+    model: ChatGPTSessionModel,
   ) => ReactNode;
 }) {
+  const model = useChatGPTSession(environmentId, session, activity, {
+    now,
+    phase: recoveryPhase,
+    verifiedSpawnCreatedAt,
+  });
   const sortable = useSortable({ id, disabled });
   return (
     <SidebarMenuItem
@@ -175,7 +188,7 @@ function SortableBrowserSessionRow({
         zIndex: sortable.isDragging ? 1 : undefined,
       }}
     >
-      {children(sortable, activity)}
+      {children(sortable, activity, model)}
     </SidebarMenuItem>
   );
 }
@@ -886,7 +899,6 @@ export function ChatGPTBrowserSidebarEntry({
           .filter(
             (session) =>
               !isSnoozed(session) &&
-              !readChatGPTRecoveryState(environmentId, session.id).escalationReason &&
               (activities[session.id]?.age === "unknown" ||
                 activities[session.id]?.age === "inactive" ||
                 activities[session.id]?.label ===
@@ -1007,19 +1019,27 @@ export function ChatGPTBrowserSidebarEntry({
                     <SortableBrowserSessionRow
                       key={session.id}
                       id={session.id}
+                      session={session}
+                      environmentId={environmentId}
+                      now={clockNow}
+                      recoveryPhase={recoveryPhases[session.id] ?? null}
+                      verifiedSpawnCreatedAt={
+                        spawnCreation.get(session.id)?.requestId === session.spawnRequestId
+                          ? spawnCreation.get(session.id)?.createdAt
+                          : undefined
+                      }
                       activity={activities[session.id] ?? UNKNOWN_ACTIVITY}
                       disabled={showingHidden || isSearching || renamingId === session.id}
                     >
-                      {(sortable, activity) => {
+                      {(sortable, activity, model) => {
                         const recoveryEligible =
-                          !session.hidden && !isSnoozed(session) && activity.age !== "unloaded";
-                        const recoveryBlocked =
-                          readChatGPTRecoveryState(environmentId, session.id).escalationReason !==
-                          null;
+                          model.residency !== "hidden" && model.residency !== "snoozed" &&
+                          model.residency !== "unloaded";
+                        const recoveryBlocked = model.recovery.stoppedReason !== null;
                         const recoveryPhase =
                           recoveryEligible &&
-                          !["working", "recent", "inactive"].includes(activity.age)
-                            ? (recoveryPhases[session.id] ?? null)
+                          !["working", "recent", "inactive"].includes(model.compatibilityAge)
+                            ? model.recovery.phase
                             : null;
                         // Missing composers are still periodically inspected and given
                         // background render time. Keep the recovery spinner visible while
@@ -1055,8 +1075,13 @@ export function ChatGPTBrowserSidebarEntry({
                                 age: activity.age,
                                 label: activity.label,
                                 phase: recoveryPhase,
-                                state: readChatGPTRecoveryState(environmentId, session.id),
-                                events: readChatGPTRecoveryEvents(environmentId, session.id, 25),
+                                state: {
+                                  lastAttemptAt: model.recovery.lastAttemptAt,
+                                  retryCount: model.recovery.attempts,
+                                  nextRetryAt: model.recovery.nextAttemptAt,
+                                  orangeStage: null,
+                                },
+                                events: model.recoveryEvents,
                                 now: clockNow,
                               })
                             : null;
@@ -1068,16 +1093,13 @@ export function ChatGPTBrowserSidebarEntry({
                             ))}
                           </div>
                         ) : null;
-                        const spawn = spawnCreation.get(session.id);
                         const creationOrigin = chatGPTSessionCreationOrigin(session);
-                        const timeline = readChatGPTSessionTimeline(
-                          environmentId,
-                          session,
-                          activity.lastWorkingAt,
-                          spawn && spawn.requestId === session.spawnRequestId
-                            ? spawn.createdAt
-                            : undefined,
-                        );
+                        const timeline = model.timeline ?? {
+                          createdAt: null,
+                          lastActiveAt: null,
+                          lastRefreshAt: null,
+                          lastRebootAt: null,
+                        };
                         // One shared hover body for both the drag/status icon and the
                         // session title: retain the richer recovery diagnostics.
                         const withTimeline = (summary: ReactNode) => (
@@ -1142,14 +1164,14 @@ export function ChatGPTBrowserSidebarEntry({
                                   render={
                                     <span
                                       role="status"
-                                      aria-label={`${projectTitle ? `${projectTitle} project. ` : ""}${isVerifiedManager ? "Verified OpenRig manager. " : ""}${recoveryLabel ?? activity.label}`}
-                                      className={`flex size-6 shrink-0 items-center justify-center ${chatGPTActivityColorClass(activity.age)}`}
+                                      aria-label={`${projectTitle ? `${projectTitle} project. ` : ""}${isVerifiedManager ? "Verified OpenRig manager. " : ""}${recoveryLabel ?? model.statusLine}`}
+                                      className={`flex size-6 shrink-0 items-center justify-center ${chatGPTActivityColorClass(model.compatibilityAge)}`}
                                     />
                                   }
                                 >
                                   <ChatGPTProjectStatusIcon
                                     project={projectTitle}
-                                    age={activity.age}
+                                    age={model.compatibilityAge}
                                     recovering={recoveryLabel !== null}
                                   />
                                 </TooltipTrigger>
@@ -1158,8 +1180,8 @@ export function ChatGPTBrowserSidebarEntry({
                                   render={
                                     <button
                                       type="button"
-                                      aria-label={`Drag ${session.title} to reorder, drop onto a project to assign, or Shift-drop onto a session to set its parent. ${projectTitle ? `${projectTitle} project. ` : ""}${isVerifiedManager ? "Verified OpenRig manager. " : ""}${recoveryLabel ?? activity.label}`}
-                                      className={`flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-sm outline-hidden hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing ${chatGPTActivityColorClass(activity.age)}`}
+                                      aria-label={`Drag ${session.title} to reorder, drop onto a project to assign, or Shift-drop onto a session to set its parent. ${projectTitle ? `${projectTitle} project. ` : ""}${isVerifiedManager ? "Verified OpenRig manager. " : ""}${recoveryLabel ?? model.statusLine}`}
+                                      className={`flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-sm outline-hidden hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing ${chatGPTActivityColorClass(model.compatibilityAge)}`}
                                       {...sortable.attributes}
                                       {...sortable.listeners}
                                     />
@@ -1167,7 +1189,7 @@ export function ChatGPTBrowserSidebarEntry({
                                 >
                                   <ChatGPTProjectStatusIcon
                                     project={projectTitle}
-                                    age={activity.age}
+                                    age={model.compatibilityAge}
                                     recovering={recoveryLabel !== null}
                                   />
                                 </TooltipTrigger>
@@ -1239,7 +1261,7 @@ export function ChatGPTBrowserSidebarEntry({
                                           />
                                         )}
                                         <span
-                                          className={`min-w-0 flex-1 truncate ${chatGPTActivityColorClass(activity.age)}`}
+                                          className={`min-w-0 flex-1 truncate ${chatGPTActivityColorClass(model.compatibilityAge)}`}
                                         >
                                           {session.title}
                                         </span>

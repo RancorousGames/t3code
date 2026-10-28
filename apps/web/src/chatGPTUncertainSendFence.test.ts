@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   archiveLegacyUnknownChatGPTSend,
+  confirmedChatGPTSendText,
+  recordDurableChatGPTSendConfirmed,
   hasDurableUnknownChatGPTSend,
   readDurableUnknownChatGPTSend,
   reserveDurableUnknownChatGPTSend,
@@ -43,9 +45,16 @@ describe("confirmed durable delivery receipts", () => {
     releaseDurableUnknownChatGPTSend(environment, session);
     expect(hasDurableUnknownChatGPTSend(environment, session)).toBe(false);
     expect(wasDurableChatGPTSendConfirmed(environment, session, url, original)).toBe(true);
+    expect(confirmedChatGPTSendText(environment, session, url, original)).toBe(original);
+    recordDurableChatGPTSendConfirmed(environment, session, url, original);
+    expect(confirmedChatGPTSendText(environment, session, url, original)).toBe(original);
+    const next = "[T3-MSG:bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb]\nNext";
+    recordDurableChatGPTSendConfirmed(environment, session, url, next, next + " policy");
+    expect(confirmedChatGPTSendText(environment, session, url, original)).toBeUndefined();
+    expect(confirmedChatGPTSendText(environment, session, url, next)).toBe(next + " policy");
     expect(wasDurableChatGPTSendConfirmed(environment, session, url + "-other", original)).toBe(false);
     expect(wasDurableChatGPTSendConfirmed(environment, session, url,
-      "[T3-MSG:bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb]\nHello")).toBe(false);
+      "[T3-MSG:cccccccc-cccc-4ccc-cccc-cccccccccccc]\nHello")).toBe(false);
   });
 });
 

@@ -325,7 +325,7 @@ def main(*, force_build: bool = False, restart_only: bool = False) -> None:
         print("New build ready. Showing cancelable 15-second restart notification.", flush=True)
         if not restart_countdown():
             print("Restart canceled; current T3 remains open.", flush=True)
-            return
+            return False
 
     # Verify staged compiled outputs immediately before any close.
     if needs_build and not staged_build_is_current(root):
@@ -356,9 +356,71 @@ def main(*, force_build: bool = False, restart_only: bool = False) -> None:
         raise
     subprocess.run([sys.executable, str(root / "launch_t3.py")], cwd=root, check=True)
     print("T3 Code (Custom) launched with verified compiled artifacts; session profile untouched.", flush=True)
+    return True
 
 
-def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_only: bool = False) -> None:
+def _taskboard_release_run(root: Path, manifest: Path | None, *, force_build: bool,
+                           restart_only: bool) -> None:
+    """Attach opt-in TaskBoard receipts to an already authorized T3 build/restart."""
+    if manifest is None:
+        print("TaskBoard: no integrated manifest; no deployment attempt recorded.", flush=True)
+        main(force_build=force_build, restart_only=restart_only)
+        return
+    bridge = root.parent / "TaskBoard" / "scripts" / "release_deployment_bridge.py"
+    if not bridge.is_file():
+        raise RuntimeError(f"TaskBoard release bridge missing: {bridge}")
+    manifest = manifest.resolve(strict=True)
+    log = Path(os.environ.get("T3_RELEASE_LOG", "") or
+               (root.parent / "T3CodeSessionBackups" / "manual-t3-release-diagnostics.log"))
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    def bookkeep(*args: str) -> None:
+        subprocess.run([sys.executable, str(bridge), *args], cwd=root, check=True)
+
+    # The bridge rejects detached revisions and freezes only source-proven members.
+    # Neither it nor this option authorizes a restart independently.
+    bookkeep("preflight", str(manifest))
+    try:
+        activated = main(force_build=force_build, restart_only=restart_only)
+        if not activated:
+            print("TaskBoard: restart canceled, recording unknown rather than deployment.", flush=True)
+            log.touch(exist_ok=True)
+            bookkeep("outcome", str(manifest), "--status", "unknown", "--log", str(log))
+            return
+        # An agent may edit the checkout while compilation runs. Revalidate the
+        # manifest bytes/ancestry after activation before claiming these sources.
+        # The idempotent bridge returns the frozen attempt without re-preparing.
+        bookkeep("preflight", str(manifest))
+        processes = running_custom_processes(root)
+        if not processes:
+            raise RuntimeError("T3 launch returned but no exact custom executable process observed")
+        exe = custom_executable(root)
+        if not exe.is_file():
+            raise RuntimeError(f"Activated T3 executable missing: {exe}")
+        receipt = log.with_suffix(".taskboard-activation.json")
+        receipt.write_text(json.dumps({
+            "manifest": str(manifest), "executable": str(exe),
+            "exe_sha256": hashlib.sha256(exe.read_bytes()).hexdigest(),
+            "observed_pids": [p["ProcessId"] for p in processes],
+            "observed_at": datetime.now().astimezone().isoformat(),
+            "verification": "matching executable alive; feature acceptance unverified"
+        }, indent=2), encoding="utf-8")
+        bookkeep("outcome", str(manifest), "--status", "deployed",
+                 "--artifact", str(exe), "--activation-receipt", str(receipt),
+                 "--log", str(log))
+    except Exception:
+        try:
+            # After preflight, errors might follow native activation, so they
+            # remain UNKNOWN until independently reconciled, never deployed.
+            log.touch(exist_ok=True)
+            bookkeep("outcome", str(manifest), "--status", "unknown", "--log", str(log))
+        except Exception as exc:
+            print(f"TaskBoard UNKNOWN recording also failed: {exc}", file=sys.stderr, flush=True)
+        raise
+
+
+def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_only: bool = False,
+                             release_manifest: Path | None = None) -> None:
     """Detach before closing T3; this survives the calling browser's shutdown."""
     if os.name != "nt":
         raise RuntimeError("This helper runs on Windows only.")
@@ -373,8 +435,10 @@ def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_o
         child = subprocess.Popen(
             [sys.executable, str(root / "compile_and_launch_t3.py"), "--worker",
              *(["--force-build"] if force_build else []),
-             *(["--restart-only"] if restart_only else [])],
+             *(["--restart-only"] if restart_only else []),
+             *(["--taskboard-manifest", str(release_manifest)] if release_manifest else [])],
             cwd=root,
+            env={**os.environ, "T3_RELEASE_LOG": str(log_path)},
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.STDOUT,
@@ -402,6 +466,8 @@ if __name__ == "__main__":
                            help="Rebuild all bundles before restarting")
         modes.add_argument("--restart-only", action="store_true",
                            help="Restart only if required compiled outputs exist")
+        parser.add_argument("--taskboard-manifest", type=Path,
+                            help="Optional source-integrated TaskBoard release manifest for durable bookkeeping")
         args = parser.parse_args()
         root = Path(__file__).resolve().parent
         load_private_openrig_human_answer_token()
@@ -415,15 +481,24 @@ if __name__ == "__main__":
         elif args.worker:
             mutex = _acquire_worker_lock()
             try:
-                main(force_build=args.force_build, restart_only=args.restart_only)
+                manifest = args.taskboard_manifest
+                if manifest is None:
+                    standard = root / ".t3" / "taskboard-release-manifest.json"
+                    manifest = standard if standard.is_file() else None
+                _taskboard_release_run(root, manifest, force_build=args.force_build,
+                                       restart_only=args.restart_only)
             finally:
                 ctypes.windll.kernel32.ReleaseMutex(mutex)
                 ctypes.windll.kernel32.CloseHandle(mutex)
         else:
             if args.restart_only and not build_is_current(root):
                 raise RuntimeError("Compiled T3 output missing. Run the default command to rebuild first.")
+            manifest = args.taskboard_manifest
+            if manifest is None:
+                standard = root / ".t3" / "taskboard-release-manifest.json"
+                manifest = standard if standard.is_file() else None
             spawn_independent_worker(root, force_build=args.force_build,
-                                     restart_only=args.restart_only)
+                                     restart_only=args.restart_only, release_manifest=manifest)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Restart/build failed: {error}", file=sys.stderr, flush=True)
         sys.exit(1)

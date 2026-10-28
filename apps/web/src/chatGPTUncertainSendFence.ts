@@ -20,6 +20,19 @@ export function wasDurableChatGPTSendConfirmed(
   return entries.some((item) => item.messageId === id && item.url === conversationUrl);
 }
 
+/** Exact last typed body, retained only for the newest confirmed delivery. */
+export function confirmedChatGPTSendText(
+  environmentId: EnvironmentId, sessionId: string, conversationUrl: string, original: string,
+): string | undefined {
+  const id = deliveryMarker(original);
+  if (!id) return undefined;
+  const raw = window.localStorage.getItem(confirmedKey(environmentId, sessionId));
+  if (!raw) return undefined;
+  const entries = JSON.parse(raw) as { messageId: string; url: string; text?: string }[];
+  if (!Array.isArray(entries)) throw new Error("Unreadable confirmed send receipts.");
+  return entries.find((item) => item.messageId === id && item.url === conversationUrl)?.text;
+}
+
 const keyFor = (environmentId: EnvironmentId, sessionId: string) =>
   `${PREFIX}${environmentId}:${sessionId}`;
 
@@ -171,15 +184,18 @@ export function recordDurableChatGPTSendConfirmed(
   sessionId: string,
   conversationUrl: string,
   original: string,
+  text?: string,
 ): void {
   const id = deliveryMarker(original);
   if (!id) return;
   const key = confirmedKey(environmentId, sessionId);
   const existing = window.localStorage.getItem(key);
-  const parsed = existing ? JSON.parse(existing) as { messageId: string; url: string }[] : [];
+  const parsed = existing ? JSON.parse(existing) as { messageId: string; url: string; text?: string }[] : [];
   if (!Array.isArray(parsed)) throw new Error("Unreadable confirmed send receipts.");
-  const data = JSON.stringify([...parsed.filter((item) => item.messageId !== id || item.url !== conversationUrl),
-    { messageId: id, url: conversationUrl }].slice(-256));
+  const priorText = parsed.find((item) => item.messageId === id && item.url === conversationUrl)?.text;
+  const data = JSON.stringify([...parsed.filter((item) => item.messageId !== id || item.url !== conversationUrl)
+    .map(({ messageId, url }) => ({ messageId, url })),
+    { messageId: id, url: conversationUrl, ...(text ?? priorText ? { text: text ?? priorText } : {}) }].slice(-256));
   window.localStorage.setItem(key, data);
   if (window.localStorage.getItem(key) !== data)
     throw new Error("Could not persist confirmed send receipt; preserve UNKNOWN fence.");
@@ -203,7 +219,7 @@ export function releaseDurableUnknownChatGPTSend(
   const key = keyFor(environmentId, sessionId);
   const receipt = readDurableUnknownChatGPTSend(environmentId, sessionId);
   if (receipt?.attempt)
-    recordDurableChatGPTSendConfirmed(environmentId, sessionId, receipt.conversationUrl, receipt.attempt.original);
+    recordDurableChatGPTSendConfirmed(environmentId, sessionId, receipt.conversationUrl, receipt.attempt.original, receipt.attempt.text);
   window.localStorage.removeItem(key);
   if (window.localStorage.getItem(key) !== null) {
     throw new Error("Uncertain send tombstone remains; refuse destructive refresh.");

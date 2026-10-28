@@ -38,6 +38,8 @@ export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL = "desktop:private-chatgpt-draft-snapshot";
 export const TASKBOARD_WORKER_CLAIMS_CHANNEL = "desktop:taskboard-worker-claims";
+export const TASKBOARD_HUMAN_INBOX_CHANNEL = "desktop:taskboard-human-inbox";
+export const TASKBOARD_HUMAN_OPEN_CHANNEL = "desktop:taskboard-human-open";
 export const OMNIHUB_KEEP_AWAKE_READ_CHANNEL = "desktop:omnihub-keep-awake-read";
 export const OMNIHUB_KEEP_AWAKE_CONTROL_CHANNEL = "desktop:omnihub-keep-awake-control";
 export const OPENRIG_LIST_AGENTS_CHANNEL = "desktop:openrig-list-agents";
@@ -71,6 +73,7 @@ export const OPENRIG_POLICY_BROWSER_SEND_CHANNEL = "desktop:openrig-policy-brows
 export const OPENRIG_BIND_AGENT_CHANNEL = "desktop:openrig-bind-agent";
 export const OPENRIG_UNBIND_AGENT_CHANNEL = "desktop:openrig-unbind-agent";
 export const OPENRIG_SEND_AGENT_MESSAGE_CHANNEL = "desktop:openrig-send-agent-message";
+export const OPENRIG_RECONCILE_HUMAN_SEND_CHANNEL = "desktop:openrig-reconcile-human-send";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
 export const SET_CLIENT_SETTINGS_CHANNEL = "desktop:set-client-settings";
 export const SETUP_SNAP_SHOT_CHANNEL = "desktop:setup-snap-shot";

@@ -909,6 +909,7 @@ export function DesktopAppActivationCoordinator() {
             count: request.count,
             maxMessageChars: request.maxMessageChars,
             message: request.message,
+            previousDeliveredMessage: request.previousDeliveredMessage,
             sendExpiresAt: request.sendExpiresAt,
             allowPossibleDuplicate: request.allowPossibleDuplicate,
             senderSessionId: request.senderSessionId,

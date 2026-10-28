@@ -703,7 +703,7 @@ describe("storage cleanup reports and local file policies", () => {
           yield* fs.writeFileString(file, "capture");
           yield* fs.utimes(file, 1, 1);
         }
-        for (const name of ["server.log.1", "server.log.2", "server.log"]) {
+        for (const name of ["server.log.1", "server.log.2", "server.log", "provider.ndjson.1"]) {
           const file = config.logsDir + "/" + name;
           yield* fs.writeFileString(file, "log");
           yield* fs.utimes(file, 1, 1);
@@ -728,6 +728,7 @@ describe("storage cleanup reports and local file policies", () => {
         expect(report.bytesFreed).toBe(20);
         expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
         expect(yield* fs.exists(config.logsDir + "/server.log")).toBe(true);
+        expect(yield* fs.exists(config.logsDir + "/provider.ndjson.1")).toBe(true);
         expect(yield* fs.exists(config.logsDir + "/server.log.1")).toBe(false);
         expect(yield* fs.exists(config.logsDir + "/server.log.2")).toBe(false);
       }),

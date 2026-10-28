@@ -34,6 +34,7 @@ export interface TaskBoardInboxTask {
   review_round?: number | null;
   created?: string;
   path?: string;
+  description?: string;
 }
 
 export interface TaskBoardInboxSnapshot {
@@ -49,6 +50,8 @@ export interface UnifiedHumanInboxEntry {
   sourceId: string;
   boardRoot?: string;
   title: string;
+  body?: string;
+  createdAt?: string;
   state: string;
   requiresAction: boolean;
   /** A native TaskBoard Review must still be opened/resolved in TaskBoard. */
@@ -83,20 +86,17 @@ export function taskBoardPendingEntries(
   const seen = new Set<string>();
 
   for (const task of snapshot.tasks) {
-    if (!task.id || !task.title || complete(task)) continue;
-    const pendingQuestion =
-      (task.kind === "for_user" || task.attention?.includes("needs-user")) &&
-      (task.question?.answer == null || !!task.attention?.includes("needs-user"));
+    if (!task.id || !task.title || task.archived) continue;
     const openReview = task.review_status === "open";
+    const pendingQuestion =
+      !complete(task) && (task.kind === "for_user" || task.attention?.includes("needs-user"));
     if (!pendingQuestion && !openReview) continue;
-    // A question/review is not actionable while one of its exact dependencies is unresolved.
-    if (
+    // Native Review remains visible while open, even when its task is Done.
+    if (pendingQuestion && !openReview &&
       !(task.depends_on ?? []).every((id) => {
         const dependency = byId.get(id);
         return dependency !== undefined && complete(dependency);
-      })
-    )
-      continue;
+      })) continue;
 
     const sourceKey = taskBoardSourceKey(snapshot.boardRoot, task.id);
     if (seen.has(sourceKey)) continue;
@@ -107,6 +107,8 @@ export function taskBoardPendingEntries(
       sourceId: task.id,
       boardRoot: snapshot.boardRoot,
       title: task.title,
+      body: task.question?.prompt || task.description || "Open this item in TaskBoard to review.",
+      ...(task.created ? { createdAt: task.created } : {}),
       state: "pending", // Projected only from the source task; never an approval or local snooze.
       requiresAction: true,
       ...(openReview

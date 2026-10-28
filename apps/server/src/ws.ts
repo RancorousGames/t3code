@@ -2443,7 +2443,7 @@ const layerWsRpc = (
                       browserOperationId!,
                       "Unknown",
                       DateTime.formatIso(yield* DateTime.now),
-                      "browser_handoff_timeout;send_may_have_happened;never_auto_replay",
+                      "browser_enqueue_unconfirmed;retry_idempotently_with_same_clientRequestId",
                     ),
                   );
                 }
@@ -2454,7 +2454,7 @@ const layerWsRpc = (
                       browserOperationId!,
                       "Unknown",
                       DateTime.formatIso(yield* DateTime.now),
-                      `browser_handoff_refused_or_uncertain:${result.code};never_auto_replay`,
+                      `browser_enqueue_unconfirmed;retry_idempotently_with_same_clientRequestId:${result.code}`,
                     ),
                   );
                 }
@@ -2476,16 +2476,20 @@ const layerWsRpc = (
                   !("verifiedConversationId" in receipt) ||
                   receipt.verifiedConversationId !== expected ||
                   !("delivery" in receipt) ||
-                  (receipt.delivery !== "user_turn_observed" && receipt.delivery !== "unknown")
+                  (receipt.delivery !== "user_turn_observed" && receipt.delivery !== "queued" && receipt.delivery !== "unknown")
                 )
                   return reply(
                     recordBrowserSubmission(
                       browserOperationId!,
                       "Unknown",
                       DateTime.formatIso(yield* DateTime.now),
-                      "browser_receipt_unverifiable;never_auto_replay",
+                      "browser_enqueue_unconfirmed;retry_idempotently_with_same_clientRequestId;receipt_unverifiable",
                     ),
                   );
+                const queued =
+                  receipt.delivery === "queued" &&
+                  "messageId" in receipt && typeof receipt.messageId === "string" &&
+                  /^[a-f0-9-]{36}$/i.test(receipt.messageId);
                 const delivered =
                   receipt.delivery === "user_turn_observed" &&
                   "messageSent" in receipt &&
@@ -2493,10 +2497,11 @@ const layerWsRpc = (
                 return reply(
                   recordBrowserSubmission(
                     browserOperationId!,
-                    delivered ? "Delivered" : "Unknown",
+                    delivered ? "Delivered" : queued ? "Queued" : "Unknown",
                     DateTime.formatIso(yield* DateTime.now),
                     delivered
                       ? "observed_matching_user_dom_turn;not_assistant_completion"
+                      : queued ? `browser_delivery_queued:${receipt.messageId}`
                       : "browser_send_attempt_uncertain;never_auto_replay",
                   ),
                 );

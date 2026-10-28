@@ -34,7 +34,10 @@ export function beginBrowserSubmission(input: {
   const existing = browserKeys.get(key);
   if (existing) {
     if (existing.fingerprint !== fingerprint) return { kind: "conflict" };
-    return { kind: "duplicate", operation: browserOperations.get(existing.operationId)! };
+    const prior = browserOperations.get(existing.operationId)!;
+    return prior.receiptBasis?.startsWith("browser_enqueue_unconfirmed;")
+      ? { kind: "new", operation: prior }
+      : { kind: "duplicate", operation: prior };
   }
   // Never evict a tombstone while this process can still receive retries.
   if (browserKeys.size >= MAX_BROWSER_ATTEMPTS) return { kind: "capacity" };
@@ -53,7 +56,7 @@ export function beginBrowserSubmission(input: {
 
 export function recordBrowserSubmission(
   operationId: string,
-  state: "Delivered" | "Unknown",
+  state: "Delivered" | "Unknown" | "Queued",
   observedAt: string,
   receiptBasis: string,
 ): AgentProviderV1Operation {

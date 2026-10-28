@@ -1,5 +1,7 @@
 "use client";
 
+import { registerHostedBrowserGuestPresence } from "./hostedBrowserGuestPresence";
+
 import type {
   DesktopPreviewColorScheme,
   PreviewViewportSetting,
@@ -209,6 +211,7 @@ export function HostedBrowserWebview(props: {
     const bridge = previewBridge;
     if (!clientSettingsHydrated || !webview || !config || !bridge) return;
     let disposed = false;
+    let releasePresence: (() => void) | undefined;
     let recoveryTimeout: ReturnType<typeof setTimeout> | null = null;
     const register = () => {
       const lease = tabLeaseRef.current;
@@ -218,10 +221,11 @@ export function HostedBrowserWebview(props: {
           // The main-process tab and the DOM webview are created by separate
           // effects. Wait for the former so registration cannot race and fail
           // with PreviewTabNotFoundError on a fast about:blank attachment.
-          await lease.ready;
-          if (disposed || webviewRef.current !== webview) return;
           const webContentsId = webview.getWebContentsId();
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
+            if (!releasePresence) releasePresence = registerHostedBrowserGuestPresence({ environmentId: threadRef.environmentId, threadId: threadRef.threadId }, runtimeTabId);
+            await lease.ready;
+            if (disposed || webviewRef.current !== webview) return;
             await bridge.registerWebview(runtimeTabId, webContentsId);
             const pending = pendingResetRef.current;
             if (!disposed && pending && webContentsId !== pending.previousWebContentsId) {
@@ -237,6 +241,8 @@ export function HostedBrowserWebview(props: {
       })();
     };
     const recoverGuest = () => {
+      releasePresence?.();
+      releasePresence = undefined;
       if (disposed || recoveryTimeout !== null) return;
       const recovery = planWebviewCrashRecovery(crashRecoveryRef.current, Date.now());
       if (!recovery) return;
@@ -264,13 +270,14 @@ export function HostedBrowserWebview(props: {
     register();
     return () => {
       disposed = true;
+      releasePresence?.();
       if (recoveryTimeout !== null) clearTimeout(recoveryTimeout);
       webview.removeEventListener("did-attach", register);
       webview.removeEventListener("dom-ready", register);
       webview.removeEventListener("render-process-gone", recoverGuest);
       webview.removeEventListener("focus", dismissHostPopups);
     };
-  }, [clientSettingsHydrated, config, initialSrc, runtimeTabId, webviewGeneration]);
+  }, [clientSettingsHydrated, config, initialSrc, runtimeTabId, webviewGeneration, threadRef.environmentId, threadRef.threadId]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;

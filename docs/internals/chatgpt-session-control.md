@@ -27,11 +27,14 @@ The returned statuses are observation-based, not a provider API truth source:
 - `working`: visible enabled Stop generation control.
 - `waiting_for_input`: generation stopped and assistant's final visible text ends in a question mark (heuristic only).
 - `done_or_idle`: assistant last replied and generation has stopped; does _not_ prove the task is finished.
-- `pending_or_stalled`: last visible message is from user but the generation control is absent.
+- `pending_or_stalled`: the last visible user turn has no observed assistant response or an empty assistant placeholder. Without an active Stop control, execution/completion is unknown; this does **not** prove an actual stall.
 - `stuck`: existing T3 recovery detector confirms exact ChatGPT load-error plus Retry button.
 - `stuck_connecting`: visible `Connection interrupted. Waiting for the complete answer` notice; ChatGPT may recover spontaneously or require a manual `reload`. This takes precedence over a stale Stop button. `statusReason` includes a UTC observation timestamp. The structured `statusObservedAt` field records the most recent inspection, while `connectionInterruptedFirstSeenAt` is the first time **this running T3 app** observed the notice, not necessarily when the connection actually dropped. It resets after a successful non-interrupted inspection.
 - `hibernated`: the guest was unloaded to save memory because it sat on a conversation, unshown and not working, for 15 minutes (each guest is a separate 0.4–1 GB renderer). `list` reports it without reloading; `read`, `send`, `reload`, `complete` and `archive` reload it first and wait up to 45 s for the composer. Selecting it in the sidebar also reloads it.
-- `loading`, `new`, `unavailable`: no reliable answer (unmounted, hidden, authentication error, no readable messages, etc.).
+- `unloaded`: restored session intentionally deferred until selected or addressed for work. No preview is mounted; this is normal memory management, not a loading failure.
+- `loading`: a preview is requested but not attached yet, or the page is actually loading; a persistent state can merit investigation.
+- `hidden`: intentionally hidden or archived session, not a browser failure. It is never loaded by inventory scans.
+- `new`, `unavailable`: no reliable answer (new conversation, sign-in issue, unreadable conversation, etc.).
 
 **Examples** (first eight requests use the installed `t3_sessions` MCP action; the final two require the direct CLI until the OmniMCP tool schema is updated):
 

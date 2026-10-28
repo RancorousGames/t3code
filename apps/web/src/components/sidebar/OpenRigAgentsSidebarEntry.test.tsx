@@ -4,6 +4,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("../../env", () => ({ isElectron: true }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("react-dom", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react-dom")>()),
   createPortal: (children: unknown) => children,
@@ -117,6 +118,7 @@ beforeEach(() => {
   lifecycle.mockReset().mockRejectedValue(new Error("Synthetic lifecycle receipt not configured"));
   vi.stubGlobal("window", {
     desktopBridge: {
+      onMenuAction: () => () => {},
       listOpenRigAgents: list, listOpenRigManagedSessions: listManaged,
       readOpenRigExecutionProfile: readProfile,
       configureOpenRigExecutionProfile: configureProfile,

@@ -13,6 +13,7 @@ import {
   reserveDurableUnknownChatGPTSend,
   releaseDurableUnknownChatGPTSend,
   recordDurableChatGPTSendConfirmed,
+  confirmedChatGPTSendText,
   discardDurableUnsubmittedChatGPTSend,
   wasDurableChatGPTSendConfirmed,
   clearDurableUnknownChatGPTSendsForTests,
@@ -71,6 +72,7 @@ import {
 import { recordChatGPTSessionRefreshedAt } from "./chatGPTSessionTimestamps";
 import { tryAcquireChatGPTRecoveryMutation } from "./chatGPTRecoveryMutationGate";
 import { validChatGPTCompletion } from "./chatGPTSessionCompletion";
+import { deriveChatGPTSession, matchesChatGPTSessionWhich } from "./chatGPTSessionModel";
 import { assertArchivableSession, descendantSessions } from "./chatGPTSessionArchivePolicy";
 
 export type ChatGPTSessionAction =
@@ -92,12 +94,7 @@ export function matchesSessionWhich(
   age: ChatGPTActivityAge,
   hidden: boolean,
 ): boolean {
-  if (hidden) return false;
-  if (which === "all") return true;
-  if (which === "visible") return true;
-  if (which === "recent") return age === "recent";
-  if (which === "working") return age === "working";
-  return age === "interrupted" || age === "invalid";
+  return matchesChatGPTSessionWhich(which, deriveChatGPTSession({ age, hidden }, Date.now()));
 }
 export type ChatGPTSessionStatus =
   | "working"
@@ -696,6 +693,7 @@ export async function runChatGPTSessionControl(input: {
   message?: string | undefined;
   /** A durable queue attempt may never submit after this wall-clock deadline. */
   sendExpiresAt?: number | undefined;
+  previousDeliveredMessage?: string | undefined;
   /** Explicit, bounded durable-queue duplicate-risk retry of the SAME marked message. */
   allowPossibleDuplicate?: boolean | undefined;
   senderSessionId?: string | undefined;
@@ -734,7 +732,14 @@ export async function runChatGPTSessionControl(input: {
     const result = inspected.filter(
       (entry) =>
         (input.includeHidden === true && entry.hidden) ||
-        matchesSessionWhich(which, entry.uiColor, entry.hidden),
+        matchesChatGPTSessionWhich(which, deriveChatGPTSession({
+          age: entry.uiColor,
+          status: entry.status,
+          hidden: entry.hidden,
+          snoozedUntil: entry.snoozedUntil,
+          lastWorkingAt: entry.lastWorkingAt,
+          completionValid: entry.completion !== null,
+        }, Date.now())),
     );
     return { which, sessions: result, total: result.length };
   }
@@ -765,7 +770,13 @@ export async function runChatGPTSessionControl(input: {
     const guest = guestFor(environmentId, entry.id);
     if (!guest.runtimeId || !guest.webview || isChatGPTGuestHibernated(guest.runtimeId))
       return unknown("hibernated_or_unmounted");
-    if (guest.loading || guest.nav?._tag !== "Success") return unknown("guest_not_ready");
+    // The navigation reducer can be stale even after the actual webview has
+    // finished loading. Use the native guest URL as independent binding evidence;
+    // two DOM probes must still agree with it before any private backup.
+    const mountedUrl = guest.webview.getURL();
+    if (guest.loading ||
+        !CANONICAL_CHATGPT_CONVERSATION_ID.test(chatGPTConversationIdFromUrl(mountedUrl) ?? ""))
+      return unknown("guest_not_ready");
     const read = async (): Promise<ComposerProbe> =>
       (await guest.webview!.executeJavaScript(CHATGPT_COMPOSER_PROBE_EXPRESSION)) as ComposerProbe;
     let first: ComposerProbe;
@@ -798,7 +809,8 @@ export async function runChatGPTSessionControl(input: {
     if (
       !(confirmedLimitWithoutEditor || sameComposerProbe(first, second)) ||
       (!confirmedLimitWithoutEditor && first.status === "unknown") ||
-      first.url !== guest.nav.url ||
+      first.url !== mountedUrl ||
+      guest.webview.getURL() !== mountedUrl ||
       guestFor(environmentId, entry.id).webview !== guest.webview ||
       isChatGPTGuestHibernated(guest.runtimeId)
     )
@@ -826,6 +838,7 @@ export async function runChatGPTSessionControl(input: {
       if (
         !ledgerUnchanged() ||
         guestFor(environmentId, entry.id).webview !== guest.webview ||
+        guest.webview.getURL() !== mountedUrl ||
         isChatGPTGuestHibernated(guest.runtimeId)
       )
         return unknown("guest_or_send_changed_during_backup");
@@ -1070,7 +1083,7 @@ export async function runChatGPTSessionControl(input: {
         }) as ComposerProbe;
         if (sameComposerProbe(first, second) &&
             (first.status === "empty" || matchesPending && pending?.staged &&
-              first.status === "nonempty" && normalize(first.text) === normalize(pending.text)) &&
+              first.status === "nonempty" && first.text.replace(/\r\n/g, "\n") === pending.text.replace(/\r\n/g, "\n")) &&
             first.url === session.observedGuestUrl &&
             (!readDurableUnknownChatGPTSend(environmentId, entry.id) || matchesPending && pending?.staged))
           return {
@@ -1427,13 +1440,19 @@ export async function runChatGPTSessionControl(input: {
     // A successful DOM observation can outlive a lost IPC reply and the original
     // click fence. Never resend a previously confirmed stable message ID.
     if (wasDurableChatGPTSendConfirmed(environmentId, entry.id,
-          before.observedGuestUrl ?? "", prepared.text))
+          before.observedGuestUrl ?? "", prepared.text)) {
+      const pending = pendingChatGPTSend(environmentId, entry.id);
+      if (pending && pending.url === before.observedGuestUrl && sameSend(pending.original, prepared.text)) {
+        releaseDurableUnknownChatGPTSend(environmentId, entry.id);
+        uncertainChatGPTSends.delete(receiptKey);
+      }
       return {
         sessionId: entry.id, recipientSessionId: entry.id,
         messageSent: true, delivery: "user_turn_observed" as const,
         reconciled: true, conversationGuardValidated: true,
         verifiedConversationId: input.expectedConversationId,
       };
+    }
     let unresolved = pendingChatGPTSend(environmentId, entry.id);
     // Resolve any positively observed earlier delivery before considering a new message.
     if (unresolved && unresolved.url === before.observedGuestUrl) {
@@ -1523,6 +1542,37 @@ export async function runChatGPTSessionControl(input: {
           "A matching send was previously invoked but its user turn has not been proven. No duplicate click was issued; read the session and do not blindly retry.",
       };
     }
+    // A queued attempt can survive in the editor after its renderer lost the
+    // receipt. Only the exact current payload can establish ownership again.
+    if (!unresolved && !legacyUnknown && input.expectedConversationId && input.sendExpiresAt &&
+        messageMarker(prepared.text) && acceptsSend(before)) {
+      const { runtimeId } = guestFor(environmentId, entry.id);
+      if (runtimeId) {
+        const first = await chatGPTWebviewAutomation.evaluate(runtimeId, { expression: CHATGPT_COMPOSER_PROBE_EXPRESSION }) as ComposerProbe;
+        const second = await chatGPTWebviewAutomation.evaluate(runtimeId, { expression: CHATGPT_COMPOSER_PROBE_EXPRESSION }) as ComposerProbe;
+        const exact = (text: string) => text.replace(/\r\n/g, "\n");
+        if (sameComposerProbe(first, second) && first.status === "nonempty" &&
+            first.url === before.observedGuestUrl && exact(first.text) === exact(prepared.text)) {
+          const observed = await chatGPTWebviewAutomation.evaluate(runtimeId, {
+            expression: `(() => { if (location.pathname !== "/c/" + ${JSON.stringify(input.expectedConversationId)}) return false;
+              const marker = ${JSON.stringify(`[T3-MSG:${messageMarker(prepared.text)}]`)}.toLowerCase();
+              return Array.from(document.querySelectorAll('[data-message-author-role="user"],[data-content-search-unit-key$=":user"]'))
+                .some(el => (el.innerText || el.textContent || '').trim().toLowerCase().startsWith(marker)); })()`,
+          });
+          if (observed === true) {
+            recordDurableChatGPTSendConfirmed(environmentId, entry.id, first.url, prepared.text, prepared.text);
+            return { sessionId: entry.id, recipientSessionId: entry.id, messageSent: true,
+              delivery: "user_turn_observed" as const, reconciled: true,
+              conversationGuardValidated: true, verifiedConversationId: input.expectedConversationId };
+          }
+          unresolved = { staged: true, original: prepared.text, text: prepared.text, url: first.url,
+            before: { totalTurns: before.totalTurns, lastUserTurnKey: before.lastUserTurnKey },
+            policyEnrichment: { schema: "t3-c05-browser-optional/v1", status: "not_eligible" } };
+          reserveDurableUnknownChatGPTSend(environmentId, entry.id, first.url, false, unresolved);
+          uncertainChatGPTSends.set(receiptKey, unresolved);
+        }
+      }
+    }
     // Generic keep-awake may be reattempted with a NEW UUID after an UNKNOWN,
     // but no other unknown may be cleared/displaced by a different send.
     const duplicateSafeReplacement =
@@ -1544,7 +1594,7 @@ export async function runChatGPTSessionControl(input: {
         const second = await chatGPTWebviewAutomation.evaluate(runtimeId, {
           expression: CHATGPT_COMPOSER_PROBE_EXPRESSION,
         }) as ComposerProbe;
-        const normalize = (text: string) => text.replace(/\s+/gu, " ").trim();
+        const normalize = (text: string) => text.replace(/\r\n/g, "\n");
         if (sameComposerProbe(first, second) && first.status === "nonempty" &&
             first.url === before.observedGuestUrl &&
             normalize(first.text) === normalize(unresolved.text)) {
@@ -1593,11 +1643,18 @@ export async function runChatGPTSessionControl(input: {
       }
     }
     if (unresolved?.staged) {
-      // Typing alone cannot deliver anything. An empty composer permits a fresh
-      // attempt; edited drafts remain protected by the ordinary typing guard.
-      discardDurableUnsubmittedChatGPTSend(environmentId, entry.id);
-      uncertainChatGPTSends.delete(receiptKey);
-      unresolved = undefined;
+      // Keep ownership while the composer is changed or unavailable; it may
+      // return to the staged text after a restart or temporary edit.
+      const { runtimeId } = guestFor(environmentId, entry.id);
+      if (runtimeId) {
+        const first = await chatGPTWebviewAutomation.evaluate(runtimeId, { expression: CHATGPT_COMPOSER_PROBE_EXPRESSION }) as ComposerProbe;
+        const second = await chatGPTWebviewAutomation.evaluate(runtimeId, { expression: CHATGPT_COMPOSER_PROBE_EXPRESSION }) as ComposerProbe;
+        if (sameComposerProbe(first, second) && first.status === "empty" && first.url === unresolved.url) {
+          discardDurableUnsubmittedChatGPTSend(environmentId, entry.id);
+          uncertainChatGPTSends.delete(receiptKey);
+          unresolved = undefined;
+        }
+      }
     }
     // Durable queued messages must not be held indefinitely by a different
     // unprovable old send. After two minutes, preserve its full receipt in an
@@ -1640,7 +1697,15 @@ export async function runChatGPTSessionControl(input: {
     const draft = await chatGPTWebviewAutomation.evaluate(runtimeId, {
       expression: inputExpression,
     });
-    if (typeof draft === "string" && draft.trim())
+    const previous = input.previousDeliveredMessage;
+    const previousText = previous && wasDurableChatGPTSendConfirmed(environmentId, entry.id,
+      before.observedGuestUrl ?? "", previous)
+      ? confirmedChatGPTSendText(environmentId, entry.id, before.observedGuestUrl ?? "", previous) ?? previous
+      : undefined;
+    const exactText = (text: string) => text.replace(/\r\n/g, "\n");
+    const replaceOwnedComposerText = typeof draft === "string" && previousText !== undefined &&
+      exactText(draft) === exactText(previousText) ? previousText : undefined;
+    if (typeof draft === "string" && draft.trim() && replaceOwnedComposerText === undefined)
       throw new Error("Composer contains an existing draft; refusing to overwrite it.");
     if (legacyUnknown && typeof draft !== "string")
       throw new Error("Cannot prove an empty composer; legacy UNKNOWN remains held.");
@@ -1772,6 +1837,7 @@ export async function runChatGPTSessionControl(input: {
         text: message,
         clear: true,
         requireEmptyComposer: true,
+        replaceOwnedComposerText,
         expectedConversationId: input.expectedConversationId,
       });
     } catch (error) {
@@ -1780,8 +1846,7 @@ export async function runChatGPTSessionControl(input: {
       const draft = await chatGPTWebviewAutomation.evaluate(runtimeId, {
         expression: CHATGPT_COMPOSER_PROBE_EXPRESSION,
       }).catch(() => null) as ComposerProbe | null;
-      if (draft && draft.status !== "unknown" &&
-          (draft.status === "empty" || draft.text !== message)) {
+      if (draft && draft.status === "empty" && draft.url === attempt.url) {
         discardDurableUnsubmittedChatGPTSend(environmentId, entry.id);
         uncertainChatGPTSends.delete(receiptKey);
       }

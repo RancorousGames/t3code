@@ -272,6 +272,14 @@ export class ChatGPTDeliveryQueue {
   }
 
   private async dispatch(record: DeliveryRecord, action: "send" | "reconcile_send", retry = false) {
+    // The most recent observed delivery can survive as composer residue after a restart.
+    let previous: DeliveryRecord | undefined;
+    for (const item of this.records.values()) {
+      if (item.sessionId === record.sessionId && item.conversationId === record.conversationId &&
+          item.status === "delivered" && item.messageId !== record.messageId &&
+          item.createdAt <= record.createdAt && (!previous || item.createdAt >= previous.createdAt))
+        previous = item;
+    }
     const request: BrowserRequest = {
       version: 1,
       requestId: NodeCrypto.randomUUID(),
@@ -279,6 +287,7 @@ export class ChatGPTDeliveryQueue {
       action,
       sessionId: record.sessionId,
       expectedConversationId: record.conversationId,
+      ...(previous ? { previousDeliveredMessage: `${MARKER(previous.messageId)}\n${previous.body}` } : {}),
       message: `${MARKER(record.messageId)}\n${retry ? "[Potential duplicate: acknowledgement was lost. If you already handled this message ID, do not repeat its actions.]\n" : ""}${record.body}`,
       ...(retry ? { allowPossibleDuplicate: true } : {}),
       ...(record.sendExpiresAt ? { sendExpiresAt: record.sendExpiresAt } : {}),

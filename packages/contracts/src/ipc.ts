@@ -1374,6 +1374,20 @@ export const DesktopOpenRigSendInputSchema = Schema.Struct({
   message: Schema.String,
 });
 export type DesktopOpenRigSendInput = typeof DesktopOpenRigSendInputSchema.Type;
+/** Exact-route reconciliation never treats an absent message as permission to resend. */
+export const DesktopOpenRigHumanSendReconcileInputSchema = Schema.Struct({
+  id: Schema.String,
+  managedSessionId: Schema.String,
+  attemptId: Schema.String,
+  target: DesktopOpenRigSessionTargetSchema,
+});
+export type DesktopOpenRigHumanSendReconcileInput =
+  typeof DesktopOpenRigHumanSendReconcileInputSchema.Type;
+export const DesktopOpenRigHumanSendReconcileResultSchema = Schema.Struct({
+  state: Schema.Literals(["observed", "pending", "route_changed"]),
+  persisted: Schema.optional(Schema.Boolean),
+  assistantAcknowledged: Schema.optional(Schema.Boolean),
+});
 
 /** Read-only RigSpec seat hierarchy (delegates_to / spawned_by edges). Never inferred from sessions. */
 export const DesktopOpenRigSeatNodeSchema = Schema.Struct({

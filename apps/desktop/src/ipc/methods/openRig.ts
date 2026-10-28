@@ -46,6 +46,9 @@ import {
   type DesktopOpenRigPrimaryInput,
   DesktopOpenRigBindInputSchema,
   DesktopOpenRigSendInputSchema,
+  DesktopOpenRigHumanSendReconcileInputSchema,
+  DesktopOpenRigHumanSendReconcileResultSchema,
+  type DesktopOpenRigHumanSendReconcileInput,
   type DesktopOpenRigAgent,
   type DesktopOpenRigInbox,
   type DesktopOpenRigSession,
@@ -84,6 +87,7 @@ import {
   reviewNativeSpawnOperation,
 } from "../../app/DesktopOpenRigApprovalHost.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import * as DesktopAppActivation from "../../app/DesktopAppActivation.ts";
 import { ensureLocalOpenRigBridge } from "./OpenRigBridgeLifecycle.ts";
 
 // The renderer never connects to localhost directly. It cannot choose the host,
@@ -97,6 +101,20 @@ const decodeOpenRigInbox = Schema.decodeUnknownSync(DesktopOpenRigInboxSchema);
 const decodeHumanResponse = Schema.decodeUnknownSync(DesktopOpenRigHumanResponseResultSchema);
 const decodeCanonicalAgentTasks = Schema.decodeUnknownSync(DesktopOpenRigAgentTasksSchema);
 const decodeOpenRigPolicyPage = Schema.decodeUnknownSync(DesktopOpenRigPolicyPageSchema);
+
+/** MAIN-only token from the canonical OpenRig startup script. Renderer cannot
+ * supply or observe it; rereading allows recovery after a daemon replacement. */
+function integrationBearer(preferPersisted = false): string | null {
+  const configured = NodeProcess.env.OPENRIG_TERMINAL_BEARER_TOKEN?.trim() ||
+    NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim() || null;
+  if (configured && !preferPersisted) return configured;
+  try {
+    const tokenFile = joinPath(NodeProcess.env.USERPROFILE || homedir(), ".openrig", "terminal-token");
+    const token = readFileSync(tokenFile, "utf8").trim();
+    if (token.length >= 24) return token;
+  } catch { /* Canonical launcher may not have provisioned a token yet. */ }
+  return configured;
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -157,12 +175,15 @@ async function bridgeRequest(
   // adopt an existing OpenRig listener or start the local Phase-1 bridge.
   // Injected test fetchers never create external processes.
   if (fetchImpl === fetch) await ensureLocalOpenRigBridge();
-  const response = await fetchImpl(`${OPENRIG_BASE_URL}${path}`, {
+  // The daemon protects T3 integration routes with its terminal bearer. Keep
+  // credentials in desktop MAIN; never accept them from renderer IPC payloads.
+  const request = (bearer: string | null) => fetchImpl(`${OPENRIG_BASE_URL}${path}`, {
     method: options.method,
-    headers:
-      options.payload === undefined
-        ? { Accept: "application/json" }
-        : { Accept: "application/json", "Content-Type": "application/json" },
+    headers: {
+      Accept: "application/json",
+      ...(options.payload === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+    },
     ...(options.payload === undefined ? {} : { body: JSON.stringify(options.payload) }),
     cache: "no-store",
     redirect: "error",
@@ -174,6 +195,14 @@ async function bridgeRequest(
           : LIST_TIMEOUT_MS,
     ),
   });
+  const bearer = integrationBearer();
+  let response = await request(bearer);
+  // Recover transparently if an independently started daemon has rotated the
+  // terminal token. Only retry read-only GET; never replay ambiguous writes.
+  if (response.status === 401 && options.method === "GET") {
+    const refreshed = integrationBearer(true);
+    if (refreshed && refreshed !== bearer) response = await request(refreshed);
+  }
   if (
     !response.ok &&
     !(allowUnavailable && response.status === 503) &&
@@ -213,6 +242,20 @@ export function assertOpenRigSendAcknowledged(value: unknown): void {
     )
       return;
   } else if (target?.kind === "chatgpt-conversation") {
+    // Newer OpenRig sends to T3's durable, idempotent conversation outbox.
+    // "queued" is an accepted/persisted send, NOT an observed user turn.
+    // Reject unverified 2xx payloads and any different conversation.
+    if (
+      typeof result?.messageId === "string" &&
+      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(result.messageId) &&
+      result.sessionId === target.conversationId &&
+      result.conversationId === target.conversationId &&
+      (result.status === "queued" || result.status === "sending" ||
+        result.status === "delivered")
+    )
+      return;
+    // Older desktop backends may still return a direct, positively guarded
+    // user-turn receipt. Keep that compatibility only when exact target agrees.
     if (
       result?.messageSent === true &&
       result.conversationGuardValidated === true &&
@@ -228,11 +271,16 @@ export function assertOpenRigSendAcknowledged(value: unknown): void {
 }
 
 export async function sendOpenRigMessage(
-  { id, message }: DesktopOpenRigSendInput,
+  { id, message, messageId, expectedConversationId }: DesktopOpenRigSendInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   if (!id.trim() || id.length > 512 || !message.trim() || message.length > 8_000) {
     throw new Error("OpenRig message not sent: invalid seat or message.");
+  }
+  const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
+  if ((messageId !== undefined || expectedConversationId !== undefined) &&
+      (!uuid.test(messageId ?? "") || !uuid.test(expectedConversationId ?? ""))) {
+    throw new Error("OpenRig message not sent: stable send requires valid messageId and expectedConversationId.");
   }
   // Older OpenRig versions still have a legacy /binding fallback when no
   // managed primary exists. Refuse to make any POST in that state, even if a
@@ -252,14 +300,26 @@ export async function sendOpenRigMessage(
   const expected = primary?.status === "active" ? primary.target : null;
   if (!expected || expected.kind === "legacy-browser")
     throw new Error("OpenRig message not sent: seat has no routable active managed primary.");
+  if (messageId && (expected.kind !== "chatgpt-conversation" ||
+      expected.conversationId !== expectedConversationId)) {
+    throw new Error("OpenRig message not sent: managed primary changed from the original conversation.");
+  }
   const response = await bridgeRequest(
     `/agents/${encodeURIComponent(id)}/send`,
-    { method: "POST", payload: { message } },
+    { method: "POST", payload: { message,
+      ...(messageId ? { messageId, expectedConversationId } : {}),
+    } },
     fetchImpl,
   );
   const acknowledgement = (await response.json()) as unknown;
   assertOpenRigSendAcknowledged(acknowledgement);
   const actual = record(record(acknowledgement)?.target);
+  if (messageId && (
+    record(record(acknowledgement)?.result)?.messageId !== messageId ||
+    record(record(acknowledgement)?.deliveryReceipt)?.messageId !== messageId ||
+    record(record(acknowledgement)?.deliveryReceipt)?.queuePersisted !== true
+  ))
+    throw new Error("OpenRig acknowledgement did not preserve original durable messageId; reconcile without replay.");
   if (
     !actual ||
     actual.kind !== expected.kind ||
@@ -522,7 +582,7 @@ export async function readOpenRigPolicyForBrowserSend(
     return deferred("invalid_exact_browser_identity");
 
   const noStartGet = async (path: string): Promise<unknown> => {
-    const token = NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim();
+    const token = integrationBearer();
     const response = await fetchImpl(`${OPENRIG_BASE_URL}${path}`, {
       method: "GET",
       headers: {
@@ -1310,6 +1370,7 @@ export async function fetchOpenRigHumanResponse(
   if (!answerToken || answerToken.length < 24) {
     throw new Error("Interactive OpenRig replies are not configured on this desktop yet.");
   }
+  const bearer = integrationBearer();
   const response = await fetchImpl(
     `${OPENRIG_BASE_URL}/human-inbox/${encodeURIComponent(input.qitemId)}/answer`,
     {
@@ -1319,9 +1380,7 @@ export async function fetchOpenRigHumanResponse(
         "Content-Type": "application/json",
         "x-openrig-human-answer-token": answerToken,
         "x-openrig-human-intent": "t3-desktop-ipc",
-        ...(NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim()
-          ? { Authorization: `Bearer ${NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN}` }
-          : {}),
+        ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
       },
       body: JSON.stringify({ version: 2, destination: input.destination, answers: input.answers }),
       cache: "no-store",
@@ -1392,7 +1451,7 @@ function privateOperatorAnswerToken(): string | null {
 function operatorReplyHeaders(): Record<string, string> | null {
   const token = privateOperatorAnswerToken();
   if (!token) return null;
-  const bearer = NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim();
+  const bearer = integrationBearer();
   // OpenRig permits bearer-free loopback calls when its daemon is configured
   // without a bearer. The fixed endpoint is ALWAYS 127.0.0.1:7433 and the
   // independent private human-answer token is still mandatory for writes.
@@ -1597,7 +1656,7 @@ async function reviewGateLinkConfirmed(
   gate: OpenRigReviewGate,
   fetchImpl: typeof fetch,
 ): Promise<boolean> {
-  const bearer = NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim();
+  const bearer = integrationBearer();
   const response = await fetchImpl(
     `${REVIEW_GATES_BASE_URL}/${encodeURIComponent(gate.gateQitemId)}`,
     {
@@ -2012,4 +2071,87 @@ export const sendOpenRigAgentMessage = DesktopIpc.makeIpcMethod({
   payload: DesktopOpenRigSendInputSchema,
   result: Schema.Void,
   handler: (input) => Effect.tryPromise(() => sendOpenRigMessage(input)),
+});
+
+/** Reconciles only a uniquely tagged user turn in an unchanged managed primary.
+ * GET /messages has an OpenRig conversation guard; absence is never a no-send proof. */
+export async function reconcileOpenRigHumanSend(
+  input: DesktopOpenRigHumanSendReconcileInput,
+  fetchImpl: typeof fetch = fetch,
+  durableReceipt?: { messageId: string; conversationId: string; status: string } | null,
+): Promise<{ state: "observed" | "pending" | "route_changed"; persisted?: boolean; assistantAcknowledged?: boolean }> {
+  if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(input.attemptId) ||
+      !input.managedSessionId.trim())
+    throw new Error("Invalid Human Inbox delivery receipt identity.");
+
+  const targetEquals = (a: DesktopOpenRigSessionTarget | null | undefined) => {
+    const b = input.target;
+    if (!a || a.kind !== b.kind) return false;
+    if (a.kind === "chatgpt-conversation" && b.kind === "chatgpt-conversation")
+      return a.conversationId === b.conversationId;
+    if (a.kind === "t3-thread" && b.kind === "t3-thread")
+      return a.environmentId === b.environmentId && a.threadId === b.threadId;
+    return false;
+  };
+  const matches = (ledger: DesktopOpenRigSeatSessions) =>
+    ledger.primarySessionId === input.managedSessionId &&
+    targetEquals(ledger.sessions.find((s) => s.id === ledger.primarySessionId)?.target);
+
+  const before = await fetchOpenRigManagedSessions(input.id, fetchImpl);
+  if (!matches(before)) return { state: "route_changed" };
+
+  const persisted = input.target.kind === "chatgpt-conversation" &&
+    durableReceipt?.messageId === input.attemptId &&
+    durableReceipt.conversationId === input.target.conversationId;
+  // A cold/busy guest need not be readable to establish durable storage. The
+  // main-process outbox continues delivery even when this window is closed.
+  if (persisted && durableReceipt.status !== "delivered")
+    return { state: "pending", persisted: true, assistantAcknowledged: false };
+
+  const id = assertSeatId(input.id);
+  const response = await bridgeRequest(
+    `/agents/${id}/messages?count=20`, { method: "GET" }, fetchImpl,
+  );
+  const payload = record((await response.json()) as unknown);
+  // The bridge checks its binding, while the inbox checks the managed primary:
+  // prove the two are the SAME address rather than trusting a successful GET.
+  const address = input.target;
+  const exactRead = address.kind === "chatgpt-conversation"
+    ? payload?.conversationGuardValidated === true &&
+      payload.verifiedConversationId === address.conversationId
+    : address.kind === "t3-thread"
+      ? payload?.threadId === address.threadId &&
+        payload.environmentId === address.environmentId
+      : false;
+  if (!exactRead) throw new Error("OpenRig message history did not verify the selected managed primary.");
+  const messages = Array.isArray(payload?.messages)
+    ? payload.messages
+    : record(payload?.session)?.messages;
+  // A unique marker in an observed USER turn proves dispatch, but failure
+  // to find it can never prove non-dispatch or license a retry.
+  const marker = `[T3-HUMAN-DELIVERY:${input.attemptId}]`;
+  const observed = Array.isArray(messages) && messages.some((value) => {
+    const item = record(value);
+    return (item?.role === "user" || item?.role === "human") &&
+      typeof item.text === "string" && item.text.includes(marker);
+  });
+  const assistantAcknowledged = observed && Array.isArray(messages) && messages.some((value) => {
+    const item = record(value);
+    return item?.role === "assistant" && typeof item.text === "string" && item.text.includes(marker);
+  });
+  const after = await fetchOpenRigManagedSessions(input.id, fetchImpl);
+  if (!matches(after)) return { state: "route_changed" };
+  return { state: observed ? "observed" : "pending",
+    ...(persisted ? { persisted: true } : {}), assistantAcknowledged };
+}
+
+export const reconcileOpenRigHumanSendIpc = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPENRIG_RECONCILE_HUMAN_SEND_CHANNEL,
+  payload: DesktopOpenRigHumanSendReconcileInputSchema,
+  result: DesktopOpenRigHumanSendReconcileResultSchema,
+  handler: Effect.fn("desktop.ipc.openRig.reconcileHumanSend")(function* (input) {
+    const activation = yield* DesktopAppActivation.DesktopAppActivation;
+    const receipt = yield* activation.chatGPTDeliveryStatus(input.attemptId);
+    return yield* Effect.tryPromise(() => reconcileOpenRigHumanSend(input, fetch, receipt));
+  }),
 });

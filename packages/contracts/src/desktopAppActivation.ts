@@ -160,6 +160,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     from: Schema.optional(Schema.Literals(["start", "end"])),
     message: Schema.optional(Schema.String),
     messageId: Schema.optional(TrimmedNonEmptyString),
+    previousDeliveredMessage: Schema.optional(Schema.String),
     // Sent by the desktop queue: late preflight must never submit after this timestamp.
     sendExpiresAt: Schema.optional(Schema.Number),
     // A direct-send CLI preflight can request targeted loading of one unloaded guest.

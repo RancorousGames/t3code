@@ -19,7 +19,7 @@ import {
   appendUnverifiedOpenRigPolicies,
   prepareChatGPTSessionMessage,
 } from "./chatGPTSessionMessaging";
-import { reserveDurableUnknownChatGPTSend } from "./chatGPTUncertainSendFence";
+import { reserveDurableUnknownChatGPTSend, recordDurableChatGPTSendConfirmed } from "./chatGPTUncertainSendFence";
 
 const autoWake = (id: string) =>
   "[AUTOMATED TEMPORARY OMNIHUB KEEP-AWAKE; not a human message] If you have already been assigned work that is still authorized and unfinished, please resume it and report meaningful progress or blockers. If you are blocked on a human decision, finished, or awaiting input, do not invent work; state that fact. This monitor is a temporary bootstrap to be replaced by OpenRig's canonical scheduler. [Monitor attempt: " +
@@ -126,6 +126,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     let guestUrl = `https://chatgpt.com/c/${conversationId}`;
     let generating = false;
     const inspected: string[] = [];
+    Object.defineProperty(guest, "getURL", { value: () => guestUrl });
     Object.defineProperty(guest, "executeJavaScript", {
       value: vi.fn(async (script: string) => {
         if (script.includes("const result =") && script.includes("inspectChatGPTPage")) {
@@ -158,6 +159,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
           }; // read-only composer probe, no guest focus or transcript
         if (script.includes("const el=document.querySelector(")) return composerDraft; // existing draft check
         if (script.includes("Array.from(document.querySelectorAll('[data-message-author-role")) {
+          if (script.includes(".toLowerCase();")) return visible;
           const expected = script.match(/(?:=== |const expected = )("(?:\\.|[^"\\])*")/);
           return visible && !!expected && typed === JSON.parse(expected[1]!);
         }
@@ -166,7 +168,9 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
           expect(script).toContain("Composer contains an existing draft");
           const match = script.match(/const value = ("(?:\\.|[^"\\])*");/);
           if (!match) throw new Error("No literal text in one guest editor operation");
-          if (composerDraft.trim())
+          const replacement = script.match(/const replacement = (null|"(?:\\.|[^"\\])*");/);
+          const allowed = replacement && replacement[1] !== "null" && composerDraft === JSON.parse(replacement[1]!);
+          if (composerDraft.trim() && !allowed)
             return {
               ok: false,
               reason: "Composer contains an existing draft; refusing to overwrite it.",
@@ -180,6 +184,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
             return { composerMismatch: true };
           }
           presses++;
+          if (!typed) typed = composerDraft;
           sent = true;
           if (!options.delayed) visible = true;
           if (options.pressThrows) throw new Error("bridge detached after click");
@@ -211,6 +216,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
       revealTurn: () => {
         if (sent) visible = true;
       },
+      setObservedTurn: () => { visible = true; },
       get typed() {
         return typed;
       },
@@ -631,6 +637,62 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
       });
       expect(result).toMatchObject({ delivery: "pre_submit_aborted", sendAttempted: false });
       expect(fixture.presses).toBe(0);
+    } finally { fixture.guest.remove(); }
+  });
+
+  it("replaces confirmed previous residue for the next queued send but preserves edits", async () => {
+    const previous = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\nPrevious";
+    const enriched = previous + "\npolicy context";
+    const next = "[T3-MSG:bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb]\nNext";
+    const fixture = guestFixture(async () => { throw Error("offline"); });
+    const input = { environmentId: "local" as never, sessions: [{ id: browserId, title: "M3" }] as never,
+      action: "send" as const, sessionId: browserId, expectedConversationId: conversationId,
+      sendExpiresAt: Date.now() + 70_000, previousDeliveredMessage: previous, message: next };
+    try {
+      recordDurableChatGPTSendConfirmed(input.environmentId, browserId,
+        `https://chatgpt.com/c/${conversationId}`, previous, enriched);
+      fixture.setComposerDraft(enriched + " edited");
+      await expect(runChatGPTSessionControl(input)).rejects.toThrow("existing draft");
+      fixture.setComposerDraft(enriched);
+      expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "user_turn_observed" });
+      expect(fixture.typed).toBe(next);
+      expect(fixture.presses).toBe(1);
+    } finally { fixture.guest.remove(); }
+  });
+
+  it("retains staged ownership through restart and a temporarily changed draft", async () => {
+    const original = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\nQueued message";
+    const url = `https://chatgpt.com/c/${conversationId}`;
+    const fixture = guestFixture(async () => { throw Error("offline"); });
+    const input = { environmentId: "local" as never, sessions: [{ id: browserId, title: "M3" }] as never,
+      action: "send" as const, sessionId: browserId, expectedConversationId: conversationId,
+      sendExpiresAt: Date.now() + 70_000, message: original };
+    try {
+      reserveDurableUnknownChatGPTSend(input.environmentId, browserId, url, false, {
+        staged: true, original, text: original, url, before: { totalTurns: 1, lastUserTurnKey: "old-key" },
+        policyEnrichment: { schema: "t3-c05-browser-optional/v1", status: "not_eligible" },
+      });
+      resetUncertainChatGPTSendsForTests(true);
+      fixture.setComposerDraft(original + " edited");
+      await expect(runChatGPTSessionControl(input)).rejects.toThrow("UNKNOWN send");
+      expect(hasUncertainChatGPTSend(input.environmentId, browserId)).toBe(true);
+      fixture.setComposerDraft(original);
+      expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "user_turn_observed" });
+      expect(fixture.presses).toBe(1);
+    } finally { fixture.guest.remove(); }
+  });
+
+  it.each([false, true])("recovers a receiptless exact queued draft; observed=%s", async (observed) => {
+    const original = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\nQueued message";
+    const fixture = guestFixture(async () => { throw Error("offline"); });
+    fixture.setComposerDraft(original);
+    if (observed) fixture.setObservedTurn();
+    try {
+      const result = await runChatGPTSessionControl({ environmentId: "local" as never,
+        sessions: [{ id: browserId, title: "M3" }] as never, action: "send", sessionId: browserId,
+        expectedConversationId: conversationId, sendExpiresAt: Date.now() + 70_000, message: original });
+      expect(result).toMatchObject({ delivery: "user_turn_observed" });
+      expect(fixture.presses).toBe(observed ? 0 : 1);
     } finally { fixture.guest.remove(); }
   });
 

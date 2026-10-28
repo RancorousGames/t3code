@@ -12,6 +12,7 @@ export interface TaskBoardClaim {
   claimedBy: string;
   column: string;
   completedAt: number | null;
+  handoffAt: number | null;
 }
 
 const DEFAULT_VAULT = "B:/GDrive/SharedWithPhone/Obsidian/jjj";
@@ -39,6 +40,7 @@ export function parseTaskBoardClaim(contents: string): TaskBoardClaim | null {
     claimedBy: claimedBy.toLowerCase(),
     column,
     completedAt: Number.isFinite(completedAt) ? completedAt : null,
+    handoffAt: null,
   };
 }
 
@@ -58,6 +60,8 @@ export async function readTaskBoardClaims(
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
+    const projectClaims: TaskBoardClaim[] = [];
+    const relatedForUser = new Map<string, number>();
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
       const file = NodePath.join(active, entry.name);
@@ -65,8 +69,46 @@ export async function readTaskBoardClaims(
       // An unreadable/oversized task could hide a worker association; don't
       // infer "unassigned" from a silently skipped card.
       if (info.size > 128 * 1024) throw new Error(`Oversized TaskBoard card: ${file}`);
-      const claim = parseTaskBoardClaim(await NodeFS.readFile(file, "utf8"));
+      const contents = await NodeFS.readFile(file, "utf8");
+      const claim = parseTaskBoardClaim(contents);
       if (!claim) throw new Error(`Unparseable TaskBoard frontmatter: ${file}`);
+      projectClaims.push(claim);
+      const header = contents.split(/\r?\n---(?:\r?\n|$)/, 2)[0] ?? "";
+      const pendingAttention = /^attention:\s*$/m.test(header) &&
+        /^\s*-\s*(?:question|needs-user)\s*$/m.test(header);
+      const answer = header.match(/^  answer:\s*(.*)$/m)?.[1]?.trim();
+      const unanswered = !answer || answer === "null" || answer === "~";
+      const hasQuestion = /^question:\s*$/m.test(header) && /^  prompt:\s*\S/m.test(header);
+      const awaitingHuman = pendingAttention && hasQuestion && unanswered &&
+        !/^column:\s*(?:draft|done)\s*$/m.test(header);
+      // A question on the worker's own claimed task is a handoff; use the
+      // read file mtime as a conservative clock when no request timestamp exists.
+      if (awaitingHuman) claim.handoffAt = info.mtimeMs;
+      // Separate For User cards only affect explicit related_to task IDs.
+      if (awaitingHuman && (/^kind:\s*for_user\s*$/m.test(header) ||
+          /^\s*-\s*needs-user\s*$/m.test(header))) {
+        const matches = header.match(/^related_to:\s*\r?\n((?:\s*-\s*[A-Z][A-Z0-9]*-\d+\s*\r?\n?)*)/m);
+        for (const id of matches?.[1]?.match(/[A-Z][A-Z0-9]*-\d+/g) ?? [])
+          relatedForUser.set(id, Math.max(relatedForUser.get(id) ?? 0, info.mtimeMs));
+      }
+    }
+    for (const claim of projectClaims) {
+      const manifestPath = NodePath.join(vault, project.name, "Tasks", "Reviews", claim.taskId, "manifest.json");
+      try {
+        const manifest = JSON.parse(await NodeFS.readFile(manifestPath, "utf8")) as {
+          task_id?: string; status?: string; rounds?: Array<{ requested_at?: string }>;
+        };
+        if (manifest.task_id !== claim.taskId) throw new Error("Review identity mismatch: " + manifestPath);
+        if (manifest.status === "open") {
+          const requested = Date.parse(manifest.rounds?.at(-1)?.requested_at ?? "");
+          if (!Number.isFinite(requested)) throw new Error("Invalid review timestamp: " + manifestPath);
+          claim.handoffAt = requested;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (claim.handoffAt === null && relatedForUser.has(claim.taskId))
+        claim.handoffAt = relatedForUser.get(claim.taskId)!;
       claims.push(claim);
     }
   }
@@ -82,6 +124,7 @@ export const readTaskBoardWorkerClaimsIpc = DesktopIpc.makeIpcMethod({
       claimedBy: Schema.String,
       column: Schema.String,
       completedAt: Schema.NullOr(Schema.Number),
+      handoffAt: Schema.NullOr(Schema.Number),
     }),
   ),
   handler: Effect.fn("desktop.ipc.taskBoardWorkerClaims")(function* () {

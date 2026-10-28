@@ -16,6 +16,7 @@ import {
   trimOpenRigSpeech,
   fetchOpenRigSessions,
   sendOpenRigMessage,
+  reconcileOpenRigHumanSend,
   runOpenRigSeatBrowserLifecycle,
   unbindOpenRigSeat,
 } from "./openRig.ts";
@@ -1079,6 +1080,110 @@ describe("local OpenRig desktop proxy", () => {
     };
   }
 
+  it("automatically reconciles a uniquely tagged user turn against the exact unchanged managed primary", async () => {
+    const attemptId = "550e8400-e29b-41d4-a716-446655440000";
+    const target = nativeTarget as { kind: "t3-thread"; environmentId: string; threadId: string };
+    const input = { id: "seat1", managedSessionId: "managed-session-1", target, attemptId };
+    const fetcher = vi.fn(async (url: string) =>
+      url.endsWith("/sessions")
+        ? Response.json(managedLedger("seat1"))
+        : Response.json({ threadId: "thread1", environmentId: "env1", messages: [
+            { role: "assistant", text: `[T3-HUMAN-DELIVERY:${attemptId}]` },
+            { role: "user", text: `[T3-HUMAN-DELIVERY:${attemptId}]\\nHello` },
+          ] }),
+    ) as typeof fetch;
+    expect(await reconcileOpenRigHumanSend(input, fetcher)).toEqual({ state: "observed", assistantAcknowledged: true });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(fetcher).mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringContaining("/agents/seat1/sessions"),
+      expect.stringContaining("/agents/seat1/messages?count=20"),
+      expect.stringContaining("/agents/seat1/sessions"),
+    ]);
+    const wrong = { ...input, managedSessionId: "other" };
+    vi.mocked(fetcher).mockClear();
+    expect(await reconcileOpenRigHumanSend(wrong, fetcher)).toEqual({ state: "route_changed" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles ChatGPT DOM history nested under the guarded session", async () => {
+    const attemptId = "550e8400-e29b-41d4-a716-446655440000";
+    const target = { kind: "chatgpt-conversation" as const,
+      conversationId: "6ad41909-57c8-83ed-a20f-742a43cd06a6" };
+    const original = managedLedger("seat1");
+    const ledger = { ...original, sessions: original.sessions.map((entry) =>
+      ({ ...entry, target })) };
+    const fetcher = vi.fn(async (url: string) =>
+      url.endsWith("/sessions") ? Response.json(ledger) : Response.json({
+        conversationGuardValidated: true,
+        verifiedConversationId: target.conversationId,
+        session: { messages: [
+          { role: "assistant", text: "Done" },
+          { role: "user", text: `[T3-HUMAN-DELIVERY:${attemptId}]\\nHello` },
+        ] },
+      }),
+    ) as typeof fetch;
+    expect(await reconcileOpenRigHumanSend({
+      id: "seat1", managedSessionId: "managed-session-1", target, attemptId,
+    }, fetcher)).toEqual({ state: "observed", assistantAcknowledged: false });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports exact durable storage without reading a cold recipient or claiming observation", async () => {
+    const attemptId = "550e8400-e29b-41d4-a716-446655440000";
+    const target = { kind: "chatgpt-conversation" as const,
+      conversationId: "6ad41909-57c8-83ed-a20f-742a43cd06a6" };
+    const original = managedLedger("seat1");
+    const ledger = { ...original, sessions: original.sessions.map((entry) => ({ ...entry, target })) };
+    const fetcher = vi.fn(async () => Response.json(ledger)) as typeof fetch;
+    expect(await reconcileOpenRigHumanSend({
+      id: "seat1", managedSessionId: "managed-session-1", target, attemptId,
+    }, fetcher, { messageId: attemptId, conversationId: target.conversationId, status: "queued" }))
+      .toEqual({ state: "pending", persisted: true, assistantAcknowledged: false });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects another bound conversation's transcript even when the ledger primary is unchanged", async () => {
+    const attemptId = "550e8400-e29b-41d4-a716-446655440000";
+    const target = { kind: "chatgpt-conversation" as const,
+      conversationId: "6ad41909-57c8-83ed-a20f-742a43cd06a6" };
+    const original = managedLedger("seat1");
+    const ledger = { ...original, sessions: original.sessions.map((entry) => ({ ...entry, target })) };
+    const fetcher = vi.fn(async (url: string) => url.endsWith("/sessions")
+      ? Response.json(ledger)
+      : Response.json({
+        conversationGuardValidated: true,
+        verifiedConversationId: "different-conversation",
+        session: { messages: [
+          { role: "user", text: `[T3-HUMAN-DELIVERY:${attemptId}]` },
+        ] },
+      }),
+    ) as typeof fetch;
+    await expect(reconcileOpenRigHumanSend({
+      id: "seat1", managedSessionId: "managed-session-1", target, attemptId,
+    }, fetcher)).rejects.toThrow("did not verify");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("never mistakes absence, assistant echo or an offline read for positive send evidence", async () => {
+    const attemptId = "550e8400-e29b-41d4-a716-446655440000";
+    const input = { id: "seat1", managedSessionId: "managed-session-1",
+      target: nativeTarget as { kind: "t3-thread"; environmentId: string; threadId: string },
+      attemptId };
+    const fetcher = vi.fn(async (url: string) =>
+      url.endsWith("/sessions") ? Response.json(managedLedger("seat1")) :
+        Response.json({ threadId: "thread1", environmentId: "env1", messages: [
+          { role: "assistant", text: `[T3-HUMAN-DELIVERY:${attemptId}]` },
+        ] }),
+    ) as typeof fetch;
+    expect(await reconcileOpenRigHumanSend(input, fetcher)).toEqual({ state: "pending", assistantAcknowledged: false });
+    const offline = vi.fn(async (url: string) =>
+      url.endsWith("/sessions") ? Response.json(managedLedger("seat1")) :
+        new Response("offline", { status: 503 }),
+    ) as typeof fetch;
+    await expect(reconcileOpenRigHumanSend(input, offline)).rejects.toThrow("HTTP 503");
+    expect(offline).toHaveBeenCalledTimes(2);
+  });
+
   it("sends an opaque ID as one encoded segment and a message body", async () => {
     const fetcher = vi.fn(async (url: string) =>
       url.endsWith("/sessions")
@@ -1113,6 +1218,59 @@ describe("local OpenRig desktop proxy", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards the persisted Human Inbox UUID to OpenRig and checks the exact T3 journal receipt", async () => {
+    const messageId = "550e8400-e29b-41d4-a716-446655440000";
+    const conversationId = "6ad41909-57c8-83ed-a20f-742a43cd06a6";
+    const target = { kind: "chatgpt-conversation" as const, conversationId };
+    const original = managedLedger("seat1");
+    const ledger = { ...original, sessions: original.sessions.map((session) => ({ ...session, target })) };
+    const fetcher = vi.fn(async (url: string) => url.endsWith("/sessions")
+      ? Response.json(ledger)
+      : Response.json({
+          target,
+          result: { messageId, sessionId: conversationId, conversationId, status: "queued" },
+          deliveryReceipt: { messageId, queuePersisted: true,
+            queueStatus: "queued", userTurnObserved: null, assistantReplyObserved: null },
+        })) as typeof fetch;
+    await sendOpenRigMessage({ id: "seat1", message: "Status?", messageId, expectedConversationId: conversationId }, fetcher);
+    const [, request] = vi.mocked(fetcher).mock.calls[1]!;
+    expect(request).toMatchObject({ method: "POST", body: JSON.stringify({
+      message: "Status?", messageId, expectedConversationId: conversationId,
+    }) });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("never POSTs a stable ID when managed primary moved; rejects mismatched journal ID", async () => {
+    const messageId = "550e8400-e29b-41d4-a716-446655440000";
+    const conversationId = "6ad41909-57c8-83ed-a20f-742a43cd06a6";
+    const wrongConversation = "c4329499-e41a-4d98-8d4a-ccd0dd419956";
+    const target = { kind: "chatgpt-conversation" as const, conversationId: wrongConversation };
+    const base = managedLedger("seat1");
+    const ledger = { ...base, sessions: base.sessions.map((session) => ({ ...session, target })) };
+    const fetcher = vi.fn(async (url: string) => url.endsWith("/sessions")
+      ? Response.json(ledger)
+      : Response.json({
+        target: { kind: "chatgpt-conversation", conversationId },
+        result: { messageId: wrongConversation, sessionId: conversationId, conversationId, status: "queued" },
+        deliveryReceipt: { messageId: wrongConversation, queuePersisted: true, queueStatus: "queued" },
+      })) as typeof fetch;
+    await expect(sendOpenRigMessage({
+      id: "seat1", message: "Status?", messageId, expectedConversationId: conversationId,
+    }, fetcher)).rejects.toThrow("managed primary changed");
+    expect(fetcher).toHaveBeenCalledOnce();
+    // Even an HTTP 200 queue receipt cannot swap in another ID after an exact preflight.
+    const correctLedger = { ...base, sessions: base.sessions.map((session) =>
+      ({ ...session, target: { kind: "chatgpt-conversation" as const, conversationId } })) };
+    const wrongReceipt = vi.fn(async (url: string) => url.endsWith("/sessions")
+      ? Response.json(correctLedger)
+      : Response.json({ target: { kind: "chatgpt-conversation", conversationId },
+        result: { messageId: wrongConversation, sessionId: conversationId, conversationId, status: "queued" },
+        deliveryReceipt: { messageId: wrongConversation, queuePersisted: true, queueStatus: "queued" } })) as typeof fetch;
+    await expect(sendOpenRigMessage({
+      id: "seat1", message: "Status?", messageId, expectedConversationId: conversationId,
+    }, wrongReceipt)).rejects.toThrow("did not preserve original durable messageId");
+    expect(wrongReceipt).toHaveBeenCalledTimes(2);
+  });
   it("never sends through legacy binding when there is no managed primary", async () => {
     const onlyLegacy = {
       ...managedLedger("seat1"),
@@ -1187,7 +1345,21 @@ describe("local OpenRig desktop proxy", () => {
         },
       }),
     ).not.toThrow();
-    expect(() =>
+    const queueTarget = { kind: "chatgpt-conversation", conversationId: "conversation-1" };
+    const queued = {
+      messageId: "550e8400-e29b-41d4-a716-446655440000",
+      sessionId: "conversation-1",
+      conversationId: "conversation-1",
+      status: "queued",
+    };
+    expect(() => assertOpenRigSendAcknowledged({ target: queueTarget, result: queued })).not.toThrow();
+    expect(() => assertOpenRigSendAcknowledged({ target: queueTarget,
+      result: { ...queued, conversationId: "other" } })).toThrow("acknowledgement");
+    expect(() => assertOpenRigSendAcknowledged({ target: queueTarget,
+      result: { ...queued, status: "cancelled" } })).toThrow("acknowledgement");
+    expect(() => assertOpenRigSendAcknowledged({ target: queueTarget,
+      result: { ...queued, messageId: null } })).toThrow("acknowledgement");
+        expect(() =>
       assertOpenRigSendAcknowledged({
         sessionId: "browser-1",
         result: { messageSent: true, sessionId: "browser-1" },

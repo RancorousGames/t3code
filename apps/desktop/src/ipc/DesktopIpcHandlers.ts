@@ -72,6 +72,7 @@ import * as PreviewIpc from "./methods/preview.ts";
 import { installOpenRigIpcHandlers } from "./installOpenRigIpcHandlers.ts";
 import { savePrivateChatGPTDraftSnapshotIpc } from "./methods/chatGPTDraftSnapshot.ts";
 import { readTaskBoardWorkerClaimsIpc } from "./methods/taskBoardWorkerClaims.ts";
+import { readTaskBoardHumanInboxIpc, openTaskBoardHumanItemIpc } from "./methods/taskBoardHumanInboxIpc.ts";
 import { controlOmniHubKeepAwakeMonitorIpc, readOmniHubKeepAwakeMonitorsIpc } from "./methods/omniHubKeepAwake.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
@@ -110,6 +111,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(savePrivateChatGPTDraftSnapshotIpc);
   yield* ipc.handle(readTaskBoardWorkerClaimsIpc);
+  yield* ipc.handle(readTaskBoardHumanInboxIpc);
+  yield* ipc.handle(openTaskBoardHumanItemIpc);
   yield* ipc.handle(readOmniHubKeepAwakeMonitorsIpc);
   yield* ipc.handle(controlOmniHubKeepAwakeMonitorIpc);
   yield* installOpenRigIpcHandlers();

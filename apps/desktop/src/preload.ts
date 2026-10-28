@@ -125,6 +125,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   savePrivateChatGPTDraftSnapshot: (input) =>
     ipcRenderer.invoke(IpcChannels.PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL, input),
   readTaskBoardWorkerClaims: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_WORKER_CLAIMS_CHANNEL),
+  readTaskBoardHumanInbox: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_HUMAN_INBOX_CHANNEL),
+  openTaskBoardHumanItem: (input) => ipcRenderer.invoke(IpcChannels.TASKBOARD_HUMAN_OPEN_CHANNEL, input),
   listOpenRigAgents: () => ipcRenderer.invoke(IpcChannels.OPENRIG_LIST_AGENTS_CHANNEL),
   listPendingOpenRigNativeApprovals: () =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_NATIVE_APPROVAL_PENDING_CHANNEL),
@@ -178,6 +180,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   unbindOpenRigAgent: (id) => ipcRenderer.invoke(IpcChannels.OPENRIG_UNBIND_AGENT_CHANNEL, id),
   sendOpenRigAgentMessage: (input) =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_SEND_AGENT_MESSAGE_CHANNEL, input),
+  reconcileOpenRigHumanSend: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_RECONCILE_HUMAN_SEND_CHANNEL, input),
   requestSnapShotPermissions: (includeAccessibility) =>
     ipcRenderer.invoke(IpcChannels.REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL, includeAccessibility),
   getSnapShotState: () => ipcRenderer.invoke(IpcChannels.GET_SNAP_SHOT_STATE_CHANNEL),

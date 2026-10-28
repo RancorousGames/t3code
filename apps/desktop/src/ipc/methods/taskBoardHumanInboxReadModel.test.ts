@@ -71,7 +71,7 @@ describe("OW-0022 TaskBoard read-only human inbox projection", () => {
     );
   });
 
-  it("keeps unresolved dependencies, terminal tasks, archived tasks and answered cards out", () => {
+  it("keeps unresolved dependencies, terminal tasks and archived tasks out; For User remains eligible until source releases it", () => {
     expect(
       taskBoardPendingEntries(
         board("B:/Vault/Omni/Tasks", [
@@ -84,7 +84,7 @@ describe("OW-0022 TaskBoard read-only human inbox projection", () => {
           task("X-7", { review_status: "resolved", kind: "task", question: null }),
         ]),
       ).map((item) => item.sourceId),
-    ).toEqual(["X-6"]);
+    ).toEqual(["X-5", "X-6"]);
   });
 
   it("does not convert unavailable sources into zero source-owned tasks or approvals", () => {

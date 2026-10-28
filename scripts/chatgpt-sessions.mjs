@@ -10,10 +10,10 @@ export async function controlSessions(
   input,
   { home = NodePath.resolve(import.meta.dirname, "../.t3"), exchange = sendAppControlRequest } = {},
 ) {
-  const allowed = ["list", "read", "send", "reconcile_send", "enqueue", "delivery_status", "delivery_list", "cancel_delivery", "reload", "complete", "archive", "restore", "change_state", "rollover_finalize", "wait"];
+  const allowed = ["list", "open", "read", "send", "reconcile_send", "enqueue", "delivery_status", "delivery_list", "cancel_delivery", "reload", "complete", "archive", "restore", "change_state", "rollover_finalize", "wait"];
   if (input?.action === "wait") return waitForChatGPTSessions(input, { home, exchange });
   if (!input || !allowed.includes(input.action))
-    throw new Error("action must be list, read, send, reconcile_send, reload, complete, archive, restore, change_state, rollover_finalize or wait.");
+    throw new Error("action must be list, open, read, send, reconcile_send, reload, complete, archive, restore, change_state, rollover_finalize or wait.");
   if (
     input.which !== undefined &&
     (input.action !== "list" ||

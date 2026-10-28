@@ -78,6 +78,27 @@ export function parseRebootArgs(argv) {
   return out;
 }
 
+
+/** Parse the private JSON-stdin transport used by OMCP's t3_sessions(reboot).
+ * This keeps handoff text out of process argv while using the same durable T3 operation. */
+export function parseRebootJsonInput(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || input.action !== "reboot")
+    throw new Error("Expected a reboot action object.");
+  const flags = {
+    sessionId: "--session-id", conversationId: "--conversation-id",
+    conversationUrl: "--conversation-url", requestId: "--request-id",
+    phase: "--phase", message: "--message",
+  };
+  const argv = [];
+  for (const [key, value] of Object.entries(input)) {
+    if (key === "action") continue;
+    if (!Object.hasOwn(flags, key) || typeof value !== "string")
+      throw new Error("Unknown or invalid reboot input: " + key);
+    argv.push(flags[key], value);
+  }
+  return parseRebootArgs(argv);
+}
+
 export async function rebootExistingT3Session(
   args,
   { exchange = sendAppControlRequest } = {},
@@ -137,7 +158,15 @@ export async function rebootExistingT3Session(
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const args = parseRebootArgs(process.argv.slice(2));
+    const jsonStdin = process.argv.length === 3 && process.argv[2] === "--json-stdin";
+    let args;
+    if (jsonStdin) {
+      const chunks = [];
+      for await (const chunk of process.stdin) chunks.push(chunk);
+      args = parseRebootJsonInput(JSON.parse(Buffer.concat(chunks).toString("utf8").replace(/^\uFEFF/, "")));
+    } else {
+      args = parseRebootArgs(process.argv.slice(2));
+    }
     if (!args) {
       process.stdout.write("Agent Reboot (OpenRig optional): --session-id UUID or --conversation-url URL; --message-file FILE for begin, --request-id UUID --phase status|finalize to reconcile.\n");
     } else {
@@ -147,7 +176,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       process.stderr.write(`Agent Reboot operation requestId=${args.requestId}; phase=${args.phase}\n`);
       const response = await rebootExistingT3Session(args);
       process.stdout.write(JSON.stringify(response, null, 2) + "\n");
-      if (response.status !== "committed") process.exitCode = 2;
+      // JSON/MCP callers must receive submitted/unknown receipts, not lose them as an exit error.
+      if (response.status !== "committed" && !jsonStdin) process.exitCode = 2;
     }
   } catch (error) {
     process.stderr.write(String(error?.message ?? error) + "\n");

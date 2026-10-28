@@ -25,6 +25,7 @@ export function parseArguments(args) {
     messageFile: "",
     parentSessionId: "",
     project: "",
+    requestId: "",
     requireParent: false,
     dryRun: false,
   };
@@ -40,6 +41,7 @@ export function parseArguments(args) {
       arg === "--message-file" ||
       arg === "--parent-session-id" ||
       arg === "--project" ||
+      arg === "--request-id" ||
       arg === "--home"
     ) {
       if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}.`);
@@ -48,6 +50,8 @@ export function parseArguments(args) {
           ? "messageFile"
           : arg === "--parent-session-id"
             ? "parentSessionId"
+            : arg === "--request-id"
+            ? "requestId"
             : arg.slice(2)
       ] = args[++i];
     } else if (arg === "--help" || arg === "-h") {
@@ -261,7 +265,7 @@ export async function main(args = process.argv.slice(2)) {
     );
     return;
   }
-  const request = createChatGPTSpawnRequest(options);
+  const request = createChatGPTSpawnRequest(options, options.requestId || NodeCrypto.randomUUID());
   const address = controlAddress(options.home);
   if (Buffer.byteLength(JSON.stringify(request), "utf8") + 1 > 64 * 1024) {
     throw new Error("Message exceeds the desktop control socket's 64 KiB request limit.");

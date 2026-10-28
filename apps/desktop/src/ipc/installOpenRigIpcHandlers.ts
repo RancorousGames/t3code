@@ -35,5 +35,6 @@ export const installOpenRigIpcHandlers = Effect.fn("desktop.ipc.installOpenRigHa
     yield* ipc.handle(OpenRigIpc.bindOpenRigAgent);
     yield* ipc.handle(OpenRigIpc.unbindOpenRigAgent);
     yield* ipc.handle(OpenRigIpc.sendOpenRigAgentMessage);
+    yield* ipc.handle(OpenRigIpc.reconcileOpenRigHumanSendIpc);
   },
 );

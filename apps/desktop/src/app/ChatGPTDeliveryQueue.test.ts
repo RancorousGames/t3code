@@ -93,6 +93,23 @@ describe("durable ChatGPT delivery queue", () => {
     expect(sender).not.toHaveBeenCalled();
   });
 
+  it("provides the last observed message as residue evidence after restart", async () => {
+    const dir = makeDir();
+    const sender = vi.fn(async (request: DesktopAppActivationRequest) => observed(request));
+    const first = new ChatGPTDeliveryQueue(dir, sender);
+    first.enqueue(input);
+    await first.pulse();
+    first.close();
+    const second = new ChatGPTDeliveryQueue(dir, sender);
+    second.enqueue({ ...input, messageId: anotherConversation, body: "Next" });
+    await second.pulse();
+    expect(sender.mock.calls[1]?.[0]).toMatchObject({
+      previousDeliveredMessage: `[T3-MSG:${id}]\n${input.body}`,
+      message: `[T3-MSG:${anotherConversation}]\nNext`,
+    });
+    second.close();
+  });
+
   it("reconciles lost IPC acknowledgement on restart without issuing a second send", async () => {
     const dir = makeDir();
     const firstSender = vi.fn(async () => {
