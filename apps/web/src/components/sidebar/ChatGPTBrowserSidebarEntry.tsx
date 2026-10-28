@@ -549,6 +549,10 @@ export function ChatGPTBrowserSidebarEntry({
   const visibleWorkerCount = visibleSessions.filter((session) =>
     hideableWorkerIds.has(session.id),
   ).length;
+  // Count every working session before applying Hide Workers to sidebar rows.
+  const activeSessionCount = visibleSessions.filter((session) =>
+    activities[session.id]?.age === "working",
+  ).length;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
   // Like Hidden, the Snoozed view falls back to active sessions once it empties.
@@ -719,6 +723,13 @@ export function ChatGPTBrowserSidebarEntry({
           <div className="flex min-w-0 items-center gap-1">
             <span className="min-w-0 flex-1 truncate ps-2 text-2xs font-semibold tracking-wide text-muted-foreground uppercase">
               ChatGPT
+            </span>
+            <span
+              className="shrink-0 text-2xs font-semibold text-lime-500 dark:text-lime-400"
+              aria-label={`${activeSessionCount} active ChatGPT sessions`}
+              title={`${activeSessionCount} active ChatGPT sessions (including workers hidden from the sidebar)`}
+            >
+              {activeSessionCount}
             </span>
             <Button
               size="icon-xs"
