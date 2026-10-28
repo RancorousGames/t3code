@@ -307,7 +307,9 @@ export function useChatGPTBrowserSessionActivity(
   const age = snoozed
     ? "snoozed"
     : unloaded
-      ? "unloaded"
+      ? chatGPTActivityAge("idle", lastWorkingAt, now) === "recent"
+        ? "recent"
+        : "unloaded"
       : chatGPTActivityAge(activity, lastWorkingAt, now);
   const reason = result.tabId === runtimeTabId ? result.reason : null;
   const label =
@@ -318,9 +320,11 @@ export function useChatGPTBrowserSessionActivity(
         : age === "working"
           ? "ChatGPT is working"
           : age === "recent"
-            ? "ChatGPT worked within the last 15 minutes"
+            ? unloaded
+              ? "ChatGPT worked within the last 2 hours; guest is unloaded, open to reload"
+              : "ChatGPT worked within the last 2 hours"
             : age === "inactive"
-              ? "ChatGPT is inactive; no work in the last 15 minutes"
+              ? "ChatGPT is inactive; no work in the last 2 hours"
               : age === "interrupted"
                 ? "ChatGPT connection interrupted; waiting for the complete answer"
                 : age === "delivery-timeout"

@@ -32,19 +32,19 @@ afterEach(() => {
 });
 
 describe("ChatGPT activity recency", () => {
-  const now = 1_800_000;
+  const now = 18_000_000;
 
   it("keeps an actively working session green regardless of previous activity", () => {
     expect(chatGPTActivityAge("working", 0, now)).toBe("working");
     expect(chatGPTActivityColorClass("working")).toBe("text-lime-500! dark:text-lime-400!");
   });
 
-  it("shows blue for 15 minutes after the last observed work", () => {
+  it("shows blue for 2 hours after the last observed work", () => {
     expect(chatGPTActivityAge("idle", now - CHATGPT_RECENT_ACTIVITY_MS + 1, now)).toBe("recent");
     expect(chatGPTActivityColorClass("recent")).toContain("text-[#5d82a9]!");
   });
 
-  it("shows inactive grey after 15 minutes or without any recorded work", () => {
+  it("shows inactive grey after 2 hours or without any recorded work", () => {
     expect(chatGPTActivityAge("idle", now - CHATGPT_RECENT_ACTIVITY_MS, now)).toBe("inactive");
     for (const timestamp of [0, -1, NaN, Infinity, now + 1]) {
       expect(chatGPTActivityAge("idle", timestamp, now)).toBe("inactive");

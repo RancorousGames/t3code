@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import { CHATGPT_RECENT_ACTIVITY_MS } from "../components/sidebar/chatGPTActivity";
 import { resolveStorage } from "../lib/storage";
 import { activeOmniworkUnloadPolicy } from "../omniwork/chatGPTUnloadPolicy";
 
@@ -11,7 +10,8 @@ import { activeOmniworkUnloadPolicy } from "../omniwork/chatGPTUnloadPolicy";
 // Callers pass runtime tab ids, but state is keyed by environment and thread:
 // the runtime id carries the server epoch, and the hibernated set is persisted
 // so a restart restores the loaded guests and the most recently used sessions.
-export const CHATGPT_GUEST_HIBERNATE_AFTER_MS = CHATGPT_RECENT_ACTIVITY_MS;
+// Guest unloading remains independent of the two-hour blue activity indicator.
+export const CHATGPT_GUEST_HIBERNATE_AFTER_MS = 15 * 60 * 1_000;
 
 interface ChatGPTGuestHibernationState {
   readonly hibernated: Record<string, true>;

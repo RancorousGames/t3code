@@ -1,6 +1,6 @@
 import { hasChatGPTLoadFailure } from "./chatGPTConversationRecovery";
 
-export const CHATGPT_RECENT_ACTIVITY_MS = 15 * 60 * 1_000;
+export const CHATGPT_RECENT_ACTIVITY_MS = 2 * 60 * 60 * 1_000;
 
 export type ChatGPTActivityState =
   | "working"
