@@ -52,7 +52,7 @@ describe("ServerSettings response streaming", () => {
 });
 
 describe("storage cleanup settings", () => {
-  it("keeps cleanup disabled for existing installations", () => {
+  it("defaults only rotated logs to 30-day cleanup", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
     expect(decodeServerSettings({}).storageCleanup).toEqual({
       worktreeAfterDays: null,
@@ -61,8 +61,15 @@ describe("storage cleanup settings", () => {
       worktreeUnchanged: false,
       worktreeKeepWhen: "uncommitted-changes",
       browserArtifactsAfterDays: null,
-      logsAfterDays: null,
+      logsAfterDays: 30,
     });
+  });
+
+  it("preserves an explicitly disabled log cleanup policy", () => {
+    expect(
+      decodeServerSettings({ storageCleanup: { logsAfterDays: null } }).storageCleanup
+        .logsAfterDays,
+    ).toBeNull();
   });
 
   it("accepts eight-day retention and disabling one rule without resetting others", () => {

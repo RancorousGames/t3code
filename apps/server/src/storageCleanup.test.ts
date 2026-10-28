@@ -274,7 +274,10 @@ const cleanupFixture = Effect.gen(function* () {
     } as unknown as ProjectStore.ProjectStoreV2["Service"]),
     Effect.provideService(ProjectionStore.ProjectionStoreV2, {
       getShellSnapshot: (input?: { location?: string }) =>
-        Effect.sync(() => ({ threads: input?.location === "archive" ? [] : threads })),
+        Effect.sync(() => ({
+          threads: input?.location === "archive" ? [] : threads,
+          archivedThreads: [],
+        })),
     } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
     Effect.provideService(Orchestrator.OrchestratorV2, {
       streamDomainEvents: Stream.empty,
@@ -709,6 +712,11 @@ describe("storage cleanup reports and local file policies", () => {
           yield* fs.utimes(file, 1, 1);
         }
         const report = yield* service.runNow;
+        expect(decodeCleanupReport(report).nativeHistoryDryRun).toMatchObject({
+          mode: "dry-run",
+          retentionDays: 180,
+          pruneEligible: 0,
+        });
         expect(report.entries.filter((entry) => entry.kind !== "worktree")).toMatchObject([
           {
             kind: "browser-artifacts",

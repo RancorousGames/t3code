@@ -1073,8 +1073,45 @@ export const StorageCleanupReportEntry = Schema.Struct({
   files: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
 });
 export type StorageCleanupReportEntry = typeof StorageCleanupReportEntry.Type;
+// A preview is intentionally not deletion authorization: browser drafts, UNKNOWN
+// sends and external references cannot be attested from native thread shells.
+export const NativeHistoryRetentionDryRun = Schema.Struct({
+  mode: Schema.Literal("dry-run"),
+  retentionDays: Schema.Number,
+  scannedThreads: Schema.Number,
+  provisionalCandidates: Schema.Number,
+  pruneEligible: Schema.Literal(0),
+  estimatedReclaimBytes: Schema.Null,
+  exclusions: Schema.Struct({
+    recent: Schema.Number,
+    active: Schema.Number,
+    pending: Schema.Number,
+    pinned: Schema.Number,
+    referenced: Schema.Number,
+    unverifiedClientState: Schema.Number,
+  }),
+  samples: Schema.Array(
+    Schema.Struct({
+      threadId: Schema.String,
+      exclusion: Schema.Literals([
+        "recent",
+        "active",
+        "pending",
+        "pinned",
+        "referenced",
+        "unverifiedClientState",
+      ]),
+      ageDays: Schema.Number,
+    }),
+  ),
+});
+export type NativeHistoryRetentionDryRun = typeof NativeHistoryRetentionDryRun.Type;
+
 export const StorageCleanupReport = Schema.Struct({
   trigger: Schema.Literals(["automatic", "manual"]),
+  nativeHistoryDryRun: Schema.NullOr(NativeHistoryRetentionDryRun).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   startedAt: Schema.String,
   finishedAt: Schema.String,
   entries: Schema.Array(StorageCleanupReportEntry),
@@ -1095,7 +1132,7 @@ export const StorageCleanupSettings = Schema.Struct({
   browserArtifactsAfterDays: StorageRetentionDays.pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(30))),
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
