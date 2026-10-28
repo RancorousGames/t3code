@@ -498,6 +498,7 @@ export async function inspectBrowserSession(
     hidden: entry.hidden === true,
     snoozedUntil: entry.snoozedUntil ?? null,
     parentSessionId: entry.parentSessionId ?? null,
+    spawnRequestId: entry.spawnRequestId ?? null,
     project: entry.project ?? null,
     url:
       entry.hidden && entry.archive && !entry.archive.restoredAt
