@@ -114,12 +114,12 @@ afterEach(() => {
 
 describe("read-only OpenRig manager sidebar attribution", () => {
   it("reads RigSpec roles and only the manager's durable active ChatGPT attachment", async () => {
-    const managed = vi.fn(async (_id: string) => ledger);
+    const managed = vi.fn(async (id: string) => id === "manager" ? ledger : { ...ledger, seatId: id, primarySessionId: null, sessions: [] });
     bridge(async () => topology, managed);
     await act(async () => {
       renderer = create(<Probe />);
     });
-    expect(managed).toHaveBeenCalledExactlyOnceWith("manager");
+    expect(managed).toHaveBeenCalledTimes(2);
     expect(rendered()).toBe("browser-1");
   });
 
@@ -144,7 +144,7 @@ describe("read-only OpenRig manager sidebar attribution", () => {
     await act(async () => {
       renderer = create(<Probe />);
     });
-    expect(read).toHaveBeenCalledExactlyOnceWith("manager");
+    expect(read).toHaveBeenCalledTimes(2);
     expect(rendered()).toBe("unknown");
   });
 
@@ -163,12 +163,12 @@ describe("read-only OpenRig manager sidebar attribution", () => {
     await act(async () => {
       renderer = create(<Probe />);
     });
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(3);
     expect(rendered()).toBe("unknown");
   });
 
   it("distinguishes trusted topology with zero manager seats from unavailable topology", async () => {
-    const read = vi.fn(async () => ledger);
+    const read = vi.fn(async () => ({ ...ledger, seatId: "specialist", primarySessionId: null, sessions: [] }));
     bridge(
       async () => ({
         ...topology,
@@ -179,7 +179,7 @@ describe("read-only OpenRig manager sidebar attribution", () => {
     await act(async () => {
       renderer = create(<Probe />);
     });
-    expect(read).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledOnce();
     expect(rendered()).toBe("");
   });
 });

@@ -12,28 +12,36 @@ export function verifiedManagerChatGPTTabIds(
   ledgers: readonly DesktopOpenRigSeatSessions[],
   environmentId: string,
 ): ReadonlySet<string> {
-  const managerSeatIds = new Set(
-    topology.source === "openrig-rigspec" || topology.source === "openrig-rigspec-and-managed-ledger"
-      ? topology.seats.filter((seat) => isOpenRigManagerRole(seat.role)).map((seat) => seat.id)
-      : [],
-  );
-  const ids = new Set<string>();
+  if (topology.source !== "openrig-rigspec" &&
+      topology.source !== "openrig-rigspec-and-managed-ledger") return new Set();
+
+  const seatRoles = new Map(topology.seats.map((seat) => [seat.id, seat.role]));
+  const byTab = new Map<string, { seatId: string; conversationId: string }[]>();
+  const byConversation = new Map<string, Set<string>>();
   for (const ledger of ledgers) {
-    if (!managerSeatIds.has(ledger.seatId)) continue;
-    for (const session of ledger.sessions) {
-      if (
-        session.seatId !== ledger.seatId ||
-        session.status !== "active" ||
-        (session.mode !== "chatgpt" && session.mode !== "adopt") ||
-        session.target?.kind !== "chatgpt-conversation" ||
-        (session.environmentId !== null && session.environmentId !== environmentId) ||
-        !session.attachedTabUuid
-      )
-        continue;
-      ids.add(session.attachedTabUuid);
-    }
+    if (!seatRoles.has(ledger.seatId) || !ledger.primarySessionId) continue;
+    const session = ledger.sessions.find((item) =>
+      item.id === ledger.primarySessionId && item.primary && item.seatId === ledger.seatId);
+    if (!session || session.status !== "active" ||
+      (session.mode !== "chatgpt" && session.mode !== "adopt") ||
+      session.target?.kind !== "chatgpt-conversation" ||
+      !session.target.conversationId ||
+      (session.conversationId && session.conversationId !== session.target.conversationId) ||
+      (session.environmentId && session.environmentId !== environmentId) ||
+      !session.attachedTabUuid) continue;
+
+    const owner = { seatId: ledger.seatId, conversationId: session.target.conversationId };
+    byTab.set(session.attachedTabUuid, [...(byTab.get(session.attachedTabUuid) ?? []), owner]);
+    const owners = byConversation.get(owner.conversationId) ?? new Set<string>();
+    owners.add(owner.seatId);
+    byConversation.set(owner.conversationId, owners);
   }
-  return ids;
+  return new Set([...byTab].flatMap(([tabId, claims]) =>
+    claims.length === 1 &&
+    isOpenRigManagerRole(seatRoles.get(claims[0]!.seatId) ?? null) &&
+    byConversation.get(claims[0]!.conversationId)?.size === 1
+      ? [tabId] : [],
+  ));
 }
 
 /** Use one stable project label for every child/row even in status-only groups. */

@@ -2,7 +2,7 @@ import type { DesktopOpenRigSeatSessions } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
 import { isElectron } from "../../env";
-import { isOpenRigManagerRole, verifiedManagerChatGPTTabIds } from "./chatGPTSidebarVisuals";
+import { verifiedManagerChatGPTTabIds } from "./chatGPTSidebarVisuals";
 
 const REFRESH_MS = 90_000;
 
@@ -36,15 +36,16 @@ export function useOpenRigManagerChatGPTSessions(
       try {
         const topology = await discover();
         if (topology.source !== "openrig-rigspec") throw new Error("Unverified seat topology");
-        const managerSeats = topology.seats.filter((seat) => isOpenRigManagerRole(seat.role));
-        const responses = await Promise.allSettled(managerSeats.map((seat) => read(seat.id)));
+        // Check every seat, not just managers: a worker can contest the same
+        // browser tab or conversation. An incomplete ledger cannot prove ownership.
+        const responses = await Promise.allSettled(topology.seats.map((seat) => read(seat.id)));
         if (
           responses.some(
             (result, index) =>
-              result.status !== "fulfilled" || result.value.seatId !== managerSeats[index]?.id,
+              result.status !== "fulfilled" || result.value.seatId !== topology.seats[index]?.id,
           )
         )
-          throw new Error("Incomplete authoritative manager seat ledgers");
+          throw new Error("Incomplete authoritative managed seat ledgers");
         const ledgers: DesktopOpenRigSeatSessions[] = responses.flatMap((result) =>
           result.status === "fulfilled" ? [result.value] : [],
         );

@@ -74,7 +74,7 @@ const ledger = (
 ): DesktopOpenRigSeatSessions => ({
   version: 1,
   seatId,
-  primarySessionId: null,
+  primarySessionId: sessions[0]?.id ?? null,
   sessions: [...sessions],
   legacyBinding: null,
   legacyAutoImported: false,
@@ -257,5 +257,26 @@ describe("stable per-project identity in ChatGPT sidebar", () => {
     expect(mapping.get("chat-1")).toBe("Wartribes");
     expect(mapping.get("chat-2")).toBe("Wartribes");
     expect(mapping.has("unknown")).toBe(false);
+  });
+});
+
+describe("recovered manager binding validation", () => {
+  it("rejects non-primary manager records", () => {
+    const result = verifiedManagerChatGPTTabIds(topology, [
+      { ...ledger("seat-manager", [session()]), primarySessionId: "different-session" },
+    ], "env-1");
+    expect([...result]).toEqual([]);
+  });
+
+  it("rejects competing seats claiming the same tab or conversation", () => {
+    for (const tabId of ["browser-session-1", "different-worker-tab"]) {
+      const result = verifiedManagerChatGPTTabIds(topology, [
+        ledger("seat-manager", [session()]),
+        ledger("seat-worker", [session({
+          seatId: "seat-worker", id: "worker-managed", attachedTabUuid: tabId,
+        })]),
+      ], "env-1");
+      expect([...result]).toEqual([]);
+    }
   });
 });
