@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  planManagerSeatAttachment, attachManagerSeat, createManagerSeatSession,
+  planManagerSeatAttachment,
+  attachManagerSeat,
+  createManagerSeatSession,
   createManagerSeatOnly,
 } from "./openrig-manager-seat.mjs";
 
@@ -18,44 +20,70 @@ const TOPOLOGY = {
     { id: WORKER, rigId: "rig-omni", logicalId: "workers.test", role: "worker" },
   ],
 };
-const empty = seatId => ({ seatId, primarySessionId: null, sessions: [] });
+const empty = (seatId) => ({ seatId, primarySessionId: null, sessions: [] });
 const active = () => ({
-  id: "managed-001", seatId: MANAGER, primary: true, status: "active",
-  mode: "adopt", attachedTabUuid: TAB,
+  id: "managed-001",
+  seatId: MANAGER,
+  primary: true,
+  status: "active",
+  mode: "adopt",
+  attachedTabUuid: TAB,
   target: { kind: "chatgpt-conversation", conversationId: CONVERSATION },
 });
 const browser = () => ({
-  id: TAB, conversationId: CONVERSATION,
+  id: TAB,
+  conversationId: CONVERSATION,
   observedGuestUrl: "https://chatgpt.com/c/" + CONVERSATION,
   parentSessionId: "75a6ef99-1f30-4ac3-afe2-4ced0ad7a849",
-  spawnRequestId: SPAWN, hidden: false,
+  spawnRequestId: SPAWN,
+  hidden: false,
   title: "Not trusted as a role",
 });
 const input = {
-  seatId: MANAGER, sessionId: TAB, conversationId: CONVERSATION,
-  operationId: OP, expectedSpawnRequestId: SPAWN, expectedLogicalId: "projects.omni",
+  seatId: MANAGER,
+  sessionId: TAB,
+  conversationId: CONVERSATION,
+  operationId: OP,
+  expectedSpawnRequestId: SPAWN,
+  expectedLogicalId: "projects.omni",
 };
 
 test("seat-create provisions identity without spawning a browser conversation", async () => {
   let launches = 0;
   let provisionCalls = 0;
   const operationId = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
-  const input = { operationId, rigId: "rig-omni", logicalId: "projects.omni",
-    role: "project-manager", label: "Omni Project Manager" };
+  const input = {
+    operationId,
+    rigId: "rig-omni",
+    logicalId: "projects.omni",
+    role: "project-manager",
+    label: "Omni Project Manager",
+  };
   const response = await createManagerSeatOnly(input, {
-    provision: async payload => {
+    provision: async (payload) => {
       provisionCalls++;
       assert.deepEqual(payload, input);
       return { state: "created", seatId: MANAGER, operationId, createdExecution: false };
     },
-    spawn: async () => { launches++; throw Error("No spawn may happen"); },
+    spawn: async () => {
+      launches++;
+      throw Error("No spawn may happen");
+    },
   });
   assert.equal(response.seatId, MANAGER);
   assert.equal(provisionCalls, 1);
   assert.equal(launches, 0);
-  await assert.rejects(createManagerSeatOnly({ ...input, role: "worker" },
-    { provision: async () => { throw Error("Invalid role admitted"); } }),
-    /Explicit manager role/);
+  await assert.rejects(
+    createManagerSeatOnly(
+      { ...input, role: "worker" },
+      {
+        provision: async () => {
+          throw Error("Invalid role admitted");
+        },
+      },
+    ),
+    /Explicit manager role/,
+  );
 });
 
 test("verified manager attach persists one primary without changing independent child lineage", async () => {
@@ -64,16 +92,18 @@ test("verified manager attach persists one primary without changing independent 
   const child = browser();
   const services = {
     topology: async () => TOPOLOGY,
-    ledger: async id => id === MANAGER ? managerLedger : empty(WORKER),
+    ledger: async (id) => (id === MANAGER ? managerLedger : empty(WORKER)),
     session: async () => child,
     adopt: async (seatId, operationId, target) => {
       adoptCalls++;
       assert.equal(seatId, MANAGER);
       assert.equal(operationId, OP);
-      assert.deepEqual(target, { kind: "chatgpt-conversation",
-        conversationId: CONVERSATION, preferredBrowserSessionId: TAB });
-      managerLedger = { seatId: MANAGER, primarySessionId: "managed-001",
-        sessions: [active()] };
+      assert.deepEqual(target, {
+        kind: "chatgpt-conversation",
+        conversationId: CONVERSATION,
+        preferredBrowserSessionId: TAB,
+      });
+      managerLedger = { seatId: MANAGER, primarySessionId: "managed-001", sessions: [active()] };
       return { seatId: MANAGER, session: { ...active(), operationId: OP } };
     },
   };
@@ -87,34 +117,69 @@ test("verified manager attach persists one primary without changing independent 
 });
 
 test("another primary or other owner rejects duplicate manager attach", () => {
-  const own = { seatId: MANAGER, primarySessionId: "occupied",
-    sessions: [{ ...active(), id: "occupied",
-      target: { kind: "chatgpt-conversation", conversationId:
-        "6adebb1b-423c-83ed-9e67-070d92aa5bf2" } }] };
-  assert.throws(() => planManagerSeatAttachment({
-    topology: TOPOLOGY, ledgers: [own, empty(WORKER)],
-    seatId: MANAGER, sessionId: TAB, conversationId: CONVERSATION,
-  }), /another PRIMARY/);
-  assert.throws(() => planManagerSeatAttachment({
-    topology: TOPOLOGY,
-    ledgers: [empty(MANAGER), { seatId: WORKER, primarySessionId: "owned",
-      sessions: [{ ...active(), id: "owned", seatId: WORKER }] }],
-    seatId: MANAGER, sessionId: TAB, conversationId: CONVERSATION,
-  }), /owned by another/);
+  const own = {
+    seatId: MANAGER,
+    primarySessionId: "occupied",
+    sessions: [
+      {
+        ...active(),
+        id: "occupied",
+        target: {
+          kind: "chatgpt-conversation",
+          conversationId: "6adebb1b-423c-83ed-9e67-070d92aa5bf2",
+        },
+      },
+    ],
+  };
+  assert.throws(
+    () =>
+      planManagerSeatAttachment({
+        topology: TOPOLOGY,
+        ledgers: [own, empty(WORKER)],
+        seatId: MANAGER,
+        sessionId: TAB,
+        conversationId: CONVERSATION,
+      }),
+    /another PRIMARY/,
+  );
+  assert.throws(
+    () =>
+      planManagerSeatAttachment({
+        topology: TOPOLOGY,
+        ledgers: [
+          empty(MANAGER),
+          {
+            seatId: WORKER,
+            primarySessionId: "owned",
+            sessions: [{ ...active(), id: "owned", seatId: WORKER }],
+          },
+        ],
+        seatId: MANAGER,
+        sessionId: TAB,
+        conversationId: CONVERSATION,
+      }),
+    /owned by another/,
+  );
 });
 
 test("stale/unknown seat role and ordinary backend child cannot assert manager", async () => {
   for (const role of [null, "worker", "worker-manager"]) {
-    const topology = { ...TOPOLOGY, seats: [{ ...TOPOLOGY.seats[0], role },
-      TOPOLOGY.seats[1]] };
-    assert.throws(() => planManagerSeatAttachment({
-      topology, ledgers: [empty(MANAGER), empty(WORKER)],
-      seatId: MANAGER, sessionId: TAB, conversationId: CONVERSATION,
-    }), /no explicit verified RigSpec manager role/);
+    const topology = { ...TOPOLOGY, seats: [{ ...TOPOLOGY.seats[0], role }, TOPOLOGY.seats[1]] };
+    assert.throws(
+      () =>
+        planManagerSeatAttachment({
+          topology,
+          ledgers: [empty(MANAGER), empty(WORKER)],
+          seatId: MANAGER,
+          sessionId: TAB,
+          conversationId: CONVERSATION,
+        }),
+      /no explicit verified RigSpec manager role/,
+    );
   }
   const services = {
     topology: async () => TOPOLOGY,
-    ledger: async id => empty(id),
+    ledger: async (id) => empty(id),
     session: async () => ({ ...browser(), spawnRequestId: "wrong" }),
     adopt: async () => assert.fail("No adoption on invalid correlation"),
   };
@@ -123,89 +188,106 @@ test("stale/unknown seat role and ordinary backend child cannot assert manager",
 
 test("create refuses occupied manager before spawning a second T3 session", async () => {
   let called = false;
-  await assert.rejects(createManagerSeatSession({
-    ...input, title: "Requested manager", promptFile: "instructions.md",
-    spawnRequestId: SPAWN,
-  }, {
-    topology: async () => TOPOLOGY,
-    ledger: async id => id === MANAGER ? {
-      seatId: MANAGER, primarySessionId: "managed-001", sessions: [active()],
-    } : empty(id),
-    spawn: async () => { called = true; },
-  }), /already occupied/);
+  await assert.rejects(
+    createManagerSeatSession(
+      {
+        ...input,
+        title: "Requested manager",
+        promptFile: "instructions.md",
+        spawnRequestId: SPAWN,
+      },
+      {
+        topology: async () => TOPOLOGY,
+        ledger: async (id) =>
+          id === MANAGER
+            ? {
+                seatId: MANAGER,
+                primarySessionId: "managed-001",
+                sessions: [active()],
+              }
+            : empty(id),
+        spawn: async () => {
+          called = true;
+        },
+      },
+    ),
+    /already occupied/,
+  );
   assert.equal(called, false);
 });
 
 test("read-only preflight rejects incomplete RigSpec/ledger and duplicate logical seats", () => {
-  assert.throws(() => planManagerSeatAttachment({
-    topology: TOPOLOGY, ledgers: [empty(MANAGER)],
-    seatId: MANAGER, sessionId: TAB, conversationId: CONVERSATION,
-  }), /Complete RigSpec/);
-  const duplicate = { ...TOPOLOGY, seats: [...TOPOLOGY.seats,
-    { ...TOPOLOGY.seats[0], id: "another-seat" }] };
-  assert.throws(() => planManagerSeatAttachment({
-    topology: duplicate,
-    ledgers: [empty(MANAGER), empty(WORKER), empty("another-seat")],
-    seatId: MANAGER, sessionId: TAB, conversationId: CONVERSATION,
-  }), /Duplicate canonical manager logical seat/);
+  assert.throws(
+    () =>
+      planManagerSeatAttachment({
+        topology: TOPOLOGY,
+        ledgers: [empty(MANAGER)],
+        seatId: MANAGER,
+        sessionId: TAB,
+        conversationId: CONVERSATION,
+      }),
+    /Complete RigSpec/,
+  );
+  const duplicate = {
+    ...TOPOLOGY,
+    seats: [...TOPOLOGY.seats, { ...TOPOLOGY.seats[0], id: "another-seat" }],
+  };
+  assert.throws(
+    () =>
+      planManagerSeatAttachment({
+        topology: duplicate,
+        ledgers: [empty(MANAGER), empty(WORKER), empty("another-seat")],
+        seatId: MANAGER,
+        sessionId: TAB,
+        conversationId: CONVERSATION,
+      }),
+    /Duplicate canonical manager logical seat/,
+  );
 });
 
-
-test("explicit manager create reserves once, keeps parent lineage and attaches verified PRIMARY", async () => {
-  const parent = "75a6ef99-1f30-4ac3-afe2-4ced0ad7a849";
-  const browserChild = { ...browser(), parentSessionId: parent };
-  let managerLedger = empty(MANAGER);
-  let reserves = 0;
-  let spawns = 0;
+test("create rejects before reservation, spawn, adoption or send on an empty canonical seat", async () => {
+  const effects = [];
   const services = {
     topology: async () => TOPOLOGY,
-    ledger: async id => id === MANAGER ? managerLedger : empty(WORKER),
-    reserveCreation: async (seatId, operationId, spawnRequestId) => {
-      reserves++;
-      assert.deepEqual([seatId, operationId, spawnRequestId], [MANAGER, OP, SPAWN]);
-    },
-    spawn: async request => {
-      spawns++;
-      assert.equal(request.requestId, SPAWN);
-      assert.equal(request.parentSessionId, parent);
-      return { requestId: SPAWN, created: true, outcome: "delivered",
-        sessionId: TAB, parentConfirmation: "confirmed", parentSessionId: parent };
-    },
-    session: async () => browserChild,
-    adopt: async (seatId, operationId) => {
-      managerLedger = { seatId: MANAGER, primarySessionId: "managed-001",
-        sessions: [active()] };
-      return { seatId, session: { ...active(), operationId } };
-    },
+    ledger: async (id) => empty(id),
+    reserveCreation: async () => effects.push("reserve"),
+    spawn: async () => effects.push("spawn"),
+    adopt: async () => effects.push("adopt"),
+    send: async () => effects.push("send"),
   };
-  const request = { ...input, title: "Manager", promptFile: "instructions.md",
-    spawnRequestId: SPAWN, parentSessionId: parent };
-  assert.equal((await createManagerSeatSession(request, services)).persisted, true);
-  await assert.rejects(createManagerSeatSession(request, services), /already occupied/);
-  assert.deepEqual([reserves, spawns, browserChild.parentSessionId], [1, 1, parent]);
+  for (const parentSessionId of [undefined, browser().parentSessionId]) {
+    const request = {
+      ...input,
+      title: "Manager",
+      promptFile: "instructions.md",
+      spawnRequestId: SPAWN,
+      parentSessionId,
+    };
+    // Even an explicit repeated call has no lifecycle side effects.
+    for (let attempt = 0; attempt < 2; attempt++)
+      await assert.rejects(
+        createManagerSeatSession(request, services),
+        /first-turn creation unsupported.*No session created/,
+      );
+  }
+  assert.deepEqual(effects, []);
 });
 
-test("UNKNOWN manager create cannot replay a reserved spawn, and wrong parent cannot adopt", async () => {
-  const parent = "75a6ef99-1f30-4ac3-afe2-4ced0ad7a849";
-  let reserved = false;
-  let spawns = 0;
+test("UNKNOWN adoption is never retried or dispatched", async () => {
   let adopts = 0;
-  const services = {
-    topology: async () => TOPOLOGY,
-    ledger: async id => empty(id),
-    reserveCreation: async () => {
-      if (reserved) throw new Error("Manager create already reserved");
-      reserved = true;
-    },
-    spawn: async () => { spawns++; return {
-      requestId: SPAWN, created: true, outcome: "created", sessionId: TAB,
-      parentConfirmation: "mismatch", parentSessionId: null,
-    }; },
-    adopt: async () => { adopts++; },
-  };
-  const request = { ...input, title: "Manager", promptFile: "instructions.md",
-    spawnRequestId: SPAWN, parentSessionId: parent };
-  await assert.rejects(createManagerSeatSession(request, services), /parent lineage unconfirmed/);
-  await assert.rejects(createManagerSeatSession(request, services), /already reserved/);
-  assert.deepEqual([spawns, adopts], [1, 0]);
+  const child = browser();
+  await assert.rejects(
+    attachManagerSeat(input, {
+      topology: async () => TOPOLOGY,
+      ledger: async (id) => empty(id),
+      session: async () => child,
+      adopt: async () => {
+        adopts++;
+        return {};
+      },
+    }),
+    /outcome UNKNOWN/,
+  );
+  assert.equal(adopts, 1);
+  assert.equal(child.parentSessionId, browser().parentSessionId);
 });

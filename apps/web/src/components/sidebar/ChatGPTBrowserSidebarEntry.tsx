@@ -64,7 +64,12 @@ import {
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { resolveSnoozePresets } from "../Sidebar.snooze";
 import { useClientSettings } from "../../hooks/useSettings";
-import { removeLocalStorageItem, useLocalStorage } from "../../hooks/useLocalStorage";
+import {
+  getLocalStorageItem,
+  removeLocalStorageItem,
+  useLocalStorage,
+} from "../../hooks/useLocalStorage";
+import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import * as Schema from "effect/Schema";
 import { readThreadPreviewState } from "../../previewStateStore";
 import { useProjects } from "../../state/entities";
@@ -108,6 +113,12 @@ import {
   chatGPTSidebarProjectTitles,
 } from "./chatGPTSidebarVisuals";
 import { useOpenRigManagerChatGPTSessions } from "./useOpenRigManagerChatGPTSessions";
+import {
+  managerRoleSnapshotKey,
+  readManagerRoleSnapshot,
+  projectOpenRigManagerTabIds,
+  projectHideableWorkerIds,
+} from "./chatGPTManagerRoleProjection";
 import { ChatGPTSessionIcon } from "./ChatGPTSessionIcon";
 import { SidebarHeaderIconButton } from "./SidebarThreadHeader";
 import { useChatGPTBrowserSessionActivity } from "./ChatGPTBrowserSessionActivity";
@@ -251,23 +262,6 @@ export function ChatGPTBrowserSidebarEntry({
   const environmentId = usePrimaryEnvironmentId();
   const projects = useProjects();
   const verifiedManagerSessionIds = useOpenRigManagerChatGPTSessions(environmentId);
-  // A transient manager-seat ledger outage must not turn a manager into a worker.
-  const [knownManagerIds, setKnownManagerIds] = useLocalStorage(
-    `t3code:chatgpt-browser:known-managers:${environmentId ?? "unconnected"}`,
-    [] as string[],
-    Schema.Array(Schema.String),
-  );
-  useEffect(() => {
-    if (verifiedManagerSessionIds === null) return;
-    const ids = [...verifiedManagerSessionIds].sort();
-    // Keep previously confirmed manager identities through temporary ledger gaps.
-    const merged = [...new Set([...knownManagerIds, ...ids])].sort();
-    if (JSON.stringify(merged) !== JSON.stringify(knownManagerIds)) setKnownManagerIds(merged);
-  }, [verifiedManagerSessionIds, knownManagerIds, setKnownManagerIds]);
-  const managerIds = useMemo(
-    () => new Set([...(verifiedManagerSessionIds ?? []), ...knownManagerIds]),
-    [verifiedManagerSessionIds, knownManagerIds],
-  );
   const {
     sessions,
     createSession,
@@ -283,6 +277,27 @@ export function ChatGPTBrowserSidebarEntry({
     syncInferredMetadata,
     pruneExpiredHidden,
   } = useChatGPTBrowserSessions(environmentId);
+  // Fresh OpenRig ledgers outrank history, including a complete empty set after
+  // revocation. Offline fallback requires exact seat, generation and conversation.
+  const managerIds = useMemo(() => {
+    if (!environmentId) return new Set<string>();
+    try {
+      const cached = readManagerRoleSnapshot(
+        window.localStorage.getItem(managerRoleSnapshotKey(environmentId)),
+      );
+      const observed = new Map(
+        sessions.map((session) => [
+          session.id,
+          chatGPTConversationIdFromUrl(
+            getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, session.id), Schema.String),
+          ),
+        ]),
+      );
+      return projectOpenRigManagerTabIds(sessions, verifiedManagerSessionIds, cached, observed);
+    } catch {
+      return projectOpenRigManagerTabIds(sessions, verifiedManagerSessionIds, [], new Map());
+    }
+  }, [environmentId, sessions, verifiedManagerSessionIds]);
   // Old worker sessions may have a durable, exact creation receipt even though
   // the session index itself predates createdAt. Decode this journal only once.
   const spawnCreation = useMemo(() => {
@@ -528,16 +543,8 @@ export function ChatGPTBrowserSidebarEntry({
   // Adopted chats and managers stay visible when workers are hidden, even
   // if they still belong to a manager's child-session tree.
   const hideableWorkerIds = useMemo(
-    () =>
-      new Set(
-        sessions
-          .filter(
-            (session) =>
-              chatGPTSessionDisplayRole(session, managerIds.has(session.id)) === "worker",
-          )
-          .map((session) => session.id),
-      ),
-    [sessions, managerIds],
+    () => projectHideableWorkerIds(sessions, verifiedManagerSessionIds, managerIds, workerIds),
+    [sessions, verifiedManagerSessionIds, managerIds, workerIds],
   );
   const visibleWorkerCount = visibleSessions.filter((session) =>
     hideableWorkerIds.has(session.id),
@@ -920,11 +927,13 @@ export function ChatGPTBrowserSidebarEntry({
       />
       {visibleSessions.map((session) => (
         <Fragment key={session.id}>
-          {!requiredForDelivery[`${environmentId}:${session.id}`] && <ChatGPTBrowserSessionRuntime
-            environmentId={environmentId}
-            sessionId={session.id}
-            suspended={closingId === session.id || isSnoozed(session)}
-          />}
+          {!requiredForDelivery[`${environmentId}:${session.id}`] && (
+            <ChatGPTBrowserSessionRuntime
+              environmentId={environmentId}
+              sessionId={session.id}
+              suspended={closingId === session.id || isSnoozed(session)}
+            />
+          )}
           <BrowserSessionActivityMonitor
             id={session.id}
             environmentId={environmentId}
@@ -1033,7 +1042,8 @@ export function ChatGPTBrowserSidebarEntry({
                     >
                       {(sortable, activity, model) => {
                         const recoveryEligible =
-                          model.residency !== "hidden" && model.residency !== "snoozed" &&
+                          model.residency !== "hidden" &&
+                          model.residency !== "snoozed" &&
                           model.residency !== "unloaded";
                         const recoveryBlocked = model.recovery.stoppedReason !== null;
                         const recoveryPhase =

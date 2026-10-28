@@ -3,6 +3,10 @@ import { useEffect, useState } from "react";
 
 import { isElectron } from "../../env";
 import { verifiedManagerChatGPTTabIds } from "./chatGPTSidebarVisuals";
+import {
+  captureVerifiedManagerBindings,
+  managerRoleSnapshotKey,
+} from "./chatGPTManagerRoleProjection";
 
 const REFRESH_MS = 90_000;
 
@@ -35,7 +39,11 @@ export function useOpenRigManagerChatGPTSessions(
       requesting = true;
       try {
         const topology = await discover();
-        if (topology.source !== "openrig-rigspec") throw new Error("Unverified seat topology");
+        if (
+          topology.source !== "openrig-rigspec" &&
+          topology.source !== "openrig-rigspec-and-managed-ledger"
+        )
+          throw new Error("Unverified seat topology");
         // Check every seat, not just managers: a worker can contest the same
         // browser tab or conversation. An incomplete ledger cannot prove ownership.
         const responses = await Promise.allSettled(topology.seats.map((seat) => read(seat.id)));
@@ -49,11 +57,20 @@ export function useOpenRigManagerChatGPTSessions(
         const ledgers: DesktopOpenRigSeatSessions[] = responses.flatMap((result) =>
           result.status === "fulfilled" ? [result.value] : [],
         );
-        if (!disposed)
-          setEvidence({
-            environmentId,
-            ids: verifiedManagerChatGPTTabIds(topology, ledgers, environmentId),
-          });
+        if (!disposed) {
+          const ids = verifiedManagerChatGPTTabIds(topology, ledgers, environmentId);
+          // A complete fresh ledger replaces old identity evidence, including revocation.
+          // Cache exact seat + managed generation + conversation for unloaded guest display.
+          try {
+            window.localStorage?.setItem(
+              managerRoleSnapshotKey(environmentId),
+              JSON.stringify(captureVerifiedManagerBindings(topology, ledgers, environmentId, ids)),
+            );
+          } catch {
+            /* Storage unavailable; fresh authority still applies. */
+          }
+          setEvidence({ environmentId, ids });
+        }
       } catch {
         // Offline or absent OpenRig evidence is not permission to label by title.
         if (!disposed) setEvidence({ environmentId, ids: null });
