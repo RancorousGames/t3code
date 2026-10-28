@@ -144,6 +144,59 @@ export function quotaUsedInLastHour(samples: readonly QuotaSample[], now: number
   return baseline ? Math.max(0, latest.used - baseline.used) : null;
 }
 
+/** Estimate weekly quota consumption from paired observations within current reset windows. */
+export function estimateWeeklyQuotaRisk(
+  session: { key: string; window: ServerProviderUsageWindow },
+  weekly: { key: string; window: ServerProviderUsageWindow },
+  history: QuotaHistory,
+  now: number,
+) {
+  const short = history[session.key] ?? [];
+  const weeklyAt = new Map((history[weekly.key] ?? []).map((sample) => [sample.at, sample.used]));
+  let shortGain = 0;
+  let weeklyGain = 0;
+  for (let i = 1; i < short.length; i++) {
+    const before = short[i - 1]!;
+    const after = short[i]!;
+    const a = weeklyAt.get(before.at);
+    const b = weeklyAt.get(after.at);
+    if (a === undefined || b === undefined) continue;
+    const ds = after.used - before.used;
+    const dw = b - a;
+    if (ds <= 0 || dw < 0) continue;
+    shortGain += ds;
+    weeklyGain += dw;
+  }
+  if (shortGain < 5 || weeklyGain < 0.5) return null;
+  const weeklyPerSession = weeklyGain / shortGain;
+  const remainingWeekly = Math.max(0, 100 - weekly.window.usedPercent);
+  const remainingSession = Math.max(0, 100 - session.window.usedPercent);
+  const equivalents = remainingWeekly / (100 * weeklyPerSession);
+  const totalWindows = Math.ceil(Math.max(0, equivalents - remainingSession / 100)) +
+    (equivalents > 0 ? 1 : 0);
+  const deadline = Date.parse(weekly.window.resetsAt ?? "");
+  if (!Number.isFinite(deadline) || deadline <= now) return null;
+  const hoursLeft = (deadline - now) / 3_600_000;
+  const awakeHours = hoursLeft * (16 / 24);
+  const minimumActiveHours = equivalents * 2;
+  const sessionReset = Date.parse(session.window.resetsAt ?? "");
+  const resetHours = Number.isFinite(sessionReset)
+    ? Math.max(0, (sessionReset - now) / 3_600_000) : 5;
+  const firstFraction = Math.min(equivalents, remainingSession / 100);
+  const laterFraction = Math.max(0, equivalents - firstFraction);
+  const minimumElapsedHours = laterFraction > 0
+    ? Math.max(firstFraction * 2, resetHours) +
+      Math.max(0, laterFraction - 1) * 5 + 2 * Math.min(1, laterFraction)
+    : minimumActiveHours;
+  return {
+    weeklyPerSession, sampleSessionGain: shortGain, sampleWeeklyGain: weeklyGain,
+    equivalents, totalWindows, hoursLeft, awakeHours,
+    minimumActiveHours, minimumElapsedHours,
+    atRisk: remainingWeekly > 2 &&
+      (minimumActiveHours > awakeHours * 0.8 || minimumElapsedHours > hoursLeft * 0.8),
+  };
+}
+
 export function quotaPath(samples: readonly QuotaSample[], window: ServerProviderUsageWindow) {
   return samples
     .map((sample, index) => {

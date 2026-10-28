@@ -3,6 +3,7 @@ import { ProviderDriverKind, type ServerProviderUsageWindow } from "@t3tools/con
 import type { LimitAccount } from "@t3tools/shared/usageLimits";
 import {
   bankedResets,
+  estimateWeeklyQuotaRisk,
   normalizeQuotaHistory,
   quotaPath,
   quotaUsedInLastHour,
@@ -35,6 +36,23 @@ function account(key: string, windows = [window]): LimitAccount {
 }
 
 describe("quota pacing", () => {
+  it("forecasts quota from timestamp-paired readings and rejects sparse data", () => {
+    const session = { key: "five", window: { ...window, usedPercent: 50 } };
+    const weekly = { key: "week", window: {
+      ...window, kind: "weekly" as const, usedPercent: 80,
+      resetsAt: new Date(now + 18 * 3_600_000).toISOString(),
+      windowDurationMins: 10080,
+    } };
+    const readings = {
+      five: [{ at: now - 60_000, used: 25 }, { at: now, used: 50 }],
+      week: [{ at: now - 60_000, used: 77.5 }, { at: now, used: 80 }],
+    };
+    const result = estimateWeeklyQuotaRisk(session, weekly, readings, now)!;
+    expect(result.weeklyPerSession).toBeCloseTo(0.1);
+    expect(result.equivalents).toBeCloseTo(2);
+    expect(result.totalWindows).toBe(3);
+    expect(estimateWeeklyQuotaRisk(session, weekly, { ...readings, week: [readings.week[1]!] }, now)).toBeNull();
+  });
   it("shows the most constrained real account without averaging subscriptions", () => {
     const rows = quotaWindows([account("a"), account("b", [{ ...window, usedPercent: 80 }])], now);
     expect(rows[1]!.series[0]!.account.key).toBe("b");
