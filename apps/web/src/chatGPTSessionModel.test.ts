@@ -63,6 +63,12 @@ describe("ChatGPT session model", () => {
     }).attention).toBe("recovery_stopped");
   });
 
+  it("preserves the saved interruption stage for sidebar recovery diagnostics", () => {
+    expect(derive({ age: "interrupted", recovery: { orangeStage: "observe_only" } })
+      .recovery.orangeStage).toBe("observe_only");
+    expect(derive({ age: "interrupted" }).recovery.orangeStage).toBeNull();
+  });
+
   it("applies the exact hidden, completion, attention, snooze, work, recent, idle order", () => {
     expect(derive({ hidden: true, uncertainSend: true, completionValid: true }).bucket).toBeNull();
     expect(derive({ completionValid: true, uncertainSend: true }).bucket).toBe("completed");

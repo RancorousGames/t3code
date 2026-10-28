@@ -1079,7 +1079,7 @@ export function ChatGPTBrowserSidebarEntry({
                                   lastAttemptAt: model.recovery.lastAttemptAt,
                                   retryCount: model.recovery.attempts,
                                   nextRetryAt: model.recovery.nextAttemptAt,
-                                  orangeStage: null,
+                                  orangeStage: model.recovery.orangeStage,
                                 },
                                 events: model.recoveryEvents,
                                 now: clockNow,

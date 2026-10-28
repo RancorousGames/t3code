@@ -27,6 +27,7 @@ export interface ChatGPTSessionRecovery {
   nextAttemptAt: number | null;
   lastAttemptAt: number | null;
   lastOutcome: string | null;
+  orangeStage: string | null;
   stoppedReason: string | null;
 }
 export interface ChatGPTSessionTimeline {
@@ -75,7 +76,7 @@ export interface ChatGPTSessionModel {
 
 const EMPTY_RECOVERY: ChatGPTSessionRecovery = {
   phase: null, attempts: 0, nextAttemptAt: null,
-  lastAttemptAt: null, lastOutcome: null, stoppedReason: null,
+  lastAttemptAt: null, lastOutcome: null, orangeStage: null, stoppedReason: null,
 };
 
 /** One authoritative, side-effect-free mapping. Never validates a completion marker itself. */
@@ -206,6 +207,7 @@ function readSavedSignals(
       nextAttemptAt: state.nextRetryAt,
       lastAttemptAt: state.lastAttemptAt,
       lastOutcome: events.at(-1)?.event ?? null,
+      orangeStage: state.orangeStage,
       stoppedReason: state.escalationReason,
     },
     timeline: readChatGPTSessionTimeline(environmentId, session, lastWorkingAt, createdAt),
