@@ -169,30 +169,37 @@ export function estimateWeeklyQuotaRisk(
   }
   if (shortGain < 5 || weeklyGain < 0.5) return null;
   const weeklyPerSession = weeklyGain / shortGain;
-  const remainingWeekly = Math.max(0, 100 - weekly.window.usedPercent);
-  const remainingSession = Math.max(0, 100 - session.window.usedPercent);
+  // Alert only when reaching 98% before the weekly reset is endangered.
+  const remainingWeekly = Math.max(0, 98 - weekly.window.usedPercent);
   const equivalents = remainingWeekly / (100 * weeklyPerSession);
-  const totalWindows = Math.ceil(Math.max(0, equivalents - remainingSession / 100)) +
-    (equivalents > 0 ? 1 : 0);
   const deadline = Date.parse(weekly.window.resetsAt ?? "");
-  if (!Number.isFinite(deadline) || deadline <= now) return null;
-  const hoursLeft = (deadline - now) / 3_600_000;
-  const awakeHours = hoursLeft * (16 / 24);
-  const minimumActiveHours = equivalents * 2;
   const sessionReset = Date.parse(session.window.resetsAt ?? "");
-  const resetHours = Number.isFinite(sessionReset)
-    ? Math.max(0, (sessionReset - now) / 3_600_000) : 5;
-  const firstFraction = Math.min(equivalents, remainingSession / 100);
+  if (!Number.isFinite(deadline) || deadline <= now ||
+      !Number.isFinite(sessionReset) || sessionReset <= now) return null;
+  const hoursLeft = (deadline - now) / 3_600_000;
+  const nextResetHours = (sessionReset - now) / 3_600_000;
+  // Optimistically assume a full 5h allowance takes 2h to consume. An almost
+  // expired current window cannot contribute more than its remaining time permits.
+  const currentCapacity = Math.min(
+    Math.max(0, (100 - session.window.usedPercent) / 100), nextResetHours / 2,
+  );
+  const firstFraction = Math.min(equivalents, currentCapacity);
   const laterFraction = Math.max(0, equivalents - firstFraction);
-  const minimumElapsedHours = laterFraction > 0
-    ? Math.max(firstFraction * 2, resetHours) +
-      Math.max(0, laterFraction - 1) * 5 + 2 * Math.min(1, laterFraction)
-    : minimumActiveHours;
+  const freshWindows = Math.ceil(laterFraction);
+  const totalWindows = (firstFraction > 0 ? 1 : 0) + freshWindows;
+  const minimumActiveHours = equivalents * 2;
+  const minimumElapsedHours = freshWindows > 0
+    ? Math.max(firstFraction * 2, nextResetHours) +
+      (freshWindows - 1) * 5 + (laterFraction - (freshWindows - 1)) * 2
+    : firstFraction * 2;
+  // The 01:00–13:00 sleep window is approximate; reserve 8h/day for sleep.
+  const awakeHours = hoursLeft * (16 / 24);
   return {
     weeklyPerSession, sampleSessionGain: shortGain, sampleWeeklyGain: weeklyGain,
     equivalents, totalWindows, hoursLeft, awakeHours,
     minimumActiveHours, minimumElapsedHours,
-    atRisk: remainingWeekly > 2 &&
+    // Warn with a 20% margin for variable conversion and sleep timing.
+    atRisk: remainingWeekly > 0 &&
       (minimumActiveHours > awakeHours * 0.8 || minimumElapsedHours > hoursLeft * 0.8),
   };
 }

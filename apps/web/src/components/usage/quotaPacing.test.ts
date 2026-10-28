@@ -49,8 +49,9 @@ describe("quota pacing", () => {
     };
     const result = estimateWeeklyQuotaRisk(session, weekly, readings, now)!;
     expect(result.weeklyPerSession).toBeCloseTo(0.1);
-    expect(result.equivalents).toBeCloseTo(2);
+    expect(result.equivalents).toBeCloseTo(1.8);
     expect(result.totalWindows).toBe(3);
+    expect(result.minimumElapsedHours).toBeGreaterThan(result.minimumActiveHours);
     expect(estimateWeeklyQuotaRisk(session, weekly, { ...readings, week: [readings.week[1]!] }, now)).toBeNull();
   });
   it("shows the most constrained real account without averaging subscriptions", () => {

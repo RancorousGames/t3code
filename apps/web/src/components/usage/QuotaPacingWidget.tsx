@@ -22,6 +22,7 @@ import { useChatCanvas } from "../chat/ChatCanvasContext";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   bankedResets,
+  estimateWeeklyQuotaRisk,
   normalizeQuotaHistory,
   quotaPath,
   quotaUsedInLastHour,
@@ -305,6 +306,20 @@ export function QuotaPacingWidget({
   );
   const rows = useMemo(() => quotaWindows(accounts, observedNow), [accounts, observedNow]);
   const resets = useMemo(() => bankedResets(accounts), [accounts]);
+  const weeklyRisks = useMemo(() => {
+    const weekly = rows.find((row) => row.label === "week");
+    return weekly?.series.map((series) => {
+      if (!series || series.account.limits.unavailable) return null;
+      // The displayed 5h and week curves may use different subscriptions.
+      // Only pair observations belonging to the weekly account.
+      const short = quotaWindows([series.account], observedNow)
+        .find((row) => row.label === "5h")?.series.find(Boolean);
+      return short ? estimateWeeklyQuotaRisk(short, series, history, observedNow) : null;
+    }) ?? [];
+  }, [rows, history, observedNow]);
+  const weeklyWarning = weeklyRisks.map((risk, index) => risk?.atRisk
+    ? `${NAMES[index]}: Need ${risk.equivalents.toFixed(1)} full 5h quota equivalents within ${risk.hoursLeft.toFixed(1)}h to reach 98% weekly usage (about ${risk.totalWindows} current/future windows). At least ${risk.minimumActiveHours.toFixed(1)}h of active use and ${risk.minimumElapsedHours.toFixed(1)}h with reset waits; roughly ${risk.awakeHours.toFixed(1)}h awake with 8h/day sleep. Observed correlation: +${risk.sampleSessionGain.toFixed(1)}% of 5h usage to +${risk.sampleWeeklyGain.toFixed(1)}% weekly usage. Timing and conversion are estimates.`
+    : null).filter((line): line is string => line !== null).join("\n");
   const connectedKey = Array.from(presentations)
     .filter(
       ([, presentation]) =>
@@ -490,10 +505,11 @@ export function QuotaPacingWidget({
                 </div>
                 <svg
                   viewBox="0 0 280 70"
-                  className="h-[70px] w-full rounded-md border border-white bg-background/80"
+                  className={`h-[70px] w-full rounded-md border bg-background/80 ${row.label === "week" && weeklyWarning ? "border-amber-400/80 ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(245,158,11,0.35)]" : "border-white"}`}
                   role="img"
-                  aria-label={`${row.label} usage; dashed diagonal is ideal consumption. Blue is Codex, orange is Claude. History begins with the first observed reading.`}
+                  aria-label={`${row.label} usage; dashed diagonal is ideal consumption. Blue is Codex, orange is Claude. Solid vertical divider marks ${row.label === "5h" ? "one hour" : "one day"} before reset. History begins with the first observed reading.${row.label === "week" && weeklyWarning ? ` Warning: ${weeklyWarning}` : ""}`}
                 >
+                  {row.label === "week" && weeklyWarning ? <title>{weeklyWarning}</title> : null}
                   {[20, 35, 50].map((y) => (
                     <line key={y} x1="5" x2="275" y1={y} y2={y} stroke="var(--border)" />
                   ))}
@@ -504,6 +520,15 @@ export function QuotaPacingWidget({
                     strokeWidth="1.5"
                     strokeDasharray="6 4"
                     opacity="0.7"
+                  />
+                  <line
+                    x1={5 + 270 * (row.label === "5h" ? 4 / 5 : 6 / 7)}
+                    x2={5 + 270 * (row.label === "5h" ? 4 / 5 : 6 / 7)}
+                    y1="5"
+                    y2="65"
+                    stroke="var(--foreground)"
+                    strokeWidth="1.25"
+                    opacity="0.8"
                   />
                   {row.series.map((series, index) => {
                     if (!series) return null;
