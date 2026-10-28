@@ -798,7 +798,7 @@ export async function runChatGPTSessionControl(input: {
           (await guest.webview.executeJavaScript(`(() => {
           const page = (${inspectChatGPTPage.toString()})({from:'end',count:1,includeMessages:false});
           const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"]');
-          return page.conversationFull === true && page.url === ${JSON.stringify(guest.nav.url)} &&
+          return page.conversationFull === true && page.url === ${JSON.stringify(mountedUrl)} &&
             !document.querySelector('textarea,[contenteditable="true"]') &&
             !(stop && stop.getClientRects().length && !stop.hasAttribute('disabled'));
         })()`)) === true;
