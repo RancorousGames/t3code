@@ -4,6 +4,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import {
+  AlarmClockCheckIcon,
   ArrowDownUpIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -1264,7 +1265,7 @@ export function ChatGPTBrowserSidebarEntry({
                                             setSessionHidden(session.id, false);
                                             setShowHidden(false);
                                           }
-                                          if (isSnoozed(session))
+                                          if (typeof session.snoozedUntil === "number")
                                             setSessionSnooze([session.id], null);
                                           void navigate({
                                             to: "/browser/$browserSessionId",
@@ -1287,6 +1288,15 @@ export function ChatGPTBrowserSidebarEntry({
                                         >
                                           {session.title}
                                         </span>
+                                        {Number.isFinite(session.snoozedUntil) &&
+                                          session.snoozedUntil! <= clockNow && (
+                                            <AlarmClockCheckIcon
+                                              aria-label="Woke from snooze"
+                                              className="size-3 shrink-0 text-muted-foreground"
+                                            >
+                                              <title>Woke from snooze</title>
+                                            </AlarmClockCheckIcon>
+                                          )}
                                         {childCount > 0 && (
                                           <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                                             {childCount}
