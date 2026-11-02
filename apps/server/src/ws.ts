@@ -1970,7 +1970,7 @@ export const layerWsRpc = (
       // A paired web caller can spoof ?clientSurface=desktop; only the
       // authenticated local desktop-bootstrap grant may own the guest driver.
       const isAuthenticatedChatGPTDesktopDriver =
-        clientOrigin.surface === "desktop" && currentSession.subject === "desktop-bootstrap";
+        originProps.surface === "desktop" && currentSession.subject === "desktop-bootstrap";
       const handlers = ServerWsRpcGroup.of({
         [WS_METHODS.chatGptRegistryList]: ({ environmentId }) =>
           Effect.gen(function* () {
@@ -2344,7 +2344,7 @@ export const layerWsRpc = (
             if (request.method === "desktop.sessions.publish") {
               // The existing authenticated WS operation scope and desktop
               // origin must both hold. No local named pipe grants authority.
-              if (clientOrigin.surface !== "desktop") {
+              if (!isAuthenticatedChatGPTDesktopDriver) {
                 return error("Unsupported", "Browser catalogs must come from a T3 desktop client.");
               }
               const decodedSnapshot = yield* Effect.result(
@@ -2389,7 +2389,7 @@ export const layerWsRpc = (
               return reply({ published: snapshot.sessions.length });
             }
             if (request.method === "desktop.sessions.next") {
-              if (clientOrigin.surface !== "desktop")
+              if (!isAuthenticatedChatGPTDesktopDriver)
                 return error(
                   "Unsupported",
                   "Only an authenticated desktop publisher can pull browser work.",
@@ -2408,7 +2408,7 @@ export const layerWsRpc = (
               return reply({ work });
             }
             if (request.method === "desktop.sessions.result") {
-              if (clientOrigin.surface !== "desktop")
+              if (!isAuthenticatedChatGPTDesktopDriver)
                 return error(
                   "Unsupported",
                   "Only an authenticated desktop publisher can answer browser work.",
@@ -3024,7 +3024,7 @@ export const layerWsRpc = (
                 }
                 const initialNonce = historyInput.cursor
                   ? null
-                  : yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+                  : yield* crypto.randomUUIDv4().pipe(Effect.orDie);
                 const page = yield* Effect.result(
                   threadManagement.getThreadHistoryPage(
                     threadId,

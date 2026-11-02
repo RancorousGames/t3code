@@ -2497,8 +2497,9 @@ type ClaudeAssistantToolResultContentBlock = Extract<
     readonly tool_use_id: string;
   }
 >;
+type ClaudeSdkUserContentBlock = Exclude<SDKUserMessage["message"]["content"], string>[number];
 type ClaudeUserToolResultContentBlock = Extract<
-  ClaudeUserContentBlock,
+  ClaudeSdkUserContentBlock,
   {
     readonly tool_use_id: string;
   }
@@ -3324,7 +3325,7 @@ function isClaudeAssistantToolResultContentBlock(
 }
 
 function isClaudeUserToolResultContentBlock(
-  part: ClaudeUserContentBlock,
+  part: ClaudeSdkUserContentBlock,
 ): part is ClaudeUserToolResultContentBlock {
   return "tool_use_id" in part && typeof part.tool_use_id === "string";
 }
@@ -3396,7 +3397,14 @@ function claudeToolResultBlocksFromUserMessage(
   if (message.type !== "user" || typeof message.message.content === "string") {
     return [];
   }
-  return message.message.content.filter(isClaudeUserToolResultContentBlock);
+  // SDKUserMessage exposes a broad ContentBlockParam union that the current
+  // compiler cannot narrow through Array.filter. Validate each discriminant
+  // before mapping the block into the tool-result subset.
+  return message.message.content.flatMap((part) =>
+    isClaudeUserToolResultContentBlock(part)
+      ? [part as ClaudeUserToolResultContentBlock]
+      : [],
+  );
 }
 
 function claudeToolResultEntriesFromMessage(message: SDKMessage): ReadonlyArray<{
