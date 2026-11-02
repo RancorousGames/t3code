@@ -30,6 +30,15 @@ function independentRead(request: DesktopAppActivationRequest): boolean {
   );
 }
 
+// Socket/API traffic is often polling or background agent work. Only commands
+// explicitly asking to show a user-facing window may restore/focus T3.
+function shouldActivateWindow(request: DesktopAppActivationRequest): boolean {
+  if (request.type === "open-workspace") return true;
+  if (request.type === "t3.threads") return request.action === "focus";
+  if (request.type === "chatgpt.sessions") return request.action === "focus";
+  return false;
+}
+
 function failure(
   requestId: string,
   code: DesktopAppActivationFailure["code"],
@@ -131,17 +140,9 @@ export class DesktopAppActivationBroker {
       });
     });
 
-    // Agent-spawn requests must not steal focus from the user's current T3
-    // thread (or a different application). The already-running renderer can
-    // create and drive ChatGPT's browser tab without activating the window.
-    if (
-      request.type !== "chatgpt.reboot" &&
-      request.type !== "chatgpt.refresh" &&
-      request.type !== "chatgpt.spawn" &&
-      (request.type !== "chatgpt.sessions" || request.action === "open") &&
-      request.type !== "openrig.human_inbox"
-    )
-      this.#activate();
+    // In particular, high-frequency list/read/refresh/open/send requests must
+    // never unminimize T3 or interrupt the user's foreground application.
+    if (shouldActivateWindow(request)) this.#activate();
     this.#flush();
     return response;
   }

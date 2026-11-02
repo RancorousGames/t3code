@@ -123,6 +123,46 @@ describe("DesktopAppActivationBroker", () => {
     broker.close();
   });
 
+  it("does not restore a minimized window for background API or guest requests", async () => {
+    const activate = vi.fn();
+    const broker = new DesktopAppActivationBroker({ requestTimeoutMs: 1_000, activate });
+    broker.registerRenderer(vi.fn());
+
+    const background: DesktopAppActivationRequest[] = [
+      { version: 1, requestId: "threads-list", type: "t3.threads", action: "list" },
+      { version: 1, requestId: "threads-read", type: "t3.threads", action: "read" },
+      { version: 1, requestId: "threads-providers", type: "t3.threads", action: "providers" },
+      { version: 1, requestId: "sessions-list", type: "chatgpt.sessions", action: "list" },
+      { version: 1, requestId: "sessions-open", type: "chatgpt.sessions", action: "open" },
+      { version: 1, requestId: "sessions-send", type: "chatgpt.sessions", action: "send" },
+      { version: 1, requestId: "spawn", type: "chatgpt.spawn", title: "Agent", prompt: "Work" },
+      { version: 1, requestId: "inbox", type: "openrig.human_inbox", action: "fetch_unread" },
+    ];
+    const replies = background.map((entry) => broker.request(entry));
+    expect(activate).not.toHaveBeenCalled();
+
+    replies.push(
+      broker.request({
+        version: 1,
+        requestId: "focus-thread",
+        type: "t3.threads",
+        action: "focus",
+      }),
+    );
+    replies.push(
+      broker.request({
+        version: 1,
+        requestId: "focus-session",
+        type: "chatgpt.sessions",
+        action: "focus",
+      }),
+    );
+    expect(activate).toHaveBeenCalledTimes(2);
+
+    broker.close();
+    await Promise.all(replies);
+  });
+
   it("fails an in-flight request when the renderer goes away", async () => {
     const broker = new DesktopAppActivationBroker({ requestTimeoutMs: 1_000, activate: vi.fn() });
     broker.registerRenderer(vi.fn());
