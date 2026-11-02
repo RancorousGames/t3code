@@ -1,5 +1,5 @@
 import type { CodeViewItem } from "@pierre/diffs";
-import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
+import { parsePatchFiles } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
 // Find-in-diff lives in our @pierre/diffs patch and is not a package export.

@@ -4,6 +4,7 @@ import {
   CHATGPT_LOAD_FAILURE_EXPRESSION,
   chatGPTRecoveryProblem,
   RECOVERY_ORANGE_GRACE_MS,
+  RECOVERY_MISSING_COMPOSER_GRACE_MS,
   RECOVERY_GLOBAL_MS,
   RECOVERY_PER_SESSION_MS,
   RECOVERY_SCAN_MS,
@@ -62,29 +63,30 @@ describe("ChatGPT conversation failure detection", () => {
 });
 
 describe("recoverable ChatGPT activity", () => {
-  it("queues only the dedicated load failure and both orange status notices", () => {
+  it("recovers confirmed load errors and sustained missing composers, but not unrelated invalid states", () => {
     expect(chatGPTRecoveryProblem("invalid: Could not load this ChatGPT conversation")).toBe(
       "load-failure",
     );
+    expect(chatGPTRecoveryProblem("invalid: the ChatGPT composer is unavailable")).toBe("load-failure");
     expect(chatGPTRecoveryProblem("interrupted")).toBe("interrupted");
     expect(chatGPTRecoveryProblem("delivery-timeout")).toBe("delivery-timeout");
     for (const state of [
       "working",
       "idle",
-      "invalid: the ChatGPT composer is unavailable",
       "invalid: this page is not on ChatGPT",
       "invalid: unrelated message",
     ]) {
       expect(chatGPTRecoveryProblem(state)).toBeNull();
     }
     expect(RECOVERY_ORANGE_GRACE_MS).toBe(600_000);
+    expect(RECOVERY_MISSING_COMPOSER_GRACE_MS).toBe(60_000);
   });
 });
 
 describe("serialized recovery cooldowns", () => {
-  it("checks every 30 seconds, with 30 seconds global and 2 minutes per session", () => {
-    expect(RECOVERY_SCAN_MS).toBe(30_000);
-    expect(RECOVERY_GLOBAL_MS).toBe(30_000);
+  it("checks every 20 seconds, with 20 seconds global and 2 minutes per session for non-red states", () => {
+    expect(RECOVERY_SCAN_MS).toBe(20_000);
+    expect(RECOVERY_GLOBAL_MS).toBe(20_000);
     expect(RECOVERY_PER_SESSION_MS).toBe(120_000);
     const now = 1_800_000;
     recordRecoveryAttempt("local", "comit", now, ["comit", "other"]);
@@ -112,6 +114,21 @@ describe("serialized recovery cooldowns", () => {
     ]);
   });
 
+  it("maintains independent red and orange retry clocks", () => {
+    const now = 200_000;
+    recordRecoveryAttempt("local", "comit", now, ["comit", "other"], "orange");
+    let history = readRecoveryHistory("local");
+    expect(history.orangeLastAttemptAt).toBe(now);
+    // An orange attempt does not impose its cooldown on a red dispatch.
+    expect(cooldownElapsed(history.redLastAttemptAt, now + 1, 30_000)).toBe(true);
+    recordRecoveryAttempt("local", "other", now + 1, ["comit", "other"], "red");
+    history = readRecoveryHistory("local");
+    expect(history.redLastAttemptAt).toBe(now + 1);
+    expect(history.orangeLastAttemptAt).toBe(now);
+    expect(cooldownElapsed(history.orangeLastAttemptAt, now + 30_000, 60_000)).toBe(false);
+    expect(cooldownElapsed(history.redLastAttemptAt, now + 30_001, 30_000)).toBe(true);
+  });
+
   it("prioritizes expanded groups ahead of collapsed projects even with recent clicks", () => {
     const history = { lastAttemptAt: 0, bySession: { collapsed: 0, expanded: 100 } };
     expect(
@@ -126,8 +143,10 @@ describe("serialized recovery cooldowns", () => {
     recordRecoveryAttempt("local", "comit", 1000, ["comit", "other"]);
     recordRecoveryAttempt("local", "other", 2000, ["other"]);
     const state = JSON.parse(localStorage.getItem(recoveryKey("local"))!);
-    expect(state).toEqual({ lastAttemptAt: 2000, bySession: { other: 2000 } });
-    expect(readRecoveryHistory("another")).toEqual({ lastAttemptAt: 0, bySession: {} });
+    expect(state).toEqual({ lastAttemptAt: 2000, redLastAttemptAt: 2000,
+      orangeLastAttemptAt: 0, bySession: { other: 2000 } });
+    expect(readRecoveryHistory("another")).toEqual({ lastAttemptAt: 0,
+      redLastAttemptAt: 0, orangeLastAttemptAt: 0, bySession: {} });
     expect(cooldownElapsed(3000, 1000, RECOVERY_GLOBAL_MS)).toBe(true);
   });
 

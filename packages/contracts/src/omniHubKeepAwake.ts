@@ -1,0 +1,126 @@
+import * as Schema from "effect/Schema";
+
+/**
+ * Desktop-only read projection of OmniHub Tools' temporary keep-awake monitors.
+ * Never add tokens, receipts, scheduler operations, or private source records.
+ */
+export const DesktopOmniHubKeepAwakeSessionKind = Schema.Literals([
+  "t3/chatgpt_browser",
+  "t3/native_thread",
+]);
+export const DesktopOmniHubKeepAwakeTargetSessionSchema = Schema.Struct({
+  id: Schema.String,
+  kind: DesktopOmniHubKeepAwakeSessionKind,
+  title: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.optional(Schema.NullOr(Schema.String)),
+  hidden: Schema.optional(Schema.Boolean),
+});
+export type DesktopOmniHubKeepAwakeTargetSession =
+  typeof DesktopOmniHubKeepAwakeTargetSessionSchema.Type;
+
+export const DesktopOmniHubKeepAwakeQuerySchema = Schema.Struct({
+  /** Exact local session snapshot supplied by the renderer; no guest loading. */
+  sessions: Schema.optional(Schema.Array(DesktopOmniHubKeepAwakeTargetSessionSchema)),
+  /** A missing session only means absent if its kind was actually enumerated. */
+  checkedKinds: Schema.optional(Schema.Array(DesktopOmniHubKeepAwakeSessionKind)),
+});
+export type DesktopOmniHubKeepAwakeQuery = typeof DesktopOmniHubKeepAwakeQuerySchema.Type;
+
+const source = Schema.Literal("omnihub-temporary-keep-awake");
+const maybeTime = Schema.NullOr(Schema.Number);
+const keepAwakeMonitorSchema = Schema.Struct({
+  source,
+  id: Schema.String,
+  mandateId: Schema.String,
+  target: Schema.Struct({
+    id: Schema.String,
+    kind: Schema.Literals(["t3/chatgpt_browser", "t3/native_thread", "unknown"]),
+    title: Schema.String,
+    url: Schema.NullOr(Schema.String),
+    visibility: Schema.Literals(["visible", "hidden", "missing", "unchecked"]),
+  }),
+  status: Schema.Literals([
+    "active",
+    "attempting",
+    "retrying",
+    "final_pending",
+    "final_retrying",
+    "needs_attention",
+    "completed",
+    "cancelled",
+    "history",
+    "unknown",
+  ]),
+  activeOrPending: Schema.Boolean,
+  finalWakePending: Schema.Boolean,
+  oneShot: Schema.Boolean,
+  intervalMinutes: maybeTime,
+  createdAtMs: maybeTime,
+  endAtMs: maybeTime,
+  nextAttemptAtMs: maybeTime,
+  lastSchedulerTickAtMs: maybeTime,
+  lastWakeUserTurnAtMs: maybeTime,
+  lastAssistantAckAtMs: maybeTime,
+  finalDeliveredAtMs: maybeTime,
+  wakeAttempts: Schema.Number,
+  lastDelivery: Schema.NullOr(Schema.String),
+  lastOutcome: Schema.NullOr(Schema.String),
+  explanation: Schema.String,
+});
+export const DesktopOmniHubKeepAwakeReadResultSchema = Schema.Union([
+  Schema.Struct({
+    source,
+    availability: Schema.Literal("ok"),
+    observedAtMs: Schema.Number,
+    monitors: Schema.Array(keepAwakeMonitorSchema),
+  }),
+  Schema.Struct({
+    source,
+    availability: Schema.Literal("unavailable"),
+    observedAtMs: Schema.Number,
+    monitors: Schema.Tuple([]),
+    error: Schema.String,
+  }),
+]);
+export type DesktopOmniHubKeepAwakeReadResult = typeof DesktopOmniHubKeepAwakeReadResultSchema.Type;
+
+/** Trusted desktop operator controls, applied by OmniHub Tools using its own owner token. */
+export const DesktopOmniHubKeepAwakeControlQuerySchema = Schema.Struct({
+  monitorId: Schema.String,
+  action: Schema.Literals(["wake_in_one_minute", "cancel", "send_final_and_stop"]),
+  clientRequestId: Schema.String,
+  confirmedTargetId: Schema.optional(Schema.String),
+});
+export type DesktopOmniHubKeepAwakeControlQuery =
+  typeof DesktopOmniHubKeepAwakeControlQuerySchema.Type;
+
+export const DesktopOmniHubKeepAwakeControlReceiptSchema = Schema.Struct({
+  ok: Schema.Boolean,
+  monitorId: Schema.String,
+  action: Schema.Literals(["wake_in_one_minute", "cancel", "send_final_and_stop"]),
+  clientRequestId: Schema.String,
+  code: Schema.Literals(["applied", "queued", "unavailable", "denied", "conflict", "unknown"]),
+  detail: Schema.String,
+  state: Schema.optional(Schema.String),
+  nextDueMs: Schema.optional(Schema.Number),
+  sendMayAlreadyBeInFlight: Schema.optional(Schema.Boolean),
+});
+export type DesktopOmniHubKeepAwakeControlReceipt =
+  typeof DesktopOmniHubKeepAwakeControlReceiptSchema.Type;
+
+/** Register a temporary wake schedule for an exact existing ChatGPT session. */
+export const DesktopOmniHubKeepAwakeStartQuerySchema = Schema.Struct({
+  sessionId: Schema.String,
+  conversationId: Schema.String,
+  durationHours: Schema.Literals([1, 2, 4, 6]),
+  clientRequestId: Schema.String,
+});
+export type DesktopOmniHubKeepAwakeStartQuery = typeof DesktopOmniHubKeepAwakeStartQuerySchema.Type;
+export const DesktopOmniHubKeepAwakeStartReceiptSchema = Schema.Struct({
+  ok: Schema.Boolean,
+  code: Schema.Literals(["applied", "unavailable", "denied", "unknown"]),
+  detail: Schema.String,
+  monitorId: Schema.optional(Schema.String),
+});
+export type DesktopOmniHubKeepAwakeStartReceipt =
+  typeof DesktopOmniHubKeepAwakeStartReceiptSchema.Type;

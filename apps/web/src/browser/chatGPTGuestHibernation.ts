@@ -1,9 +1,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import { CHATGPT_RECENT_ACTIVITY_MS } from "../components/sidebar/chatGPTActivity";
 import { resolveStorage } from "../lib/storage";
-import { activeOmniworkUnloadPolicy } from "../omniwork/chatGPTUnloadPolicy";
+import { activeOmniworkUnloadPolicy, useOmniworkPreferences } from "../omniwork/chatGPTUnloadPolicy";
 
 // Each ChatGPT guest costs its own renderer (roughly 0.4-1 GB). Sessions that
 // are not shown and have not worked recently are unmounted; their preview
@@ -11,7 +10,8 @@ import { activeOmniworkUnloadPolicy } from "../omniwork/chatGPTUnloadPolicy";
 // Callers pass runtime tab ids, but state is keyed by environment and thread:
 // the runtime id carries the server epoch, and the hibernated set is persisted
 // so a restart restores the loaded guests and the most recently used sessions.
-export const CHATGPT_GUEST_HIBERNATE_AFTER_MS = CHATGPT_RECENT_ACTIVITY_MS;
+// Guest unloading remains independent of the two-hour blue activity indicator.
+export const CHATGPT_GUEST_HIBERNATE_AFTER_MS = 15 * 60 * 1_000;
 
 interface ChatGPTGuestHibernationState {
   readonly hibernated: Record<string, true>;
@@ -65,12 +65,16 @@ export function recentChatGPTGuestKeys(
   protectedKeys: ReadonlySet<string> = new Set(),
 ): string[] {
   const keys = new Set(candidates.map(({ key }) => key));
+  const policy = activeOmniworkUnloadPolicy();
+  const ordinaryLimit = policy.idleMs === null
+    ? Number.POSITIVE_INFINITY
+    : (useOmniworkPreferences.getState().recentGuests ?? policy.minRecentGuests);
   // Important sessions do not compete against the five ordinary recent slots.
   const protectedCandidates = [...protectedKeys].filter((key) => keys.has(key));
   const ordinary = [...candidates]
     .filter(({ key }) => !protectedKeys.has(key))
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-    .slice(0, activeOmniworkUnloadPolicy().minRecentGuests)
+    .slice(0, ordinaryLimit)
     .map(({ key }) => key);
   return [...protectedCandidates, ...ordinary];
 }
@@ -133,6 +137,7 @@ export function shouldHibernateChatGPTGuest(input: {
   readonly visible: boolean;
   /** Important managers, sessions with children, or queued recovery remain attached. */
   readonly protected?: boolean;
+  readonly longIdle?: boolean;
   /** Only an existing conversation can be reloaded; fresh home pages await a first prompt. */
   readonly onConversation: boolean;
   readonly activity: string;
@@ -145,6 +150,7 @@ export function shouldHibernateChatGPTGuest(input: {
   // invalid/red, interrupted/orange and working are not evidence of completion.
   if (input.activity !== "idle") return false;
   const lastUsedAt = Math.max(input.lastWorkingAt || 0, input.touchedAt || 0);
-  const idleMs = activeOmniworkUnloadPolicy().idleMs;
+  const baseIdleMs = activeOmniworkUnloadPolicy().idleMs;
+  const idleMs = input.longIdle && baseIdleMs !== null ? 4 * 60 * 60_000 : baseIdleMs;
   return idleMs !== null && input.now - lastUsedAt >= idleMs;
 }

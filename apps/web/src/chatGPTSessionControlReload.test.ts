@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+// This suite exercises the legacy <webview> implementation, not native Chromium.
+vi.mock("./browser/persistentChatGPTSessionMode", () => ({
+  isPersistentChatGPTSessionOptedIn: () => false,
+}));
+
 const shared = vi.hoisted(() => ({
   url: "https://chatgpt.com/",
   saved: "https://chatgpt.com/c/6ad64bc9-020c-83eb-a38c-85834fa7118b",
@@ -9,6 +14,9 @@ const shared = vi.hoisted(() => ({
   safe: true,
   draft: "",
   unknownSend: false,
+  attachments: false,
+  draftAtCommit: false,
+  reloads: 0,
 }));
 vi.mock("./browser/chatGPTGuestHibernation", () => ({
   isChatGPTGuestHibernated: () => false,
@@ -44,7 +52,9 @@ vi.mock("./chatGPTWebviewAutomation", () => ({
     evaluate: vi.fn(async (_runtime: string, options: { expression: string }) =>
       options.expression.startsWith("(() => {const el=document.querySelector(")
         ? shared.draft
-        : shared.safe,
+        : options.expression.includes("form.querySelector('img,video,audio")
+          ? !shared.attachments
+          : shared.safe,
     ),
   },
 }));
@@ -64,6 +74,7 @@ vi.mock("./chatGPTSessionCompletion", () => ({
 import { runChatGPTSessionControl } from "./chatGPTSessionControl";
 import { previewBridge } from "./components/preview/previewBridge";
 import { chatGPTWebviewAutomation } from "./chatGPTWebviewAutomation";
+import { tryAcquireChatGPTRecoveryMutation } from "./chatGPTRecoveryMutationGate";
 
 const session = { id: "existing-inactive-session", title: "Inactive" };
 const changeState = (state: "hidden" | "unhidden" | "closed") =>
@@ -91,20 +102,33 @@ beforeEach(() => {
   shared.safe = true;
   shared.draft = "";
   shared.unknownSend = false;
+  shared.attachments = false;
+  shared.draftAtCommit = false;
+  shared.reloads = 0;
   const guest = {
     dataset: { previewTab: "unit-runtime" },
-    executeJavaScript: async () => ({
-      url: shared.url,
-      activity: shared.activity,
-      uiActivity: shared.uiActivity,
-      lastText: "",
-      lastRole: null,
-      assistantHasContent: false,
-      totalTurns: 0,
-      messages: [],
-      stuck: false,
-      connectionInterrupted: false,
-    }),
+    executeJavaScript: async (expression: string) => {
+      if (expression.includes("location.reload();")) {
+        if (shared.draftAtCommit) shared.draft = "user typed between checks";
+        if (shared.draft || shared.attachments || shared.url !== shared.saved) return false;
+        shared.reloads++;
+        return true;
+      }
+      if (expression.includes("inspectChatGPTComposer"))
+        return { status: shared.draft ? "nonempty" : "empty", url: shared.url, text: shared.draft };
+      return {
+        url: shared.url,
+        activity: shared.activity,
+        uiActivity: shared.uiActivity,
+        lastText: "",
+        lastRole: null,
+        assistantHasContent: false,
+        totalTurns: 0,
+        messages: [],
+        stuck: false,
+        connectionInterrupted: false,
+      };
+    },
   };
   vi.stubGlobal("document", { querySelectorAll: () => [guest] });
   const storage = {
@@ -192,6 +216,20 @@ describe("exact-session state changes", () => {
 });
 
 describe("existing blank ChatGPT homepage recovery through normal OMCP reload", () => {
+  it("refuses manual force reload while automatic recovery owns an in-flight mutation lease", async () => {
+    const automatic = tryAcquireChatGPTRecoveryMutation("local", session.id, "automatic", "reload");
+    expect(automatic).not.toBeNull();
+    try {
+      await expect(reload(true)).rejects.toThrow("Another browser recovery is in progress");
+      expect(shared.reloads).toBe(0);
+      expect(previewBridge!.navigate).not.toHaveBeenCalled();
+    } finally {
+      automatic?.release();
+    }
+    await expect(reload()).resolves.toMatchObject({ requestedNavigation: true });
+    expect(previewBridge!.navigate).toHaveBeenCalledTimes(1);
+  });
+
   it("navigates exactly the attached inactive session to its saved canonical URL without force", async () => {
     const result = await reload();
     expect(result).toMatchObject({
@@ -227,11 +265,51 @@ describe("existing blank ChatGPT homepage recovery through normal OMCP reload", 
     expect(previewBridge!.navigate).not.toHaveBeenCalled();
   });
 
-  it("refuses to disrupt active generation even when force is supplied", async () => {
+  it("requires deliberate force to interrupt a working canonical conversation", async () => {
+    shared.url = shared.saved;
     shared.activity = "working";
     shared.uiActivity = "working";
-    await expect(reload(true)).rejects.toThrow(/working session/);
-    expect(previewBridge!.navigate).not.toHaveBeenCalled();
+    await expect(reload()).rejects.toThrow(/force=true/);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
+    await expect(reload(true)).resolves.toMatchObject({
+      reloaded: true,
+      forcedWorkingReload: true,
+      warning: expect.stringMatching(/unfinished assistant response/),
+    });
+    expect(shared.reloads).toBe(1);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
+  });
+
+  it("never drops a typed draft, attachments or an UNKNOWN send, even with force", async () => {
+    shared.url = shared.saved;
+    shared.activity = "working";
+    shared.uiActivity = "working";
+    shared.draft = "unsent human text";
+    await expect(reload(true)).rejects.toThrow(/Composer draft/);
+    shared.draft = "";
+    shared.attachments = true;
+    await expect(reload(true)).rejects.toThrow(/attachments/);
+    shared.attachments = false;
+    shared.unknownSend = true;
+    await expect(reload(true)).rejects.toThrow(/UNKNOWN send/);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
+  });
+
+  it("also protects an idle session's human draft on an ordinary reload", async () => {
+    shared.url = shared.saved;
+    shared.draft = "unfinished text";
+    await expect(reload()).rejects.toThrow(/Composer draft/);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
+  });
+
+  it("preserves text entered between preflight and the atomic guest reload", async () => {
+    shared.url = shared.saved;
+    shared.activity = "working";
+    shared.uiActivity = "working";
+    shared.draftAtCommit = true;
+    await expect(reload(true)).rejects.toThrow(/Guest changed or contains a draft/);
+    expect(shared.draft).toBe("user typed between checks");
+    expect(shared.reloads).toBe(0);
   });
 
   it("requires force for an orange interrupted session while allowing a regular inactive reload", async () => {
@@ -243,7 +321,8 @@ describe("existing blank ChatGPT homepage recovery through normal OMCP reload", 
   it("refreshes a healthy idle canonical conversation normally without force", async () => {
     shared.url = shared.saved;
     await expect(reload()).resolves.toMatchObject({ reloaded: true, sessionId: session.id });
-    expect(previewBridge!.refresh).toHaveBeenCalledExactlyOnceWith("unit-runtime");
+    expect(shared.reloads).toBe(1);
+    expect(previewBridge!.refresh).not.toHaveBeenCalled();
     expect(previewBridge!.navigate).not.toHaveBeenCalled();
   });
 

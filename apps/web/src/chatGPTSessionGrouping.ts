@@ -1,4 +1,4 @@
-import type { BrowserSession } from "./chatGPTBrowserSessions";
+import { chatGPTSessionCreationOrigin, type BrowserSession } from "./chatGPTBrowserSessions";
 import { chatGPTParentIndex } from "./chatGPTSessionLineage";
 import learned from "./chatGPTGroupingTraining.generated.json";
 
@@ -11,6 +11,8 @@ export interface ChatGPTSidebarSession {
   readonly session: BrowserSession;
   readonly depth: number;
   readonly childCount: number;
+  /** Contextual label for active children whose parent is not active. */
+  readonly inactiveParentHeader?: string;
 }
 export interface ChatGPTPermanentProject {
   readonly key: string;
@@ -337,8 +339,10 @@ export function layoutChatGPTSessions(
   sortMode: ChatGPTSessionSortMode,
   activityById: Readonly<Record<string, ChatGPTSessionSortActivity>>,
   permanentProjects: readonly ChatGPTPermanentProject[] = [],
+  selectedSessionId?: string,
 ): ChatGPTSidebarGroup[] {
   if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects);
+  void selectedSessionId;
   const rank: Record<ChatGPTSessionSortActivity["age"], number> = {
     working: 0,
     recent: 1,
@@ -350,76 +354,88 @@ export function layoutChatGPTSessions(
     invalid: 4,
   };
   const order = new Map(sessions.map((session, index) => [session.id, index]));
-  // Keep parent/child subtrees together across status boundaries. The
-  // previous flat "active" queue always erased indentation.
   const enriched = applyConfirmedChatGPTSessionMetadata(sessions);
+  // Activity mode is a global queue. A working child must never be held below
+  // an inactive manager, and parent labels are visual context, not sessions.
+  const parents = chatGPTParentIndex(enriched);
   const byId = new Map(enriched.map((session) => [session.id, session]));
-  const parentById = chatGPTParentIndex(enriched);
-  const children = new Map<string, BrowserSession[]>();
-  const rootFor = (session: BrowserSession): string => {
-    let node = session;
-    const seen = new Set([node.id]);
-    let parent = parentById.get(node.id);
-    while (parent && !seen.has(parent)) {
-      seen.add(parent);
-      node = byId.get(parent)!;
-      parent = parentById.get(node.id);
-    }
-    return node.id;
-  };
-  const rootBuckets = new Map<string, BrowserSession[]>();
-  for (const session of enriched) {
-    const rootId = rootFor(session);
-    if (!rootBuckets.has(rootId)) rootBuckets.set(rootId, []);
-    rootBuckets.get(rootId)!.push(session);
-    const parent = parentById.get(session.id);
-    if (parent) {
-      const list = children.get(parent) ?? [];
-      list.push(session);
-      children.set(parent, list);
-    }
+  const active = enriched
+    .filter((session) => activityById[session.id]?.age === "working")
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  const inactive = enriched
+    .filter((session) => activityById[session.id]?.age !== "working")
+    .sort((a, b) => {
+      const aRank = rank[activityById[a.id]?.age ?? "unknown"];
+      const bRank = rank[activityById[b.id]?.age ?? "unknown"];
+      return (
+        aRank - bRank ||
+        (activityById[b.id]?.lastWorkingAt ?? 0) - (activityById[a.id]?.lastWorkingAt ?? 0) ||
+        (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)
+      );
+    });
+  const activeRows: ChatGPTSidebarSession[] = [];
+  // Keep active children with the same inactive immediate parent together.
+  // Only one thin label precedes the contiguous group.
+  const emitted = new Set<string>();
+  const parentGroups = new Map<string, BrowserSession[]>();
+  for (const session of active) {
+    const parentId = parents.get(session.id);
+    if (!parentId || activityById[parentId]?.age === "working") continue;
+    const group = parentGroups.get(parentId) ?? [];
+    group.push(session);
+    parentGroups.set(parentId, group);
   }
-  const buckets = [...rootBuckets]
-    .map(([rootId, members]) => {
-      const priority = Math.min(
-        ...members.map((session) => rank[activityById[session.id]?.age ?? "unknown"]),
-      );
-      const latest = Math.max(
-        0,
-        ...members.map((session) => activityById[session.id]?.lastWorkingAt ?? 0),
-      );
-      return { rootId, members, priority, latest };
-    })
-    .sort(
-      (a, b) =>
-        a.priority - b.priority ||
-        // Working heartbeats must not move the rows while the user reads or clicks.
-        // Other statuses retain activity ordering within their status tier.
-        (a.priority !== 0 ? b.latest - a.latest : 0) ||
-        (order.get(a.rootId) ?? 0) - (order.get(b.rootId) ?? 0),
-    );
-  const emitTree = (bucket: (typeof buckets)[number]): ChatGPTSidebarSession[] => {
-    const rows: ChatGPTSidebarSession[] = [];
-    const seen = new Set<string>();
-    const members = new Set(bucket.members.map((session) => session.id));
-    const walk = (session: BrowserSession, depth: number) => {
-      if (seen.has(session.id)) return;
-      seen.add(session.id);
-      const descendants = (children.get(session.id) ?? []).filter(
-        (child) => members.has(child.id) && !seen.has(child.id),
-      );
-      rows.push({ session, depth, childCount: descendants.length });
-      descendants.forEach((child) => walk(child, depth + 1));
-    };
-    walk(byId.get(bucket.rootId) ?? bucket.members[0]!, 0);
-    bucket.members.forEach((session) => walk(session, 0));
-    return rows;
+  const pushActive = (session: BrowserSession, label?: string) => {
+    emitted.add(session.id);
+    activeRows.push({
+      session,
+      depth: 0,
+      childCount: 0,
+      ...(label ? { inactiveParentHeader: label } : {}),
+    });
   };
-  // Activity mode is a single global queue: project grouping must not reorder
-  // idle sessions ahead of more recently active sessions from other projects.
-  // Explicit project assignments and permanent groups remain unchanged for
-  // Started mode and for project drop targets.
-  return buckets.length
-    ? [{ key: "status:activity", title: null, rows: buckets.flatMap(emitTree) }]
-    : [];
+  for (const session of active) {
+    if (emitted.has(session.id)) continue;
+    const parentId = parents.get(session.id);
+    if (!parentId || activityById[parentId]?.age === "working") {
+      pushActive(session);
+      continue;
+    }
+    const group = parentGroups.get(parentId) ?? [session];
+    group.forEach((child, index) =>
+      pushActive(child, index === 0 ? byId.get(parentId)?.title : undefined),
+    );
+  }
+  // Keep the non-working part hierarchical when parent and child share the
+  // same status tier. Never indent a row beneath an unrelated preceding session.
+  const inactiveById = new Map(inactive.map((session) => [session.id, session]));
+  const inactiveChildren = new Map<string, BrowserSession[]>();
+  const activityRank = (session: BrowserSession) =>
+    rank[activityById[session.id]?.age ?? "unknown"];
+  for (const session of inactive) {
+    const parentId = parents.get(session.id);
+    const parent = parentId ? inactiveById.get(parentId) : undefined;
+    if (!parent || activityRank(parent) !== activityRank(session)) continue;
+    const siblings = inactiveChildren.get(parent.id) ?? [];
+    siblings.push(session);
+    inactiveChildren.set(parent.id, siblings);
+  }
+  const remainingRows: ChatGPTSidebarSession[] = [];
+  const visited = new Set<string>();
+  const emitInactive = (session: BrowserSession, depth: number) => {
+    if (visited.has(session.id)) return;
+    visited.add(session.id);
+    const children = inactiveChildren.get(session.id) ?? [];
+    remainingRows.push({ session, depth, childCount: children.length });
+    children.forEach((child) => emitInactive(child, depth + 1));
+  };
+  for (const session of inactive) {
+    const parentId = parents.get(session.id);
+    if (parentId && inactiveChildren.get(parentId)?.some((child) => child.id === session.id))
+      continue;
+    emitInactive(session, 0);
+  }
+  inactive.forEach((session) => emitInactive(session, 0));
+  const rows = [...activeRows, ...remainingRows];
+  return rows.length ? [{ key: "status:activity", title: null, rows }] : [];
 }

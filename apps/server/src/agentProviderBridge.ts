@@ -15,10 +15,18 @@ type DesktopCatalog = {
 export type BrowserWork = {
   jobId: string;
   environmentId: string;
-  browserSessionId: string;
-  expectedConversationId: string;
-  action: "history" | "submit";
+  browserSessionId?: string;
+  expectedConversationId?: string;
+  action: "history" | "submit" | "create" | "visibility";
+  visibility?: { hidden?: boolean; snoozedUntil?: number | null };
   text?: string;
+  delivery?: "WhenIdle" | "WaitForSlot" | "Steer";
+  maxActiveWorkers?: number;
+  clientRequestId?: string;
+  title?: string;
+  prompt?: string;
+  project?: string;
+  parentSessionId?: string;
 };
 export type BrowserWorkReply =
   | { ok: true; data: unknown }
@@ -107,9 +115,15 @@ export function readDesktopCatalog(environmentId: string): ReadonlyArray<AgentPr
 export function dispatchBrowserWork(
   environmentId: string,
   browserSessionId: string,
-  expectedConversationId: string,
-  action: BrowserWork["action"],
+  expectedConversationId: string | null,
+  action: "history" | "submit" | "visibility",
   text?: string,
+  options?: {
+    delivery?: "WhenIdle" | "WaitForSlot" | "Steer";
+    clientRequestId?: string;
+    maxActiveWorkers?: number;
+    visibility?: { hidden?: boolean; snoozedUntil?: number | null };
+  },
 ): Promise<BrowserWorkReply | null> {
   const owners = liveOwners(environmentId, browserSessionId);
   if (owners.length !== 1)
@@ -122,9 +136,18 @@ export function dispatchBrowserWork(
   if (
     session.kind !== "t3/chatgpt" ||
     session.source.browserSessionId !== browserSessionId ||
-    session.source.conversationId !== expectedConversationId ||
-    !session.capabilities.includes(action === "history" ? "ReadHistory" : "Submit") ||
-    (action === "submit" && !session.deliveryModes.includes("WhenIdle"))
+    (action !== "visibility" &&
+      session.source.conversationId !== expectedConversationId &&
+      // A cold guest has no observed conversation; queued delivery will
+      // verify the exact requested conversation before touching its composer.
+      !(
+        action === "submit" &&
+        options?.delivery === "WhenIdle" &&
+        session.source.conversationId === null
+      )) ||
+    (action !== "visibility" &&
+      !session.capabilities.includes(action === "history" ? "ReadHistory" : "Submit")) ||
+    (action === "submit" && !session.deliveryModes.includes(options?.delivery ?? "WhenIdle"))
   )
     return Promise.resolve({
       ok: false,
@@ -146,9 +169,13 @@ export function dispatchBrowserWork(
     jobId: newId(),
     environmentId,
     browserSessionId,
-    expectedConversationId,
+    ...(expectedConversationId === null ? {} : { expectedConversationId }),
     action,
     ...(text === undefined ? {} : { text }),
+    ...(options?.delivery ? { delivery: options.delivery } : {}),
+    ...(options?.clientRequestId ? { clientRequestId: options.clientRequestId } : {}),
+    ...(options?.maxActiveWorkers ? { maxActiveWorkers: options.maxActiveWorkers } : {}),
+    ...(options?.visibility ? { visibility: options.visibility } : {}),
   };
   return new Promise((resolve) => {
     jobs.set(work.jobId, { owner, work, claimed: false, resolve });
@@ -227,4 +254,65 @@ export function finishDesktopWork(
   jobs.delete(jobId);
   job.resolve(result);
   return true;
+}
+
+/**
+ * Creation is bound to exactly one authenticated T3 desktop publisher, not
+ * the most recently active browser tab. A claimed job is never redelivered.
+ */
+export function hasUniqueDesktopCreator(environmentId: string): boolean {
+  const now = clockNow();
+  return (
+    [...catalogs.values()].filter(
+      (catalog) => catalog.environmentId === environmentId && now - catalog.updatedAt <= LEASE_MS,
+    ).length === 1
+  );
+}
+export function dispatchBrowserCreate(
+  environmentId: string,
+  input: {
+    clientRequestId: string;
+    title: string;
+    prompt?: string;
+    project?: string;
+    parentSessionId?: string;
+  },
+): Promise<BrowserWorkReply | null> {
+  const now = clockNow();
+  const owners = [...catalogs.entries()].filter(
+    ([, catalog]) => catalog.environmentId === environmentId && now - catalog.updatedAt <= LEASE_MS,
+  );
+  if (owners.length !== 1)
+    return Promise.resolve({
+      ok: false,
+      code: "Unavailable",
+      message: "Exactly one authenticated T3 desktop publisher is required for ChatGPT creation.",
+    });
+  const owner = owners[0]![0];
+  const work: BrowserWork = {
+    jobId: newId(),
+    environmentId,
+    action: "create",
+    ...input,
+  };
+  return new Promise((resolve) => {
+    jobs.set(work.jobId, { owner, work, claimed: false, resolve });
+    Effect.runFork(
+      Effect.sleep(105_000).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (!jobs.has(work.jobId)) return;
+            jobs.delete(work.jobId);
+            resolve(null);
+          }),
+        ),
+      ),
+    );
+    const waiter = waiters.get(owner);
+    if (waiter) {
+      waiters.delete(owner);
+      jobs.get(work.jobId)!.claimed = true;
+      waiter.resolve(work);
+    }
+  });
 }

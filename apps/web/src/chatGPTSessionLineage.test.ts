@@ -46,6 +46,15 @@ describe("explicit ChatGPT spawn parent identity", () => {
     ).toThrow(/Unknown or hidden/);
   });
 
+  it("resolves a parent by its registered public Bootstrap ID", () => {
+    const publicId = "6d50bdf7-bc79-4a94-a938-657f65ee390e";
+    const registered: Session[] = [
+      { ...existing[0]!, bootstrapIdentity: { state: "registered", publicId } }, existing[1]!,
+    ];
+    expect(resolveExplicitChatGPTParent(registered, publicId)?.id).toBe(parentId);
+    expect(resolveExplicitChatGPTParent(registered, parentId)?.id).toBe(parentId);
+  });
+
   it("records the supplied T3 UUID even if the parent browser hasn't activated yet", () => {
     const child = {
       id: childId,
@@ -53,12 +62,18 @@ describe("explicit ChatGPT spawn parent identity", () => {
       project: "t3code",
       parentSessionId: parentId,
     };
-    // Both T3 sort modes follow the *same* exact parent, regardless of other active tabs.
+    // Started mode nests the child. Activity mode puts working children ahead
+    // of inactive parents without changing their stored parent identity.
     const sessions = [existing[0]!, existing[1]!, child];
     for (const mode of ["started", "activity"] as const) {
       const rendered = rows(sessions, mode);
       const at = rendered.findIndex(([id]) => id === parentId);
-      expect(rendered[at + 1]).toEqual([childId, 1]);
+      if (mode === "started") {
+        expect(rendered[at + 1]).toEqual([childId, 1]);
+      } else {
+        expect(rendered.find(([id]) => id === childId)).toEqual([childId, 0]);
+        expect(rendered.findIndex(([id]) => id === childId)).toBeLessThan(at);
+      }
       expect(rendered.filter(([id]) => id === childId)).toHaveLength(1);
     }
     const index = chatGPTParentIndex(sessions);
@@ -138,12 +153,19 @@ describe("defensive grouping against inconsistent persisted parents", () => {
         [child.id]: { age: "invalid", lastWorkingAt: 1 },
         [other.id]: { age: "working", lastWorkingAt: 100 },
       }).flatMap((group) => group.rows.map(({ session, depth }) => [session.id, depth]));
-      const rootAt = tree.findIndex(([id]) => id === root.id);
-      expect(tree.slice(rootAt, rootAt + 3)).toEqual([
-        [root.id, 0],
-        [child.id, 1],
-        [grandchildId, 2],
-      ]);
+      if (mode === "started") {
+        const rootAt = tree.findIndex(([id]) => id === root.id);
+        expect(tree.slice(rootAt, rootAt + 3)).toEqual([
+          [root.id, 0],
+          [child.id, 1],
+          [grandchildId, 2],
+        ]);
+      } else {
+        // Working grandchildren move ahead of their inactive ancestors.
+        expect(tree.findIndex(([id]) => id === grandchildId)).toBeLessThan(
+          tree.findIndex(([id]) => id === root.id),
+        );
+      }
     }
     const hidden = setChatGPTSessionHidden(hydrated, root.id, true);
     expect(hidden.find((entry) => entry.id === child.id)?.parentSessionId).toBe(root.id);

@@ -1,6 +1,5 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
-  DEFAULT_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -8,6 +7,11 @@ import * as Schema from "effect/Schema";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isChatGPTHomeUrl } from "../../chatGPTBrowserPrewarm";
+import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
+import { useChatGPTSessionQueueDriver, hasAdmittedCapacityMessage } from "../../chatGPTSessionMessageQueue";
+import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
+import { isChatGPTStartupSessionDeferred } from "../../omniwork/chatGPTStartupLoadPolicy";
+import { useWarmChatGPTSessionIds } from "../../omniwork/chatGPTWarmSessionPolicy";
 import {
   CHATGPT_DEFAULT_URL,
   chatGPTBrowserLastUrlKey,
@@ -47,13 +51,38 @@ export function ChatGPTBrowserSessionRuntime({
     [environmentId, sessionId],
   );
   const previewState = useThreadPreviewState(threadRef);
-  const { renameSessionFromPageTitle, disqualifyManualEmptyCandidate } =
+  const warmedIds = useWarmChatGPTSessionIds(environmentId);
+  const [capacityAdmitted, setCapacityAdmitted] = useState(() =>
+    hasAdmittedCapacityMessage(environmentId, sessionId));
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const data = (event as CustomEvent<{environmentId:string;sessionId:string}>).detail;
+      if (data?.environmentId === environmentId && data.sessionId === sessionId)
+        setCapacityAdmitted(hasAdmittedCapacityMessage(environmentId, sessionId));
+    };
+    const changedQueue = (event: Event) => {
+      const key = (event as CustomEvent<string>).detail;
+      if (key === `t3code:chatgpt-browser:session-queue:v1:${environmentId}:${sessionId}`)
+        setCapacityAdmitted(hasAdmittedCapacityMessage(environmentId, sessionId));
+    };
+    window.addEventListener("t3:chatgpt-capacity-admitted", changed);
+    window.addEventListener("t3:chatgpt-session-queue-change", changedQueue);
+    return () => {
+      window.removeEventListener("t3:chatgpt-capacity-admitted", changed);
+      window.removeEventListener("t3:chatgpt-session-queue-change", changedQueue);
+    };
+  }, [environmentId, sessionId]);
+  const startupDeferred = !capacityAdmitted && !warmedIds.includes(sessionId) &&
+    isChatGPTStartupSessionDeferred(environmentId, sessionId);
+  const { sessions, renameSessionFromPageTitle, disqualifyManualEmptyCandidate } =
     useChatGPTBrowserSessions(environmentId);
+  useChatGPTSessionQueueDriver(environmentId, sessionId, sessions);
   const observedHomeRef = useRef(false);
   const open = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const close = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const list = useAtomQueryRunner(previewEnvironment.list, { refresh: true, reportFailure: false });
   const openingRef = useRef(false);
+  const startupRetryUsedRef = useRef(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [lastUrl, setLastUrl] = useLocalStorage(
     chatGPTBrowserLastUrlKey(environmentId, sessionId),
@@ -62,16 +91,19 @@ export function ChatGPTBrowserSessionRuntime({
   );
   const openUrl = /^https?:\/\//i.test(lastUrl.trim()) ? lastUrl.trim() : CHATGPT_DEFAULT_URL;
 
+  const persistentChromium = isPersistentChatGPTSessionOptedIn(sessionId);
   usePreviewSession(threadRef);
   // Restored webviews load their saved URL on attach. Do not eagerly reload
   // every existing session: large sets of ChatGPT tabs can hit rate limits.
   // The recovery coordinator refreshes only confirmed failures, one at a time.
 
   useEffect(() => {
-    if (suspended || openError !== null || openingRef.current) return;
+    // Native Chrome pages are independent of old preview-tab lifecycle.
+    // A stale preview snapshot is never a reason to open another page.
+    if (persistentChromium || (suspended && !capacityAdmitted) || startupDeferred || openError !== null || openingRef.current) return;
 
     const currentSnapshot = previewState.snapshot;
-    if (currentSnapshot && currentSnapshot.navStatus._tag !== "Idle") return;
+    if (currentSnapshot && (persistentChromium || currentSnapshot.navStatus._tag !== "Idle")) return;
 
     // Reconciliation can briefly know about tabs before choosing an active one.
     if (!currentSnapshot && Object.keys(previewState.sessions).length > 0) return;
@@ -87,7 +119,7 @@ export function ChatGPTBrowserSessionRuntime({
       }
       reconcilePreviewServerSessions(threadRef, listed.value);
       const existingSnapshot = readThreadPreviewState(threadRef).snapshot;
-      if (existingSnapshot && existingSnapshot.navStatus._tag !== "Idle") return;
+      if (existingSnapshot && (persistentChromium || existingSnapshot.navStatus._tag !== "Idle")) return;
 
       // An Idle preview renders T3's generic local-server page. Replace it
       // instead of trying to navigate that already-mounted blank webview.
@@ -103,9 +135,9 @@ export function ChatGPTBrowserSessionRuntime({
       const result = await openPreviewSession({
         openPreview: open,
         threadRef,
-        url: openUrl,
+        ...(persistentChromium ? {} : { url: openUrl }),
         viewport: FILL_PREVIEW_VIEWPORT,
-        profileId: DEFAULT_BROWSER_PROFILE_ID,
+        profileId: chatGPTSessionProfileId(sessions.find((session) => session.id === sessionId)),
       });
       if (result._tag === "Failure") {
         const error = squashAtomCommandFailure(result);
@@ -125,11 +157,35 @@ export function ChatGPTBrowserSessionRuntime({
     environmentId,
     openError,
     openUrl,
+    persistentChromium,
     previewState.sessions,
     previewState.snapshot,
     suspended,
+    capacityAdmitted,
+    startupDeferred,
     threadRef,
   ]);
+
+  // React may report a transient update-depth error while dozens of stored
+  // sessions hydrate after desktop startup. Retry that specific failure once
+  // after hydration, through the ordinary list-before-open path (never blindly
+  // reload an existing guest or discard a draft). Persistent errors keep Retry.
+  useEffect(() => {
+    if (
+      quiet ||
+      !openError ||
+      startupRetryUsedRef.current ||
+      !/Minified React error #185|Maximum update depth exceeded/i.test(openError)
+    )
+      return;
+    const delay =
+      3_000 + ([...sessionId].reduce((value, char) => value + char.charCodeAt(0), 0) % 2_000);
+    const retry = setTimeout(() => {
+      startupRetryUsedRef.current = true;
+      setOpenError((current) => (current === openError ? null : current));
+    }, delay);
+    return () => clearTimeout(retry);
+  }, [quiet, openError, sessionId]);
 
   // The offscreen spare has no user-facing retry button. Retry a failed open
   // conservatively without rendering error UI over the workspace.

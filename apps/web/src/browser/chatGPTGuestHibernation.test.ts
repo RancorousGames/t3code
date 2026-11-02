@@ -40,6 +40,12 @@ describe("shouldHibernateChatGPTGuest", () => {
       expect(shouldHibernateChatGPTGuest({ ...stale, activity })).toBe(false);
   });
 
+  it('keeps managers/manual sessions for four hours but not ordinary workers', () => {
+    const threeHours = { ...stale, now: 3 * 60 * 60_000 };
+    expect(shouldHibernateChatGPTGuest(threeHours)).toBe(true);
+    expect(shouldHibernateChatGPTGuest({ ...threeHours, longIdle: true })).toBe(false);
+    expect(shouldHibernateChatGPTGuest({ ...threeHours, longIdle: true, now: 4 * 60 * 60_000 })).toBe(true);
+  });
   it("keeps shown, fresh, generating and recently used guests loaded", () => {
     expect(shouldHibernateChatGPTGuest({ ...stale, visible: true })).toBe(false);
     expect(shouldHibernateChatGPTGuest({ ...stale, onConversation: false })).toBe(false);

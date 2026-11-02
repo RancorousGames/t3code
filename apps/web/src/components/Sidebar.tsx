@@ -82,6 +82,7 @@ import {
 } from "react";
 import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import { OpenRigAgentsSidebarEntry } from "./sidebar/OpenRigAgentsSidebarEntry";
+import { ChatGPTRegistryRemoteSidebarEntry } from "./sidebar/ChatGPTRegistryRemoteSidebarEntry";
 import { OpenRigOperatorInbox } from "./sidebar/OpenRigOperatorInbox";
 
 import {
@@ -3186,7 +3187,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               onNewThread={handleNewThreadClick}
               newThreadDisabled={projects.length === 0}
               newThreadShortcutLabel={newThreadShortcutLabel}
-              chatGPTSessionAction={<ChatGPTBrowserNewSessionAction />}
+              chatGPTSessionAction={isElectron ? <ChatGPTBrowserNewSessionAction /> : undefined}
               newThreadInProjectShortcutLabel={newThreadInProjectShortcutLabel}
               showNewThreadInProjectHint={
                 !boringSidebarEnabled &&
@@ -3213,9 +3214,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       >
         <SidebarGroup className="flex-1" role="presentation">
           <OpenRigOperatorInbox />
-          <ChatGPTBrowserSidebarEntry showCreateAction={false} />
+          <TooltipProvider delay={700} closeDelay={0} timeout={0}>
+            {isElectron ? <ChatGPTBrowserSidebarEntry showCreateAction={false} /> : <ChatGPTRegistryRemoteSidebarEntry />}
+          </TooltipProvider>
           <OpenRigAgentsSidebarEntry />
-          <OpenRigAgentsSidebarEntry />
+          {isElectron && (
+            <div role="separator" aria-label="OpenRig agents / T3 threads divider"
+              className="mx-2 my-1 h-px bg-sidebar-border/70" />
+          )}
+          {isElectron && (
+            <div
+              role="separator"
+              aria-label="T3 threads"
+              className="mx-0.5 flex h-8 items-center gap-2 px-2 text-xs font-medium text-sidebar-muted-foreground/60"
+            >
+              <span className="shrink-0">T3 Threads</span>
+              <span aria-hidden className="h-px min-w-2 flex-1 bg-sidebar-border/60" />
+            </div>
+          )}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider

@@ -27,6 +27,7 @@ import { dispatchHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCom
 import { WorkspaceConnectionTitle } from "../home/WorkspaceConnectionTitle";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
+import { ChatGPTSessionsScreen } from "../chatgpt/ChatGPTSessionsScreen";
 import {
   WorkspaceTabsContext,
   WorkspaceTabsProvider,
@@ -168,11 +169,15 @@ function WorkspaceRootContent() {
             title="T3 Code"
             titleContent={renderHeaderTitle()}
             actions={[
-              ...(state.selectedTab === "threads" || state.selectedTab === "pullRequests"
+              ...(state.selectedTab === "threads" || state.selectedTab === "pullRequests" || state.selectedTab === "chatGPT"
                 ? [
                     {
                       accessibilityLabel:
-                        state.selectedTab === "threads" ? "Search threads" : "Search pull requests",
+                        state.selectedTab === "threads"
+                          ? "Search threads"
+                          : state.selectedTab === "chatGPT"
+                            ? "Search ChatGPT sessions"
+                            : "Search pull requests",
                       icon: "magnifyingglass" as const,
                       onPress: () => {
                         dispatchHardwareKeyboardCommand("focusSearch");
@@ -197,6 +202,8 @@ function WorkspaceRootContent() {
             <HomeRouteScreen />
           ) : state.selectedTab === "pullRequests" ? (
             <PullRequestsScreen />
+          ) : state.selectedTab === "chatGPT" ? (
+            <ChatGPTSessionsScreen />
           ) : (
             <WorkspaceExtraTab tab={state.selectedTab} />
           )}
@@ -208,7 +215,7 @@ function WorkspaceRootContent() {
         {enabled.length === 0 && !settingsOpen ? null : (
             settingsOpen
               ? Platform.OS === "ios"
-              : state.selectedTab === "threads" || state.selectedTab === "pullRequests"
+              : state.selectedTab === "threads" || state.selectedTab === "pullRequests" || state.selectedTab === "chatGPT"
           ) ? (
           <WorkspaceToolbar sidebar={sidebarNavigation} onNewTask={startNewTask} />
         ) : (

@@ -190,6 +190,15 @@ export function writeLocalStorageValue<T, E>(
     console.error("[LOCALSTORAGE] Could not update stored value.", error);
   }
 }
+/** Update browser storage and subscribed controls from non-React actions. */
+export const setLocalStorageItemAndNotify = <T, E>(
+  key: string,
+  value: T,
+  schema: Schema.Codec<T, E>,
+): void => {
+  setLocalStorageItem(key, value, schema);
+  dispatchLocalStorageChange(key);
+};
 
 export function useLocalStorage<T, E>(
   key: string,

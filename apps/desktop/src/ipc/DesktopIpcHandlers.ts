@@ -69,6 +69,31 @@ import {
 import * as PreviewIpc from "./methods/preview.ts";
 import { installOpenRigIpcHandlers } from "./installOpenRigIpcHandlers.ts";
 import { savePrivateChatGPTDraftSnapshotIpc } from "./methods/chatGPTDraftSnapshot.ts";
+import { persistentChatGPTRequestIpc } from "./methods/persistentChatGPTBrowser.ts";
+import { stableChatGPTViewRequestIpc } from "./methods/stableChatGPTView.ts";
+import { readChatGPTBootstrapTitleIpc } from "./methods/chatGPTBootstrapTitle.ts";
+import { readTaskBoardWorkerClaimsIpc } from "./methods/taskBoardWorkerClaims.ts";
+import {
+  openTaskBoardLiveSessionIpc,
+  controlTaskBoardLiveSessionIpc,
+} from "./methods/taskBoardLiveSession.ts";
+import {
+  openTaskBoardLinkIpc,
+  openFirefoxLinkIpc,
+  openWartribesTourIpc,
+} from "./methods/taskBoardSmartLinks.ts";
+import { searchChatGPTHistoryIpc } from "./methods/chatGPTHistorySearch.ts";
+import {
+  readTaskBoardHumanInboxIpc,
+  openTaskBoardHumanItemIpc,
+} from "./methods/taskBoardHumanInboxIpc.ts";
+import {
+  controlOmniHubKeepAwakeMonitorIpc,
+  readOmniHubKeepAwakeMonitorsIpc,
+  startOmniHubKeepAwakeMonitorIpc,
+} from "./methods/omniHubKeepAwake.ts";
+import { readCaffyManagedIdleIpc, cancelCaffyManagedIdleIpc } from "./methods/caffyManagedIdle.ts";
+import { chatGPTCapacityMessageIpc } from "./methods/chatGPTCapacityMessage.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
 import {
@@ -89,6 +114,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(AppActivationIpc.setReady);
   yield* ipc.handle(AppActivationIpc.complete);
+  yield* ipc.handle(AppActivationIpc.enqueueChatGPT);
+  yield* ipc.handle(AppActivationIpc.recordIdle);
+  yield* ipc.handle(AppActivationIpc.recipientMounted);
+  yield* ipc.handle(AppActivationIpc.deliveryDiagnostics);
   yield* ipc.handle(WebLinksIpc.setReady);
 
   yield* ipc.handleSync(takeLegacyLocalStorage);
@@ -105,6 +134,24 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(savePrivateChatGPTDraftSnapshotIpc);
+  yield* ipc.handle(readChatGPTBootstrapTitleIpc);
+  yield* ipc.handle(persistentChatGPTRequestIpc);
+  yield* ipc.handle(stableChatGPTViewRequestIpc);
+  yield* ipc.handle(readTaskBoardWorkerClaimsIpc);
+  yield* ipc.handle(openTaskBoardLiveSessionIpc);
+  yield* ipc.handle(openTaskBoardLinkIpc);
+  yield* ipc.handle(openFirefoxLinkIpc);
+  yield* ipc.handle(openWartribesTourIpc);
+  yield* ipc.handle(searchChatGPTHistoryIpc);
+  yield* ipc.handle(controlTaskBoardLiveSessionIpc);
+  yield* ipc.handle(readTaskBoardHumanInboxIpc);
+  yield* ipc.handle(openTaskBoardHumanItemIpc);
+  yield* ipc.handle(chatGPTCapacityMessageIpc);
+  yield* ipc.handle(readCaffyManagedIdleIpc);
+  yield* ipc.handle(cancelCaffyManagedIdleIpc);
+  yield* ipc.handle(readOmniHubKeepAwakeMonitorsIpc);
+  yield* ipc.handle(controlOmniHubKeepAwakeMonitorIpc);
+  yield* ipc.handle(startOmniHubKeepAwakeMonitorIpc);
   yield* installOpenRigIpcHandlers();
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getSnapShotState);

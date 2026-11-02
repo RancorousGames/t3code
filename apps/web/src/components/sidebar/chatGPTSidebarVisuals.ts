@@ -1,5 +1,5 @@
 import type { DesktopOpenRigSeatSessions, DesktopOpenRigSeatTopology } from "@t3tools/contracts";
-import type { BrowserSession } from "../../chatGPTBrowserSessions";
+import { chatGPTSessionCreationOrigin, type BrowserSession } from "../../chatGPTBrowserSessions";
 
 /** Only the explicit RigSpec role (never a display title) establishes manager type. */
 export function isOpenRigManagerRole(role: string | null): boolean {
@@ -12,28 +12,48 @@ export function verifiedManagerChatGPTTabIds(
   ledgers: readonly DesktopOpenRigSeatSessions[],
   environmentId: string,
 ): ReadonlySet<string> {
-  const managerSeatIds = new Set(
-    topology.source === "openrig-rigspec"
-      ? topology.seats.filter((seat) => isOpenRigManagerRole(seat.role)).map((seat) => seat.id)
-      : [],
-  );
-  const ids = new Set<string>();
+  if (
+    topology.source !== "openrig-rigspec" &&
+    topology.source !== "openrig-rigspec-and-managed-ledger"
+  )
+    return new Set();
+
+  const seatRoles = new Map(topology.seats.map((seat) => [seat.id, seat.role]));
+  const byTab = new Map<string, { seatId: string; conversationId: string }[]>();
+  const byConversation = new Map<string, Set<string>>();
   for (const ledger of ledgers) {
-    if (!managerSeatIds.has(ledger.seatId)) continue;
-    for (const session of ledger.sessions) {
-      if (
-        session.seatId !== ledger.seatId ||
-        session.status !== "active" ||
-        (session.mode !== "chatgpt" && session.mode !== "adopt") ||
-        session.target?.kind !== "chatgpt-conversation" ||
-        (session.environmentId !== null && session.environmentId !== environmentId) ||
-        !session.attachedTabUuid
-      )
-        continue;
-      ids.add(session.attachedTabUuid);
-    }
+    if (!seatRoles.has(ledger.seatId) || !ledger.primarySessionId) continue;
+    const session = ledger.sessions.find(
+      (item) =>
+        item.id === ledger.primarySessionId && item.primary && item.seatId === ledger.seatId,
+    );
+    if (
+      !session ||
+      session.status !== "active" ||
+      (session.mode !== "chatgpt" && session.mode !== "adopt") ||
+      session.target?.kind !== "chatgpt-conversation" ||
+      !session.target.conversationId ||
+      (session.conversationId && session.conversationId !== session.target.conversationId) ||
+      (session.environmentId && session.environmentId !== environmentId) ||
+      !session.attachedTabUuid
+    )
+      continue;
+
+    const owner = { seatId: ledger.seatId, conversationId: session.target.conversationId };
+    byTab.set(session.attachedTabUuid, [...(byTab.get(session.attachedTabUuid) ?? []), owner]);
+    const owners = byConversation.get(owner.conversationId) ?? new Set<string>();
+    owners.add(owner.seatId);
+    byConversation.set(owner.conversationId, owners);
   }
-  return ids;
+  return new Set(
+    [...byTab].flatMap(([tabId, claims]) =>
+      claims.length === 1 &&
+      isOpenRigManagerRole(seatRoles.get(claims[0]!.seatId) ?? null) &&
+      byConversation.get(claims[0]!.conversationId)?.size === 1
+        ? [tabId]
+        : [],
+    ),
+  );
 }
 
 /** Use one stable project label for every child/row even in status-only groups. */
@@ -58,17 +78,29 @@ export function chatGPTSidebarProjectTitles(
   return titles;
 }
 
-/** Sidebar border colors a user can pin to a ChatGPT session from its context menu. */
+/** Manager seats outrank both human adoption and creation origin. */
+export function chatGPTSessionDisplayRole(
+  session: BrowserSession,
+  verifiedManager: boolean,
+): "manager" | "worker" | "human" {
+  // Local labels are user hints, not canonical OpenRig role evidence.
+  if (verifiedManager) return "manager";
+  if (session.markedAsWorkerAt !== undefined) return "worker";
+  if (session.humanControlled) return "human";
+  if (session.binding) return session.binding.role === "worker" ? "worker" : "human";
+  return chatGPTSessionCreationOrigin(session) === "backend" ? "worker" : "human";
+}
+/** User-selected personal highlight colors, independent of AI activity color. */
 export const CHATGPT_SESSION_BORDER_COLORS = [
-  { id: "red", label: "Red", ring: "ring-red-500", swatch: "bg-red-500" },
-  { id: "orange", label: "Orange", ring: "ring-orange-500", swatch: "bg-orange-500" },
-  { id: "yellow", label: "Yellow", ring: "ring-yellow-400", swatch: "bg-yellow-400" },
-  { id: "green", label: "Green", ring: "ring-emerald-500", swatch: "bg-emerald-500" },
-  { id: "blue", label: "Blue", ring: "ring-sky-500", swatch: "bg-sky-500" },
-  { id: "purple", label: "Purple", ring: "ring-violet-500", swatch: "bg-violet-500" },
-  { id: "pink", label: "Pink", ring: "ring-pink-500", swatch: "bg-pink-500" },
+  { id: "red", label: "Red", accent: "ring-red-400", swatch: "bg-red-500" },
+  { id: "orange", label: "Orange", accent: "ring-orange-400", swatch: "bg-orange-500" },
+  { id: "yellow", label: "Yellow", accent: "ring-yellow-300", swatch: "bg-yellow-400" },
+  { id: "green", label: "Green", accent: "ring-emerald-400", swatch: "bg-emerald-500" },
+  { id: "blue", label: "Blue", accent: "ring-sky-400", swatch: "bg-sky-500" },
+  { id: "purple", label: "Purple", accent: "ring-violet-400", swatch: "bg-violet-500" },
+  { id: "pink", label: "Pink", accent: "ring-pink-400", swatch: "bg-pink-500" },
 ] as const;
 
-export function chatGPTSessionBorderRingClass(color: string | undefined): string | null {
-  return CHATGPT_SESSION_BORDER_COLORS.find((entry) => entry.id === color)?.ring ?? null;
+export function chatGPTSessionHighlightAccentClass(color: string | undefined): string | null {
+  return CHATGPT_SESSION_BORDER_COLORS.find((entry) => entry.id === color)?.accent ?? null;
 }

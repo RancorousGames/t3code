@@ -73,6 +73,47 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  persistentChatGPTRequest: (input) =>
+    ipcRenderer.invoke(IpcChannels.PERSISTENT_CHATGPT_REQUEST_CHANNEL, input),
+  stableChatGPTViewRequest: (input) =>
+    ipcRenderer.invoke(IpcChannels.STABLE_CHATGPT_VIEW_REQUEST_CHANNEL, input),
+  onStableChatGPTViewState: (listener) => {
+    const onState = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      if (!payload || typeof payload !== "object") return;
+      const state = payload as { environmentId?: unknown; sessionId?: unknown; phase?: unknown };
+      if (
+        typeof state.environmentId !== "string" ||
+        typeof state.sessionId !== "string" ||
+        !["loading", "loaded", "failed", "navigated"].includes(String(state.phase))
+      )
+        return;
+      listener(
+        state as {
+          environmentId: string;
+          sessionId: string;
+          phase: "loading" | "loaded" | "failed" | "navigated";
+        },
+      );
+    };
+    ipcRenderer.on(IpcChannels.STABLE_CHATGPT_VIEW_STATE_CHANNEL, onState);
+    return () => ipcRenderer.removeListener(IpcChannels.STABLE_CHATGPT_VIEW_STATE_CHANNEL, onState);
+  },
+  readChatGPTBootstrapTitle: (id) =>
+    ipcRenderer.invoke(IpcChannels.CHATGPT_BOOTSTRAP_TITLE_LOOKUP_CHANNEL, id),
+  readChatGPTDeliveryDiagnostics: () =>
+    ipcRenderer.invoke(IpcChannels.DESKTOP_CHATGPT_DELIVERY_DIAGNOSTICS_CHANNEL),
+  chatGPTCapacityMessage: (input) =>
+    ipcRenderer.invoke(IpcChannels.CHATGPT_CAPACITY_MESSAGE_CHANNEL, input),
+  readCaffyManagedIdleSubscriptions: () =>
+    ipcRenderer.invoke(IpcChannels.CAFFY_MANAGED_IDLE_READ_CHANNEL),
+  cancelCaffyManagedIdleSubscription: (id) =>
+    ipcRenderer.invoke(IpcChannels.CAFFY_MANAGED_IDLE_CANCEL_CHANNEL, id),
+  readOmniHubKeepAwakeMonitors: (input) =>
+    ipcRenderer.invoke(IpcChannels.OMNIHUB_KEEP_AWAKE_READ_CHANNEL, input),
+  controlOmniHubKeepAwakeMonitor: (input) =>
+    ipcRenderer.invoke(IpcChannels.OMNIHUB_KEEP_AWAKE_CONTROL_CHANNEL, input),
+  startOmniHubKeepAwakeMonitor: (input) =>
+    ipcRenderer.invoke(IpcChannels.OMNIHUB_KEEP_AWAKE_START_CHANNEL, input),
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {
@@ -124,6 +165,14 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
   savePrivateChatGPTDraftSnapshot: (input) =>
     ipcRenderer.invoke(IpcChannels.PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL, input),
+  readTaskBoardWorkerClaims: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_WORKER_CLAIMS_CHANNEL),
+  openTaskBoardLiveSession: (input) =>
+    ipcRenderer.invoke(IpcChannels.TASKBOARD_LIVE_SESSION_OPEN_CHANNEL, input),
+  controlTaskBoardLiveSession: (input) =>
+    ipcRenderer.invoke(IpcChannels.TASKBOARD_LIVE_SESSION_CONTROL_CHANNEL, input),
+  readTaskBoardHumanInbox: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_HUMAN_INBOX_CHANNEL),
+  openTaskBoardHumanItem: (input) =>
+    ipcRenderer.invoke(IpcChannels.TASKBOARD_HUMAN_OPEN_CHANNEL, input),
   listOpenRigAgents: () => ipcRenderer.invoke(IpcChannels.OPENRIG_LIST_AGENTS_CHANNEL),
   listPendingOpenRigNativeApprovals: () =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_NATIVE_APPROVAL_PENDING_CHANNEL),
@@ -171,12 +220,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.OPENRIG_RECONCILE_MANAGED_CHANNEL, input),
   detachOpenRigManagedSession: (input) =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_DETACH_MANAGED_CHANNEL, input),
+  runOpenRigSeatReboot: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_SEAT_REBOOT_CHANNEL, input),
   runOpenRigManagedBrowserLifecycle: (input) =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_MANAGED_BROWSER_LIFECYCLE_CHANNEL, input),
   bindOpenRigAgent: (input) => ipcRenderer.invoke(IpcChannels.OPENRIG_BIND_AGENT_CHANNEL, input),
   unbindOpenRigAgent: (id) => ipcRenderer.invoke(IpcChannels.OPENRIG_UNBIND_AGENT_CHANNEL, id),
+  retireOpenRigSeat: (id) => ipcRenderer.invoke(IpcChannels.OPENRIG_RETIRE_SEAT_CHANNEL, id),
   sendOpenRigAgentMessage: (input) =>
     ipcRenderer.invoke(IpcChannels.OPENRIG_SEND_AGENT_MESSAGE_CHANNEL, input),
+  reconcileOpenRigHumanSend: (input) =>
+    ipcRenderer.invoke(IpcChannels.OPENRIG_RECONCILE_HUMAN_SEND_CHANNEL, input),
   requestSnapShotPermissions: (includeAccessibility) =>
     ipcRenderer.invoke(IpcChannels.REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL, includeAccessibility),
   getSnapShotState: () => ipcRenderer.invoke(IpcChannels.GET_SNAP_SHOT_STATE_CHANNEL),
@@ -258,6 +312,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   readMedia: (url: string) => ipcRenderer.invoke(IpcChannels.READ_MEDIA_CHANNEL, url),
+  openTaskBoardLink: (request) =>
+    ipcRenderer.invoke(IpcChannels.OPEN_TASKBOARD_LINK_CHANNEL, request),
+  openFirefoxLink: (url) => ipcRenderer.invoke(IpcChannels.OPEN_FIREFOX_LINK_CHANNEL, url),
+  openWartribesTour: (scenario) =>
+    ipcRenderer.invoke(IpcChannels.OPEN_WARTRIBES_TOUR_CHANNEL, scenario),
+  searchChatGPTHistory: (input) =>
+    ipcRenderer.invoke(IpcChannels.CHATGPT_HISTORY_SEARCH_CHANNEL, input),
   checkSystemPermission: (pane: string) =>
     ipcRenderer.invoke(IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL, pane),
   openSystemSettings: (pane: string) =>
@@ -361,6 +422,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_READY_CHANNEL, ready),
     complete: (response) =>
       ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_COMPLETE_CHANNEL, response),
+    enqueueChatGPT: (input) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_CHATGPT_DELIVERY_ENQUEUE_CHANNEL, input),
+    reportChatGPTIdleTransition: (event) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_CHATGPT_IDLE_TRANSITION_CHANNEL, event),
+    reportChatGPTRecipientMounted: (event) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_CHATGPT_RECIPIENT_MOUNTED_CHANNEL, event),
     onRequest: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
         if (typeof request !== "object" || request === null) return;

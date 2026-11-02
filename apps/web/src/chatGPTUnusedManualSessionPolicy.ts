@@ -62,6 +62,8 @@ export function emptyManualChatEligibility(input: {
     session.archive ||
     session.snoozedUntil ||
     session.borderColor ||
+    session.autoCloseExempt ||
+    session.humanControlled ||
     session.completion ||
     session.spawnRequestId ||
     session.project ||

@@ -1,4 +1,5 @@
 import { AgentProviderV1Request, AgentProviderV1Reply } from "./agentProvider.ts";
+import { ChatGPTRegistryAction, ChatGPTRegistryDriver, ChatGPTRegistryMetadataPatch, ChatGPTRegistryRecord, ChatGPTRegistrySession, ChatGPTRegistrySnapshot, ChatGPTRegistryTimeline } from "./chatGPTRegistry.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -436,6 +437,22 @@ export const WS_METHODS = {
 
   // Unified execution provider (additive to the existing native and desktop interfaces).
   agentProviderCall: "agentProvider.call",
+  chatGptTranscriptIngest: "chatgpt.transcript.ingest",
+  chatGptTranscriptSearch: "chatgpt.transcript.search",
+  chatGptTranscriptRead: "chatgpt.transcript.read",
+  chatGptRegistryList: "chatgpt.registry.list",
+  chatGptRegistrySubscribe: "chatgpt.registry.subscribe",
+  chatGptRegistryGet: "chatgpt.registry.get",
+  chatGptRegistryPatch: "chatgpt.registry.patch",
+  chatGptRegistryDriverRegister: "chatgpt.registry.driver.register",
+  chatGptRegistryDriverHeartbeat: "chatgpt.registry.driver.heartbeat",
+  chatGptRegistryDriverDisconnect: "chatgpt.registry.driver.disconnect",
+  chatGptRegistrySync: "chatgpt.registry.sync",
+  chatGptRegistryClose: "chatgpt.registry.close",
+  chatGptRegistryAct: "chatgpt.registry.act",
+  chatGptRegistryTake: "chatgpt.registry.take",
+  chatGptRegistryFinish: "chatgpt.registry.finish",
+  chatGptRegistryReceipt: "chatgpt.registry.receipt",
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
@@ -633,6 +650,157 @@ const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, 
 const WsAgentProviderCallRpc = Rpc.make(WS_METHODS.agentProviderCall, {
   payload: AgentProviderV1Request,
   success: AgentProviderV1Reply,
+  error: EnvironmentAuthorizationError,
+});
+
+const ChatGPTTranscriptTurn = Schema.Struct({
+  conversationUrl: Schema.String,
+  sessionId: Schema.String,
+  observedAt: Schema.String,
+  role: Schema.Literals(["user", "assistant"]),
+  turn: Schema.Number,
+  turnKey: Schema.optional(Schema.NullOr(Schema.String)),
+  index: Schema.Number,
+  text: Schema.String,
+  possiblyTruncated: Schema.optional(Schema.Boolean),
+  title: Schema.optional(Schema.NullOr(Schema.String)),
+  project: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const WsChatGPTTranscriptIngestRpc = Rpc.make(WS_METHODS.chatGptTranscriptIngest, {
+  payload: Schema.Struct({ turns: Schema.Array(ChatGPTTranscriptTurn) }),
+  success: Schema.Struct({ processed: Schema.Number }),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTTranscriptSearchRpc = Rpc.make(WS_METHODS.chatGptTranscriptSearch, {
+  payload: Schema.Struct({
+    query: Schema.String,
+    phrase: Schema.optional(Schema.Boolean),
+    role: Schema.optional(Schema.Literals(["user", "assistant"])),
+    project: Schema.optional(Schema.String),
+    limit: Schema.optional(Schema.Number),
+  }),
+  success: Schema.Array(Schema.Struct({
+    conversationId: Schema.String, url: Schema.String,
+    title: Schema.NullOr(Schema.String), project: Schema.NullOr(Schema.String),
+    sessionId: Schema.String, turnIndex: Schema.Number,
+    role: Schema.Literals(["user", "assistant"]), snippet: Schema.String,
+    observedAt: Schema.String, revisionHash: Schema.String,
+    firstTurnMissing: Schema.Boolean,
+  })),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTTranscriptReadRpc = Rpc.make(WS_METHODS.chatGptTranscriptRead, {
+  payload: Schema.Struct({ conversationId: Schema.String, limit: Schema.optional(Schema.Number) }),
+  success: Schema.Struct({
+    conversationId: Schema.String,
+    lastObservedAt: Schema.NullOr(Schema.String),
+    firstTurnMissing: Schema.Boolean,
+    limited: Schema.Boolean,
+    messages: Schema.Array(Schema.Struct({
+      role: Schema.Literals(["user", "assistant"]),
+      turnIndex: Schema.Number,
+      ordinal: Schema.Number,
+      text: Schema.String,
+      observedAt: Schema.String,
+      possiblyTruncated: Schema.Boolean,
+    })),
+  }),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryListRpc = Rpc.make(WS_METHODS.chatGptRegistryList, {
+  payload: Schema.Struct({ environmentId: Schema.String }),
+  success: Schema.Struct({
+    sessions: Schema.Array(ChatGPTRegistrySession),
+    driver: ChatGPTRegistryDriver,
+  }),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistrySubscribeRpc = Rpc.make(WS_METHODS.chatGptRegistrySubscribe, {
+  payload: Schema.Struct({ environmentId: Schema.String }),
+  success: Schema.Struct({
+    sessions: Schema.Array(ChatGPTRegistrySession),
+    driver: ChatGPTRegistryDriver,
+  }),
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+const WsChatGPTRegistryGetRpc = Rpc.make(WS_METHODS.chatGptRegistryGet, {
+  payload: Schema.Struct({ environmentId: Schema.String, sessionId: Schema.String }),
+  success: Schema.NullOr(ChatGPTRegistrySession),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryPatchRpc = Rpc.make(WS_METHODS.chatGptRegistryPatch, {
+  payload: Schema.Struct({
+    environmentId: Schema.String,
+    sessionId: Schema.String,
+    expectedUpdatedAt: Schema.Number,
+    patch: ChatGPTRegistryMetadataPatch,
+  }),
+  success: Schema.Struct({ ok: Schema.Boolean, session: Schema.NullOr(ChatGPTRegistrySession), reason: Schema.optional(Schema.String) }),
+  error: EnvironmentAuthorizationError,
+});
+const RegistryDriverPayload = Schema.Struct({
+  environmentId: Schema.String, driverId: Schema.String,
+});
+const RegistryMutationResult = Schema.Struct({
+  ok: Schema.Boolean, reason: Schema.optional(Schema.String),
+});
+const WsChatGPTRegistryDriverRegisterRpc = Rpc.make(WS_METHODS.chatGptRegistryDriverRegister, {
+  payload: RegistryDriverPayload, success: RegistryMutationResult,
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryDriverHeartbeatRpc = Rpc.make(WS_METHODS.chatGptRegistryDriverHeartbeat, {
+  payload: RegistryDriverPayload, success: RegistryMutationResult,
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryDriverDisconnectRpc = Rpc.make(WS_METHODS.chatGptRegistryDriverDisconnect, {
+  payload: RegistryDriverPayload, success: RegistryMutationResult,
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistrySyncRpc = Rpc.make(WS_METHODS.chatGptRegistrySync, {
+  payload: Schema.Struct({
+    driverId: Schema.String,
+    initial: Schema.optional(Schema.Boolean),
+    changes: Schema.Array(Schema.Struct({
+      environmentId: Schema.String, sessionId: Schema.String,
+      record: ChatGPTRegistryRecord,
+      snapshot: Schema.optional(Schema.NullOr(ChatGPTRegistrySnapshot)),
+      timeline: Schema.optional(Schema.NullOr(ChatGPTRegistryTimeline)),
+      appliedMetadataRevision: Schema.optional(Schema.Number),
+    })),
+  }),
+  success: Schema.Struct({ ok: Schema.Boolean, count: Schema.Number, reason: Schema.optional(Schema.String) }),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryCloseRpc = Rpc.make(WS_METHODS.chatGptRegistryClose, {
+  payload: Schema.Struct({
+    environmentId: Schema.String,
+    driverId: Schema.String,
+    receipts: Schema.Array(Schema.Struct({ sessionId: Schema.String, removedAt: Schema.String })),
+  }),
+  success: Schema.Struct({ ok: Schema.Boolean, closed: Schema.Number, reason: Schema.optional(Schema.String) }),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryActRpc = Rpc.make(WS_METHODS.chatGptRegistryAct, {
+  payload: Schema.Struct({
+    requestId: Schema.String, environmentId: Schema.String, sessionId: Schema.String,
+    actionId: Schema.String, args: ChatGPTRegistryRecord,
+  }),
+  success: Schema.Struct({ ok: Schema.Boolean, action: Schema.NullOr(ChatGPTRegistryAction), reason: Schema.optional(Schema.String) }),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryTakeRpc = Rpc.make(WS_METHODS.chatGptRegistryTake, {
+  payload: RegistryDriverPayload,
+  success: Schema.Struct({ ok: Schema.Boolean, actions: Schema.Array(ChatGPTRegistryAction), reason: Schema.optional(Schema.String) }),
+  error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryFinishRpc = Rpc.make(WS_METHODS.chatGptRegistryFinish, {
+  payload: Schema.Struct({ requestId: Schema.String, driverId: Schema.String, result: ChatGPTRegistryRecord }),
+  success: RegistryMutationResult, error: EnvironmentAuthorizationError,
+});
+const WsChatGPTRegistryReceiptRpc = Rpc.make(WS_METHODS.chatGptRegistryReceipt, {
+  payload: Schema.Struct({ requestId: Schema.String }),
+  success: Schema.NullOr(ChatGPTRegistryAction),
   error: EnvironmentAuthorizationError,
 });
 
@@ -1993,6 +2161,22 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
   WsAgentProviderCallRpc,
+  WsChatGPTTranscriptIngestRpc,
+  WsChatGPTTranscriptSearchRpc,
+  WsChatGPTTranscriptReadRpc,
+  WsChatGPTRegistryListRpc,
+  WsChatGPTRegistrySubscribeRpc,
+  WsChatGPTRegistryGetRpc,
+  WsChatGPTRegistryPatchRpc,
+  WsChatGPTRegistryDriverRegisterRpc,
+  WsChatGPTRegistryDriverHeartbeatRpc,
+  WsChatGPTRegistryDriverDisconnectRpc,
+  WsChatGPTRegistrySyncRpc,
+  WsChatGPTRegistryCloseRpc,
+  WsChatGPTRegistryActRpc,
+  WsChatGPTRegistryTakeRpc,
+  WsChatGPTRegistryFinishRpc,
+  WsChatGPTRegistryReceiptRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

@@ -303,22 +303,89 @@ describe("ChatGPT last-active/status sorting", () => {
     expect(started[0]?.rows.map(({ session }) => session.id)).toEqual(["wt-old", "wt-new"]);
   });
 
-  it("keeps child indentation even when parent and child have different statuses", () => {
-    const parent = { id: "pa", title: "Parent", project: "Wartribes" };
-    const child = { id: "ch", title: "Child", parentSessionId: "pa" };
-    const other = { id: "idle", title: "Idle other" };
-    const grouped = layoutChatGPTSessions([parent, child, other], projects, "activity", {
-      pa: { age: "inactive", lastWorkingAt: 0 },
-      ch: { age: "working", lastWorkingAt: 5 },
-      idle: { age: "inactive", lastWorkingAt: 0 },
+  it("keeps working children above inactive managers with a single contextual header", () => {
+    const sessions = [
+      { id: "parent", title: "Wartribes manager" },
+      { id: "working-child", title: "Working child", parentSessionId: "parent" },
+      { id: "recent-grandchild", title: "Recent grandchild", parentSessionId: "working-child" },
+      { id: "recent-sibling", title: "Recent sibling", parentSessionId: "parent" },
+      { id: "working-other", title: "Altraea worker" },
+      { id: "idle-child", title: "Idle child", parentSessionId: "parent" },
+    ];
+    const grouped = layoutChatGPTSessions(sessions, projects, "activity", {
+      parent: { age: "inactive", lastWorkingAt: 0 },
+      "working-child": { age: "working", lastWorkingAt: 50 },
+      "recent-grandchild": { age: "recent", lastWorkingAt: 40 },
+      "recent-sibling": { age: "recent", lastWorkingAt: 30 },
+      "working-other": { age: "working", lastWorkingAt: 1_000 },
+      "idle-child": { age: "inactive", lastWorkingAt: 10 },
     });
-    expect(grouped[0]?.rows.map(({ session, depth }) => [session.id, depth])).toEqual([
-      ["pa", 0],
-      ["ch", 1],
-      ["idle", 0],
-    ]);
     expect(grouped).toHaveLength(1);
-    expect(grouped[0]?.rows.map(({ session }) => session.id)).toEqual(["pa", "ch", "idle"]);
+    expect(
+      grouped[0]?.rows.map(({ session, depth, childCount, inactiveParentHeader }) => [
+        session.id,
+        depth,
+        childCount,
+        inactiveParentHeader ?? null,
+      ]),
+    ).toEqual([
+      ["working-child", 0, 0, "Wartribes manager"],
+      ["working-other", 0, 0, null],
+      ["recent-grandchild", 0, 0, null],
+      ["recent-sibling", 0, 0, null],
+      ["parent", 0, 1, null],
+      ["idle-child", 1, 0, null],
+    ]);
+    // Working parents are already visible in the active list, so no label.
+    const activeParentRows = layoutChatGPTSessions(sessions, projects, "activity", {
+      parent: { age: "working", lastWorkingAt: 60 },
+      "working-child": { age: "working", lastWorkingAt: 50 },
+      "working-other": { age: "working", lastWorkingAt: 100 },
+    })[0]?.rows;
+    expect(
+      activeParentRows?.find(({ session }) => session.id === "working-child")?.inactiveParentHeader,
+    ).toBeUndefined();
+    // Activity layout never modifies the underlying project/parent identity.
+    expect(sessions[1]?.parentSessionId).toBe("parent");
+    expect(
+      groupChatGPTSessions(sessions, projects)
+        .flatMap((group) => group.rows)
+        .find(({ session }) => session.id === "working-child")?.depth,
+    ).toBe(1);
+  });
+
+  it("always prioritizes working sessions, including over a selected idle manual chat", () => {
+    const sessions = [
+      { id: "working", title: "Wartribes worker" },
+      { id: "legacy", title: "Unknown origin" },
+      { id: "backend", title: "Backend worker", creationOrigin: "backend" as const },
+      { id: "manual", title: "New manual chat", creationOrigin: "manual" as const },
+      {
+        id: "reserved",
+        title: "Reserved worker",
+        creationOrigin: "manual" as const,
+        spawnRequestId: "backend-proof",
+      },
+    ];
+    const activity = {
+      working: { age: "working" as const, lastWorkingAt: 100 },
+      legacy: { age: "inactive" as const, lastWorkingAt: 50 },
+      backend: { age: "invalid" as const, lastWorkingAt: 30 },
+      manual: { age: "invalid" as const, lastWorkingAt: 20 },
+      reserved: { age: "invalid" as const, lastWorkingAt: 10 },
+    };
+    const ids = (selected?: string) =>
+      layoutChatGPTSessions(sessions, projects, "activity", activity, [], selected).flatMap(
+        (group) => group.rows.map(({ session }) => session.id),
+      );
+    expect(ids("manual")).toEqual(["working", "legacy", "backend", "manual", "reserved"]);
+    expect(ids()).toEqual(["working", "legacy", "backend", "manual", "reserved"]);
+    expect(ids("legacy")).toEqual(ids());
+    expect(ids("backend")).toEqual(ids());
+    expect(ids("reserved")).toEqual(ids());
+    expect(layoutChatGPTSessions(sessions, projects, "started", activity, [], "manual")).toEqual(
+      groupChatGPTSessions(sessions, projects),
+    );
   });
   it("treats status-unknown chats as inactive and preserves stable tie ordering", () => {
     const actual = layoutChatGPTSessions(

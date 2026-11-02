@@ -23,11 +23,15 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import type * as Electron from "electron";
+import { Notification } from "electron";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { DesktopAppActivationBroker } from "./DesktopAppActivationBroker.ts";
+import { ChatGPTDeliveryQueue } from "./ChatGPTDeliveryQueue.ts";
+import { ChatGPTExecutionReceiptProducer } from "./ChatGPTExecutionReceiptProducer.ts";
+import { ChatGPTIdleTransitionJournal, type VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
@@ -290,6 +294,20 @@ export class DesktopAppActivation extends Context.Service<
     readonly start: Effect.Effect<void, DesktopAppActivationStartError, Scope.Scope>;
     readonly setRendererReady: (ready: boolean) => Effect.Effect<void>;
     readonly complete: (response: DesktopAppActivationResponse) => Effect.Effect<void>;
+    readonly enqueueChatGPT: (input: {
+      messageId: string;
+      sessionId: string;
+      conversationId: string;
+      body: string;
+    }) => Effect.Effect<ReturnType<ChatGPTDeliveryQueue["enqueue"]>>;
+    readonly recordChatGPTIdleTransition: (event: VerifiedChatGPTIdleTransition) => Effect.Effect<boolean>;
+    readonly recipientMounted: (event: { sessionId: string; conversationId: string }) => Effect.Effect<boolean>;
+    readonly chatGPTDeliveryStatus: (
+      messageId: string,
+    ) => Effect.Effect<ReturnType<ChatGPTDeliveryQueue["status"]> | null>;
+    readonly chatGPTDeliveryDiagnostics: () => Effect.Effect<
+      ReturnType<ChatGPTDeliveryQueue["diagnostics"]>
+    >;
   }
 >()("@t3tools/desktop/app/DesktopAppActivation") {}
 
@@ -316,6 +334,9 @@ export const make = Effect.gen(function* () {
   const broker = new DesktopAppActivationBroker({
     requestTimeoutMs: REQUEST_TIMEOUT_MS,
     chatGPTRequestTimeoutMs: CHATGPT_REQUEST_TIMEOUT_MS,
+    trace: (stage, requestId, detail) => {
+      void runPromise(logWarning("delivery trace", { stage, requestId, detail }));
+    },
     activate: () => {
       void runPromise(
         desktopWindow.activate.pipe(
@@ -325,6 +346,75 @@ export const make = Effect.gen(function* () {
     },
   });
 
+  const idleJournal = new ChatGPTIdleTransitionJournal(path.resolve(desktopEnvironment.stateDir));
+  const deliveries = new ChatGPTDeliveryQueue(
+    path.resolve(desktopEnvironment.stateDir),
+    (request) => broker.request(request),
+    (record) => {
+      if (Notification.isSupported()) {
+        new Notification({ title: "T3 message delivery stopped", body: `Session ${record.sessionId}: ${record.attempts} attempts. Delivery ${record.messageId} retained for debugging.` }).show();
+      }
+    },
+  );
+  // T3 delivery is authoritative; receipt transport observes persisted state only.
+  // No OpenRig outage can delay, reject or retry a ChatGPT composer submission.
+  const executionReceipts = new ChatGPTExecutionReceiptProducer(
+    path.resolve(desktopEnvironment.stateDir),
+  );
+  deliveries.subscribeTransitions(record => executionReceipts.observe(record));
+  executionReceipts.resumePending();
+  for (const record of deliveries.list()) executionReceipts.observe(record);
+  const handleRequest = (
+    request: DesktopAppActivationRequest,
+  ): Promise<DesktopAppActivationResponse> => {
+    if (request.type !== "chatgpt.sessions") return broker.request(request);
+    if (request.action === "idle_status" || request.action === "idle_wait") {
+      const environmentId = request.environmentId;
+      const sessionId = request.sessionId;
+      const afterSequence = request.afterSequence ?? 0;
+      if (!environmentId || !sessionId || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId) ||
+          !Number.isSafeInteger(afterSequence) || afterSequence < 0 ||
+          (request.timeoutMs !== undefined && (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 0 || request.timeoutMs > 30_000))) {
+        return Promise.resolve({ version: 1, requestId: request.requestId, ok: false,
+          code: "invalid-request", message: "Exact environment, session UUID and bounded sequence/time required." });
+      }
+      const reply = (event: VerifiedChatGPTIdleTransition | null) => ({
+        version: 1 as const, requestId: request.requestId, ok: true as const,
+        data: { event, lastKnownOnly: true, currentBindingVerified: false,
+          deliveryStatusAction: "delivery_status", currentSessionStatusAction: "read" },
+      });
+      if (request.action === "idle_status") return Promise.resolve(reply(idleJournal.get(environmentId, sessionId)));
+      return idleJournal.wait(environmentId, sessionId, afterSequence, request.timeoutMs ?? 25_000).then(reply);
+    }
+    if (!["enqueue", "delivery_status", "delivery_list", "cancel_delivery"].includes(request.action))
+      return broker.request(request);
+    try {
+      const action = request.action;
+      const data =
+        action === "enqueue"
+          ? deliveries.enqueue({
+              messageId: request.messageId ?? "",
+              sessionId: request.sessionId ?? "",
+              conversationId: request.expectedConversationId ?? "",
+              body: request.message ?? "",
+            })
+          : action === "delivery_status"
+            ? deliveries.status(request.messageId ?? "")
+            : action === "cancel_delivery"
+              ? deliveries.cancel(request.messageId ?? "")
+              : deliveries.list();
+      return Promise.resolve({ version: 1, requestId: request.requestId, ok: true, data });
+    } catch (error) {
+      return Promise.resolve({
+        version: 1,
+        requestId: request.requestId,
+        ok: false,
+        code: "invalid-request",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   const clearRegisteredRenderer = () => {
     detachRendererListeners?.();
     detachRendererListeners = null;
@@ -333,13 +423,23 @@ export const make = Effect.gen(function* () {
   };
 
   return DesktopAppActivation.of({
+    enqueueChatGPT: (input) => Effect.sync(() => deliveries.enqueue(input)),
+    recipientMounted: (event) => Effect.sync(() => deliveries.onRecipientMounted(event)),
+    recordChatGPTIdleTransition: (event) => Effect.sync(() => {
+      const accepted = idleJournal.record(event);
+      if (accepted) deliveries.onIdleTransition(event);
+      return accepted;
+    }),
+    chatGPTDeliveryStatus: (messageId) =>
+      Effect.sync(() => deliveries.list().find((entry) => entry.messageId === messageId) ?? null),
+    chatGPTDeliveryDiagnostics: () => Effect.sync(() => deliveries.diagnostics()),
     start: Effect.acquireRelease(
       Effect.tryPromise({
         try: () =>
           startDesktopAppControlServer({
             ...address,
             userId,
-            handle: (request) => broker.request(request),
+            handle: handleRequest,
             cancel: (requestId) => broker.cancel(requestId),
             onReclaimError: (cause) =>
               void runPromise(
@@ -353,9 +453,17 @@ export const make = Effect.gen(function* () {
           Effect.catchCause((cause) =>
             logWarning("failed to close the desktop app control socket", { cause }),
           ),
-          Effect.ensuring(Effect.sync(() => broker.close())),
+          Effect.ensuring(
+            Effect.sync(() => {
+              deliveries.close();
+              broker.close();
+            }),
+          ),
         ),
-    ).pipe(Effect.asVoid),
+    ).pipe(
+      Effect.tap(() => Effect.sync(() => deliveries.start())),
+      Effect.asVoid,
+    ),
     setRendererReady: Effect.fn("DesktopAppActivation.setRendererReady")(function* (ready) {
       if (!ready) {
         clearRegisteredRenderer();
@@ -375,9 +483,18 @@ export const make = Effect.gen(function* () {
         ) => {
           if (event.isMainFrame && !event.isSameDocument) clearRegisteredRenderer();
         };
+        const onConsoleMessage = (
+          event: Electron.Event<Electron.WebContentsConsoleMessageEventParams>,
+        ) => {
+          const message = event.message;
+          if (message.startsWith("[t3-delivery-trace] "))
+            void runPromise(logWarning("renderer delivery trace", { trace: message.slice(20) }));
+        };
+        webContents.on("console-message", onConsoleMessage);
         webContents.on("did-start-navigation", onNavigation);
         webContents.once("destroyed", onUnavailable);
         detachRendererListeners = () => {
+          webContents.removeListener("console-message", onConsoleMessage);
           webContents.removeListener("did-start-navigation", onNavigation);
           webContents.removeListener("destroyed", onUnavailable);
         };

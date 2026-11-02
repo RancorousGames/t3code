@@ -1,6 +1,6 @@
 import { hasChatGPTLoadFailure } from "./chatGPTConversationRecovery";
 
-export const CHATGPT_RECENT_ACTIVITY_MS = 15 * 60 * 1_000;
+export const CHATGPT_RECENT_ACTIVITY_MS = 2 * 60 * 60 * 1_000;
 
 export type ChatGPTActivityState =
   | "working"
@@ -11,6 +11,7 @@ export type ChatGPTActivityState =
   | "delivery-timeout";
 export type ChatGPTActivityAge =
   | "working"
+  | "snoozed"
   | "unloaded"
   | "recent"
   | "inactive"
@@ -26,9 +27,11 @@ export function chatGPTActivityColorClass(age: ChatGPTActivityAge): string {
       return "text-lime-500! dark:text-lime-400!";
     case "recent":
       return "text-[#5d82a9]! dark:text-[#88a9c8]!";
+    case "snoozed":
     case "inactive":
       return "text-muted-foreground!";
     case "unloaded":
+      // Distinctly darker than the light-grey idle label, including in dark mode.
       return "text-zinc-600! dark:text-zinc-600!";
     case "unknown":
       return "text-sidebar-muted-foreground/60!";
@@ -38,6 +41,13 @@ export function chatGPTActivityColorClass(age: ChatGPTActivityAge): string {
     case "delivery-timeout":
       return "text-orange-700! dark:text-orange-400!";
   }
+}
+
+/** Verification keeps operational colors; only ordinary idle/blue titles turn amber. */
+export function chatGPTVerificationTitleColorClass(age: ChatGPTActivityAge, pending: boolean): string {
+  return pending && (age === "inactive" || age === "recent" || age === "snoozed")
+    ? "text-amber-700! dark:text-amber-200!"
+    : chatGPTActivityColorClass(age);
 }
 
 export function chatGPTActivityAge(
@@ -61,6 +71,8 @@ export function chatGPTActivityAge(
 function readChatGPTActivity(loadFailure: boolean) {
   if (!["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(location.hostname))
     return "invalid: this page is not on ChatGPT";
+  // Settings deliberately has no composer; it must not trigger error recovery.
+  if (/^\/settings(?:\/|$)/.test(location.pathname)) return "unknown: ChatGPT settings open";
   const visible = (element: Element) => {
     for (let parent: Element | null = element; parent; parent = parent.parentElement) {
       const style = getComputedStyle(parent);

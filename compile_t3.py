@@ -132,6 +132,7 @@ process.env.T3CODE_DESKTOP_APP_USER_MODEL_ID = "com.t3tools.t3code.custom";
 delete process.env.ELECTRON_RUN_AS_NODE;
 delete process.env.VITE_DEV_SERVER_URL;
 
+// One normal T3 application, no demo/survival launch arguments.
 process.chdir(desktopDir);
 require(path.join(desktopDir, "dist-electron", "boot.cjs"));
 """,

@@ -3,6 +3,8 @@ import type {
   AgentProviderV1SessionRef,
   OrchestrationV2ProjectedTurnItem,
 } from "@t3tools/contracts";
+import { OrchestrationV2TurnItem } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import { projectTurnItemForWire } from "./orchestration-v2/WireProjection.ts";
 import { encodeThreadHistoryCursor } from "./orchestration-v2/threadHistoryPaging.ts";
@@ -61,6 +63,17 @@ export function nativeHistoryItems(
 ): AgentProviderV1HistoryItem[] {
   return rows.map((row) => {
     const item = projectTurnItemForWire(row.item);
+    // The provider envelope is a JSON RPC boundary, unlike the internal
+    // Effect DateTime-rich projection. Encode nested turn payloads to JSON
+    // values before returning them through the `data: Unknown` wire schema.
+    // Otherwise transport serialization rejects an otherwise valid history
+    // page with `Expected JSON value at ["value"]["data"]`.
+    let wireItem: unknown;
+    try { wireItem = Schema.encodeSync(OrchestrationV2TurnItem)(item); }
+    catch { wireItem = { type: item.type, warning: "Native turn detail was not JSON-serializable" }; }
+    const visibleText = "text" in item && typeof item.text === "string" ? item.text
+      : "markdown" in item && typeof item.markdown === "string" ? item.markdown
+      : null;
     return {
       id: `turn:${encodeURIComponent(row.sourceThreadId)}:${encodeURIComponent(row.sourceItemId)}`,
       // The actual event-store snapshot watermark, not a synthetic per-row version.
@@ -74,12 +87,13 @@ export function nativeHistoryItems(
             ? "assistant"
             : "native",
       parts: [
+        ...(visibleText !== null ? [{ type: "text", text: visibleText }] : []),
         {
           type: "native.turn_item",
           sourceThreadId: row.sourceThreadId,
           sourceItemId: row.sourceItemId,
           visibility: row.visibility,
-          item,
+          item: wireItem,
         },
       ],
       streaming: "streaming" in item && item.streaming === true,

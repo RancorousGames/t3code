@@ -17,11 +17,13 @@ import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsOmniworkRouteImport } from './routes/settings.omniwork'
+import { Route as SettingsKeepAwakeRouteImport } from './routes/settings.keep-awake'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ChatUsageRouteImport } from './routes/_chat.usage'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
+import { Route as ChatNativeBrowserRouteImport } from './routes/_chat.native-browser'
 import { Route as ChatBrowserRouteImport } from './routes/_chat.browser'
 import { Route as ChatBrowserIndexRouteImport } from './routes/_chat.browser.index'
 import { Route as ChatSettingsWorktreesRouteImport } from './routes/_chat.settings.worktrees'
@@ -93,6 +95,11 @@ const SettingsOmniworkRoute = SettingsOmniworkRouteImport.update({
   path: '/settings/omniwork',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsKeepAwakeRoute = SettingsKeepAwakeRouteImport.update({
+  id: '/settings/keep-awake',
+  path: '/settings/keep-awake',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   id: '/projects/$projectKey',
   path: '/projects/$projectKey',
@@ -116,6 +123,11 @@ const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
 const ChatNewRoute = ChatNewRouteImport.update({
   id: '/new',
   path: '/new',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatNativeBrowserRoute = ChatNativeBrowserRouteImport.update({
+  id: '/native-browser',
+  path: '/native-browser',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatBrowserRoute = ChatBrowserRouteImport.update({
@@ -288,11 +300,13 @@ export interface FileRoutesByFullPath {
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
   '/browser': typeof ChatBrowserRouteWithChildren
+  '/native-browser': typeof ChatNativeBrowserRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
   '/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/keep-awake': typeof SettingsKeepAwakeRoute
   '/settings/omniwork': typeof SettingsOmniworkRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/browser/$browserSessionId': typeof ChatBrowserBrowserSessionIdRoute
@@ -331,11 +345,13 @@ export interface FileRoutesByTo {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/native-browser': typeof ChatNativeBrowserRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
   '/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/keep-awake': typeof SettingsKeepAwakeRoute
   '/settings/omniwork': typeof SettingsOmniworkRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -378,11 +394,13 @@ export interface FileRoutesById {
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
   '/_chat/browser': typeof ChatBrowserRouteWithChildren
+  '/_chat/native-browser': typeof ChatNativeBrowserRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
   '/_chat/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/keep-awake': typeof SettingsKeepAwakeRoute
   '/settings/omniwork': typeof SettingsOmniworkRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -426,11 +444,13 @@ export interface FileRouteTypes {
     | '/pair'
     | '/welcome'
     | '/browser'
+    | '/native-browser'
     | '/new'
     | '/pull-requests'
     | '/settings'
     | '/usage'
     | '/projects/$projectKey'
+    | '/settings/keep-awake'
     | '/settings/omniwork'
     | '/$environmentId/$threadId'
     | '/browser/$browserSessionId'
@@ -469,11 +489,13 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/native-browser'
     | '/new'
     | '/pull-requests'
     | '/settings'
     | '/usage'
     | '/projects/$projectKey'
+    | '/settings/keep-awake'
     | '/settings/omniwork'
     | '/'
     | '/$environmentId/$threadId'
@@ -515,11 +537,13 @@ export interface FileRouteTypes {
     | '/pair'
     | '/welcome'
     | '/_chat/browser'
+    | '/_chat/native-browser'
     | '/_chat/new'
     | '/_chat/pull-requests'
     | '/_chat/settings'
     | '/_chat/usage'
     | '/projects/$projectKey'
+    | '/settings/keep-awake'
     | '/settings/omniwork'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
@@ -562,6 +586,7 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   WelcomeRoute: typeof WelcomeRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  SettingsKeepAwakeRoute: typeof SettingsKeepAwakeRoute
   SettingsOmniworkRoute: typeof SettingsOmniworkRoute
 }
 
@@ -623,6 +648,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsOmniworkRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/keep-awake': {
+      id: '/settings/keep-awake'
+      path: '/settings/keep-awake'
+      fullPath: '/settings/keep-awake'
+      preLoaderRoute: typeof SettingsKeepAwakeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$projectKey': {
       id: '/projects/$projectKey'
       path: '/projects/$projectKey'
@@ -656,6 +688,13 @@ declare module '@tanstack/react-router' {
       path: '/new'
       fullPath: '/new'
       preLoaderRoute: typeof ChatNewRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/native-browser': {
+      id: '/_chat/native-browser'
+      path: '/native-browser'
+      fullPath: '/native-browser'
+      preLoaderRoute: typeof ChatNativeBrowserRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/browser': {
@@ -956,6 +995,7 @@ const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(
 
 interface ChatRouteChildren {
   ChatBrowserRoute: typeof ChatBrowserRouteWithChildren
+  ChatNativeBrowserRoute: typeof ChatNativeBrowserRoute
   ChatNewRoute: typeof ChatNewRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatSettingsRoute: typeof ChatSettingsRouteWithChildren
@@ -967,6 +1007,7 @@ interface ChatRouteChildren {
 
 const ChatRouteChildren: ChatRouteChildren = {
   ChatBrowserRoute: ChatBrowserRouteWithChildren,
+  ChatNativeBrowserRoute: ChatNativeBrowserRoute,
   ChatNewRoute: ChatNewRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatSettingsRoute: ChatSettingsRouteWithChildren,
@@ -986,6 +1027,7 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   WelcomeRoute: WelcomeRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  SettingsKeepAwakeRoute: SettingsKeepAwakeRoute,
   SettingsOmniworkRoute: SettingsOmniworkRoute,
 }
 export const routeTree = rootRouteImport

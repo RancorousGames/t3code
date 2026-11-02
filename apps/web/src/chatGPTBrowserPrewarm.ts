@@ -35,16 +35,30 @@ export function isChatGPTHomeUrl(url: string): boolean {
   }
 }
 
+/** Settings is an intentional non-conversation page, not a failed ChatGPT session. */
+export function isChatGPTSettingsUrl(url: string): boolean {
+  try {
+    const location = new URL(url);
+    return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(location.hostname) &&
+      /^\/settings(?:\/|$)/.test(location.pathname);
+  } catch {
+    return false;
+  }
+}
+
 // Executed only inside the existing ChatGPT guest. A completed navigation is
 // not necessarily an interactive page; wait until the actual composer is ready.
-function isChatGPTComposerReady(): boolean {
+function isChatGPTComposerReady(allowHidden = false): boolean {
   if (!["chatgpt.com", "chat.openai.com", "www.chatgpt.com"].includes(location.hostname))
     return false;
   if (location.pathname !== "/") return false;
   const composer = document.querySelector(
     '#prompt-textarea, [data-testid="prompt-textarea"], [data-testid="composer-input"], form textarea, [contenteditable="true"][role="textbox"]',
   );
-  return !!composer && composer.getClientRects().length > 0;
+  // Hidden native WebContentsViews have no visible viewport. The composer can
+  // be loaded and ready to reuse before the view is presented on-screen.
+  return !!composer && (allowHidden || composer.getClientRects().length > 0);
 }
 
 export const CHATGPT_PREWARM_READY_EXPRESSION = `(${isChatGPTComposerReady.toString()})()`;
+export const CHATGPT_NATIVE_PREWARM_READY_EXPRESSION = `(${isChatGPTComposerReady.toString()})(true)`;

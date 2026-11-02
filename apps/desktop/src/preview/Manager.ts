@@ -2,6 +2,7 @@ import * as NodeZlib from "node:zlib";
 import {
   DesktopPreviewRecordingInputSchema,
   DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
+  CHATGPT_WORKER_VISIBILITY_MENU_ACTION,
 } from "@t3tools/contracts";
 import type {
   DesktopPreviewAnnotationTheme,
@@ -63,6 +64,8 @@ import * as PreviewPasskeys from "./Passkeys.ts";
 import {
   activeChatGPTBrowserSessionId,
   CLOSE_CHATGPT_SESSION_MENU_ACTION,
+  RENAME_CHATGPT_SESSION_MENU_ACTION,
+  isChatGPTRenameShortcut,
   isChatGPTCloseShortcut,
   isChatGPTSessionPreviewTab,
 } from "../window/ChatGPTCloseShortcut.ts";
@@ -1515,6 +1518,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     let lastDirectGestureAt = -Infinity;
     const beforeMouse = (_event: Electron.Event, mouse: Electron.MouseInputEvent): void => {
       if (mouse.type === "mouseUp") lastDirectGestureAt = performance.now();
+      // Native webview input does not bubble to the host document. Relay only
+      // physical primary presses; never synthesize or consume a guest click.
+      if (mouse.type === "mouseDown" && mouse.button === "left") {
+        const host = currentMainWindow;
+        if (host && !host.isDestroyed() && !host.webContents.isDestroyed()) {
+          host.webContents.send(MENU_ACTION_CHANNEL, "openrig.floating-window.guest-pointerdown");
+        }
+      }
     };
     const willNavigate = (
       event: Electron.Event<Electron.WebContentsWillNavigateEventParams>,
@@ -1535,7 +1546,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         const safeUrl = parseSafeExternalUrl(event.url);
         if (Option.isNone(safeUrl)) return;
         event.preventDefault();
-        void shell.openExternal(safeUrl.value).catch(() => undefined);
+        // Use the same renderer link dispatcher as popup links, so exact
+        // TaskBoard, T3 session and presentation targets can be routed to
+        // their native owners instead of opening an unhelpful 404 in Firefox.
+        runFork(emitOpenLink({
+          tabId, url: safeUrl.value, sourceUrl: wc.getURL(), background: false,
+        }));
         lastDirectGestureAt = -Infinity;
       }
     };
@@ -1573,6 +1589,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         if (!input.isAutoRepeat) main?.webContents.send(MENU_ACTION_CHANNEL, "chatgpt.find");
         return;
       }
+      if (selectedChatGPTGuest && isChatGPTRenameShortcut(input)) {
+        event.preventDefault();
+        if (!input.isAutoRepeat)
+          main?.webContents.send(MENU_ACTION_CHANNEL, RENAME_CHATGPT_SESSION_MENU_ACTION);
+        return;
+      }
       if (selectedChatGPTGuest && isChatGPTCloseShortcut(input, hostPlatform)) {
         event.preventDefault();
         if (!input.isAutoRepeat) {
@@ -1594,19 +1616,21 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           input.alt &&
           /^(?:[^a-zA-Z0-9]|Dead)$/u.test(input.key)
         ) &&
-        forwardedShortcuts.find(({ shortcut }) =>
-          matchesKeybindingShortcut(
-            {
-              key: input.key,
-              code: input.code,
-              metaKey: input.meta,
-              ctrlKey: input.control,
-              shiftKey: input.shift,
-              altKey: input.alt,
-            },
-            shortcut,
-            hostPlatform === "darwin" ? "MacIntel" : hostPlatform,
-          ),
+        forwardedShortcuts.find(
+          ({ command, shortcut }) =>
+            (command !== CHATGPT_WORKER_VISIBILITY_MENU_ACTION || selectedChatGPTGuest) &&
+            matchesKeybindingShortcut(
+              {
+                key: input.key,
+                code: input.code,
+                metaKey: input.meta,
+                ctrlKey: input.control,
+                shiftKey: input.shift,
+                altKey: input.alt,
+              },
+              shortcut,
+              hostPlatform === "darwin" ? "MacIntel" : hostPlatform,
+            ),
         );
       if (forwarded && host) {
         event.preventDefault();
@@ -1695,13 +1719,19 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             ) {
               const safeUrl = parseSafeExternalUrl(details.url);
               if (Option.isSome(safeUrl))
-                void shell.openExternal(safeUrl.value).catch(() => undefined);
+                runFork(emitOpenLink({
+                  tabId,
+                  url: safeUrl.value,
+                  sourceUrl: wc.getURL(),
+                  background: details.disposition === "background-tab",
+                }));
               return { action: "deny" };
             }
             runFork(
               emitOpenLink({
                 tabId,
                 url: details.url,
+                sourceUrl: wc.getURL(),
                 background: details.disposition === "background-tab",
               }),
             );
@@ -1769,11 +1799,33 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       (
         tabs,
       ): readonly [
-        { readonly state: PreviewTabState; readonly created: boolean },
+        {
+          readonly state: PreviewTabState;
+          readonly created: boolean;
+          readonly previousServerTab?: PreviewTabState["serverTab"];
+        },
         ReadonlyMap<string, PreviewTabState>,
       ] => {
         const existing = tabs.get(tabId);
-        if (existing) return [{ state: existing, created: false }, tabs] as const;
+        if (existing) {
+          // Browser ownership may change on manual Bootstrap registration.
+          // Rebind the already-attached CDP guest without creating a new tab,
+          // navigating, or replacing its Electron WebContents/draft.
+          const incoming = defaults?.serverTab;
+          if (
+            !incoming ||
+            (existing.serverTab?.threadId === incoming.threadId &&
+              existing.serverTab.tabId === incoming.tabId)
+          )
+            return [{ state: existing, created: false }, tabs] as const;
+          const rebound = { ...existing, serverTab: incoming };
+          return [
+            { state: rebound, created: false, previousServerTab: existing.serverTab },
+            replaceMap(tabs, (copy) => {
+              copy.set(tabId, rebound);
+            }),
+          ] as const;
+        }
         const initial: PreviewTabState = {
           tabId,
           webContentsId: null,
@@ -1800,6 +1852,20 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
     if (result.created) {
       tabLifecycleGenerations.set(tabId, (tabLifecycleGenerations.get(tabId) ?? 0) + 1);
+    } else if (
+      result.previousServerTab !== undefined ||
+      (defaults?.serverTab && result.state.serverTab === defaults.serverTab)
+    ) {
+      // Always detach the old route before attaching the new one. The tab ID,
+      // guest WebContents and debugger stay intact.
+      if (result.previousServerTab) browserHost.detach(result.previousServerTab);
+      const incoming = result.state.serverTab;
+      const wc =
+        result.state.webContentsId === null ? null : webContents.fromId(result.state.webContentsId);
+      if (wc && !wc.isDestroyed() && incoming) {
+        const control = yield* ensureControlSession(wc);
+        browserHost.attach(incoming, { webContents: wc, debugger: control.debugger });
+      }
     }
     yield* emit(tabId, result.state);
     return result.state;
@@ -1847,6 +1913,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ],
         { concurrency: 2, discard: true },
       );
+      // Hibernation releases the desktop tab but preserves the server session.
+      // Explicitly close its guest instead of relying on DOM removal to free it.
+      const wc = webContents.fromId(closedTab.webContentsId);
+      if (wc && !wc.isDestroyed()) {
+        yield* attempt({ operation: "closeTab.closeGuest", tabId, webContentsId: wc.id }, () =>
+          wc.close({ waitForBeforeUnload: false }),
+        );
+      }
     }
     const updatedAt = yield* currentIso;
     const closed: PreviewTabState = {

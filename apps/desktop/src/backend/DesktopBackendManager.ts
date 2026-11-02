@@ -196,6 +196,11 @@ export type BackendProcessError = typeof BackendProcessError.Type;
 interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly desktopTelemetryStream: Stream.Stream<Uint8Array>;
   readonly desktopBrowserStream?: Stream.Stream<Uint8Array>;
+  /** Inactive Windows private fd9 opt-in; never provided by production. */
+  readonly inactiveMainToServerStream?: Stream.Stream<Uint8Array>;
+  /** Inactive fd8 line observer; does not authorize native execution. */
+  readonly onInactiveServerLine?: (line: string) => Effect.Effect<void>;
+  readonly onInactiveServerChannelClosed?: () => Effect.Effect<void>;
   readonly onDesktopBrowserCommand?: (line: string) => Effect.Effect<void>;
   readonly onDesktopTelemetryControl?: (
     message: DesktopTelemetryControlMessageValue,
@@ -242,6 +247,8 @@ export interface DesktopBackendInstance {
   readonly currentConfig: Effect.Effect<Option.Option<DesktopBackendStartConfig>>;
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
   readonly waitForReady: (timeout: Duration.Duration) => Effect.Effect<boolean>;
+  /** Read-only inactive process witness; null for ordinary production runs. */
+  readonly inactiveWindowsWitnessSnapshot: Effect.Effect<WindowsBackendProcessWitnessSnapshot | null>;
 }
 
 export interface BackendInstanceSpec {
@@ -255,6 +262,15 @@ export interface BackendInstanceSpec {
   readonly onStateDirOwned?: () => Effect.Effect<void>;
   /** Fires on each repeated crash or readiness timeout until the backend becomes ready. */
   readonly onStartupFailure?: (failure: BackendStartupFailure) => Effect.Effect<void>;
+  /** Inactive Windows process-witness opt-in. No production spec supplies it. */
+  readonly inactiveWindowsProcessWitness?: InactiveWindowsBackendProcessWitnessSeam;
+  /** Inactive private fd8/fd9 channel opt-in, gated by process witness. */
+  readonly inactivePrivateAuthority?: {
+    readonly prepareConfig: (original: DesktopBackendStartConfig) => DesktopBackendStartConfig | null;
+    readonly mainToServer: Stream.Stream<Uint8Array>;
+    readonly onServerLine: (line: string) => Effect.Effect<void>;
+    readonly onRevoked?: () => Effect.Effect<void>;
+  };
 }
 
 interface ActiveBackendRun {
@@ -718,6 +734,38 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const updateActiveRun = (runId: number, f: (run: ActiveBackendRun) => ActiveBackendRun) =>
     SubscriptionRef.update(state, withActiveRun(runId, f));
 
+  // Passive identity evidence. This is not a provider-host capability or execution lease.
+  const inactiveWindowsWitnessSnapshot = SubscriptionRef.get(state).pipe(
+    Effect.map((current): WindowsBackendProcessWitnessSnapshot | null => {
+      const active = Option.getOrUndefined(current.active);
+      if (
+        !current.desiredRunning || !current.ready || active === undefined ||
+        active.stopRequested || active.exitObserved
+      ) return null;
+      return active.inactiveWindowsWitness?.readCurrent() ?? null;
+    }),
+  );
+  const revokeInactiveWitness = (
+    witness: RetainedWindowsBackendProcessWitness | undefined,
+    reason: string,
+  ): Effect.Effect<void> =>
+    Effect.sync(() => {
+      if (!witness) return;
+      try { witness.revoke(reason); } catch {
+        // Already inactive even if Windows CloseHandle reports an error.
+      }
+    });
+  const revokeActiveWitness = (runId: number, reason: string): Effect.Effect<void> =>
+    SubscriptionRef.get(state).pipe(
+      Effect.flatMap((current) => {
+        const active = Option.getOrUndefined(current.active);
+        return revokeInactiveWitness(
+          active?.id === runId ? active.inactiveWindowsWitness : undefined,
+          reason,
+        );
+      }),
+    );
+
   const snapshot = SubscriptionRef.get(state).pipe(
     Effect.map((current): DesktopBackendSnapshot => ({
       desiredRunning: current.desiredRunning,
@@ -864,7 +912,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             config.value.runningDistro !== undefined
           ) {
             yield* logInstanceWarning("inactive Windows witness only supports local primary");
-            yield* Ref.update(state, (latest) => ({
+            yield* SubscriptionRef.update(state, (latest) => ({
               ...latest,
               desiredRunning: false,
               ready: false,
@@ -876,7 +924,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           );
           if (Exit.isFailure(prepared)) {
             yield* logInstanceWarning("inactive Windows witness launch provenance unavailable");
-            yield* Ref.update(state, (latest) => ({
+            yield* SubscriptionRef.update(state, (latest) => ({
               ...latest,
               desiredRunning: false,
               ready: false,
@@ -899,7 +947,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               : null;
           if (!prepared || inactivePrivateAuthorityFdPair(prepared.bootstrap) === null) {
             yield* logInstanceWarning("inactive W2-A private channel preflight refused");
-            yield* Ref.update(state, (latest) => ({
+            yield* SubscriptionRef.update(state, (latest) => ({
               ...latest,
               desiredRunning: false,
               ready: false,

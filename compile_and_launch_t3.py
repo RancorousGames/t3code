@@ -1,7 +1,7 @@
-"""Gracefully restart this checkout's T3 Code app, rebuild, and relaunch.
+"""Rebuild/reopen T3 without killing Chromium by default.
 
-Only targets the custom executable under this checkout. Other T3 Code installs
-and unrelated Electron apps are never touched.
+The stable Electron owner and browser views survive; UI assets reload.
+Main-process/server changes require an explicitly destructive replacement.
 """
 
 import argparse
@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import math
+import secrets
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,7 +20,7 @@ import sys
 import time
 
 from t3_build_freshness import build_is_current
-from compile_t3 import staged_build_is_current
+from compile_t3 import staged_build_is_current, resolve_node
 
 EXE_NAME = "T3 Code (Custom).exe"
 GRACE_SECONDS = 20
@@ -295,6 +296,125 @@ def _acquire_worker_lock():
     return handle
 
 
+def reload_owner_ui(root: Path, owner_pid: int) -> None:
+    """Request T3 renderer-only reload; fail closed if host lacks the bridge."""
+    ack = root / ".t3" / "native-ui-reload-ack.json"
+    nonce = secrets.randbelow(0xffffffff - 1) + 1
+    ack.unlink(missing_ok=True)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.PostMessageW.argtypes = [
+        wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    found = []
+
+    @callback_type
+    def visit(hwnd, _):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value != owner_pid:
+            return True
+        found.append(hwnd)
+        # Only the guarded T3 message; never a keyboard shortcut or WM_CLOSE.
+        return False
+
+    if not user32.EnumWindows(visit, 0) and not found:
+        raise RuntimeError("Unable to enumerate the T3 main window.")
+    if len(found) != 1:
+        raise RuntimeError("Expected one native T3 window; refusing ambiguous reload.")
+    if not user32.PostMessageW(found[0], 0x8236, 0x5433524c, nonce):
+        raise ctypes.WinError(ctypes.get_last_error())
+    # After a full Vite rebuild the Electron UI can need longer to load its
+    # regenerated chunk graph. Do not mistake slow startup for a dead owner.
+    deadline = time.monotonic() + 35
+    while time.monotonic() < deadline:
+        if ack.is_file():
+            try:
+                data = json.loads(ack.read_text(encoding="utf-8"))
+                if int(data.get("pid", -1)) == owner_pid and int(data.get("nonce", -1)) == nonce:
+                    return
+            except (ValueError, OSError, TypeError):
+                pass
+        time.sleep(0.2)
+    raise RuntimeError(
+        "Running T3 does not support safe native UI reload or did not acknowledge it; "
+        "Electron and ChatGPT pages were NOT terminated. A one-time host upgrade "
+        "is needed before this rebuild mode can activate UI changes."
+    )
+
+
+def build_and_reload_ui(root: Path, *, rebuild: bool = True) -> bool:
+    """Compile bundles and reload only the UI; never terminate or relaunch Electron."""
+    processes = running_custom_processes(root)
+    if not processes:
+        raise RuntimeError("Custom T3 is not running; use --full-restart to launch it.")
+    roots = [
+        int(item["ProcessId"]) for item in processes
+        if "--type=" not in (item.get("CommandLine") or "")
+        and "--bootstrap-fd" not in (item.get("CommandLine") or "")
+        and int(item["ParentProcessId"]) not in {int(p["ProcessId"]) for p in processes}
+    ]
+    if len(roots) != 1:
+        # A crashed/replaced T3 may leave a windowless, childless root process.
+        # Only the real desktop window may receive the native reload message.
+        import ctypes.wintypes as win
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        callback_type = ctypes.WINFUNCTYPE(win.BOOL, win.HWND, win.LPARAM)
+        owners = set()
+
+        @callback_type
+        def find_owner(hwnd, _):
+            pid = win.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value in roots and user32.IsWindowVisible(hwnd):
+                owners.add(pid.value)
+            return True
+
+        user32.EnumWindows(find_owner, 0)
+        if len(owners) != 1:
+            raise RuntimeError(f"Expected one visible T3 owner, found {len(owners)} among {len(roots)} roots.")
+        roots = list(owners)
+    pnpm = shutil.which("pnpm.cmd") or shutil.which("pnpm")
+    if not pnpm:
+        raise RuntimeError("pnpm not installed.")
+    node = resolve_node(root, pnpm)
+    runner = root / "node_modules" / ".bin" / "vp.cmd"
+    if not runner.is_file():
+        raise RuntimeError("Vite+ build runner missing.")
+    env = os.environ.copy()
+    env["PATH"] = str(node.parent) + os.pathsep + env.get("PATH", "")
+    env["NODE_OPTIONS"] = "--experimental-strip-types"
+    env.pop("ELECTRON_RUN_AS_NODE", None)
+    if rebuild:
+        subprocess.run(
+            [str(runner), "run", "--filter", "@t3tools/desktop", "--filter", "t3", "build"],
+            cwd=root, env=env, check=True,
+        )
+    elif not build_is_current(root):
+        raise RuntimeError("Compiled outputs missing; refusing a no-build reload.")
+    # Do not reload a different process if T3 restarted while compiling.
+    current_processes = running_custom_processes(root)
+    current_pids = {int(p["ProcessId"]) for p in current_processes}
+    current_roots = {
+        int(p["ProcessId"]) for p in current_processes
+        if "--type=" not in (p.get("CommandLine") or "")
+        and "--bootstrap-fd" not in (p.get("CommandLine") or "")
+        and int(p["ParentProcessId"]) not in current_pids
+    }
+    if not set(roots).issubset(current_roots):
+        raise RuntimeError("T3 window owner changed during build; refusing to target another window.")
+    # Never inject Ctrl+R: the focused native ChatGPT guest may receive it,
+    # triggering a real ChatGPT navigation and losing live page state.
+    # The running Electron main has a dedicated window-message handler which
+    # reloads its OWN webContents and writes an authenticated-by-PID ack.
+    reload_owner_ui(root, roots[0])
+    print("T3 UI reloaded in its existing Electron owner; Chromium pages preserved.", flush=True)
+    print("Electron main/backend changes are NOT activated by this reload.", flush=True)
+    return True
+
+
 def main(*, force_build: bool = False, restart_only: bool = False) -> None:
     if os.name != "nt":
         raise RuntimeError("This helper runs on Windows only.")
@@ -325,7 +445,7 @@ def main(*, force_build: bool = False, restart_only: bool = False) -> None:
         print("New build ready. Showing cancelable 15-second restart notification.", flush=True)
         if not restart_countdown():
             print("Restart canceled; current T3 remains open.", flush=True)
-            return
+            return False
 
     # Verify staged compiled outputs immediately before any close.
     if needs_build and not staged_build_is_current(root):
@@ -356,9 +476,84 @@ def main(*, force_build: bool = False, restart_only: bool = False) -> None:
         raise
     subprocess.run([sys.executable, str(root / "launch_t3.py")], cwd=root, check=True)
     print("T3 Code (Custom) launched with verified compiled artifacts; session profile untouched.", flush=True)
+    return True
 
 
-def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_only: bool = False) -> None:
+def _taskboard_release_run(root: Path, manifest: Path | None, *, force_build: bool,
+                           restart_only: bool, ui_only: bool = False) -> None:
+    """Attach source-bound TaskBoard receipts to an authorized T3 build/reload."""
+    if manifest is None:
+        print("TaskBoard: no integrated manifest; no deployment attempt recorded.", flush=True)
+        if ui_only:
+            build_and_reload_ui(root, rebuild=not restart_only)
+        else:
+            main(force_build=force_build, restart_only=restart_only)
+        return
+    bridge = root.parent / "TaskBoard" / "scripts" / "release_deployment_bridge.py"
+    if not bridge.is_file():
+        raise RuntimeError(f"TaskBoard release bridge missing: {bridge}")
+    manifest = manifest.resolve(strict=True)
+    log = Path(os.environ.get("T3_RELEASE_LOG", "") or
+               (root.parent / "T3CodeSessionBackups" / "manual-t3-release-diagnostics.log"))
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    def bookkeep(*args: str) -> None:
+        subprocess.run([sys.executable, str(bridge), *args], cwd=root, check=True)
+
+    # The bridge rejects detached revisions and freezes only source-proven members.
+    # Neither it nor this option authorizes a restart independently.
+    bookkeep("preflight", str(manifest))
+    try:
+        if ui_only:
+            build_and_reload_ui(root, rebuild=not restart_only)
+            # Ctrl+R dispatch is not proof that Electron loaded the new web
+            # assets. Record the actual build/reload attempt as UNKNOWN, never
+            # claim that server/main-process changes are deployed by UI reload.
+            bookkeep("preflight", str(manifest))
+            log.touch(exist_ok=True)
+            bookkeep("outcome", str(manifest), "--status", "unknown", "--log", str(log))
+            print("TaskBoard: UI reload recorded UNKNOWN until independently verified.", flush=True)
+            return
+        activated = main(force_build=force_build, restart_only=restart_only)
+        if not activated:
+            print("TaskBoard: restart canceled, recording unknown rather than deployment.", flush=True)
+            log.touch(exist_ok=True)
+            bookkeep("outcome", str(manifest), "--status", "unknown", "--log", str(log))
+            return
+        # An agent may edit the checkout while compilation runs. Revalidate the
+        # manifest bytes/ancestry after activation before claiming these sources.
+        # The idempotent bridge returns the frozen attempt without re-preparing.
+        bookkeep("preflight", str(manifest))
+        processes = running_custom_processes(root)
+        if not processes:
+            raise RuntimeError("T3 launch returned but no exact custom executable process observed")
+        exe = custom_executable(root)
+        if not exe.is_file():
+            raise RuntimeError(f"Activated T3 executable missing: {exe}")
+        receipt = log.with_suffix(".taskboard-activation.json")
+        receipt.write_text(json.dumps({
+            "manifest": str(manifest), "executable": str(exe),
+            "exe_sha256": hashlib.sha256(exe.read_bytes()).hexdigest(),
+            "observed_pids": [p["ProcessId"] for p in processes],
+            "observed_at": datetime.now().astimezone().isoformat(),
+            "verification": "matching executable alive; feature acceptance unverified"
+        }, indent=2), encoding="utf-8")
+        bookkeep("outcome", str(manifest), "--status", "deployed",
+                 "--artifact", str(exe), "--activation-receipt", str(receipt),
+                 "--log", str(log))
+    except Exception:
+        try:
+            # After preflight, errors might follow native activation, so they
+            # remain UNKNOWN until independently reconciled, never deployed.
+            log.touch(exist_ok=True)
+            bookkeep("outcome", str(manifest), "--status", "unknown", "--log", str(log))
+        except Exception as exc:
+            print(f"TaskBoard UNKNOWN recording also failed: {exc}", file=sys.stderr, flush=True)
+        raise
+
+
+def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_only: bool = False,
+                             release_manifest: Path | None = None, full_restart: bool = False) -> None:
     """Detach before closing T3; this survives the calling browser's shutdown."""
     if os.name != "nt":
         raise RuntimeError("This helper runs on Windows only.")
@@ -373,8 +568,11 @@ def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_o
         child = subprocess.Popen(
             [sys.executable, str(root / "compile_and_launch_t3.py"), "--worker",
              *(["--force-build"] if force_build else []),
-             *(["--restart-only"] if restart_only else [])],
+             *(["--restart-only"] if restart_only else []),
+             *(["--replace-electron"] if full_restart else []),
+             *(["--taskboard-manifest", str(release_manifest)] if release_manifest else [])],
             cwd=root,
+            env={**os.environ, "T3_RELEASE_LOG": str(log_path)},
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.STDOUT,
@@ -382,10 +580,11 @@ def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_o
             close_fds=True,
         )
     print(
-        f"Independent T3 build-and-restart worker started (PID {child.pid}).\n"
+        f"Independent T3 deployment worker started (PID {child.pid}).\n"
         f"Build status log: {log_path}\n"
-        "The worker builds and verifies while T3 remains open, shows a 15-second "
-        "cancelable notification, then backs up and rapidly relaunches it.",
+        + ("Destructive Electron replacement explicitly requested."
+         if full_restart else
+         "Safe rebuild/UI reload: existing Electron and browser processes stay alive."),
         flush=True,
     )
 
@@ -399,9 +598,15 @@ if __name__ == "__main__":
                             help="Validate paths without closing the application")
         modes = parser.add_mutually_exclusive_group()
         modes.add_argument("--force-build", action="store_true",
-                           help="Rebuild all bundles before restarting")
+                           help="Rebuild all bundles, then safely reload only the UI")
         modes.add_argument("--restart-only", action="store_true",
-                           help="Restart only if required compiled outputs exist")
+                           help="Safely reload UI from existing compiled assets")
+        parser.add_argument("--full-restart", action="store_true",
+                            help="Legacy alias for safe rebuild/UI reload (preserves live browser pages)")
+        parser.add_argument("--replace-electron", action="store_true",
+                            help="EXPLICITLY destroy the Electron owner and its live browser pages to activate native/backend changes")
+        parser.add_argument("--taskboard-manifest", type=Path,
+                            help="Optional source-integrated TaskBoard release manifest for durable bookkeeping")
         args = parser.parse_args()
         root = Path(__file__).resolve().parent
         load_private_openrig_human_answer_token()
@@ -415,15 +620,26 @@ if __name__ == "__main__":
         elif args.worker:
             mutex = _acquire_worker_lock()
             try:
-                main(force_build=args.force_build, restart_only=args.restart_only)
+                manifest = args.taskboard_manifest
+                if manifest is None:
+                    standard = root / ".t3" / "taskboard-release-manifest.json"
+                    manifest = standard if standard.is_file() else None
+                _taskboard_release_run(root, manifest, force_build=args.force_build,
+                                       restart_only=args.restart_only,
+                                       ui_only=not args.replace_electron)
             finally:
                 ctypes.windll.kernel32.ReleaseMutex(mutex)
                 ctypes.windll.kernel32.CloseHandle(mutex)
         else:
             if args.restart_only and not build_is_current(root):
                 raise RuntimeError("Compiled T3 output missing. Run the default command to rebuild first.")
+            manifest = args.taskboard_manifest
+            if manifest is None:
+                standard = root / ".t3" / "taskboard-release-manifest.json"
+                manifest = standard if standard.is_file() else None
             spawn_independent_worker(root, force_build=args.force_build,
-                                     restart_only=args.restart_only)
+                                     restart_only=args.restart_only, release_manifest=manifest,
+                                     full_restart=args.replace_electron)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Restart/build failed: {error}", file=sys.stderr, flush=True)
         sys.exit(1)

@@ -745,8 +745,24 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "diagnostics",
     title: "Diagnostics",
-    to: "/settings/maintenance",
+    to: "/settings/omniwork",
     searchTerms: ["logs traces processes resource history failures spans cpu memory"],
+  },
+  {
+    id: "omniwork-messaging-diagnostics",
+    title: "Messaging diagnostics",
+    to: "/settings/omniwork",
+    searchTerms: [
+      "message delivery pipeline queued pending blocked uncertain chatgpt outbox diagnostic",
+    ],
+    desktopOnly: true,
+  },
+  {
+    id: "omnihub-keep-awake",
+    title: "Caffy",
+    to: "/settings/omniwork",
+    searchTerms: ["caffy timed resume on idle keep awake wake session monitor omnihub openrig cancel"],
+    desktopOnly: true,
   },
   {
     id: "open-source-licenses",

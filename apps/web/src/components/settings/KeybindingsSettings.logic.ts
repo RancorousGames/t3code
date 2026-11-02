@@ -213,6 +213,7 @@ const KEYBINDING_GROUPS = [
     title: "Navigation",
     prefixes: ["sidebar", "rightPanel", "commandPalette", "filePicker", "projectSearch", "editor"],
   },
+  { id: "chatgpt", title: "ChatGPT & Omniwork", prefixes: ["chatgpt", "omniwork"] },
   { id: "threads", title: "Threads", prefixes: ["thread", "chat", "pullRequest"] },
   { id: "composer", title: "Composer", prefixes: ["composer", "modelPicker"] },
   { id: "terminal", title: "Terminal", prefixes: ["terminal"] },
@@ -381,6 +382,13 @@ export function commandLabel(command: KeybindingCommand): string {
   const usagePeriod = WINDOW_OPTIONS.find((option) => option.command === command);
   if (usagePeriod) return `Usage: Period: ${usagePeriod.label}`;
   if (command === "view.reopenClosed") return "Reopen Closed Tab";
+  if (command === "chatgpt.newSession") return "ChatGPT: New Session";
+  if (command === "chatgpt.openDashboard") return "ChatGPT: Open Sessions Dashboard";
+  if (command === "chatgpt.reloadSession") return "ChatGPT: Reload Current Session";
+  if (command === "chatgpt.snoozeSession") return "ChatGPT: Snooze Current Session (1 Hour)";
+  if (command === "chatgpt.unsnoozeSession") return "ChatGPT: Unsnooze Current Session";
+  if (command === "chatgpt.copySessionId") return "ChatGPT: Copy Current T3 Session ID";
+  if (command === "omniwork.toggleWorkers") return "ChatGPT: Show/Hide Workers";
   if (command === "preview.focusUrl") return "Preview: Focus URL";
   const raw = String(command);
   if (raw.startsWith("script.") && raw.endsWith(".run")) {

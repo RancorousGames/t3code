@@ -2,14 +2,67 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   chatGPTSessionTitleFromPage,
+  cleanChatGPTSessionTitle,
+  updateChatGPTAutoTitle,
   CHATGPT_HIDDEN_EXPIRY_MS,
   expiredHiddenSessionIds,
+  findExistingChatGPTConversation,
   isChatGPTConversationUrl,
   reorderChatGPTSessions,
   setChatGPTSessionArchived,
   setChatGPTSessionHidden,
 } from "./chatGPTBrowserSessions";
 
+describe("existing ChatGPT conversation resolution", () => {
+  const a = "https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const b = "https://chatgpt.com/c/bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+  const sessions = [
+    { id: "visible", title: "Chat A" },
+    { id: "hidden", title: "Hidden B", hidden: true, snoozedUntil: 9999999999999 },
+    {
+      id: "archived",
+      title: "Archived",
+      hidden: true,
+      archive: {
+        archivedAt: "2026-01-01",
+        conversationUrl: "https://chatgpt.com/c/cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa",
+        basis: "completion" as const,
+      },
+    },
+  ];
+  const urls: Record<string, string> = { visible: a, hidden: b };
+  const lookup = (id: string) => urls[id] ?? null;
+
+  it("reuses visible, hidden, snoozed and archived owners without changing identity", () => {
+    expect(findExistingChatGPTConversation(sessions, a, lookup)?.id).toBe("visible");
+    expect(findExistingChatGPTConversation(sessions, b, lookup)?.id).toBe("hidden");
+    expect(
+      findExistingChatGPTConversation(sessions, sessions[2]!.archive!.conversationUrl, lookup)?.id,
+    ).toBe("archived");
+    expect(sessions[1]!.hidden).toBe(true);
+    expect(sessions[1]!.snoozedUntil).toBe(9999999999999);
+  });
+
+  it("rejects lookalike domains, malformed IDs and unrelated conversations", () => {
+    expect(
+      findExistingChatGPTConversation(
+        sessions,
+        "https://evil.example/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        lookup,
+      ),
+    ).toBeUndefined();
+    expect(
+      findExistingChatGPTConversation(sessions, "https://chatgpt.com/c/not-a-uuid", lookup),
+    ).toBeUndefined();
+    expect(
+      findExistingChatGPTConversation(
+        sessions,
+        "https://chatgpt.com/c/dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb",
+        lookup,
+      ),
+    ).toBeUndefined();
+  });
+});
 describe("ChatGPT sidebar ordering", () => {
   const sessions = [
     { id: "a", title: "First" },
@@ -130,6 +183,29 @@ describe("ChatGPT sidebar ordering", () => {
 });
 
 describe("ChatGPT browser session title", () => {
+  const marker = "[T3-MSG:4f383fd4-0c31-4985-a34c-981a19fb35b9]";
+
+  it("omits delivery IDs from automatic conversation titles", () => {
+    expect(chatGPTSessionTitleFromPage(`${marker} Implement the taskboard tasks on - ChatGPT`))
+      .toBe("Implement the taskboard tasks on");
+    expect(chatGPTSessionTitleFromPage(`ChatGPT | ${marker} Implement the taskboard tasks on`))
+      .toBe("Implement the taskboard tasks on");
+    expect(chatGPTSessionTitleFromPage(`${marker} - ChatGPT`)).toBeNull();
+    expect(cleanChatGPTSessionTitle(`${marker} Implement the taskboard tasks on…`))
+      .toBe("Implement the taskboard tasks on…");
+  });
+
+  it("repairs existing automatically captured titles without overriding explicit renames", () => {
+    const old = { id: "original", title: `${marker} Implement the taskboard tasks on…` };
+    expect(updateChatGPTAutoTitle(old, "Another page title").title)
+      .toBe("Implement the taskboard tasks on…");
+    expect(updateChatGPTAutoTitle({ ...old, titleSource: "user" }, "Another title").title)
+      .toBe(old.title);
+    expect(updateChatGPTAutoTitle({ ...old, titleSource: "bootstrap" }, "Another title").title)
+      .toBe(old.title);
+    expect(updateChatGPTAutoTitle({ ...old, title: "ChatGPT 2" }, `${marker} Work - ChatGPT`).title)
+      .toBe("Work");
+  });
   it("uses the conversation page title without ChatGPT branding", () => {
     expect(chatGPTSessionTitleFromPage("Diagnose an Unreal crash - ChatGPT")).toBe(
       "Diagnose an Unreal crash",

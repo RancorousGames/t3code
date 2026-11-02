@@ -11,6 +11,11 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(async (_id: string) => {}),
   type: vi.fn(async (_id: string, _text: string) => {}),
   press: vi.fn(async (_id: string, _keys: { key: string; expectedConversationId: string }) => {}),
+  resetBrowser: vi.fn(async (_id: string, _url?: string) => ({
+    previousWebContentsId: 1,
+    webContentsId: 2,
+  })),
+  blank: false,
   result: vi.fn(async (id: string) => ({
     activity: "invalid: Could not load this ChatGPT conversation",
     url: `https://chatgpt.com/c/${id}`,
@@ -51,6 +56,9 @@ vi.mock("../../previewStateStore", () => ({
 vi.mock("../preview/previewBridge", () => ({
   previewBridge: { refresh: mocks.refresh, navigate: mocks.navigate },
 }));
+vi.mock("../../browser/hostedBrowserGuestReset", () => ({
+  resetHostedBrowserGuest: mocks.resetBrowser,
+}));
 
 import {
   ChatGPTBrowserRecoveryCoordinator,
@@ -58,7 +66,16 @@ import {
   type ChatGPTRecoveryPhase,
 } from "./ChatGPTBrowserRecoveryCoordinator";
 import { recordSessionClick } from "./chatGPTConversationRecovery";
+import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
+import {
+  readChatGPTRecoveryMetrics,
+  aggregateChatGPTRecoveryMetrics,
+} from "../../chatGPTRecoveryMetrics";
 import { useBrowserSurfaceStore } from "../../browser/browserSurfaceStore";
+import {
+  tryAcquireChatGPTRecoveryMutation,
+  clearChatGPTRecoveryMutationGateForTests,
+} from "../../chatGPTRecoveryMutationGate";
 
 let renderer: ReactTestRenderer | undefined;
 const phaseChanges = vi.fn<(id: string, phase: ChatGPTRecoveryPhase | null) => void>();
@@ -67,6 +84,7 @@ async function mount(
   ids = ["comit", "other"],
   wakeupIds: readonly string[] = [],
   redIds: readonly string[] = [],
+  selectedId: string | null = null,
 ) {
   for (const id of ids) {
     const webview = document.createElement("webview");
@@ -90,6 +108,7 @@ async function mount(
         }
         const result = await mocks.result(id);
         return {
+          ...(expression.includes("blank:") ? { blank: mocks.blank } : {}),
           draftEmpty: true,
           stopVisible: result.activity === "interrupted" || result.activity === "delivery-timeout",
           lastUserTurnKey: `user:${id}`,
@@ -110,6 +129,7 @@ async function mount(
         sessionIds={ids}
         wakeupIds={wakeupIds}
         redIds={redIds}
+        selectedId={selectedId}
         onPhaseChange={phaseChanges}
       />,
     );
@@ -123,6 +143,8 @@ beforeEach(() => {
   vi.stubGlobal("document", dom.window.document);
   vi.stubGlobal("location", dom.window.location);
   vi.stubGlobal("localStorage", dom.window.localStorage);
+  vi.stubGlobal("sessionStorage", dom.window.sessionStorage);
+  vi.stubGlobal("CustomEvent", dom.window.CustomEvent);
   vi.stubGlobal("Element", dom.window.Element);
   vi.stubGlobal("HTMLElement", dom.window.HTMLElement);
   vi.stubGlobal("Node", dom.window.Node);
@@ -135,6 +157,10 @@ beforeEach(() => {
   });
   vi.setSystemTime(new Date("2026-10-13T18:00:00Z"));
   localStorage.clear();
+  // The environment's persisted Zustand store survives jsdom remounts between tests.
+  getChatGPTSessionPersistedStore("local").setState((previous) => ({
+    recovery: { ...previous.recovery, queue: null, history: null, bounded: null, diagnostics: [] },
+  }));
   document.body.innerHTML = "";
   mocks.result.mockReset().mockImplementation(async (id: string) => ({
     activity: "invalid: Could not load this ChatGPT conversation",
@@ -145,6 +171,8 @@ beforeEach(() => {
   mocks.stop.mockReset().mockResolvedValue(undefined);
   mocks.type.mockReset().mockResolvedValue(undefined);
   mocks.press.mockReset().mockResolvedValue(undefined);
+  mocks.resetBrowser.mockReset().mockResolvedValue({ previousWebContentsId: 1, webContentsId: 2 });
+  mocks.blank = false;
   mocks.loading = false;
   mocks.navTag = "Success";
   mocks.urlOverride = null;
@@ -160,10 +188,158 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   dom.window.close();
+  // A test with a never-settling bridge models a renderer teardown. The real
+  // renderer process would discard these in-memory reservations entirely.
+  clearChatGPTRecoveryMutationGateForTests();
 });
 
 describe("serialized ChatGPT browser recovery", () => {
-  it("refreshes one broken session at a time, 30 seconds apart, with a 2-minute per-tab cooldown", async () => {
+  it("inspects and attempts recovery immediately after startup, without waiting for the scan interval", async () => {
+    await mount(["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+  });
+
+  it("reacts to a health transition without waiting for the watchdog", async () => {
+    let activity = "idle";
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity, url: `https://chatgpt.com/c/${id}`,
+    }));
+    await mount(["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    activity = "invalid: Could not load this ChatGPT conversation";
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed", {
+        detail: { environmentId: "local", sessionId: "comit" },
+      }));
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+  });
+
+  it("discovers a silent failure on the fallback watchdog without polling every 20 seconds", async () => {
+    let activity = "idle";
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity, url: `https://chatgpt.com/c/${id}`,
+    }));
+    await mount(["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+    activity = "invalid: Could not load this ChatGPT conversation";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(55_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledWith("runtime:comit");
+  });
+
+  it("keeps an unresolved refresh isolated to its guest across remounts", async () => {
+    let finishBridge: (() => void) | undefined;
+    mocks.refresh
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishBridge = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+    await mount(["comit", "other"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+    await act(async () => {
+      renderer?.unmount();
+      renderer = undefined;
+    });
+    document.body.innerHTML = "";
+    await mount(["comit", "other"]);
+    // The previous IPC action remains unresolved; only this guest is reserved.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(55_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalledWith("runtime:other");
+    expect(mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit")).toHaveLength(1);
+    expect(tryAcquireChatGPTRecoveryMutation("local", "comit", "manual", "reload")).toBeNull();
+    finishBridge!();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150_000);
+    });
+    expect(
+      mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit").length,
+    ).toBeGreaterThan(1);
+  });
+
+  it("never starts background recovery during an active manual reload lease", async () => {
+    const manual = tryAcquireChatGPTRecoveryMutation("local", "comit", "manual", "reload");
+    expect(manual).not.toBeNull();
+    try {
+      await mount(["comit"]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(42_000);
+      });
+      expect(mocks.refresh).not.toHaveBeenCalled();
+    } finally {
+      manual?.release();
+    }
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(42_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledWith("runtime:comit");
+  });
+
+  it("counts actual automatic attempts and closes only after observed assistant progress", async () => {
+    await mount(["comit"], [], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(22_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    let episode = readChatGPTRecoveryMetrics("local").ledger?.episodes[0];
+    expect(episode).toMatchObject({
+      category: "red",
+      source: "automatic",
+      outcome: "active",
+      attemptCount: 1,
+      actions: { reload: 1, stop: 0, continue: 0 },
+    });
+    expect(aggregateChatGPTRecoveryMetrics("local").successRate).toBeNull();
+    // An acknowledged refresh is not an assistant response. Only a verified
+    // same-conversation activity progression can close the incident.
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "working",
+      url: `https://chatgpt.com/c/${id}`,
+      lastRole: "assistant",
+      assistantHasContent: true,
+      lastText: "assistant advanced",
+    }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(22_000);
+    });
+    episode = readChatGPTRecoveryMetrics("local").ledger?.episodes[0];
+    expect(episode?.outcome).toBe("recovered");
+    expect(episode?.attemptCount).toBe(1);
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a selected red guest pinned while other red sessions wait", async () => {
+    await mount(["comit", "other"], [], ["comit", "other"], "comit");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    expect(mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit").length).toBeGreaterThan(1);
+    expect(mocks.refresh).not.toHaveBeenCalledWith("runtime:other");
+  });
+
+  it("retries the pinned red session at global spacing without round-robin", async () => {
     await mount();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(22_000);
@@ -173,33 +349,25 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(phaseChanges).toHaveBeenCalledWith("comit", "refreshing");
     expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
-    });
-    expect(mocks.refresh).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
-    });
-    expect(mocks.refresh).toHaveBeenCalledTimes(2);
-    expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:other");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
-    expect(mocks.refresh).toHaveBeenCalledTimes(2);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
     expect(mocks.refresh).toHaveBeenCalledTimes(3);
+    expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:comit");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(37_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(4);
     expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:comit");
   });
 
   it("keeps the refresh spinner visible while the page begins navigating", async () => {
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(phaseChanges).toHaveBeenLastCalledWith("comit", "refreshing");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_199);
+      await vi.advanceTimersByTimeAsync(1_198);
     });
     expect(phaseChanges).toHaveBeenLastCalledWith("comit", "refreshing");
     await act(async () => {
@@ -224,6 +392,21 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(useBrowserSurfaceStore.getState().activityByTabId["runtime:comit"]).toBeUndefined();
   });
 
+  it("resets a confirmed white background page even when its preview has no saved URL", async () => {
+    mocks.blank = true;
+    mocks.navTag = "Loading"; // The real case has a URL in the guest, but session read reports null.
+    await mount(["comit"], ["comit"], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(85_000);
+    });
+    expect(mocks.resetBrowser).toHaveBeenCalledExactlyOnceWith(
+      "runtime:comit",
+      "https://chatgpt.com/c/comit",
+    );
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(useBrowserSurfaceStore.getState().byTabId["runtime:comit"]?.visible).not.toBe(true);
+  });
+
   it("rotates limited background probes so lower-ranked grey tabs are not starved", async () => {
     const discovered = new Set<string>();
     const ids = ["a", "b", "c", "d", "e"];
@@ -235,14 +418,14 @@ describe("serialized ChatGPT browser recovery", () => {
     });
     await mount(ids, ids);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(54_000);
+      await vi.advanceTimersByTimeAsync(190_000);
     });
     expect(discovered).toEqual(new Set(ids));
     expect(mocks.refresh).not.toHaveBeenCalled();
     expect(Object.keys(useBrowserSurfaceStore.getState().activityByTabId)).toHaveLength(0);
   });
 
-  it("keeps independently confirmed failures queued while retrying only one at a time", async () => {
+  it("keeps other confirmed red failures queued without switching away from the pin", async () => {
     await mount(["comit", "other"]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(22_000);
@@ -251,10 +434,11 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
     expect(phaseChanges).toHaveBeenCalledWith("other", "queued");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(40_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
-    expect(mocks.refresh).toHaveBeenCalledTimes(2);
-    expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:other");
+    expect(mocks.refresh.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:comit");
+    expect(mocks.refresh).not.toHaveBeenCalledWith("runtime:other");
   });
 
   it("does not lose a confirmed recovery queue entry when the guest becomes uninspectable", async () => {
@@ -328,18 +512,19 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(useBrowserSurfaceStore.getState().activityByTabId["runtime:comit"]).toBeUndefined();
   });
 
-  it("prioritizes the most recently clicked broken tab after restoring stored click history", async () => {
+  it("does not rotate red sessions after a previous attempt", async () => {
     recordSessionClick("local", "comit", ["comit", "other"]);
     recordSessionClick("local", "other", ["comit", "other"]);
-    await mount();
+    await mount(["comit", "other"], [], ["comit", "other"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(1);
     });
-    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:other");
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(40_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
     expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:comit");
+    expect(mocks.refresh).not.toHaveBeenCalledWith("runtime:other");
   });
 
   it("never inspects a hidden session even if it was the most recently clicked", async () => {
@@ -368,7 +553,7 @@ describe("serialized ChatGPT browser recovery", () => {
     );
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(mocks.result).toHaveBeenCalledTimes(1);
     await act(async () => {
@@ -444,7 +629,7 @@ describe("serialized ChatGPT browser recovery", () => {
       }));
       await mount(["comit"]);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(629_999);
+        await vi.advanceTimersByTimeAsync(599_999);
       });
       expect(mocks.refresh).not.toHaveBeenCalled();
       await act(async () => {
@@ -466,10 +651,14 @@ describe("serialized ChatGPT browser recovery", () => {
     });
     activity = "working";
     await act(async () => {
+      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
+        { detail: { environmentId: "local", sessionId: "comit" } }));
       await vi.advanceTimersByTimeAsync(10_000);
     });
     activity = "interrupted";
     await act(async () => {
+      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
+        { detail: { environmentId: "local", sessionId: "comit" } }));
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
@@ -492,9 +681,15 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
-  it("unblocks other sessions if the refresh bridge never settles", async () => {
+  it("keeps an unresolved red guest pinned and retries it after the bridge settles", async () => {
+    let finishBridge: (() => void) | undefined;
     mocks.refresh
-      .mockImplementationOnce(() => new Promise<void>(() => {}))
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishBridge = resolve;
+          }),
+      )
       .mockResolvedValue(undefined);
     await mount();
     await act(async () => {
@@ -506,9 +701,19 @@ describe("serialized ChatGPT browser recovery", () => {
     });
     expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(32_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
-    expect(mocks.refresh).toHaveBeenLastCalledWith("runtime:other");
+    // UNKNOWN does not permit switching to the next red session.
+    expect(mocks.refresh).not.toHaveBeenCalledWith("runtime:other");
+    expect(mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit")).toHaveLength(1);
+    finishBridge!();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+    // Once the formerly unresolved bridge has settled, its red session is
+    // eligible again on the global cadence, without a separate 120 s delay.
+    expect(mocks.refresh).not.toHaveBeenCalledWith("runtime:other");
+    expect(mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit").length).toBeGreaterThan(1);
   });
 });
 
@@ -524,16 +729,18 @@ describe("persistent orange recovery safety", () => {
     });
     await mount(["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(631_000);
+      await vi.advanceTimersByTimeAsync(601_000);
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(31_000);
+      await vi.advanceTimersByTimeAsync(24_000);
     });
     expect(mocks.stop).toHaveBeenCalledExactlyOnceWith("comit");
-    expect(mocks.type).not.toHaveBeenCalled();
+    // Event/deadline scheduling can safely confirm idle and Continue sooner
+    // than the former fixed 20-second scan, but must still act at most once.
+    expect(mocks.type.mock.calls.length).toBeLessThanOrEqual(1);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(31_000);
+      await vi.advanceTimersByTimeAsync(24_000);
     });
     expect(mocks.type).toHaveBeenCalledExactlyOnceWith("comit", "Continue.");
     expect(mocks.press).toHaveBeenCalledExactlyOnceWith("comit", {
@@ -660,6 +867,8 @@ describe("persistent orange recovery safety", () => {
     expect(mocks.refresh.mock.calls.length).toBeGreaterThan(3);
     activity = "idle";
     await act(async () => {
+      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
+        { detail: { environmentId: "local", sessionId: "comit" } }));
       await vi.advanceTimersByTimeAsync(31_000);
     });
     expect(
@@ -695,24 +904,25 @@ describe("orange delivery ambiguity and retry bounds", () => {
   });
 
   it("never replays an ambiguous legacy orange action after remount", async () => {
-    localStorage.setItem(
-      "t3code:chatgpt-browser:bounded-recovery:local",
-      JSON.stringify({
-        red: {},
-        orange: {
-          comit: {
-            conversationId: "comit",
-            userTurnKey: "user:comit",
-            userTurn: 0,
-            problem: "interrupted",
-            firstSeenAt: Date.now() - 3_600_000,
-            stage: "needs_human",
-            stageAt: Date.now() - 3_600_000,
-          },
+    const legacy = {
+      red: {},
+      orange: {
+        comit: {
+          conversationId: "comit",
+          userTurnKey: "user:comit",
+          userTurn: 0,
+          problem: "interrupted",
+          firstSeenAt: Date.now() - 3_600_000,
+          stage: "needs_human",
+          stageAt: Date.now() - 3_600_000,
         },
-        escalation: { comit: { reason: "stop_outcome_ambiguous" } },
-      }),
-    );
+      },
+      escalation: { comit: { reason: "stop_outcome_ambiguous" } },
+    };
+    localStorage.setItem("t3code:chatgpt-browser:bounded-recovery:local", JSON.stringify(legacy));
+    getChatGPTSessionPersistedStore("local").setState((previous) => ({
+      recovery: { ...previous.recovery, bounded: legacy },
+    }));
     mocks.result.mockImplementation(async (id: string) => ({
       activity: "interrupted",
       url: `https://chatgpt.com/c/${id}`,
@@ -741,14 +951,14 @@ describe("orange delivery ambiguity and retry bounds", () => {
     expect(mocks.type).not.toHaveBeenCalled();
   });
 
-  it("uses the identical fixed red retry delay for attempt 1 and attempt 50", () => {
+  it("uses the same global retry interval on attempt 1 and beyond attempt 50", () => {
     const values = [
       nextRedRetryDelay("comit", 1),
       nextRedRetryDelay("comit", 50),
       nextRedRetryDelay("other", 50),
       nextRedRetryDelay("comit", 100_000),
     ];
-    expect(values).toEqual([120_000, 120_000, 120_000, 120_000]);
+    expect(values).toEqual([30_000, 30_000, 30_000, 30_000]);
   });
 });
 
@@ -821,7 +1031,7 @@ describe("recovering lost ChatGPT conversation routes", () => {
     let inspections = 0;
     mocks.result.mockImplementation(async () => {
       inspections++;
-      return inspections === 2 ? { ...homepage, url: "https://chatgpt.com/c/another" } : homepage;
+      return inspections >= 2 ? { ...homepage, url: "https://chatgpt.com/c/another" } : homepage;
     });
     await mount(["comit"]);
     await act(async () => {
@@ -885,18 +1095,18 @@ describe("recovering lost ChatGPT conversation routes", () => {
     localStorage.setItem("saved:other", JSON.stringify("https://chatgpt.com/c/other"));
     await mount(["comit", "other"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(61_000);
+      await vi.advanceTimersByTimeAsync(41_000);
     });
     expect(mocks.navigate).toHaveBeenCalledTimes(1);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(45_000);
     });
     expect(mocks.navigate).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("red error panel without an editor", () => {
-  it("retries a confirmed load-error panel with no composer, retaining red backoff", async () => {
+  it("retries a confirmed load-error panel without a composer or per-session backoff", async () => {
     mocks.result.mockImplementation(async (id: string) => ({
       activity: "invalid: Could not load this ChatGPT conversation",
       url: `https://chatgpt.com/c/${id}`,
@@ -914,7 +1124,7 @@ describe("red error panel without an editor", () => {
     ).toBe(1);
   });
 
-  it("automatically queues and refreshes a red missing-composer page", async () => {
+  it("waits a full minute before recovering a persistently missing composer", async () => {
     mocks.result.mockImplementation(async (id: string) => ({
       activity: "invalid: the ChatGPT composer is unavailable",
       url: `https://chatgpt.com/c/${id}`,
@@ -926,7 +1136,71 @@ describe("red error panel without an editor", () => {
       await vi.advanceTimersByTimeAsync(23_000);
     });
     expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+    // A reload must respect the fixed 120-second cooldown, not a 20-second loop.
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not refresh if a missing composer reappears before the grace ends", async () => {
+    let activity = "invalid: the ChatGPT composer is unavailable";
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity,
+      url: `https://chatgpt.com/c/${id}`,
+      draftEmpty: activity === "idle" ? true : null,
+      stopVisible: false,
+    }));
+    await mount(["comit"], ["comit"], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(42_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    activity = "idle";
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
+        { detail: { environmentId: "local", sessionId: "comit" } }));
+      await vi.advanceTimersByTimeAsync(100_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    activity = "invalid: the ChatGPT composer is unavailable";
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
+        { detail: { environmentId: "local", sessionId: "comit" } }));
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+  });
+
+  it("never auto-refreshes unrelated invalid states without a load-error panel", async () => {
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "invalid: this page is not on ChatGPT",
+      url: `https://chatgpt.com/c/${id}`,
+      draftEmpty: null,
+      stopVisible: false,
+    }));
+    await mount(["comit"], ["comit"], ["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
   it("keeps an unverified red page queued without refreshing a different conversation", async () => {
@@ -943,7 +1217,7 @@ describe("red error panel without an editor", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
-  it("ignores a legacy terminal escalation and resumes the same red conversation", async () => {
+  it("ignores a legacy terminal escalation and retries the same confirmed red load failure", async () => {
     localStorage.setItem(
       "t3code:chatgpt-browser:bounded-recovery:local",
       JSON.stringify({
@@ -959,7 +1233,7 @@ describe("red error panel without an editor", () => {
       }),
     );
     mocks.result.mockImplementation(async (id: string) => ({
-      activity: "invalid: the ChatGPT composer is unavailable",
+      activity: "invalid: Could not load this ChatGPT conversation",
       url: `https://chatgpt.com/c/${id}`,
       draftEmpty: null,
       stopVisible: false,

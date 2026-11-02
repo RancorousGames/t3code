@@ -7,6 +7,7 @@ import {
   readChatGPTSessionTimeline,
   recordChatGPTSessionActiveAt,
   recordChatGPTSessionRefreshedAt,
+  recordChatGPTSessionRebootedAt,
 } from "./chatGPTSessionTimestamps";
 
 const records = new Map<string, string>();
@@ -33,6 +34,7 @@ describe("per-ChatGPT session timestamp provenance", () => {
       createdAt: null,
       lastActiveAt: null,
       lastRefreshAt: null,
+      lastRebootAt: null,
     });
     expect(formatChatGPTSessionDateTime(null)).toBe("Unknown (not recorded)");
     expect(readChatGPTSessionTimeline("env", { ...legacy, createdAt: Date.now() }).createdAt).toBe(
@@ -72,7 +74,18 @@ describe("per-ChatGPT session timestamp provenance", () => {
     ).toBeNull();
   });
 
-  it("survives independent reads, rejects future timestamps, and isolates refreshes", () => {
+  it("keeps Agent Reboots separate from ordinary page reload timestamps", () => {
+    const entry = { id: "s", title: "Manager" };
+    recordChatGPTSessionRefreshedAt("env", "s", Date.now() - 10_000);
+    recordChatGPTSessionRebootedAt("env", "s", Date.now() - 1_000);
+    expect(readChatGPTSessionTimeline("env", entry)).toMatchObject({
+      lastRefreshAt: Date.now() - 10_000,
+      lastRebootAt: Date.now() - 1_000,
+    });
+    expect(readChatGPTSessionTimeline("env", { ...entry, id: "other" }).lastRebootAt).toBeNull();
+  });
+
+  it("survives independent reads, rejects future timestamps, and isolates browser reloads", () => {
     const entry = { id: "s", title: "Session" };
     const first = Date.now() - 45_000;
     recordChatGPTSessionRefreshedAt("env", "s", first);

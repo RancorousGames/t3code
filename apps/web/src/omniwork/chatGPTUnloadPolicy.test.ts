@@ -15,7 +15,7 @@ import {
 } from "../browser/chatGPTGuestHibernation";
 
 beforeEach(() => {
-  useOmniworkPreferences.setState({ unloadProfile: DEFAULT_OMNIWORK_UNLOAD_PROFILE });
+  useOmniworkPreferences.setState({ unloadProfile: DEFAULT_OMNIWORK_UNLOAD_PROFILE, recentGuests: null });
 });
 
 describe("Omniwork desktop ChatGPT unload preferences", () => {
@@ -62,6 +62,13 @@ describe("Omniwork desktop ChatGPT unload preferences", () => {
     expect(ordinary("never")).toHaveLength(12);
     expect(ordinary("never")).toContain("guest-0");
 
+    useOmniworkPreferences.getState().setRecentGuests(8);
+    expect(ordinary("aggressive")).toHaveLength(10);
+    useOmniworkPreferences.getState().setRecentGuests(0);
+    expect(ordinary("conservative")).toHaveLength(2);
+    useOmniworkPreferences.getState().setRecentGuests(null);
+    expect(ordinary("conservative")).toHaveLength(10);
+
     const stale = {
       visible: false,
       onConversation: true,
@@ -84,15 +91,19 @@ describe("Omniwork desktop ChatGPT unload preferences", () => {
     const { storage, name } = store.persist.getOptions();
     if (!storage || !name) throw new Error("Omniwork storage not configured");
     store.getState().setUnloadProfile("conservative");
+    store.getState().setRecentGuests(8);
     const saved = await storage.getItem(name);
-    expect(saved).toMatchObject({ state: { unloadProfile: "conservative" } });
+    expect(saved).toMatchObject({ state: { unloadProfile: "conservative", recentGuests: 8 } });
     store.getState().setUnloadProfile("aggressive");
+    store.getState().setRecentGuests(0);
     await storage.setItem(name, saved!);
     await store.persist.rehydrate();
     expect(store.getState().unloadProfile).toBe("conservative");
+    expect(store.getState().recentGuests).toBe(8);
     await storage.setItem(name, { state: { unloadProfile: "expired-invalid-option" }, version: 0 });
     await store.persist.rehydrate();
     expect(store.getState().unloadProfile).toBe("balanced");
+    expect(store.getState().recentGuests).toBeNull();
     expect(typeof store.getState().setUnloadProfile).toBe("function");
   });
 });

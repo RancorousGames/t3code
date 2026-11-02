@@ -67,6 +67,7 @@ export type AgentProviderV1Capability = typeof AgentProviderV1Capability.Type;
 
 export const AgentProviderV1Delivery = Schema.Literals([
   "WhenIdle",
+  "WaitForSlot",
   "Queue",
   "Steer",
   "RejectIfBusy",
@@ -94,6 +95,16 @@ export const AgentProviderV1Session = Schema.Struct({
   capabilities: Schema.Array(AgentProviderV1Capability),
   deliveryModes: Schema.Array(AgentProviderV1Delivery),
   lastActivityAt: Schema.optional(Schema.NullOr(Schema.String)),
+  // Authoritative T3 desktop sidebar state, not an OmniHub-local projection.
+  visibility: Schema.optional(
+    Schema.Struct({
+      hidden: Schema.Boolean,
+      hiddenAt: Schema.optional(Schema.Number),
+      snoozedUntil: Schema.optional(Schema.Number),
+      snoozedAt: Schema.optional(Schema.Number),
+      createdAt: Schema.optional(Schema.Number),
+    }),
+  ),
 });
 export type AgentProviderV1Session = typeof AgentProviderV1Session.Type;
 
@@ -141,10 +152,23 @@ export const AgentProviderV1DesktopSnapshot = Schema.Struct({
 export const AgentProviderV1DesktopWork = Schema.Struct({
   jobId: OpaqueId,
   environmentId: OpaqueId,
-  browserSessionId: OpaqueId,
-  expectedConversationId: OpaqueId,
-  action: Schema.Literals(["history", "submit"]),
+  browserSessionId: Schema.optional(OpaqueId),
+  expectedConversationId: Schema.optional(OpaqueId),
+  action: Schema.Literals(["history", "submit", "create", "visibility"]),
+  visibility: Schema.optional(
+    Schema.Struct({
+      hidden: Schema.optional(Schema.Boolean),
+      snoozedUntil: Schema.optional(Schema.NullOr(Schema.Number)),
+    }),
+  ),
   text: Schema.optional(Schema.String),
+  delivery: Schema.optional(AgentProviderV1Delivery),
+  maxActiveWorkers: Schema.optional(Schema.Number),
+  clientRequestId: Schema.optional(RequestId),
+  title: Schema.optional(Schema.String),
+  prompt: Schema.optional(Schema.String),
+  project: Schema.optional(Schema.String),
+  parentSessionId: Schema.optional(OpaqueId),
 });
 export type AgentProviderV1DesktopWork = typeof AgentProviderV1DesktopWork.Type;
 export const AgentProviderV1DesktopWorkResult = Schema.Struct({
@@ -222,12 +246,48 @@ export const AgentProviderV1Submit = Schema.Struct({
   session: AgentProviderV1SessionRef,
   content: Schema.Array(Schema.Unknown),
   delivery: AgentProviderV1Delivery,
+  maxActiveWorkers: Schema.optional(Schema.Number),
   clientRequestId: RequestId,
   expectedConversation: Schema.optional(Schema.NullOr(OpaqueId)),
   expectedEnvironmentId: Schema.optional(Schema.NullOr(OpaqueId)),
 });
 export type AgentProviderV1Submit = typeof AgentProviderV1Submit.Type;
 
+export const AgentProviderV1QueueRequest = Schema.Struct({
+  session: AgentProviderV1SessionRef,
+  expectedEnvironmentId: OpaqueId,
+});
+export const AgentProviderV1InterruptRequest = Schema.Struct({
+  session: AgentProviderV1SessionRef,
+  expectedEnvironmentId: OpaqueId,
+  clientRequestId: RequestId,
+  runId: Schema.optional(OpaqueId),
+});
+export const AgentProviderV1CreateRequest = Schema.Struct({
+  kind: AgentProviderV1SessionKind,
+  expectedEnvironmentId: OpaqueId,
+  clientRequestId: RequestId,
+  title: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(180)),
+  initialMessage: Schema.optional(Schema.String.check(Schema.isMaxLength(30_000))),
+  project: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
+  parentSessionId: Schema.optional(OpaqueId),
+});
+export const AgentProviderV1CreateReceipt = Schema.Struct({
+  operationId: OpaqueId,
+  clientRequestId: RequestId,
+  state: Schema.Literals(["Created", "NotCreated", "Unknown"]),
+  session: Schema.NullOr(AgentProviderV1SessionRef),
+  conversationId: Schema.NullOr(OpaqueId),
+  initialPromptDelivery: Schema.Literals(["Delivered", "Unknown", "NotSent"]),
+  parentConfirmed: Schema.Boolean,
+  observedAt: Schema.String,
+  reason: Schema.optional(Schema.String),
+});
+export const AgentProviderV1CreateGet = Schema.Struct({
+  operationId: OpaqueId,
+  clientRequestId: RequestId,
+  expectedEnvironmentId: OpaqueId,
+});
 export const AgentProviderV1Update = Schema.Struct({
   id: OpaqueId,
   kind: Schema.String,
@@ -270,6 +330,8 @@ export const AgentProviderV1Method = Schema.Literals([
   "sessions.updates",
   "sessions.subscribe",
   "sessions.submit",
+  "sessions.create",
+  "sessions.create.get",
   "sessions.queue",
   "sessions.queue.edit",
   "sessions.interrupt",

@@ -4,6 +4,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("../../env", () => ({ isElectron: true }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("react-dom", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react-dom")>()),
   createPortal: (children: unknown) => children,
@@ -117,6 +118,7 @@ beforeEach(() => {
   lifecycle.mockReset().mockRejectedValue(new Error("Synthetic lifecycle receipt not configured"));
   vi.stubGlobal("window", {
     desktopBridge: {
+      onMenuAction: () => () => {},
       listOpenRigAgents: list, listOpenRigManagedSessions: listManaged,
       readOpenRigExecutionProfile: readProfile,
       configureOpenRigExecutionProfile: configureProfile,
@@ -130,7 +132,9 @@ beforeEach(() => {
     setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
     innerWidth: 1920, innerHeight: 1080,
-    localStorage: { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() },
+    localStorage: { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn(), length: 0, key: () => null },
+    // The Agent Network mounts ChatGPT session readers that need both browser storages.
+    sessionStorage: { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn(), length: 0, key: () => null },
   });
   vi.stubGlobal("document", {
     visibilityState: "visible", activeElement: null,

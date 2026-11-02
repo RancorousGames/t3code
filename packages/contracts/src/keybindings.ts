@@ -103,6 +103,12 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "chat.newLocal",
   "chat.newWithoutProject",
   "chatgpt.newSession",
+  "chatgpt.openDashboard",
+  "chatgpt.reloadSession",
+  "chatgpt.snoozeSession",
+  "chatgpt.unsnoozeSession",
+  "chatgpt.copySessionId",
+  "omniwork.toggleWorkers",
   "chat.find",
   "editor.openFavorite",
   "usage.cost",
@@ -161,6 +167,9 @@ export const KeybindingShortcut = Schema.Struct({
   modKey: Schema.Boolean,
 });
 export type KeybindingShortcut = typeof KeybindingShortcut.Type;
+
+/** Shared worker-visibility command, dispatched through normal T3 keybindings. */
+export const CHATGPT_WORKER_VISIBILITY_MENU_ACTION = "omniwork.toggleWorkers";
 
 export const PreviewForwardedShortcut = Schema.Struct({
   command: KeybindingCommand,

@@ -1,0 +1,28 @@
+I've built the review-gate work from the brief: desktop MAIN can now open and release linked TaskBoard review gates, and the inbox shows them. None of it has run. Tests and typecheck need approval for `vp`, which this non-interactive session couldn't give, so I reviewed the code by hand instead.
+
+The OpenRig source and report files, and the task note, were outside the repo and permission was denied. I worked from the contract in the brief. Where it gave no exact data shape, I assumed one; if OpenRig sends something different, nothing is sent. The report lists each assumption.
+
+**What's built**
+- **Release a gate:** MAIN never trusts what the inbox panel sends. Before releasing, it:
+  - re-reads the inbox and finds the exact selected item;
+  - checks the gate is still pending and the review ID and revision match;
+  - refuses a verdict that differs from one already recorded in TaskBoard;
+  - confirms the gate link with OpenRig;
+  - shows a native Cancel / Release dialog. Clicking in the inbox is never treated as approval on its own.
+- **No duplicates:** the private token is loaded the same way as for operator replies and never reaches the inbox UI. If a release result is unclear, MAIN only asks OpenRig for the receipt; it never sends the release again.
+- **Two separate results:** the outcome reports whether OpenRig released the gate and, separately, whether the agent's wake-up was delivered.
+- **Open review:** the inbox never passes a URL. MAIN opens only local `localhost`/`127.0.0.1` links it read itself; `javascript:`, `file:` and off-host links are rejected.
+- **Inbox panel:** a new `OpenRigReviewGatePanel.tsx` in the existing inbox style shows the thumbnail, review and revision, gate state, **Open review**, a verdict choice with an optional note, and **Release gate…**. If a result is unclear it offers **Check status** and **Dismiss**.
+- **Not built:**
+  - TaskBoard does not release gates automatically. There's no trusted way to know a request came from TaskBoard, so that path stays off, and the panel and docs say so.
+  - The ordinary queue reply is unchanged.
+- **Tests:** I wrote `apps/desktop/src/ipc/methods/openRigReviewGate.test.ts`, covering a missing token, bad URLs and gate links, forged requests, repeated status checks, and which links get opened.
+
+I also added a short section to `docs/user/openrig-human-inbox.md`. The other uncommitted files already in the tree were left alone. There were no commits, rebuilds or restarts.
+
+**To do next:**
+1. Run `vp test run apps/desktop/src/ipc/methods/openRigReviewGate.test.ts apps/desktop/src/ipc/methods/openRigOperatorReply.test.ts`.
+2. Typecheck desktop, web and contracts.
+3. Check the assumed data shapes against OpenRig's `taskboard-review-gates.ts` and its inbox output, especially whether inbox items actually include a `reviewGate` field. If they don't, the panel never appears.
+
+The full report is at `.agents/MISC-0008-T3-bridge-report-20261024.md`.

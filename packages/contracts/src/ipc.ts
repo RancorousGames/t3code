@@ -627,6 +627,9 @@ export interface DesktopPreviewPointerEvent {
 export interface DesktopPreviewOpenLinkEvent {
   tabId: string;
   url: string;
+  /** Actual guest page at click time; prevents guessing navigation state. */
+  sourceUrl?: string;
+  /** True for middle-click / Cmd-click, which should not take focus. */
   background: boolean;
 }
 
@@ -1281,6 +1284,22 @@ export const DesktopOpenRigSendInputSchema = Schema.Struct({
   message: Schema.String,
 });
 export type DesktopOpenRigSendInput = typeof DesktopOpenRigSendInputSchema.Type;
+/** Exact-route reconciliation never treats an absent message as permission to resend. */
+export const DesktopOpenRigHumanSendReconcileInputSchema = Schema.Struct({
+  id: Schema.String,
+  managedSessionId: Schema.String,
+  attemptId: Schema.String,
+  target: DesktopOpenRigSessionTargetSchema,
+});
+export type DesktopOpenRigHumanSendReconcileInput =
+  typeof DesktopOpenRigHumanSendReconcileInputSchema.Type;
+export const DesktopOpenRigHumanSendReconcileResultSchema = Schema.Struct({
+  state: Schema.Literals(["observed", "pending", "route_changed"]),
+  persisted: Schema.optional(Schema.Boolean),
+  assistantAcknowledged: Schema.optional(Schema.Boolean),
+});
+export type DesktopOpenRigHumanSendReconcileResult =
+  typeof DesktopOpenRigHumanSendReconcileResultSchema.Type;
 
 /** Read-only RigSpec seat hierarchy (delegates_to / spawned_by edges). Never inferred from sessions. */
 export const DesktopOpenRigSeatNodeSchema = Schema.Struct({
@@ -1706,8 +1725,7 @@ export const DesktopOpenRigReviewGateSelectionSchema = Schema.Struct({
   qitemId: Schema.String,
   gateQitemId: Schema.String,
 });
-export type DesktopOpenRigReviewGateSelection =
-  typeof DesktopOpenRigReviewGateSelectionSchema.Type;
+export type DesktopOpenRigReviewGateSelection = typeof DesktopOpenRigReviewGateSelectionSchema.Type;
 export const DesktopOpenRigReviewGateResolveInputSchema = Schema.Struct({
   destination: Schema.Literal("human@kernel"),
   qitemId: Schema.String,
@@ -1769,7 +1787,172 @@ export interface DesktopChatGPTDraftSnapshotReceipt {
   readonly uncertainSendPresent: boolean;
 }
 
+/** Durable T3-to-ChatGPT outbox status. Deliberately excludes message bodies and errors. */
+export interface DesktopChatGPTDeliveryDiagnostics {
+  readonly sampledAt: number;
+  readonly total: number;
+  readonly newCount: number;
+  readonly counts: Readonly<
+    Record<
+      "queued" | "sending" | "uncertain" | "delivered" | "needs_attention" | "cancelled",
+      number
+    >
+  >;
+  readonly messages: readonly {
+    readonly messageId: string;
+    readonly sessionId: string;
+    readonly conversationId: string;
+    readonly status:
+      | "queued"
+      | "sending"
+      | "uncertain"
+      | "delivered"
+      | "needs_attention"
+      | "cancelled";
+    readonly attempts: number;
+    readonly createdAt: number;
+    readonly updatedAt: number;
+    readonly reason: string | null;
+    readonly queuedBehind: number;
+  }[];
+}
+
 export interface DesktopBridge {
+  /**
+   * Experimental stable Electron-owner native view API. Never exposed to
+   * guest ChatGPT webContents; main validates the sender and profile.
+   */
+  stableChatGPTViewRequest?: (
+    input:
+      | {
+          operation: "attach";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+          url: string;
+          /** Preserve the in-process native fallback if detached sign-in transfer fails. */
+          forceNative?: boolean;
+        }
+      | {
+          operation: "present";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+          bounds: { x: number; y: number; width: number; height: number } | null;
+        }
+      | {
+          operation: "tooltip";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+          bounds: { x: number; y: number; width: number; height: number } | null;
+          html: string | null;
+        }
+      | {
+          operation: "navigate";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+          url: string;
+        }
+      | {
+          operation: "evaluate";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+          expression: string;
+        }
+      | {
+          operation: "find";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+          text: string;
+          findNext?: boolean;
+          forward?: boolean;
+        }
+      | {
+          operation: "stop_find";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+        }
+      | {
+          operation: "probe" | "snapshot" | "close" | "reload" | "back" | "forward";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+        },
+  ) => Promise<unknown>;
+  /** Native Chromium lifecycle changes; status must still be verified via snapshot/DOM. */
+  onStableChatGPTViewState?: (
+    listener: (state: {
+      environmentId: string;
+      sessionId: string;
+      phase: "loading" | "loaded" | "failed" | "navigated";
+    }) => void,
+  ) => () => void;
+  /** Only T3's native renderer may control offscreen persistent ChatGPT sessions. */
+  persistentChatGPTRequest?: (input: {
+    operation: "attach" | "input" | "evaluate" | "status";
+    sessionId: string;
+    environmentId?: string;
+    profileId?: string;
+    url?: string;
+    width?: number;
+    height?: number;
+    expression?: string;
+    input?: Readonly<Record<string, unknown>>;
+  }) => Promise<unknown>;
+  /** Resolve a title saved by OMCPT Bootstrap for an exact public UUID. */
+  readChatGPTBootstrapTitle?: (id: string) => Promise<string | null>;
+  /** Read-only diagnostics from this desktop's persisted ChatGPT delivery journal. */
+  readChatGPTDeliveryDiagnostics?: () => Promise<DesktopChatGPTDeliveryDiagnostics>;
+  /** Read-only OpenRig Caffy managed idle subscriptions (not T3 queued messages). */
+  /** Shared OpenRig capacity admission for T3 Wait for slot messages. */
+  chatGPTCapacityMessage?: (
+    input: import("./chatGPTCapacityMessage.ts").CapacityMessageRequest,
+  ) => Promise<import("./chatGPTCapacityMessage.ts").CapacityMessageReceipt>;
+  readCaffyManagedIdleSubscriptions?: () => Promise<
+    import("./caffyManagedIdle.ts").CaffyManagedIdleReadResult
+  >;
+  /** Cancels exactly one managed idle subscription; no user turn or wake is sent. */
+  cancelCaffyManagedIdleSubscription?: (
+    id: string,
+  ) => Promise<import("./caffyManagedIdle.ts").CaffyManagedIdleCancelResult>;
+  /** One-shot read of OmniHub's locally persisted temporary keep-awake monitors. */
+  readOmniHubKeepAwakeMonitors?: (
+    input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeQuery,
+  ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeReadResult>;
+  /** Applies owner-token-authorized changes through OmniHub Tools; tokens never enter UI. */
+  controlOmniHubKeepAwakeMonitor?: (
+    input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeControlQuery,
+  ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeControlReceipt>;
+  /** Starts one scheduler monitor for the selected, exact browser conversation. */
+  startOmniHubKeepAwakeMonitor?: (
+    input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeStartQuery,
+  ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeStartReceipt>;
+  /** Read-only local TaskBoard Done evidence; unavailable on non-desktop clients. */
+  /** Open or create exactly one TaskBoard-bound session through the desktop durable task-open CLI. */
+  openTaskBoardLiveSession?: (input: {
+    boardRoot: string;
+    taskId: string;
+    kind?: "chatgpt" | "claude" | "codex";
+    environmentId?: string;
+  }) => Promise<{
+    status: string;
+    kind?: string;
+    sessionId?: string;
+    threadId?: string;
+    message?: string;
+  }>;
+  controlTaskBoardLiveSession?: (input: {
+    boardRoot: string;
+    taskId: string;
+    action: "later" | "clear";
+    until?: string;
+  }) => Promise<{ applied: true }>;
+  readTaskBoardWorkerClaims?: () => Promise<
+    readonly {
+      taskId: string;
+      claimedBy: string;
+      column: string;
+      boardRoot?: string;
+      project?: string;
+      withMe?: boolean;
+      laterUntil?: string;
+      completedAt: number | null;
+      liveState: "ready" | "in_session" | null;
+      taskTitle?: string;
+      liveBrief?: string;
+      liveEstMinutes?: number;
+      liveReadyAt?: string;
+    }[]
+  >;
   /** Local desktop-only private backup: raw draft and pending send never return over activation IPC. */
   savePrivateChatGPTDraftSnapshot?: (
     input: DesktopChatGPTDraftSnapshotInput,
@@ -1807,6 +1990,26 @@ export interface DesktopBridge {
   /** Opens an OS-native review; renderer supplies lookup ID only, never choice or proof. */
   requestOpenRigNativeReview?: (operationId: string) => Promise<DesktopOpenRigNativeReviewResult>;
   readOpenRigOperatorInbox?: (address: string) => Promise<DesktopOpenRigInbox>;
+  readTaskBoardHumanInbox?: () => Promise<{
+    items: Array<{
+      sourceKey: string;
+      sourceId: string;
+      boardRoot?: string;
+      title: string;
+      body?: string;
+      createdAt?: string;
+    }>;
+    sources: Array<{
+      source: "taskboard";
+      id: string;
+      status: "available" | "unavailable";
+      error?: string;
+    }>;
+  }>;
+  openTaskBoardHumanItem?: (input: {
+    boardRoot: string;
+    taskId: string;
+  }) => Promise<{ launched: true; sourceKey: string }>;
   /** Runs the locally installed AISpeak preview (max 20 spoken words). */
   speakOpenRigPreview?: (text: string) => Promise<void>;
   submitOpenRigHumanResponse?: (
@@ -1855,14 +2058,22 @@ export interface DesktopBridge {
   detachOpenRigManagedSession?: (
     input: DesktopOpenRigSessionActionInput,
   ) => Promise<DesktopOpenRigSeatSessions>;
+  runOpenRigSeatReboot?: (
+    input: DesktopOpenRigSeatRebootInput,
+  ) => Promise<DesktopOpenRigSeatRebootReceipt>;
   runOpenRigManagedBrowserLifecycle?: (
     input: DesktopOpenRigManagedBrowserLifecycleInput,
   ) => Promise<DesktopOpenRigManagedBrowserLifecycleResult>;
   bindOpenRigAgent?: (input: DesktopOpenRigBindInput) => Promise<void>;
   unbindOpenRigAgent?: (id: string) => Promise<void>;
+  retireOpenRigSeat?: (id: string) => Promise<"stopped" | "already_inactive">;
   sendOpenRigAgentMessage?: (input: DesktopOpenRigSendInput) => Promise<void>;
+  reconcileOpenRigHumanSend?: (
+    input: DesktopOpenRigHumanSendReconcileInput,
+  ) => Promise<DesktopOpenRigHumanSendReconcileResult>;
   getConnectionCatalog: () => Promise<string | null>;
   setConnectionCatalog: (catalog: string) => Promise<boolean>;
+  clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   resolveSshHost: (alias: string) => Promise<DesktopSshEnvironmentTarget>;
   requestSnapShotPermissions: (includeAccessibility: boolean) => Promise<void>;
@@ -1924,6 +2135,18 @@ export interface DesktopBridge {
   checkSystemPermission: (pane: SystemSettingsPane) => Promise<boolean>;
   probeRemoteEditors: () => Promise<readonly EditorId[]>;
   pasteAsText: () => Promise<void>;
+  openTaskBoardLink?: (request: {
+    taskId: string;
+    mode: "task" | "review";
+    board?: string;
+  }) => Promise<boolean>;
+  openFirefoxLink?: (url: string) => Promise<boolean>;
+  openWartribesTour?: (scenario: string) => Promise<boolean>;
+  searchChatGPTHistory?: (input: {
+    environmentId: string;
+    profileId?: string;
+    query: string;
+  }) => Promise<readonly { conversationId: string; title: string; url: string }[]>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   onSnapShotEvent: (listener: (event: DesktopSnapShotEvent) => void) => () => void;
   onQuitShortcut: (listener: (event: QuitShortcutHintEvent) => void) => () => void;
@@ -1953,6 +2176,33 @@ export interface DesktopBridge {
   appActivation: {
     setReady: (ready: boolean) => Promise<void>;
     complete: (response: DesktopAppActivationResponse) => Promise<void>;
+    reportChatGPTRecipientMounted: (event: { sessionId: string; conversationId: string }) => Promise<boolean>;
+    reportChatGPTIdleTransition: (event: {
+      environmentId: string;
+      sessionId: string;
+      conversationId: string;
+      bindingRevision: string | null;
+      sequence: number;
+      eventId: string;
+      observedAt: number;
+      turnCount: number;
+      kind?: "completed" | "stopped";
+    }) => Promise<boolean>;
+    enqueueChatGPT: (input: {
+      messageId: string;
+      sessionId: string;
+      conversationId: string;
+      body: string;
+    }) => Promise<{
+      messageId: string;
+      sessionId: string;
+      conversationId: string;
+      status: string;
+      attempts: number;
+      createdAt: number;
+      updatedAt: number;
+      lastError?: string;
+    }>;
     onRequest: (listener: (request: DesktopAppActivationRequest) => void) => () => void;
   };
   preview: DesktopPreviewBridge;
@@ -2047,3 +2297,25 @@ export interface LocalApi {
     setClientSettings: (settings: ClientSettings) => Promise<void>;
   };
 }
+
+/** T3-0153: exact durable request identifier; renderer does not supply authority or handoff text. */
+export const DesktopOpenRigSeatRebootInputSchema = Schema.Struct({
+  seatId: Schema.String,
+  sessionId: Schema.String,
+  requestId: Schema.String,
+  phase: Schema.Literals(["begin", "status", "reconcile"]),
+});
+export type DesktopOpenRigSeatRebootInput = typeof DesktopOpenRigSeatRebootInputSchema.Type;
+export const DesktopOpenRigSeatRebootReceiptSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  operation: Schema.Literal("reboot_agent"),
+  requestId: Schema.String,
+  seatId: Schema.String,
+  sessionId: Schema.String,
+  managedSessionId: Schema.String,
+  rebootGeneration: Schema.NullOr(Schema.Number),
+  status: Schema.Literals(["reserved", "unknown", "submitted", "committed", "restored"]),
+  reason: Schema.NullOr(Schema.String),
+  retrySafe: Schema.Literal(false),
+});
+export type DesktopOpenRigSeatRebootReceipt = typeof DesktopOpenRigSeatRebootReceiptSchema.Type;

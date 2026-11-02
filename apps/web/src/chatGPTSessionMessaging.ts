@@ -1,4 +1,5 @@
 import type { BrowserSession } from "./chatGPTBrowserSessions";
+import { publicChatGPTSessionId } from "./chatGPTBootstrapIdentity";
 
 /** The browser may reflow line breaks and spaces in a submitted ChatGPT user turn. */
 export function chatGPTSentTurnObserved(
@@ -71,8 +72,8 @@ export function prepareChatGPTSessionMessage(
     sender,
     text: [
       "T3 local inter-session message (sender ID supplied by caller, not authenticated).",
-      `From browser session: ${JSON.stringify(sender.id)}`,
-      `To browser session: ${JSON.stringify(recipient.id)}`,
+      `From browser session: ${JSON.stringify(publicChatGPTSessionId(sender))}`,
+      `To browser session: ${JSON.stringify(publicChatGPTSessionId(recipient))}`,
       "To reply, use T3 session control with the sender session ID above.",
       "",
       text,

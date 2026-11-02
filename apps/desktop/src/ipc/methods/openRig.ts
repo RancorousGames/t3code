@@ -35,6 +35,8 @@ import {
   DesktopOpenRigLaunchInputSchema,
   DesktopOpenRigAdoptInputSchema,
   DesktopOpenRigSessionActionInputSchema,
+  DesktopOpenRigSeatRebootInputSchema,
+  DesktopOpenRigSeatRebootReceiptSchema,
   DesktopOpenRigManagedBrowserLifecycleInputSchema,
   DesktopOpenRigManagedBrowserLifecycleResultSchema,
   type DesktopOpenRigAdoptInput,
@@ -46,6 +48,9 @@ import {
   type DesktopOpenRigPrimaryInput,
   DesktopOpenRigBindInputSchema,
   DesktopOpenRigSendInputSchema,
+  DesktopOpenRigHumanSendReconcileInputSchema,
+  DesktopOpenRigHumanSendReconcileResultSchema,
+  type DesktopOpenRigHumanSendReconcileInput,
   type DesktopOpenRigAgent,
   type DesktopOpenRigInbox,
   type DesktopOpenRigSession,
@@ -84,7 +89,10 @@ import {
   reviewNativeSpawnOperation,
 } from "../../app/DesktopOpenRigApprovalHost.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import type { ExecutionReceipt } from "@t3tools/shared/openRigExecutionReceiptBridge";
+import * as DesktopAppActivation from "../../app/DesktopAppActivation.ts";
 import { ensureLocalOpenRigBridge } from "./OpenRigBridgeLifecycle.ts";
+import { requestCanonicalSeatReboot } from "./OpenRigSeatReboot.ts";
 
 // The renderer never connects to localhost directly. It cannot choose the host,
 // path or HTTP method, even when a remote T3 environment is selected.
@@ -97,6 +105,20 @@ const decodeOpenRigInbox = Schema.decodeUnknownSync(DesktopOpenRigInboxSchema);
 const decodeHumanResponse = Schema.decodeUnknownSync(DesktopOpenRigHumanResponseResultSchema);
 const decodeCanonicalAgentTasks = Schema.decodeUnknownSync(DesktopOpenRigAgentTasksSchema);
 const decodeOpenRigPolicyPage = Schema.decodeUnknownSync(DesktopOpenRigPolicyPageSchema);
+
+/** MAIN-only token from the canonical OpenRig startup script. Renderer cannot
+ * supply or observe it; rereading allows recovery after a daemon replacement. */
+function integrationBearer(preferPersisted = false): string | null {
+  const configured = NodeProcess.env.OPENRIG_TERMINAL_BEARER_TOKEN?.trim() ||
+    NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim() || null;
+  if (configured && !preferPersisted) return configured;
+  try {
+    const tokenFile = joinPath(NodeProcess.env.USERPROFILE || homedir(), ".openrig", "terminal-token");
+    const token = readFileSync(tokenFile, "utf8").trim();
+    if (token.length >= 24) return token;
+  } catch { /* Canonical launcher may not have provisioned a token yet. */ }
+  return configured;
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -157,12 +179,15 @@ async function bridgeRequest(
   // adopt an existing OpenRig listener or start the local Phase-1 bridge.
   // Injected test fetchers never create external processes.
   if (fetchImpl === fetch) await ensureLocalOpenRigBridge();
-  const response = await fetchImpl(`${OPENRIG_BASE_URL}${path}`, {
+  // The daemon protects T3 integration routes with its terminal bearer. Keep
+  // credentials in desktop MAIN; never accept them from renderer IPC payloads.
+  const request = (bearer: string | null) => fetchImpl(`${OPENRIG_BASE_URL}${path}`, {
     method: options.method,
-    headers:
-      options.payload === undefined
-        ? { Accept: "application/json" }
-        : { Accept: "application/json", "Content-Type": "application/json" },
+    headers: {
+      Accept: "application/json",
+      ...(options.payload === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+    },
     ...(options.payload === undefined ? {} : { body: JSON.stringify(options.payload) }),
     cache: "no-store",
     redirect: "error",
@@ -174,6 +199,14 @@ async function bridgeRequest(
           : LIST_TIMEOUT_MS,
     ),
   });
+  const bearer = integrationBearer();
+  let response = await request(bearer);
+  // Recover transparently if an independently started daemon has rotated the
+  // terminal token. Only retry read-only GET; never replay ambiguous writes.
+  if (response.status === 401 && options.method === "GET") {
+    const refreshed = integrationBearer(true);
+    if (refreshed && refreshed !== bearer) response = await request(refreshed);
+  }
   if (
     !response.ok &&
     !(allowUnavailable && response.status === 503) &&
@@ -193,6 +226,70 @@ async function bridgeRequest(
   return response;
 }
 
+/** Desktop MAIN only: the existing bridge supplies the authenticated transport. */
+export async function postOpenRigExecutionReceipt(
+  receipt: ExecutionReceipt,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "accepted"; externalReceiptId: string } | { kind: "unknown" }> {
+  try {
+    const response = await bridgeRequest("/execution-receipts", {
+      method: "POST", payload: receipt as unknown as Record<string, unknown>,
+    }, fetchImpl);
+    const body = record(await response.json());
+    if (body?.accepted === true && typeof body.externalReceiptId === "string" &&
+      body.externalReceiptId === receipt.receiptId)
+      return { kind: "accepted", externalReceiptId: body.externalReceiptId };
+  } catch { /* The remote side may have persisted the event before the failure. */ }
+  return { kind: "unknown" };
+}
+
+/** Do not retry a quarantined write until an exact persisted-ID read proves absence. */
+export async function lookupOpenRigExecutionReceipt(
+  receipt: ExecutionReceipt,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "accepted"; externalReceiptId: string } |
+  { kind: "verified-not-observed" } | { kind: "inconclusive" }> {
+  try {
+    const response = await bridgeRequest(
+      `/execution-receipts/${encodeURIComponent(receipt.receiptId)}`,
+      { method: "GET" }, fetchImpl,
+    );
+    const body = record(await response.json());
+    if (body?.kind === "accepted" && body.externalReceiptId === receipt.receiptId)
+      return { kind: "accepted", externalReceiptId: receipt.receiptId };
+    if (body?.kind === "verified-not-observed") return { kind: "verified-not-observed" };
+  } catch { /* Inconclusive; retain UNKNOWN without repeating the original post. */ }
+  return { kind: "inconclusive" };
+}
+/** Only authoritative OpenRig ledger bindings may produce attributed receipts. */
+export async function resolveOpenRigChatGPTReceiptBinding(
+  sessionId: string,
+  conversationId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ seatId: string; environmentId: string; generation: string } | null> {
+  try {
+    const response = await bridgeRequest("/coordination/identity-snapshot", { method: "GET" }, fetchImpl);
+    const body = record(await response.json());
+    const ledgers = body?.managedLedgers;
+    if (!Array.isArray(ledgers)) return null;
+    const candidates: { seatId: string; environmentId: string; generation: string }[] = [];
+    for (const value of ledgers) {
+      const ledger = record(value);
+      if (!ledger || typeof ledger.seatId !== "string" || !Array.isArray(ledger.sessions)) continue;
+      for (const item of ledger.sessions) {
+        const session = record(item);
+        if (session?.status !== "active" || session.mode === "native" ||
+          session.attachedTabUuid !== sessionId || session.conversationId !== conversationId ||
+          typeof session.id !== "string" || !session.id) continue;
+        candidates.push({ seatId: ledger.seatId, environmentId:
+          typeof session.environmentId === "string" && session.environmentId ? session.environmentId : "chatgpt-browser",
+          generation: session.id });
+      }
+    }
+    // Ambiguous ownership must never silently assign one agent's event to another.
+    return candidates.length === 1 ? candidates[0]! : null;
+  } catch { return null; }
+}
 export async function fetchOpenRigAgents(fetchImpl: typeof fetch = fetch) {
   const response = await bridgeRequest("/agents", { method: "GET" }, fetchImpl);
   return decodeOpenRigAgents((await response.json()) as unknown);
@@ -213,6 +310,20 @@ export function assertOpenRigSendAcknowledged(value: unknown): void {
     )
       return;
   } else if (target?.kind === "chatgpt-conversation") {
+    // Newer OpenRig sends to T3's durable, idempotent conversation outbox.
+    // "queued" is an accepted/persisted send, NOT an observed user turn.
+    // Reject unverified 2xx payloads and any different conversation.
+    if (
+      typeof result?.messageId === "string" &&
+      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(result.messageId) &&
+      result.sessionId === target.conversationId &&
+      result.conversationId === target.conversationId &&
+      (result.status === "queued" || result.status === "sending" ||
+        result.status === "delivered")
+    )
+      return;
+    // Older desktop backends may still return a direct, positively guarded
+    // user-turn receipt. Keep that compatibility only when exact target agrees.
     if (
       result?.messageSent === true &&
       result.conversationGuardValidated === true &&
@@ -228,11 +339,16 @@ export function assertOpenRigSendAcknowledged(value: unknown): void {
 }
 
 export async function sendOpenRigMessage(
-  { id, message }: DesktopOpenRigSendInput,
+  { id, message, messageId, expectedConversationId }: DesktopOpenRigSendInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   if (!id.trim() || id.length > 512 || !message.trim() || message.length > 8_000) {
     throw new Error("OpenRig message not sent: invalid seat or message.");
+  }
+  const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
+  if ((messageId !== undefined || expectedConversationId !== undefined) &&
+      (!uuid.test(messageId ?? "") || !uuid.test(expectedConversationId ?? ""))) {
+    throw new Error("OpenRig message not sent: stable send requires valid messageId and expectedConversationId.");
   }
   // Older OpenRig versions still have a legacy /binding fallback when no
   // managed primary exists. Refuse to make any POST in that state, even if a
@@ -252,14 +368,26 @@ export async function sendOpenRigMessage(
   const expected = primary?.status === "active" ? primary.target : null;
   if (!expected || expected.kind === "legacy-browser")
     throw new Error("OpenRig message not sent: seat has no routable active managed primary.");
+  if (messageId && (expected.kind !== "chatgpt-conversation" ||
+      expected.conversationId !== expectedConversationId)) {
+    throw new Error("OpenRig message not sent: managed primary changed from the original conversation.");
+  }
   const response = await bridgeRequest(
     `/agents/${encodeURIComponent(id)}/send`,
-    { method: "POST", payload: { message } },
+    { method: "POST", payload: { message,
+      ...(messageId ? { messageId, expectedConversationId } : {}),
+    } },
     fetchImpl,
   );
   const acknowledgement = (await response.json()) as unknown;
   assertOpenRigSendAcknowledged(acknowledgement);
   const actual = record(record(acknowledgement)?.target);
+  if (messageId && (
+    record(record(acknowledgement)?.result)?.messageId !== messageId ||
+    record(record(acknowledgement)?.deliveryReceipt)?.messageId !== messageId ||
+    record(record(acknowledgement)?.deliveryReceipt)?.queuePersisted !== true
+  ))
+    throw new Error("OpenRig acknowledgement did not preserve original durable messageId; reconcile without replay.");
   if (
     !actual ||
     actual.kind !== expected.kind ||
@@ -522,7 +650,7 @@ export async function readOpenRigPolicyForBrowserSend(
     return deferred("invalid_exact_browser_identity");
 
   const noStartGet = async (path: string): Promise<unknown> => {
-    const token = NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim();
+    const token = integrationBearer();
     const response = await fetchImpl(`${OPENRIG_BASE_URL}${path}`, {
       method: "GET",
       headers: {
@@ -1310,6 +1438,7 @@ export async function fetchOpenRigHumanResponse(
   if (!answerToken || answerToken.length < 24) {
     throw new Error("Interactive OpenRig replies are not configured on this desktop yet.");
   }
+  const bearer = integrationBearer();
   const response = await fetchImpl(
     `${OPENRIG_BASE_URL}/human-inbox/${encodeURIComponent(input.qitemId)}/answer`,
     {
@@ -1319,9 +1448,7 @@ export async function fetchOpenRigHumanResponse(
         "Content-Type": "application/json",
         "x-openrig-human-answer-token": answerToken,
         "x-openrig-human-intent": "t3-desktop-ipc",
-        ...(NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim()
-          ? { Authorization: `Bearer ${NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN}` }
-          : {}),
+        ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
       },
       body: JSON.stringify({ version: 2, destination: input.destination, answers: input.answers }),
       cache: "no-store",
@@ -1392,7 +1519,7 @@ function privateOperatorAnswerToken(): string | null {
 function operatorReplyHeaders(): Record<string, string> | null {
   const token = privateOperatorAnswerToken();
   if (!token) return null;
-  const bearer = NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim();
+  const bearer = integrationBearer();
   // OpenRig permits bearer-free loopback calls when its daemon is configured
   // without a bearer. The fixed endpoint is ALWAYS 127.0.0.1:7433 and the
   // independent private human-answer token is still mandatory for writes.
@@ -1494,34 +1621,8 @@ export async function postOpenRigOperatorReply(
       outcome: "not_sent",
       reason: "OpenRig operator reply token is not available in desktop MAIN.",
     };
-  // Pre-POST authoritative read, not renderer metadata: original must still be
-  // a replyable direct queue message addressed to the operator.
-  try {
-    const inbox = await fetchOpenRigOperatorInbox(input.destination, fetchImpl);
-    const original = inbox.items.find(
-      (item) =>
-        item.id === input.qitemId &&
-        item.sourceType === "queue" &&
-        item.recipient === input.destination,
-    );
-    if (
-      !inbox.available ||
-      inbox.replyWriteAvailable !== true ||
-      original?.replyEligible !== true ||
-      original.sender !== input.expectedRecipient
-    )
-      return {
-        outcome: "not_sent",
-        reason: "Original item or live reply capability not confirmed.",
-      };
-  } catch {
-    return {
-      outcome: "not_sent",
-      reason: "Could not verify original OpenRig queue item before POST.",
-    };
-  }
-  // After fetch begins, an error/timeout/invalid response is indeterminate.
-  // Preserve requestId, NEVER retry POST. Only a read-only GET may resolve it.
+  // The daemon validates the exact original and selected recipient on first
+  // write and replays a committed receipt before consulting mutable routes.
   let uncertain = false;
   try {
     const response = await fetchImpl(`${operatorReplyPath(input)}/reply`, {
@@ -1532,6 +1633,7 @@ export async function postOpenRigOperatorReply(
         destination: input.destination,
         requestId: input.requestId,
         message: input.message,
+        expectedRecipient: input.expectedRecipient,
       }),
       cache: "no-store",
       redirect: "error",
@@ -1559,7 +1661,7 @@ export async function postOpenRigOperatorReply(
       ? reconciled
       : {
           outcome: "unknown",
-          reason: "POST result unconfirmed. No duplicate send; use read-only reconciliation.",
+          reason: "POST result unconfirmed. Retry the same saved reply safely.",
         };
   }
   return { outcome: "unknown", reason: "OpenRig did not confirm the exact durable reply." };
@@ -1622,7 +1724,7 @@ async function reviewGateLinkConfirmed(
   gate: OpenRigReviewGate,
   fetchImpl: typeof fetch,
 ): Promise<boolean> {
-  const bearer = NodeProcess.env.OPENRIG_AUTH_BEARER_TOKEN?.trim();
+  const bearer = integrationBearer();
   const response = await fetchImpl(
     `${REVIEW_GATES_BASE_URL}/${encodeURIComponent(gate.gateQitemId)}`,
     {
@@ -1959,6 +2061,20 @@ export const detachOpenRigManagedSession = DesktopIpc.makeIpcMethod({
   handler: (input) => Effect.tryPromise(() => detachOpenRigSeatSession(input)),
 });
 
+/** Exact same-seat reboot through OpenRig's canonical operator route, never T3's
+ * local reboot path for a managed seat. Authority stays in Electron MAIN. */
+export const runOpenRigSeatReboot = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPENRIG_SEAT_REBOOT_CHANNEL,
+  payload: DesktopOpenRigSeatRebootInputSchema,
+  result: DesktopOpenRigSeatRebootReceiptSchema,
+  handler: (input) => Effect.tryPromise(async () => {
+    await ensureLocalOpenRigBridge();
+    return requestCanonicalSeatReboot(input, {
+      bearer: integrationBearer(),
+      operatorToken: NodeProcess.env.OPENRIG_T3_ROLLOVER_OPERATOR_TOKEN?.trim() ?? null,
+    });
+  }),
+});
 export const runOpenRigManagedBrowserLifecycle = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.OPENRIG_MANAGED_BROWSER_LIFECYCLE_CHANNEL,
   payload: DesktopOpenRigManagedBrowserLifecycleInputSchema,
@@ -1971,6 +2087,49 @@ export const bindOpenRigAgent = DesktopIpc.makeIpcMethod({
   payload: DesktopOpenRigBindInputSchema,
   result: Schema.Void,
   handler: (input) => Effect.tryPromise(() => bindOpenRigSeat(input)),
+});
+
+/** Stop one native managed occupant, or confirm there is none, before hiding its
+ * seat in the local network view. No renderer-selected URL or command executes. */
+export async function retireOpenRigSeat(
+  seatId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<"stopped" | "already_inactive"> {
+  if (!seatId.trim() || seatId.length > 512) throw new Error("Invalid seat ID.");
+  if (fetchImpl === fetch) await ensureLocalOpenRigBridge();
+  const response = await fetchImpl(
+    `http://127.0.0.1:7433/api/seat/stop/${encodeURIComponent(seatId)}`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...(integrationBearer() ? { Authorization: `Bearer ${integrationBearer()}` } : {}),
+      },
+      body: JSON.stringify({ reason: "Explicit retirement from T3 Agent Network" }),
+      redirect: "error",
+      cache: "no-store",
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    },
+  );
+  const body = record((await response.json()) as unknown);
+  if (response.ok && body?.ok === true) return "stopped";
+  // Only the daemon's positive absence/no-session outcomes permit retiring a
+  // dead seat without a kill. A timeout/unknown result must never hide it.
+  if (response.status === 409 &&
+      (body?.code === "no_session" || body?.code === "session_not_live")) {
+    return "already_inactive";
+  }
+  throw new Error(
+    `Could not retire seat (HTTP ${response.status}): ${String(body?.message ?? body?.code ?? "unknown")}`,
+  );
+}
+
+export const retireOpenRigAgentSeat = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPENRIG_RETIRE_SEAT_CHANNEL,
+  payload: Schema.String,
+  result: Schema.Literals(["stopped", "already_inactive"]),
+  handler: (id) => Effect.tryPromise(() => retireOpenRigSeat(id)),
 });
 
 export const unbindOpenRigAgent = DesktopIpc.makeIpcMethod({
@@ -2037,4 +2196,87 @@ export const sendOpenRigAgentMessage = DesktopIpc.makeIpcMethod({
   payload: DesktopOpenRigSendInputSchema,
   result: Schema.Void,
   handler: (input) => Effect.tryPromise(() => sendOpenRigMessage(input)),
+});
+
+/** Reconciles only a uniquely tagged user turn in an unchanged managed primary.
+ * GET /messages has an OpenRig conversation guard; absence is never a no-send proof. */
+export async function reconcileOpenRigHumanSend(
+  input: DesktopOpenRigHumanSendReconcileInput,
+  fetchImpl: typeof fetch = fetch,
+  durableReceipt?: { messageId: string; conversationId: string; status: string } | null,
+): Promise<{ state: "observed" | "pending" | "route_changed"; persisted?: boolean; assistantAcknowledged?: boolean }> {
+  if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(input.attemptId) ||
+      !input.managedSessionId.trim())
+    throw new Error("Invalid Human Inbox delivery receipt identity.");
+
+  const targetEquals = (a: DesktopOpenRigSessionTarget | null | undefined) => {
+    const b = input.target;
+    if (!a || a.kind !== b.kind) return false;
+    if (a.kind === "chatgpt-conversation" && b.kind === "chatgpt-conversation")
+      return a.conversationId === b.conversationId;
+    if (a.kind === "t3-thread" && b.kind === "t3-thread")
+      return a.environmentId === b.environmentId && a.threadId === b.threadId;
+    return false;
+  };
+  const matches = (ledger: DesktopOpenRigSeatSessions) =>
+    ledger.primarySessionId === input.managedSessionId &&
+    targetEquals(ledger.sessions.find((s) => s.id === ledger.primarySessionId)?.target);
+
+  const before = await fetchOpenRigManagedSessions(input.id, fetchImpl);
+  if (!matches(before)) return { state: "route_changed" };
+
+  const persisted = input.target.kind === "chatgpt-conversation" &&
+    durableReceipt?.messageId === input.attemptId &&
+    durableReceipt.conversationId === input.target.conversationId;
+  // A cold/busy guest need not be readable to establish durable storage. The
+  // main-process outbox continues delivery even when this window is closed.
+  if (persisted && durableReceipt.status !== "delivered")
+    return { state: "pending", persisted: true, assistantAcknowledged: false };
+
+  const id = assertSeatId(input.id);
+  const response = await bridgeRequest(
+    `/agents/${id}/messages?count=20`, { method: "GET" }, fetchImpl,
+  );
+  const payload = record((await response.json()) as unknown);
+  // The bridge checks its binding, while the inbox checks the managed primary:
+  // prove the two are the SAME address rather than trusting a successful GET.
+  const address = input.target;
+  const exactRead = address.kind === "chatgpt-conversation"
+    ? payload?.conversationGuardValidated === true &&
+      payload.verifiedConversationId === address.conversationId
+    : address.kind === "t3-thread"
+      ? payload?.threadId === address.threadId &&
+        payload.environmentId === address.environmentId
+      : false;
+  if (!exactRead) throw new Error("OpenRig message history did not verify the selected managed primary.");
+  const messages = Array.isArray(payload?.messages)
+    ? payload.messages
+    : record(payload?.session)?.messages;
+  // A unique marker in an observed USER turn proves dispatch, but failure
+  // to find it can never prove non-dispatch or license a retry.
+  const marker = `[T3-HUMAN-DELIVERY:${input.attemptId}]`;
+  const observed = Array.isArray(messages) && messages.some((value) => {
+    const item = record(value);
+    return (item?.role === "user" || item?.role === "human") &&
+      typeof item.text === "string" && item.text.includes(marker);
+  });
+  const assistantAcknowledged = observed && Array.isArray(messages) && messages.some((value) => {
+    const item = record(value);
+    return item?.role === "assistant" && typeof item.text === "string" && item.text.includes(marker);
+  });
+  const after = await fetchOpenRigManagedSessions(input.id, fetchImpl);
+  if (!matches(after)) return { state: "route_changed" };
+  return { state: observed ? "observed" : "pending",
+    ...(persisted ? { persisted: true } : {}), assistantAcknowledged };
+}
+
+export const reconcileOpenRigHumanSendIpc = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPENRIG_RECONCILE_HUMAN_SEND_CHANNEL,
+  payload: DesktopOpenRigHumanSendReconcileInputSchema,
+  result: DesktopOpenRigHumanSendReconcileResultSchema,
+  handler: Effect.fn("desktop.ipc.openRig.reconcileHumanSend")(function* (input) {
+    const activation = yield* DesktopAppActivation.DesktopAppActivation;
+    const receipt = yield* activation.chatGPTDeliveryStatus(input.attemptId);
+    return yield* Effect.tryPromise(() => reconcileOpenRigHumanSend(input, fetch, receipt));
+  }),
 });

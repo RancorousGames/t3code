@@ -1,4 +1,8 @@
 import { CHATGPT_ACTIVITY_EXPRESSION } from "./components/sidebar/chatGPTActivity";
+import {
+  inspectChatGPTPageSnapshot,
+  type ChatGPTPageSnapshot,
+} from "./chatGPTPageSnapshotInspection";
 
 export const CHATGPT_BROWSER_FAILURE_GRACE_MS = 60_000;
 export const CHATGPT_BROWSER_UNRESPONSIVE_ACTIVITY = "invalid: browser-unresponsive";
@@ -16,7 +20,9 @@ export function isBlankChatGPTDocument(): boolean {
   const body = document.body;
   if (!body || (body.innerText ?? body.textContent)?.trim()) return false;
   return !Array.from(
-    body.querySelectorAll('input,textarea,button,[contenteditable="true"],iframe,canvas,svg,img,video,[role="progressbar"]'),
+    body.querySelectorAll(
+      'input,textarea,button,[contenteditable="true"],iframe,canvas,svg,img,video,[role="progressbar"]',
+    ),
   ).some((element) => element.getClientRects().length > 0);
 }
 
@@ -30,10 +36,13 @@ export function chatGPTBrowserFailure(webview: { getURL?: () => string }): Brows
 }
 
 /** A timeout alone is initially unknown; require the same guest/URL for a minute. */
-export async function inspectChatGPTBrowserHealth(webview: {
-  executeJavaScript: (expression: string) => Promise<unknown>;
-  getURL?: () => string;
-}) {
+export async function inspectChatGPTBrowserHealth(
+  webview: {
+    executeJavaScript: (expression: string) => Promise<unknown>;
+    getURL?: () => string;
+  },
+  onSnapshot?: (snapshot: ChatGPTPageSnapshot) => void,
+) {
   let url: string;
   try {
     url = webview.getURL?.() ?? "";
@@ -43,7 +52,11 @@ export async function inspectChatGPTBrowserHealth(webview: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([
-      webview.executeJavaScript(`(() => ({blank: (${isBlankChatGPTDocument.toString()})(), activity: ${CHATGPT_ACTIVITY_EXPRESSION}}))()`),
+      webview.executeJavaScript(`(() => {
+        const activity = ${CHATGPT_ACTIVITY_EXPRESSION};
+        return { blank: (${isBlankChatGPTDocument.toString()})(), activity,
+          snapshot: (${inspectChatGPTPageSnapshot.toString()})(String(activity ?? "unknown")) };
+      })()`),
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), 4_000);
       }),
@@ -52,19 +65,40 @@ export async function inspectChatGPTBrowserHealth(webview: {
       observations.delete(webview);
       return null;
     }
-    const probe = result as { blank?: boolean; activity?: unknown } | null;
+    const probe = result as {
+      blank?: boolean;
+      activity?: unknown;
+      snapshot?: ChatGPTPageSnapshot | null;
+    } | null;
+    // The guest URL must still match the returned snapshot. Never cache a
+    // transient navigation/login page or assume a stale guest belongs to this session.
+    if (probe?.snapshot && probe.snapshot.url === url) {
+      try {
+        onSnapshot?.(probe.snapshot);
+      } catch {
+        /* cache failure cannot affect health */
+      }
+    }
     const onChatGPT = new URL(url).origin === "https://chatgpt.com";
-    const failure = !onChatGPT ? null : result === null ? "probe-timeout" : probe?.blank === true ? "blank-page" : null;
+    const failure = !onChatGPT
+      ? null
+      : result === null
+        ? "probe-timeout"
+        : probe?.blank === true
+          ? "blank-page"
+          : null;
     if (!failure) {
       observations.delete(webview);
       return typeof probe?.activity === "string" ? probe.activity : null;
     }
     const previous = observations.get(webview);
-    const firstSeenAt = previous?.url === url && previous.failure === failure
-      ? previous.firstSeenAt : Date.now();
+    const firstSeenAt =
+      previous?.url === url && previous.failure === failure ? previous.firstSeenAt : Date.now();
     const confirmed = Date.now() - firstSeenAt >= CHATGPT_BROWSER_FAILURE_GRACE_MS;
     observations.set(webview, { url, firstSeenAt, failure, confirmed });
-    return confirmed ? CHATGPT_BROWSER_UNRESPONSIVE_ACTIVITY : "unknown: checking browser responsiveness";
+    return confirmed
+      ? CHATGPT_BROWSER_UNRESPONSIVE_ACTIVITY
+      : "unknown: checking browser responsiveness";
   } catch {
     observations.delete(webview);
     return null; // A navigation/detachment error is not a confirmed timeout.

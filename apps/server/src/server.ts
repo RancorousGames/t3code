@@ -9,6 +9,7 @@ import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQ
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
+import * as NodePath from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -26,6 +27,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
+import * as ChatGPTTranscript from "./chatGPTTranscriptIndex.ts";
 import { withUntracedRequests } from "./http.ts";
 import * as ServerHttp from "./http.ts";
 import {
@@ -376,6 +378,24 @@ const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeSer
 
 const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
+// Import legacy read-only ChatGPT archive journals once during server startup.
+// Existing rows are deduplicated by the conversation/revision index, making
+// interrupted imports and subsequent launches safe to replay. Never delay
+// startup or wake guests to perform a best-effort historical migration.
+const layerChatGPTTranscriptBackfill = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    if (config.mode !== "desktop") return;
+    const index = yield* ChatGPTTranscript.ChatGPTTranscriptIndex;
+    const archiveDir = NodePath.join(config.stateDir, "chatgpt-browser-archive");
+    yield* index.backfillArchive(archiveDir).pipe(
+      Effect.tap((counts) => Effect.logInfo("ChatGPT transcript archive import", counts)),
+      Effect.catch((error) => Effect.logWarning("ChatGPT archive import unavailable", { error })),
+      Effect.forkScoped,
+    );
+  }).pipe(Effect.provide(ChatGPTTranscript.layer)),
+);
+
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
 
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
@@ -664,6 +684,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
+  layerChatGPTTranscriptBackfill,
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),

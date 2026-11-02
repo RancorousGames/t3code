@@ -203,6 +203,37 @@ const DEFAULT_BINDINGS = compile([
   },
 ]);
 
+describe("worker visibility shortcut", () => {
+  it("uses T3's desktop keybinding precedence instead of a hardcoded chord", () => {
+    const keydown = event({ key: "H", code: "KeyH", ctrlKey: true, shiftKey: true });
+    const desktop = { platform: "Win32", context: { isDesktop: true, isWeb: false } };
+    const chatgpt = {
+      platform: "Win32",
+      context: { isDesktop: true, isWeb: false, chatgptBrowserRoute: true },
+    };
+    const web = { platform: "Win32", context: { isDesktop: false, isWeb: true } };
+    assert.equal(
+      resolveShortcutCommand(keydown, DEFAULT_RESOLVED_KEYBINDINGS, chatgpt),
+      "omniwork.toggleWorkers",
+    );
+    assert.equal(
+      resolveShortcutCommand(keydown, DEFAULT_RESOLVED_KEYBINDINGS, desktop),
+      "composer.host",
+    );
+    assert.equal(
+      resolveShortcutCommand(keydown, DEFAULT_RESOLVED_KEYBINDINGS, web),
+      "composer.host",
+    );
+    assert.equal(
+      resolveShortcutCommand(keydown, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Win32",
+        context: { isDesktop: true, chatgptBrowserRoute: true, terminalFocus: true },
+      }),
+      null,
+    );
+  });
+});
+
 describe("effectiveShortcutsForCommand", () => {
   it("passes only effective preview shortcuts to the desktop bridge", () => {
     const reopen = modShortcut("t", { shiftKey: true });

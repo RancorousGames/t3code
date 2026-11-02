@@ -3,6 +3,9 @@ import { RouterProvider } from "@tanstack/react-router";
 import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
 import { ProviderResetSound } from "./components/ProviderResetSound";
 import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
+import { ChatGPTBrowserPrewarm } from "./components/sidebar/ChatGPTBrowserPrewarm";
+import { ChatGPTSessionRegistryDriver } from "./components/sidebar/ChatGPTSessionRegistryDriver";
+import { ChatGPTRecoveryExperimentObserver } from "./components/sidebar/ChatGPTRecoveryExperimentObserver";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
 
@@ -12,6 +15,9 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
     <AppAtomRegistryProvider>
       <RouterProvider router={router} />
       <ElectronBrowserHost />
+      <ChatGPTBrowserPrewarm />
+      <ChatGPTSessionRegistryDriver />
+      <ChatGPTRecoveryExperimentObserver />
       <ProviderResetSound />
       <QuitHoldOverlay />
     </AppAtomRegistryProvider>

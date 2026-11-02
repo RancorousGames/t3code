@@ -185,7 +185,18 @@ export function OpenRigFloatingWindow({
       outsideDismissRef.current?.();
     };
     document.addEventListener("pointerdown", dismissOutside);
-    return () => document.removeEventListener("pointerdown", dismissOutside);
+    // Electron guest mouse events never reach the host DOM, even when the
+    // webview already has focus. Native before-mouse-event relays the press
+    // without intercepting it or touching the ChatGPT guest/document.
+    const unsubscribeGuest = window.desktopBridge?.onMenuAction((action) => {
+      if (action === "openrig.floating-window.guest-pointerdown") {
+        outsideDismissRef.current?.();
+      }
+    });
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside);
+      unsubscribeGuest?.();
+    };
   }, [dismissible]);
 
   useEffect(() => {

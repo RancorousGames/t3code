@@ -65,6 +65,12 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       }),
     }),
     v2: {
+      threadProjection: createEnvironmentRpcQueryAtomFamily(runtime, {
+        label: "environment-data:orchestration-v2:thread-projection",
+        tag: ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
+        staleTimeMs: 0,
+        idleTtlMs: 0,
+      }),
       dispatchCommand: createEnvironmentRpcCommand(runtime, {
         label: "environment-data:orchestration-v2:dispatch-command",
         tag: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,

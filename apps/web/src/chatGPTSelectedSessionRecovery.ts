@@ -5,12 +5,15 @@ import {
   wakeChatGPTGuest,
 } from "./browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
+import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import { isChatGPTHomeUrl } from "./chatGPTBrowserPrewarm";
 import {
   chatGPTBrowserLastUrlKey,
   chatGPTBrowserThreadRef,
   readChatGPTBrowserSessions,
 } from "./chatGPTBrowserSessions";
+import { resolveChatGPTGuestAttachUrl } from "./browser/chatGPTGuestAttachUrl";
+import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { inspectBrowserSession, runChatGPTSessionControl } from "./chatGPTSessionControl";
 import { readThreadPreviewState } from "./previewStateStore";
@@ -45,14 +48,61 @@ export async function recoverSelectedBlankChatGPTSession(input: {
     );
 
   if (!current()) return "cancelled";
-  let saved: unknown;
+  const owner = readChatGPTBrowserSessions(environmentId).find((entry) => entry.id === sessionId);
+  if (!owner) return "cancelled";
+  const savedKey = chatGPTBrowserLastUrlKey(environmentId, sessionId);
+  let locallySaved: string | null = null;
   try {
-    saved = JSON.parse(localStorage.getItem(chatGPTBrowserLastUrlKey(environmentId, sessionId)) ?? "null");
+    const decoded: unknown = JSON.parse(localStorage.getItem(savedKey) ?? "null");
+    if (typeof decoded === "string") locallySaved = decoded;
   } catch {
-    return "no-saved-conversation";
+    // Older sessions can still carry their exact registered conversation ID.
   }
-  if (typeof saved !== "string" || !chatGPTConversationIdFromUrl(saved))
-    return "no-saved-conversation";
+  const knownNav = readThreadPreviewState(chatGPTBrowserThreadRef(environmentId, sessionId)).snapshot?.navStatus;
+  const previewUrl = knownNav && knownNav._tag !== "Idle" ? knownNav.url : null;
+  const observed = getChatGPTSessionPersistedStore(environmentId).getState().snapshots[sessionId];
+  const observedId = observed && typeof observed === "object" && "conversationId" in observed &&
+    typeof observed.conversationId === "string" ? observed.conversationId : null;
+  const saved = resolveChatGPTGuestAttachUrl(owner, locallySaved, previewUrl, observedId);
+  if (!saved || !chatGPTConversationIdFromUrl(saved)) return "no-saved-conversation";
+
+  if (isPersistentChatGPTSessionOptedIn(sessionId)) {
+    // Native Chromium is an Electron-owned page, NOT a legacy preview tab.
+    // A missing owner must be warmed separately; never auto-navigate it based
+    // on an old preview snapshot or a previously saved conversation URL.
+    const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+    if (!bridge) return "guest-not-ready";
+    const identity = { environmentId, sessionId, profileId: "default" };
+    try {
+      const first = (await bridge({ operation: "snapshot", identity })) as {
+        destroyed?: boolean; url?: string;
+      };
+      if (first.destroyed || !first.url) return "guest-not-ready";
+      if (!isChatGPTHomeUrl(first.url)) return "already-open";
+      const inspected = await inspectBrowserSession(environmentId, owner);
+      if (!current()) return "cancelled";
+      if (inspected.status !== "new" || inspected.activity !== "idle" ||
+          inspected.totalTurns !== 0 || inspected.lastRole !== null)
+        return "unsafe-or-unavailable";
+      await new Promise<void>((resolve) => setTimeout(resolve, HOME_CONFIRM_MS));
+      if (!current()) return "cancelled";
+      const second = (await bridge({ operation: "snapshot", identity })) as {
+        destroyed?: boolean; url?: string;
+      };
+      if (second.destroyed || second.url !== first.url) return "unsafe-or-unavailable";
+      // runChatGPTSessionControl performs a further pair of native draft
+      // probes and an atomic guard in the guest before navigating.
+      if (locallySaved !== saved) localStorage.setItem(savedKey, JSON.stringify(saved));
+      const outcome = await runChatGPTSessionControl({
+        environmentId, sessions: readChatGPTBrowserSessions(environmentId),
+        sessionId, action: "reload", shouldContinue: current,
+      }) as { recoveredUrl?: string; requestedNavigation?: boolean };
+      return outcome.requestedNavigation && outcome.recoveredUrl === saved
+        ? "recovered" : "unsafe-or-unavailable";
+    } catch {
+      return "unsafe-or-unavailable";
+    }
+  }
 
   const startedAt = Date.now();
   let blankSince: number | null = null;
@@ -107,6 +157,9 @@ export async function recoverSelectedBlankChatGPTSession(input: {
       if (Date.now() - blankSince >= HOME_CONFIRM_MS) {
         if (!current()) return "cancelled";
         try {
+          // The guarded reload controller uses the local last-URL key. Restore
+          // it from the registered owner only after proving an empty homepage.
+          if (locallySaved !== saved) localStorage.setItem(savedKey, JSON.stringify(saved));
           const outcome = await runChatGPTSessionControl({
             environmentId,
             sessions: readChatGPTBrowserSessions(environmentId),

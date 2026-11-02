@@ -1,0 +1,87 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  archiveLegacyUnknownChatGPTSend,
+  confirmedChatGPTSendText,
+  recordDurableChatGPTSendConfirmed,
+  hasDurableUnknownChatGPTSend,
+  readDurableUnknownChatGPTSend,
+  reserveDurableUnknownChatGPTSend,
+  wasDurableChatGPTSendConfirmed,
+  releaseDurableUnknownChatGPTSend,
+} from "./chatGPTUncertainSendFence";
+
+const environment = "test-delivery" as never;
+const session = "test-worker";
+const url = "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111";
+
+function storage() {
+  const map = new Map<string, string>();
+  return {
+    getItem: (key: string) => map.get(key) ?? null,
+    setItem: (key: string, value: string) => { map.set(key, value); },
+    removeItem: (key: string) => { map.delete(key); },
+    keys: () => [...map.keys()],
+  };
+}
+
+let store: ReturnType<typeof storage>;
+beforeEach(() => {
+  store = storage();
+  vi.stubGlobal("window", { localStorage: store });
+});
+afterEach(() => vi.unstubAllGlobals());
+
+describe("confirmed durable delivery receipts", () => {
+  it("stores a verified message before clearing the unknown fence for lost ACK reconciliation", () => {
+    const id = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const original = "[T3-MSG:" + id + "]\nHello";
+    const attempt = {
+      original, text: original, url,
+      before: { totalTurns: 1, lastUserTurnKey: null },
+      policyEnrichment: { schema: "t3-c05-browser-optional/v1" as const, status: "not_eligible" as const },
+    };
+    reserveDurableUnknownChatGPTSend(environment, session, url, false, attempt);
+    expect(wasDurableChatGPTSendConfirmed(environment, session, url, original)).toBe(false);
+    releaseDurableUnknownChatGPTSend(environment, session);
+    expect(hasDurableUnknownChatGPTSend(environment, session)).toBe(false);
+    expect(wasDurableChatGPTSendConfirmed(environment, session, url, original)).toBe(true);
+    expect(confirmedChatGPTSendText(environment, session, url, original)).toBe(original);
+    recordDurableChatGPTSendConfirmed(environment, session, url, original);
+    expect(confirmedChatGPTSendText(environment, session, url, original)).toBe(original);
+    const next = "[T3-MSG:bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb]\nNext";
+    recordDurableChatGPTSendConfirmed(environment, session, url, next, next + " policy");
+    expect(confirmedChatGPTSendText(environment, session, url, original)).toBeUndefined();
+    expect(confirmedChatGPTSendText(environment, session, url, next)).toBe(next + " policy");
+    expect(wasDurableChatGPTSendConfirmed(environment, session, url + "-other", original)).toBe(false);
+    expect(wasDurableChatGPTSendConfirmed(environment, session, url,
+      "[T3-MSG:cccccccc-cccc-4ccc-cccc-cccccccccccc]\nHello")).toBe(false);
+  });
+});
+
+describe("durable legacy UNKNOWN quarantine", () => {
+  it("retains original v1 evidence and unblocks only the exact old conversation after a minimum age", () => {
+    const now = Date.now();
+    vi.setSystemTime(now - 120_000);
+    reserveDurableUnknownChatGPTSend(environment, session, url, false);
+    vi.useRealTimers();
+    expect(archiveLegacyUnknownChatGPTSend(environment, session, url + "-other", now)).toBe(false);
+    expect(archiveLegacyUnknownChatGPTSend(environment, session, url, now)).toBe(true);
+    expect(hasDurableUnknownChatGPTSend(environment, session)).toBe(false);
+    const archives = store.keys().filter(k => k.includes("legacy-unknown-archive"));
+    expect(archives).toHaveLength(1);
+    expect(store.getItem(archives[0]!)).toContain("original_delivery_unresolved");
+    // A fresh distinct operation can obtain a new fence without losing the old evidence.
+    reserveDurableUnknownChatGPTSend(environment, session, url, false);
+    expect(readDurableUnknownChatGPTSend(environment, session)?.conversationUrl).toBe(url);
+  });
+  it("will not archive a modern v2 receipt with exact original message evidence", () => {
+    const attempt = {
+      original: "Exact message", text: "Exact message", url,
+      before: { totalTurns: 2, lastUserTurnKey: "turn-2" },
+      policyEnrichment: { schema: "t3-c05-browser-optional/v1" as const, status: "not_eligible" as const },
+    };
+    reserveDurableUnknownChatGPTSend(environment, session, url, false, attempt);
+    expect(archiveLegacyUnknownChatGPTSend(environment, session, url, Date.now() + 120_000)).toBe(false);
+    expect(hasDurableUnknownChatGPTSend(environment, session)).toBe(true);
+  });
+});

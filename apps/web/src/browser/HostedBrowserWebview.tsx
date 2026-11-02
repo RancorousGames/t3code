@@ -1,3 +1,7 @@
+"use client";
+
+import { registerHostedBrowserGuestPresence } from "./hostedBrowserGuestPresence";
+
 import type {
   DesktopPreviewColorScheme,
   PreviewViewportSetting,
@@ -204,6 +208,7 @@ export function HostedBrowserWebview(props: {
     const bridge = previewBridge;
     if (!clientSettingsHydrated || !webview || !config || !bridge) return;
     let disposed = false;
+    let releasePresence: (() => void) | undefined;
     let recoveryTimeout: ReturnType<typeof setTimeout> | null = null;
     const register = () => {
       const lease = tabLeaseRef.current;
@@ -215,6 +220,7 @@ export function HostedBrowserWebview(props: {
           if (disposed || webviewRef.current !== webview) return;
           const webContentsId = webview.getWebContentsId();
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
+            if (!releasePresence) releasePresence = registerHostedBrowserGuestPresence({ environmentId: threadRef.environmentId, threadId: threadRef.threadId }, runtimeTabId);
             await bridge.registerWebview(runtimeTabId, webContentsId);
             const pending = pendingResetRef.current;
             if (!disposed && pending && webContentsId !== pending.previousWebContentsId) {
@@ -228,6 +234,8 @@ export function HostedBrowserWebview(props: {
       })();
     };
     const recoverGuest = () => {
+      releasePresence?.();
+      releasePresence = undefined;
       if (disposed || recoveryTimeout !== null) return;
       const recovery = planWebviewCrashRecovery(crashRecoveryRef.current, Date.now());
       if (!recovery) return;
@@ -243,6 +251,16 @@ export function HostedBrowserWebview(props: {
         new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
       );
     };
+    const onChatGPTPagePush = (event: Event) => {
+      const message = event as Event & { channel?: string };
+      if (message.channel !== "preview:chatgpt-page-push") return;
+      // The renderer validates the exact mounted guest before probing. Never
+      // accept page-supplied transcript text via this notification channel.
+      window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
+        detail: { runtimeTabId },
+      }));
+    };
+    webview.addEventListener("ipc-message", onChatGPTPagePush);
     webview.addEventListener("did-attach", register);
     webview.addEventListener("dom-ready", register);
     webview.addEventListener("render-process-gone", recoverGuest);
@@ -250,19 +268,15 @@ export function HostedBrowserWebview(props: {
     register();
     return () => {
       disposed = true;
+      releasePresence?.();
       if (recoveryTimeout !== null) clearTimeout(recoveryTimeout);
+      webview.removeEventListener("ipc-message", onChatGPTPagePush);
       webview.removeEventListener("did-attach", register);
       webview.removeEventListener("dom-ready", register);
       webview.removeEventListener("render-process-gone", recoverGuest);
       webview.removeEventListener("focus", dismissHostPopups);
     };
-  }, [
-    clientSettingsHydrated,
-    config,
-    runtimeTabId,
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A crash recovery remounts the webview under a new key, so the listeners attach to the new element.
-    webviewGeneration,
-  ]);
+  }, [clientSettingsHydrated, config, initialSrc, runtimeTabId, webviewGeneration, threadRef.environmentId, threadRef.threadId]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;

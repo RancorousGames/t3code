@@ -31,7 +31,7 @@ export function chatGPTConversationIdFromUrl(url: string | null): string | null 
     const parsed = new URL(url);
     if (
       parsed.protocol !== "https:" ||
-      (parsed.hostname !== "chatgpt.com" && parsed.hostname !== "chat.openai.com")
+      !["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(parsed.hostname)
     )
       return null;
     const match = parsed.pathname.match(/(?:^|\/)c\/([a-z0-9-]+)(?:\/|$)/i);

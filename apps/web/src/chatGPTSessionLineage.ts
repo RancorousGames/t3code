@@ -1,4 +1,5 @@
 import type { BrowserSession } from "./chatGPTBrowserSessions";
+import { findChatGPTSessionByAnyId } from "./chatGPTBootstrapIdentity";
 
 /**
  * Parent links are local T3 browser-session IDs, never ChatGPT conversation URLs.
@@ -46,9 +47,9 @@ export function resolveExplicitChatGPTParent(
   parentSessionId: string | undefined,
 ): BrowserSession | null {
   if (!parentSessionId) return null;
-  const parent = sessions.find((session) => session.id === parentSessionId);
+  const parent = findChatGPTSessionByAnyId(sessions, parentSessionId);
   if (!parent || parent.hidden) {
-    throw new Error("Unknown or hidden parent ChatGPT browser session ID.");
+    throw new Error("Unknown or hidden parent T3 session ID. Use your own T3 session ID (from Bootstrap or the sidebar's Copy T3 session ID).");
   }
   return parent;
 }

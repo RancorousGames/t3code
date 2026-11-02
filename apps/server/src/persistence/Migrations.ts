@@ -80,6 +80,11 @@ import Migration0074 from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSea
 import Migration0075 from "./Migrations/075_SubagentDeliveryState.ts";
 import Migration0076 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 import Migration0077 from "./Migrations/077_RepairBooleanSettledOverride.ts";
+import Migration0078 from "./Migrations/078_ChatGPTTranscriptIndex.ts";
+import Migration0079 from "./Migrations/079_ChatGPTSessionRegistry.ts";
+import Migration0080 from "./Migrations/080_ChatGPTSessionTimeline.ts";
+import Migration0081 from "./Migrations/081_ChatGPTRegistryMetadata.ts";
+import Migration0082 from "./Migrations/082_ChatGPTRegistryClosures.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -160,6 +165,11 @@ const migrationEntries = [
   [75, "SubagentDeliveryState", Migration0075],
   [76, "ProjectionProjectsPinArchive", Migration0076],
   [77, "RepairBooleanSettledOverride", Migration0077],
+  [78, "ChatGPTTranscriptIndex", Migration0078],
+  [79, "ChatGPTSessionRegistry", Migration0079],
+  [80, "ChatGPTSessionTimeline", Migration0080],
+  [81, "ChatGPTRegistryMetadata", Migration0081],
+  [82, "ChatGPTRegistryClosures", Migration0082],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -172,6 +182,86 @@ const makeMigrationLoader = (throughId?: number) =>
         .map(([id, name, migration]) => [`${id}_${name}`, migration]),
     ),
   );
+
+
+/**
+ * The local fork shipped ChatGPT migrations as 62–66 before upstream assigned
+ * those same IDs to different schemas. A history written by that fork cannot
+ * simply consume the renumbered 78–82 entries: the SQL migrator skips all IDs
+ * below the highest recorded migration, including upstream's required 62–77.
+ *
+ * Rewrite only an exact, contiguous fork signature, in one transaction. Apply
+ * the new upstream migrations and any missing local migrations before
+ * recording their canonical IDs; otherwise roll the entire conversion back.
+ */
+const reconcileForkChatGPTMigrations = Effect.fn("reconcileForkChatGPTMigrations")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const tables = yield* sql`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+      `;
+      if (tables.length === 0) return [] as Array<readonly [number, string]>;
+
+      const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+        SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 62
+        ORDER BY migration_id
+      `;
+      const legacyNames = [
+        "ChatGPTTranscriptIndex",
+        "ChatGPTSessionRegistry",
+        "ChatGPTSessionTimeline",
+        "ChatGPTRegistryMetadata",
+        "ChatGPTRegistryClosures",
+      ] as const;
+      const first = history[0];
+      if (first?.name !== legacyNames[0] || first?.migration_id !== 62) {
+        return [] as Array<readonly [number, string]>;
+      }
+
+      const invalid = history.find((entry, index) =>
+        index >= legacyNames.length ||
+        entry.migration_id !== 62 + index ||
+        entry.name !== legacyNames[index]
+      );
+      if (invalid !== undefined) {
+        return yield* new Migrator.MigrationError({
+          kind: "BadState",
+          message: "Cannot upgrade fork ChatGPT migrations: unexpected migration history. No schema was modified.",
+        });
+      }
+
+      // Preserve already-applied local tables and registry data.
+      for (const row of history) {
+        yield* sql`
+          UPDATE effect_sql_migrations
+          SET migration_id = ${row.migration_id + 16}
+          WHERE migration_id = ${row.migration_id} AND name = ${row.name}
+        `;
+      }
+
+      const executed: Array<readonly [number, string]> = [];
+      for (const [id, name, migration] of migrationEntries) {
+        if (id < 62 || id > 77) continue;
+        yield* migration;
+        yield* sql`
+          INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})
+        `;
+        executed.push([id, name]);
+      }
+
+      for (const [id, name, migration] of migrationEntries) {
+        if (id < 78 + history.length || id > 82) continue;
+        yield* migration;
+        yield* sql`
+          INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})
+        `;
+        executed.push([id, name]);
+      }
+      return executed;
+    }),
+  );
+});
 
 const FIRST_V2_MIGRATION_ID = 55;
 
@@ -220,11 +310,15 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  const forkMigrations = includesV2 && toMigrationInclusive === undefined
+    ? yield* reconcileForkChatGPTMigrations()
+    : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
   const executedMigrations = [
     ...previewMigrations,
+    ...forkMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);

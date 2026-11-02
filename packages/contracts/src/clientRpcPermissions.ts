@@ -19,6 +19,16 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Stopping a server signals its processes, as closing a terminal does.
   [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
+  [WS_METHODS.chatGptRegistryDriverRegister]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryDriverHeartbeat]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryDriverDisconnect]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistrySync]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryClose]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryPatch]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryAct]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryTake]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryFinish]: AuthOrchestrationOperateScope,
+  // Endpoint checks exist to configure exports, so they need the same grant as saving them.
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsUpdate]: AuthSourceControlWriteScope,

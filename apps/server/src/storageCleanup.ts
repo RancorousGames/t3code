@@ -42,6 +42,7 @@ import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementService.ts";
 import { forkParked } from "./serverActivation.ts";
+import { previewNativeHistoryRetention } from "./nativeHistoryRetention.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
@@ -1158,7 +1159,7 @@ const make = Effect.gen(function* () {
         const stat = yield* fs.stat(target);
         if (stat.type === "Directory" && rotatedLogs) {
           yield* visit(target);
-        } else if (stat.type === "File" && (!rotatedLogs || /\.(?:log|ndjson)\.\d+$/.test(name))) {
+        } else if (stat.type === "File" && (!rotatedLogs || /\.log\.\d+$/.test(name))) {
           const modified = Option.getOrNull(stat.mtime);
           if (modified !== null && modified.getTime() < now - days * DAY_MS) {
             const current = (yield* settingsService.getSettings).storageCleanup;
@@ -1260,6 +1261,17 @@ const make = Effect.gen(function* () {
         ),
       );
     }
+    // Read-only native history inventory. No automatic native history deletion:
+    // client drafts, UNKNOWN sends, cross-client references and index recovery are unverified.
+    const nativeHistoryDryRun = yield* Effect.gen(function* () {
+      const active = yield* projections.getShellSnapshot();
+      const archive = yield* projections.getShellSnapshot({ location: "archive" });
+      // Archive snapshots carry history in archivedThreads, not threads.
+      return previewNativeHistoryRetention(active.threads, archive.archivedThreads, now);
+    }).pipe(
+      Effect.tapError((error) => Effect.logWarning("native history dry-run unavailable", { error })),
+      Effect.orElseSucceed(() => null),
+    );
     const counts = { removed: 0, kept: 0, failed: 0 };
     let bytesFreed = 0;
     for (const entry of entries) {
@@ -1276,6 +1288,7 @@ const make = Effect.gen(function* () {
             : 3;
     const latestReport: StorageCleanupReport = {
       trigger,
+      nativeHistoryDryRun,
       startedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
       finishedAt: DateTime.formatIso(yield* DateTime.now),
       entries: entries.sort((a, b) => priority(a) - priority(b)).slice(0, REPORT_ENTRY_LIMIT),

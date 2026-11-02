@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, Globe2Icon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -12,6 +12,7 @@ import {
   type HistoryDirection,
 } from "../../navigationHistory";
 import { primaryServerKeybindingsAtom } from "../../state/server";
+import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
@@ -243,8 +244,11 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/settings" });
   };
 
-  const handleUsageClick = () => {
-    if (isMobile) {
+  const handleNativeBrowserClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/native-browser" });
+  };
+  const handleUsageClick = () => {    if (isMobile) {
       setOpenMobile(false);
     }
     void navigate({ to: "/usage" });
@@ -276,6 +280,13 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               icon={<PullRequestGlyph.pullRequest />}
               label="Pull requests"
               onClick={handlePullRequestsClick}
+            />
+          ) : null}
+          {isElectron ? (
+            <SidebarUtilityItem
+              icon={<Globe2Icon />}
+              label="Native Browser"
+              onClick={handleNativeBrowserClick}
             />
           ) : null}
           <SidebarUtilityItem

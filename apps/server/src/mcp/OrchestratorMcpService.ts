@@ -1460,12 +1460,12 @@ const make = Effect.gen(function* () {
   });
 
   /** Resolve the actual registry/adapters/project candidate without execution. */
-  const resolveTargetCandidate: OrchestratorMcpServiceShape["resolveTargetCandidate"] = (
-    parent,
-    target,
-    skipProjectEnablementFilter = false,
-  ) =>
-    Effect.gen(function* () {
+  const resolveTargetCandidate: OrchestratorMcpServiceShape["resolveTargetCandidate"] =
+    Effect.fn("OrchestratorMcpService.resolveTargetCandidate")(function* (
+      parent,
+      target,
+      skipProjectEnablementFilter = false,
+    ) {
       const providers = yield* loadProviders;
       const resolved = yield* resolveTargetRechecking({
         parent,
@@ -1493,7 +1493,7 @@ const make = Effect.gen(function* () {
 
   const requestKey = (clientRequestId: string | undefined): Effect.Effect<string> =>
     clientRequestId === undefined
-      ? crypto.randomUUIDv4().pipe(Effect.orDie)
+      ? crypto.randomUUIDv4.pipe(Effect.orDie)
       : Effect.succeed(clientRequestId);
 
   const readTask = Effect.fn("OrchestratorMcpService.readTask")(function* (
@@ -2005,6 +2005,7 @@ const make = Effect.gen(function* () {
   });
 
   return OrchestratorMcpService.of({
+    resolveTargetCandidate,
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
       const { parent, limits } = yield* loadCaller(scope);
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
@@ -2336,9 +2337,7 @@ const make = Effect.gen(function* () {
             provider.supportedRuntimeModes.length === 0
               ? {}
               : { runtimeModes: [...provider.supportedRuntimeModes] }),
-            canRunChildTask: constraints.length === 0,
-            canRunCrossProviderChildTask: constraints.length === 0,
-            constraints: [...constraints],
+            ...unavailableNativeSpawnCapabilities(constraints),
           };
         }),
         features: {
@@ -2775,6 +2774,9 @@ const make = Effect.gen(function* () {
     createThreads: Effect.fn("OrchestratorMcpService.createThreads")(
       function* (callerScope, input) {
         const { scope, parent } = yield* loadThreadCaller(callerScope, "create_threads");
+        // Hold before any command, model selection, or native child side effect.
+        yield* nativeCreateHold;
+        const providers = yield* loadProviders;
         const parentRun = ThreadManagementService.latestActiveRun(parent);
         if (
           parentRun === undefined ||

@@ -5,6 +5,8 @@
  * renderer still owns its attached <webview> and can safely drive that guest
  * using the public Electron webview API without new privileged IPC endpoints.
  */
+import { findMountedChatGPTGuest } from "./browser/mountedChatGPTGuest";
+import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 
 type ChatGPTWebview = HTMLElementTagNameMap["webview"] & {
@@ -13,10 +15,33 @@ type ChatGPTWebview = HTMLElementTagNameMap["webview"] & {
   sendInputEvent?: (event: { type: "keyDown" | "keyUp"; keyCode: string }) => Promise<void>;
 };
 
+// A native Chromium page has no DOM <webview>; its exact Electron owner is
+// addressed by UUID and environment. Never infer this from the selected tab.
+const nativeSessionEnvironments = new Map<string, string>();
+export function registerNativeChatGPTAutomationSession(environmentId: string, sessionId: string) {
+  if (isPersistentChatGPTSessionOptedIn(sessionId))
+    nativeSessionEnvironments.set(sessionId, environmentId);
+}
 function findWebview(runtimeTabId: string): ChatGPTWebview {
-  const guest = Array.from(document.querySelectorAll("webview")).find(
-    (element) => element.dataset.previewTab === runtimeTabId,
-  );
+  if (isPersistentChatGPTSessionOptedIn(runtimeTabId)) {
+    const environmentId = nativeSessionEnvironments.get(runtimeTabId);
+    const bridge =
+      typeof window !== "undefined" ? window.desktopBridge?.stableChatGPTViewRequest : undefined;
+    if (!environmentId || !bridge)
+      throw new Error("Native ChatGPT session is not registered or its bridge is unavailable.");
+    const identity = { sessionId: runtimeTabId, environmentId, profileId: "default" };
+    return {
+      executeJavaScript: async (expression: string) => {
+        const response = (await bridge({ operation: "evaluate", identity, expression })) as {
+          result?: unknown;
+        };
+        return response.result;
+      },
+      getURL: () => "",
+      isLoading: () => false,
+    } as unknown as ChatGPTWebview;
+  }
+  const guest = findMountedChatGPTGuest(runtimeTabId);
   if (!guest) throw new Error("ChatGPT guest webview has not attached.");
   return guest as ChatGPTWebview;
 }
@@ -116,11 +141,13 @@ export const chatGPTWebviewAutomation = {
       clear,
       expectedConversationId,
       requireEmptyComposer,
+      replaceOwnedComposerText,
     }: {
       selector: string;
       text: string;
       clear?: boolean;
       requireEmptyComposer?: boolean;
+      replaceOwnedComposerText?: string | undefined;
       timeoutMs?: number;
       expectedConversationId?: string | undefined;
     },
@@ -133,12 +160,49 @@ export const chatGPTWebviewAutomation = {
       if (!(el instanceof HTMLElement))
         return { ok: false, reason: "PreviewAutomationTargetNotFoundError" };
       const value = ${JSON.stringify(text)};
-      // One synchronous guest JS turn: NEVER erase a draft typed during async policy intake.
       if (${Boolean(requireEmptyComposer)}) {
         const current = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement
           ? el.value : (el.innerText || el.textContent || "");
-        if (current.trim()) return { ok: false, reason: "Composer contains an existing draft; refusing to overwrite it." };
+        const previous = window[Symbol.for('t3.chatgpt.composerOwner')];
+        const normalizeExact = value => value.replace(/\\r\\n/g, '\\n');
+        const replacement = ${JSON.stringify(replaceOwnedComposerText ?? null)};
+        const ownedResidue = replacement !== null && normalizeExact(current) === normalizeExact(replacement) &&
+          (!previous || (!previous.interrupted && previous.editor === el &&
+            previous.conversationId === ${JSON.stringify(expectedConversationId ?? null)}));
+        if (current.trim() && !ownedResidue) return { ok: false, reason: "Composer contains an existing draft; refusing to overwrite it." };
+        if (previous?.active && !ownedResidue) return { ok: false, reason: "Automated composer ownership still active before typing; no message sent." };
       }
+      // The ownership token only exists between inserting automation text and
+      // clicking Send. Trusted human input invalidates it rather than being sent.
+      const markOwned = () => {
+        if (!${Boolean(requireEmptyComposer)} || !${JSON.stringify(expectedConversationId ?? null)}) return;
+        const key = Symbol.for('t3.chatgpt.composerOwner');
+        window[key]?.finish?.();
+        const owner = {
+          editor: el, conversationId: ${JSON.stringify(expectedConversationId ?? null)},
+          active: true, interrupted: false, expiresAt: Date.now() + 9000
+        };
+        const events = ['keydown', 'beforeinput', 'input', 'paste', 'drop', 'compositionstart'];
+        const onInput = event => {
+          if (!event.isTrusted) return;
+          owner.interrupted = true;
+        };
+        events.forEach(name => document.addEventListener(name, onInput, true));
+        owner.finish = () => {
+          owner.active = false;
+          events.forEach(name => document.removeEventListener(name, onInput, true));
+          if (window[key] === owner) delete window[key];
+        };
+        window[key] = owner;
+        // Keep an expired tombstone until the next type or the acknowledged
+        // click: a delayed press must not mistake a missing token for safety.
+        setTimeout(() => {
+          if (!owner.active) return;
+          owner.active = false;
+          // Keep watching human edits on the expired draft. Recovery must know
+          // if a person changed it and later restored the same text.
+        }, 9100);
+      };
       el.focus();
       if (el.isContentEditable) {
         if (${Boolean(clear)}) {
@@ -153,15 +217,16 @@ export const chatGPTWebviewAutomation = {
         // concatenate those nodes without separators, so compare innerText
         // using normalized whitespace rather than rejecting multiline prompts.
         const normalize = (text) => (text || "").replace(/\\s+/g, " ").trim();
-        return {
-          ok: inserted && normalize(el.innerText || el.textContent).includes(normalize(value)),
-          reason: "Contenteditable rejected text",
-        };
+        const ok = inserted && normalize(el.innerText || el.textContent) === normalize(value);
+        if (ok) markOwned();
+        return { ok, reason: "Contenteditable rejected or changed text" };
       }
       if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
         if (${Boolean(clear)}) el.select();
         const inserted = document.execCommand("insertText", false, value);
-        return { ok: inserted && el.value.includes(value), reason: "Input rejected text" };
+        const ok = inserted && el.value === value;
+        if (ok) markOwned();
+        return { ok, reason: "Input rejected or changed text" };
       }
       return { ok: false, reason: "PreviewAutomationTargetNotFoundError" };
     })()`;
@@ -179,7 +244,19 @@ export const chatGPTWebviewAutomation = {
 
   async press(
     runtimeId: string,
-    { key, expectedConversationId }: { key: string; expectedConversationId?: string | undefined },
+    {
+      key,
+      expectedConversationId,
+      expectedComposerText,
+      sendExpiresAt,
+      recoverStagedComposer,
+    }: {
+      key: string;
+      expectedConversationId?: string | undefined;
+      expectedComposerText?: string | undefined;
+      sendExpiresAt?: number | undefined;
+      recoverStagedComposer?: boolean;
+    },
   ): Promise<void> {
     const webview = findWebview(runtimeId);
     if (key === "Enter") {
@@ -192,11 +269,29 @@ export const chatGPTWebviewAutomation = {
           webview,
           `(() => {
           ${guestConversationGuardExpression(expectedConversationId)}
+          if (${JSON.stringify(sendExpiresAt ?? null)} !== null &&
+              Date.now() >= ${JSON.stringify(sendExpiresAt ?? null)})
+            return { expired: true };
           const editor = [
             '#prompt-textarea', '[data-testid="prompt-textarea"]',
             '[data-testid="composer-input"]', '[contenteditable="true"][role="textbox"]',
             'div[contenteditable="true"]', 'textarea'
           ].map((selector) => document.querySelector(selector)).find(Boolean);
+          if (${JSON.stringify(expectedComposerText ?? null)} !== null) {
+            const current = editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement
+              ? editor.value : (editor?.innerText || editor?.textContent || '');
+            const normalize = value => ${Boolean(recoverStagedComposer)}
+              ? (value || '').replace(/\\r\\n/g, '\\n') : (value || '').replace(/\\s+/g, ' ').trim();
+            if (normalize(current) !== normalize(${JSON.stringify(expectedComposerText ?? null)}))
+              return { composerMismatch: true };
+            const owner = window[Symbol.for('t3.chatgpt.composerOwner')];
+            // A manually edited automation draft can coincidentally match the
+            // expected text again. The trusted input event still vetoes submit.
+            if (owner && (owner.interrupted ||
+                (!${Boolean(recoverStagedComposer)} && (!owner.active || owner.expiresAt <= Date.now())) || owner.editor !== editor ||
+                owner.conversationId !== ${JSON.stringify(expectedConversationId ?? null)}))
+              return { composerMismatch: true };
+          }
           const selectors = [
             '[data-testid="send-button"]', '[data-testid="composer-submit-button"]',
             'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]',
@@ -211,8 +306,17 @@ export const chatGPTWebviewAutomation = {
             node.getAttribute('aria-disabled') !== 'true' &&
             node.getAttribute('aria-label') !== 'Stop' &&
             !node.matches('[data-testid="stop-button"]'));
+          const finishSend = () => {
+            const owner = window[Symbol.for('t3.chatgpt.composerOwner')];
+            // Release only focus we acquired for this uninterrupted staged send.
+            // A human interaction or an unrelated focus target must be preserved.
+            if (owner?.active && !owner.interrupted && owner.editor === editor &&
+                document.activeElement === editor) editor.blur();
+            owner?.finish?.();
+          };
           if (button) {
             button.click();
+            finishSend();
             return { clicked: true };
           }
           const form = editor?.closest('form');
@@ -220,6 +324,7 @@ export const chatGPTWebviewAutomation = {
           // the editor's own form invokes the same handler as clicking Send.
           if (form instanceof HTMLFormElement && form.querySelector('button[type="submit"]:not([disabled])')) {
             form.requestSubmit();
+            finishSend();
             return { clicked: true };
           }
           return {
@@ -239,10 +344,16 @@ export const chatGPTWebviewAutomation = {
         })()`,
         )) as {
           clicked?: boolean;
+          expired?: boolean;
+          composerMismatch?: boolean;
           guardMismatch?: boolean;
           actualConversationId?: string | null;
         } | null;
         assertGuestGuard(state);
+        if (state?.expired)
+          throw new Error("Queued attempt expired before submitting; no click issued.");
+        if (state?.composerMismatch)
+          throw new Error("Composer changed before submitting; refusing to click Send.");
         if (state?.clicked) return;
         lastState = state;
         await new Promise<void>((resolve) => setTimeout(resolve, 150));
@@ -258,6 +369,72 @@ export const chatGPTWebviewAutomation = {
     }
     await webview.sendInputEvent({ type: "keyDown", keyCode: key });
     await webview.sendInputEvent({ type: "keyUp", keyCode: key });
+  },
+
+  /** Submit text through ChatGPT's currently mounted React callback without touching the human editor.
+   * A false result proves no callback invocation; transport failures after invocation stay UNKNOWN.
+   */
+  async directSubmit(
+    runtimeId: string,
+    options: {
+      text: string;
+      expectedConversationId: string;
+      sendExpiresAt?: number | undefined;
+    },
+  ): Promise<"submitted" | "not_submitted"> {
+    const webview = findWebview(runtimeId);
+    const result = await executeWithoutStealingHostFocus(
+      webview,
+      `(() => {
+      const expected = ${JSON.stringify(options.expectedConversationId)};
+      const expiresAt = ${JSON.stringify(options.sendExpiresAt ?? null)};
+      const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
+      if (actual !== expected || (expiresAt !== null && Date.now() >= expiresAt))
+        return { submitted: false, reason: 'identity_or_expiry' };
+      const editor = document.querySelector('[data-composer-markdown][contenteditable="true"]');
+      if (!(editor instanceof HTMLElement)) return { submitted: false, reason: 'editor_missing' };
+      const stop = document.querySelector('[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"]');
+      if (stop instanceof HTMLButtonElement && stop.getClientRects().length && !stop.disabled)
+        return { submitted: false, reason: 'generation_active' };
+      const parent = editor.parentElement;
+      const key = parent && Object.keys(parent).find(k => k.startsWith('__reactFiber'));
+      let fiber = key && parent[key], callback = null;
+      for (let depth = 0; fiber && depth < 90; depth++, fiber = fiber.return) {
+        const props = fiber.memoizedProps;
+        const candidate = props?.onSubmit;
+        // ChatGPT minifies callback bodies on every deploy. Identify the
+        // composer submit handler by its component props and serialization
+        // behavior, never an unstable minified function name such as i6().
+        if (typeof candidate === 'function' &&
+            Object.prototype.hasOwnProperty.call(props, 'submitDisabled') &&
+            Object.prototype.hasOwnProperty.call(props, 'allowBackgroundSubmit') &&
+            String(candidate).includes('serialization_metadata')) {
+          callback = candidate;
+          break;
+        }
+      }
+      if (!callback) return { submitted: false, reason: 'callback_unavailable' };
+      if ((${chatGPTConversationIdFromUrl.toString()})(location.href) !== expected ||
+          (expiresAt !== null && Date.now() >= expiresAt))
+        return { submitted: false, reason: 'identity_or_expiry' };
+      // No DOM writes or editor focus. Any callback exception after invocation is ambiguous.
+      callback(${JSON.stringify(options.text)}, performance.now(), { preserveDraft: true }, true);
+      return { submitted: true };
+    })()`,
+    );
+    if (
+      result &&
+      typeof result === "object" &&
+      (result as { submitted?: boolean }).submitted === true
+    )
+      return "submitted";
+    if (
+      result &&
+      typeof result === "object" &&
+      (result as { submitted?: boolean }).submitted === false
+    )
+      return "not_submitted";
+    throw new Error("Direct submit outcome unknown.");
   },
 
   async evaluate(runtimeId: string, { expression }: { expression: string }): Promise<unknown> {

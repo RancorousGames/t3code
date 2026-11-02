@@ -82,6 +82,33 @@ NodeTest.test("the OMCP/CLI spawn request carries explicit parent UUID only when
   NodeAssert.equal(without.project, "t3code");
 });
 
+NodeTest.test("explicit OpenRig binding metadata survives the spawn CLI boundary", () => {
+  const opts = parseArguments([
+    "--title",
+    "Worker",
+    "--message",
+    "Implement",
+    "--parent-session-id",
+    "5d38e296-561d-4e91-91f0-320c7617edce",
+    "--seat-id",
+    "wartribes/worker",
+    "--role",
+    "worker",
+    "--task-board",
+    "Wartribes",
+    "--task-id",
+    "WT-0313",
+  ]);
+  const request = createChatGPTSpawnRequest(opts, "bound-request");
+  NodeAssert.equal(request.seatId, "wartribes/worker");
+  NodeAssert.equal(request.role, "worker");
+  NodeAssert.deepEqual(request.taskRef, { board: "Wartribes", id: "WT-0313" });
+  NodeAssert.throws(
+    () => parseArguments(["--title", "No role", "--message", "Do work", "--seat-id", "seat"]),
+    /role is required/,
+  );
+});
+
 NodeTest.test(
   "a named-pipe request waits for correlated confirmation of message delivery",
   async () => {
@@ -322,6 +349,32 @@ NodeTest.test("partial created receipt is a success with ID and no delivered cla
   );
 });
 
+NodeTest.test("pending renderer spawn keeps its created ID in the OMCP-compatible receipt", () => {
+  const receipt = classifySpawnResponse(
+    {
+      ok: true,
+      data: {
+        action: "spawn",
+        created: true,
+        sessionId: "reserved-native-uuid",
+        parentSessionId: null,
+        promptDelivery: "pending",
+        messageSent: false,
+        sendAttempted: null,
+      },
+    },
+    { requestId: "pending-native-spawn" },
+  );
+  NodeAssert.equal(receipt.outcome, "created");
+  NodeAssert.equal(receipt.created, true);
+  NodeAssert.equal(receipt.sessionId, "reserved-native-uuid");
+  NodeAssert.equal(receipt.messageSent, false);
+  NodeAssert.equal(receipt.promptDelivery, "unknown");
+  NodeAssert.equal(receipt.deliveryPending, true);
+  NodeAssert.equal(receipt.sendAttempted, null);
+  NodeAssert.match(receipt.next, /delivery continues/i);
+});
+
 NodeTest.test(
   "lost renderer acknowledgement reconciles a single exact request id without respawning",
   async () => {
@@ -435,3 +488,31 @@ NodeTest.test("read-only recovery confirms or rejects stored lineage without res
   }));
   NodeAssert.equal(uncertain.parentConfirmation, "unconfirmed");
 });
+
+NodeTest.test(
+  "pending creation returns the child immediately without claiming initial delivery",
+  () => {
+    const request = { requestId: "pending-request", parentSessionId: "parent-id" };
+    const receipt = classifySpawnResponse(
+      {
+        ok: true,
+        data: {
+          action: "spawn",
+          created: true,
+          sessionId: "child-id",
+          parentSessionId: "parent-id",
+          promptDelivery: "pending",
+          messageSent: false,
+          sendAttempted: null,
+        },
+      },
+      request,
+    );
+    NodeAssert.equal(receipt.sessionId, "child-id");
+    NodeAssert.equal(receipt.parentConfirmation, "confirmed");
+    NodeAssert.equal(receipt.outcome, "created");
+    NodeAssert.equal(receipt.messageSent, false);
+    NodeAssert.equal(receipt.promptDelivery, "unknown");
+    NodeAssert.equal(receipt.deliveryPending, true);
+  },
+);

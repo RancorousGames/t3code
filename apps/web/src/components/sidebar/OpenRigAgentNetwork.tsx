@@ -1,6 +1,11 @@
 import type { DesktopOpenRigAgent, DesktopOpenRigSeatTopology } from "@t3tools/contracts";
+import { useChatGPTBrowserSessions } from "../../chatGPTBrowserSessions";
+import { runChatGPTSessionControl } from "../../chatGPTSessionControl";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { ChevronDownIcon, ChevronRightIcon, NetworkIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as Schema from "effect/Schema";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
 
 import { useThreadShells } from "../../state/entities";
 import { Badge } from "../ui/badge";
@@ -8,6 +13,7 @@ import { Button } from "../ui/button";
 import { OpenRigFloatingWindow, type FloatingSize } from "./OpenRigFloatingWindow";
 import { OpenRigCanonicalSpawnApprovals } from "./OpenRigSpawnApproval";
 import { OpenRigAgentGraph } from "./OpenRigAgentGraph";
+import { exactGraphSeatBrowserSessions, graphWorkerDescendants } from "./openRigGraphSessionData";
 import { SEAT_STATUS_BADGE, explanation, formatTimestamp, seatStatusTone } from "./openRigAgentPresentation";
 import {
   isCostlyModel,
@@ -79,6 +85,7 @@ export function OpenRigAgentNetwork({
   topologyError,
   onRefreshAgents,
   onOpenAgent,
+  onOpenSession,
   onClose,
   onOutsideClose,
 }: {
@@ -87,6 +94,7 @@ export function OpenRigAgentNetwork({
   topologyError: string | null;
   onRefreshAgents: () => Promise<void>;
   onOpenAgent: (seatId: string) => void;
+  onOpenSession: (browserSessionId: string) => void;
   onClose: () => void;
   onOutsideClose: () => void;
 }) {
@@ -95,6 +103,8 @@ export function OpenRigAgentNetwork({
     [agents, topology],
   );
   const { ledgers, loading, loadedAt, reload } = useSeatLedgers(seatIds);
+  const environmentId = usePrimaryEnvironmentId();
+  const { sessions: browserSessions } = useChatGPTBrowserSessions(environmentId);
   const threads = useThreadShells(true);
   const [costlyPatterns, setCostlyPatterns] = useState(readCostlyPatterns);
   const [costlyDraft, setCostlyDraft] = useState(() => readCostlyPatterns().join(", "));
@@ -107,6 +117,39 @@ export function OpenRigAgentNetwork({
   const [showUnattributed, setShowUnattributed] = useState(false);
   const [unattributedLimit, setUnattributedLimit] = useState(UNATTRIBUTED_PAGE);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  // The daemon retains topology/history; retirement here is an explicit
+  // operator stop (when live) plus reversible hiding from this network view.
+  const [retiredSeats, setRetiredSeats] = useLocalStorage(
+    "t3code:openrig-network:retired-seats:v1",
+    [] as string[], Schema.Array(Schema.String),
+  );
+  const [showRetired, setShowRetired] = useState(false);
+  const [retiring, setRetiring] = useState(false);
+  const retireSeat = async (seat: NetworkSeat) => {
+    if (retiring) return;
+    if (!window.confirm(
+      `Retire ${seat.name}? A live managed occupant will be stopped and this seat hidden from the network. Existing work may be interrupted. You can reveal the seat later, but that will not restart its occupant.`,
+    )) return;
+    const action = window.desktopBridge?.retireOpenRigSeat;
+    if (!action) { setActionNotice("Retire unavailable: update the T3 desktop app."); return; }
+    setRetiring(true);
+    setActionNotice(null);
+    try {
+      const outcome = await action(seat.id);
+      setRetiredSeats([...new Set([...retiredSeats, seat.id])]);
+      setSelectedId(null);
+      setActionNotice(outcome === "stopped"
+        ? `Stopped and retired ${seat.name} from this view.`
+        : `Retired inactive seat ${seat.name} from this view.`);
+      void onRefreshAgents();
+    } catch (error) {
+      setActionNotice(`Seat not retired: ${explanation(error)}`);
+    } finally {
+      setRetiring(false);
+    }
+  };
+
 
   const network = useMemo(
     () => buildAgentNetwork({ agents, topology, ledgers, threads, costlyPatterns }),
@@ -116,10 +159,39 @@ export function OpenRigAgentNetwork({
   // The graph collapses subtrees itself, so every seat is expanded for the model.
   const allSeats = useMemo(() => new Set(network.seats.keys()), [network]);
   const rows = useMemo(
-    () => flattenAgentTree(network, allSeats, { query, activeOnly, costlyOnly, rigId, model, costlyPatterns }),
-    [network, allSeats, query, activeOnly, costlyOnly, rigId, model, costlyPatterns],
+    () => flattenAgentTree(network, allSeats, { query, activeOnly, costlyOnly, rigId, model, costlyPatterns })
+      .filter((row) => showRetired || (row.kind === "seat"
+        ? !retiredSeats.includes(row.seat.id)
+        : !retiredSeats.includes(row.session.seatId ?? ""))),
+    [network, allSeats, query, activeOnly, costlyOnly, rigId, model, costlyPatterns, retiredSeats, showRetired],
+  );
+  const seatBrowserIds = useMemo(
+    () => exactGraphSeatBrowserSessions(network, ledgers, browserSessions),
+    [network, ledgers, browserSessions],
+  );
+  const childSessions = useMemo(
+    () => graphWorkerDescendants(network, selectedId, seatBrowserIds, browserSessions),
+    [network, selectedId, seatBrowserIds, browserSessions],
   );
   const selectedSeat = selectedId ? (network.seats.get(selectedId) ?? null) : null;
+  const openExactSession = (sessionId: string) => {
+    if (browserSessions.some((session) => session.id === sessionId)) onOpenSession(sessionId);
+  };
+  // Existing T3 manual reload path checks mounted guest, busy status, UNKNOWN send,
+  // drafts, identity, and recovery mutex. The graph never requests force=true.
+  const reloadExactSession = async (sessionId: string) => {
+    if (!environmentId || !browserSessions.some((session) => session.id === sessionId)) return;
+    setActionNotice(null);
+    try {
+      await runChatGPTSessionControl({
+        environmentId, sessions: browserSessions, action: "reload", sessionId, force: false,
+      });
+      setActionNotice("Reloaded the selected T3 session.");
+    } catch (error) {
+      // An ordinary reload is intentionally refused when its guest is busy or unsafe.
+      setActionNotice(`Reload not performed: ${explanation(error)}`);
+    }
+  };
   const unattributed = network.unattributed.filter((session) => sessionMatches(session, filter));
   const rigs = useMemo(
     () => [...new Map(topology?.seats.map((seat) => [seat.rigId, seat.rigName || seat.rigId]) ?? []).entries()],
@@ -199,6 +271,10 @@ export function OpenRigAgentNetwork({
                 </button>
               ))}
             </div>
+            {retiredSeats.length > 0 && <Button type="button" size="xs" variant="outline"
+              onClick={() => setShowRetired(!showRetired)}>
+              {showRetired ? "Hide retired" : `Show retired (${retiredSeats.length})`}
+            </Button>}
             <select aria-label="Filter by rig" className="h-8 rounded-md border border-border bg-background px-1 text-xs" value={rigId}
               onChange={(event) => setRigId(event.currentTarget.value)}>
               <option value="">All rigs</option>
@@ -239,6 +315,15 @@ export function OpenRigAgentNetwork({
                 onToggle={toggle}
                 onSelect={setSelectedId}
                 onOpenAgent={onOpenAgent}
+                actionNotice={actionNotice}
+                childSessions={childSessions}
+                getSeatSessionId={(seatId) => seatBrowserIds.get(seatId)?.[0] ?? null}
+                onOpenSession={openExactSession}
+                onReloadSession={(sessionId) => { void reloadExactSession(sessionId); }}
+                onReloadSeatSession={(seatId) => {
+                  const id = seatBrowserIds.get(seatId)?.[0];
+                  if (id) void reloadExactSession(id);
+                }}
               />
               <section aria-label="Unattributed T3 threads" className="shrink-0 border-t border-dashed border-border">
                 <button
@@ -276,6 +361,14 @@ export function OpenRigAgentNetwork({
                 onSelect={setSelectedId}
                 onClear={() => setSelectedId(null)}
                 onOpenAgent={onOpenAgent}
+                retired={selectedSeat ? retiredSeats.includes(selectedSeat.id) : false}
+                retiring={retiring}
+                onRetire={() => { if (selectedSeat) void retireSeat(selectedSeat); }}
+                onRestore={() => {
+                  if (!selectedSeat) return;
+                  setRetiredSeats(retiredSeats.filter((id) => id !== selectedSeat.id));
+                  setActionNotice(`Restored ${selectedSeat.name} to network view. No occupant was launched.`);
+                }}
               />
               <section aria-label="Spawn approvals">
                 <h3 className="mb-1 text-2xs font-semibold tracking-wide text-muted-foreground uppercase">Spawn approvals</h3>
@@ -358,8 +451,12 @@ export function OpenRigAgentNetwork({
 }
 
 /** Everything a graph node abbreviates: identity, real links, ledger state and every owned session. */
-function SeatDetails({ seat, seatName, costlyPatterns, onSelect, onClear, onOpenAgent }: {
+function SeatDetails({ seat, seatName, costlyPatterns, onSelect, onClear, onOpenAgent, retired, retiring, onRetire, onRestore }: {
   seat: NetworkSeat | null;
+  retired: boolean;
+  retiring: boolean;
+  onRetire: () => void;
+  onRestore: () => void;
   seatName: (id: string) => string;
   costlyPatterns: readonly string[];
   onSelect: (id: string) => void;
@@ -369,7 +466,7 @@ function SeatDetails({ seat, seatName, costlyPatterns, onSelect, onClear, onOpen
   if (!seat)
     return (
       <p className="rounded-xl border border-dashed border-border px-3 py-2.5 text-2xs text-muted-foreground">
-        Select a seat in the graph to see its links and sessions. Double-click or press Enter to open its workspace.
+        Select a seat to inspect it. Double-click or Enter opens its exact T3 session, if linked; right-click for Open workspace.
       </p>
     );
   const links = (label: string, ids: readonly string[]) =>
@@ -403,6 +500,10 @@ function SeatDetails({ seat, seatName, costlyPatterns, onSelect, onClear, onOpen
       {!seat.inTopology && <p className="text-3xs text-muted-foreground">Not in RigSpec topology; no parent is known or guessed.</p>}
       {seat.ledger === "failed" && <p className="text-3xs text-warning-foreground">Ledger unreadable: {seat.ledgerError}</p>}
       <Button size="xs" variant="outline" className="w-full" onClick={() => onOpenAgent(seat.id)}>Open workspace</Button>
+      {retired
+        ? <Button size="xs" variant="outline" className="w-full" onClick={onRestore}>Restore seat in network</Button>
+        : <Button size="xs" variant="destructive" className="w-full" disabled={retiring}
+            onClick={onRetire}>{retiring ? "Retiring…" : "Retire seat (stop + hide)"}</Button>}
       <div>
         <h4 className="mb-1 text-3xs font-semibold tracking-wide text-muted-foreground uppercase">Sessions ({seat.sessions.length})</h4>
         {seat.sessions.length === 0 ? (

@@ -202,9 +202,18 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+n", command: "chat.newLocal", when: "!terminalFocus" },
   { key: "mod+alt+n", command: "chat.newWithoutProject", when: "!terminalFocus" },
   { key: "ctrl+shift+t", command: "chatgpt.newSession", when: "isDesktop && !terminalFocus" },
+  { key: "ctrl+alt+g", command: "chatgpt.openDashboard", when: "isDesktop && !terminalFocus" },
+  { key: "ctrl+alt+r", command: "chatgpt.reloadSession", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },
+  { key: "ctrl+alt+s", command: "chatgpt.snoozeSession", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },
+  { key: "ctrl+alt+shift+s", command: "chatgpt.unsnoozeSession", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },
+  { key: "ctrl+alt+i", command: "chatgpt.copySessionId", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },
   { key: "mod+f", command: "chat.find", when: "!terminalFocus && !previewFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
-  { key: "mod+shift+h", command: "composer.host", when: "!terminalFocus" },
+  {
+    key: "mod+shift+h",
+    command: "composer.host",
+    when: "!terminalFocus && !chatgptBrowserRoute",
+  },
   { key: "mod+shift+e", command: "composer.effort", when: "!terminalFocus" },
   { key: "mod+shift+a", command: "composer.mode", when: "!terminalFocus" },
   { key: "mod+shift+x", command: "composer.workspace", when: "!terminalFocus" },
@@ -237,6 +246,11 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+2", command: "usage.period.week", when: "usagePageOpen" },
   { key: "mod+shift+3", command: "usage.period.month", when: "usagePageOpen" },
   { key: "mod+shift+4", command: "usage.period.quarter", when: "usagePageOpen" },
+  {
+    key: "ctrl+shift+h",
+    command: "omniwork.toggleWorkers",
+    when: "isDesktop && chatgptBrowserRoute && !terminalFocus",
+  },
 ];
 
 function normalizeKeyToken(token: string): string {

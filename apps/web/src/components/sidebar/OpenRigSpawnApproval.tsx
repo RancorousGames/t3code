@@ -1,4 +1,7 @@
-import type { DesktopOpenRigNativeApproval, DesktopOpenRigNativeReviewResult } from "@t3tools/contracts";
+import type {
+  DesktopOpenRigNativeApproval,
+  DesktopOpenRigNativeReviewResult,
+} from "@t3tools/contracts";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "../ui/badge";
@@ -66,7 +69,10 @@ export const SPAWN_APPROVAL_FEED_UNAVAILABLE: SpawnApprovalFeed = {
   reason: "Native spawn approval history is not available in this desktop build.",
 };
 
-const STATUS: Record<SpawnApprovalStatus, { label: string; variant: "warning" | "success" | "info" | "error" | "outline" }> = {
+const STATUS: Record<
+  SpawnApprovalStatus,
+  { label: string; variant: "warning" | "success" | "info" | "error" | "outline" }
+> = {
   requested: { label: "Requested", variant: "outline" },
   pending_approval: { label: "Pending approval", variant: "warning" },
   approved: { label: "Approved once", variant: "success" },
@@ -80,7 +86,8 @@ const STATUS: Record<SpawnApprovalStatus, { label: string; variant: "warning" | 
 function relative(fromMs: number, toIso: string): string {
   const minutes = Math.round((Date.parse(toIso) - fromMs) / 60_000);
   if (!Number.isFinite(minutes)) return toIso;
-  const span = Math.abs(minutes) < 60 ? `${Math.abs(minutes)} min` : `${Math.round(Math.abs(minutes) / 60)} h`;
+  const span =
+    Math.abs(minutes) < 60 ? `${Math.abs(minutes)} min` : `${Math.round(Math.abs(minutes) / 60)} h`;
   return minutes >= 0 ? `in ${span}` : `${span} ago`;
 }
 
@@ -109,13 +116,17 @@ export function SpawnApprovalCard({
     setResult("");
     try {
       const outcome = await onReview(request.operationId);
-      setResult(outcome.outcome === "recorded" && outcome.item
-        ? `Decision recorded: ${outcome.item.status}. Check the operation status for launch outcome.`
-        : outcome.outcome === "verification-unavailable"
-          ? "Windows Hello verification unavailable. No decision was recorded."
-          : "Native review cancelled. No decision was recorded.");
+      setResult(
+        outcome.outcome === "recorded" && outcome.item
+          ? `Decision recorded: ${outcome.item.status}. Check the operation status for launch outcome.`
+          : outcome.outcome === "verification-unavailable"
+            ? "Windows Hello verification unavailable. No decision was recorded."
+            : "Native review cancelled. No decision was recorded.",
+      );
     } catch (error) {
-      setResult(`Native review outcome unconfirmed: ${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}. Inspect the canonical operation; do not retry automatically.`);
+      setResult(
+        `Native review outcome unconfirmed: ${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}. Inspect the canonical operation; do not retry automatically.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -127,15 +138,21 @@ export function SpawnApprovalCard({
       className={`space-y-1.5 rounded-xl border px-3 py-2.5 text-xs ${request.status === "pending_approval" && !expired ? "border-warning/50 bg-warning/6" : "border-border"}`}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={expired && request.status === "pending_approval" ? "outline" : status.variant}>
+        <Badge
+          variant={expired && request.status === "pending_approval" ? "outline" : status.variant}
+        >
           {expired && request.status === "pending_approval" ? "Expired" : status.label}
         </Badge>
         <span className="font-medium">
-          {request.requestedBy.kind === "verified-seat" ? seatName(request.requestedBy.seatId) : "Unknown caller (unverified)"}
+          {request.requestedBy.kind === "verified-seat"
+            ? seatName(request.requestedBy.seatId)
+            : "Unknown caller (unverified)"}
           {" → "}
           {request.destinationSeatId ? seatName(request.destinationSeatId) : "no seat"}
         </span>
-        <span className="text-2xs text-muted-foreground">requested {relative(now, request.requestedAt)}</span>
+        <span className="text-2xs text-muted-foreground">
+          requested {relative(now, request.requestedAt)}
+        </span>
         {request.expiresAt && request.status === "pending_approval" && !expired && (
           <span className="text-2xs text-warning">expires {relative(now, request.expiresAt)}</span>
         )}
@@ -143,40 +160,90 @@ export function SpawnApprovalCard({
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-2xs">
         <dt className="text-muted-foreground">Model</dt>
         <dd className="flex flex-wrap items-center gap-1">
-          {request.target.model}{request.target.effort ? ` · effort ${request.target.effort}` : ""}
-          {costly && <Badge variant="warning" size="sm">Costly</Badge>}
-          {request.exemption === "not-exempt" && <Badge variant="outline" size="sm">Not exempt</Badge>}
-          {request.exemption === "unknown" && <Badge variant="outline" size="sm">Exemption unverified</Badge>}
+          {request.target.model}
+          {request.target.effort ? ` · effort ${request.target.effort}` : ""}
+          {costly && (
+            <Badge variant="warning" size="sm">
+              Costly
+            </Badge>
+          )}
+          {request.exemption === "not-exempt" && (
+            <Badge variant="outline" size="sm">
+              Not exempt
+            </Badge>
+          )}
+          {request.exemption === "unknown" && (
+            <Badge variant="outline" size="sm">
+              Exemption unverified
+            </Badge>
+          )}
         </dd>
         <dt className="text-muted-foreground">Provider</dt>
-        <dd>{request.target.providerInstanceId} · {request.target.runtime} · {request.target.runtimeMode}</dd>
+        <dd>
+          {request.target.providerInstanceId} · {request.target.runtime} ·{" "}
+          {request.target.runtimeMode}
+        </dd>
         <dt className="text-muted-foreground">Workspace</dt>
-        <dd className="break-all">{request.workspaceRoot ?? request.projectId ?? "not recorded"}</dd>
+        <dd className="break-all">
+          {request.workspaceRoot ?? request.projectId ?? "not recorded"}
+        </dd>
         <dt className="text-muted-foreground">Source thread</dt>
-        <dd className="break-all">{request.sourceThread ? request.sourceThread.threadId : request.verifiedSourceThreadId ? `${request.verifiedSourceThreadId} (environment not recorded)` : "not proven"}</dd>
+        <dd className="break-all">
+          {request.sourceThread
+            ? request.sourceThread.threadId
+            : request.verifiedSourceThreadId
+              ? `${request.verifiedSourceThreadId} (environment not recorded)`
+              : "not proven"}
+        </dd>
         <dt className="text-muted-foreground">Operation</dt>
-        <dd className="font-mono" aria-label={`Operation ${request.operationId}`}>{request.operationId}</dd>
-        {request.stateVersion !== undefined && <><dt className="text-muted-foreground">Canonical version</dt><dd>{request.stateVersion}</dd></>}
-        {request.descriptorSha256 && <><dt className="text-muted-foreground">Descriptor digest</dt><dd className="break-all font-mono">{request.descriptorSha256}</dd></>}
+        <dd className="font-mono" aria-label={`Operation ${request.operationId}`}>
+          {request.operationId}
+        </dd>
+        {request.stateVersion !== undefined && (
+          <>
+            <dt className="text-muted-foreground">Canonical version</dt>
+            <dd>{request.stateVersion}</dd>
+          </>
+        )}
+        {request.descriptorSha256 && (
+          <>
+            <dt className="text-muted-foreground">Descriptor digest</dt>
+            <dd className="break-all font-mono">{request.descriptorSha256}</dd>
+          </>
+        )}
       </dl>
-      {request.taskPreview && <p className="line-clamp-3 break-words text-2xs text-muted-foreground">Task: {request.taskPreview}</p>}
+      {request.taskPreview && (
+        <p className="line-clamp-3 break-words text-2xs text-muted-foreground">
+          Task: {request.taskPreview}
+        </p>
+      )}
       {request.decision && (
         <p className="text-2xs text-muted-foreground">
-          {request.decision.outcome === "approved" ? "Approved" : "Denied"} by {request.decision.actor} {formatTimestamp(request.decision.at)}
+          {request.decision.outcome === "approved" ? "Approved" : "Denied"} by{" "}
+          {request.decision.actor} {formatTimestamp(request.decision.at)}
         </p>
       )}
       {request.status === "indeterminate" && (
-        <p role="alert" className="text-2xs text-destructive">Launch outcome is unknown. It will not be retried; inspect the provider before any new request.</p>
+        <p role="alert" className="text-2xs text-destructive">
+          Launch outcome is unknown. It will not be retried; inspect the provider before any new
+          request.
+        </p>
       )}
       {costly && request.status === "pending_approval" && !expired && (
-        <p className="text-2xs text-warning">Flagged as costly on this device. T3 cannot show its price.</p>
+        <p className="text-2xs text-warning">
+          Flagged as costly on this device. T3 cannot show its price.
+        </p>
       )}
       {reviewable && (
         <Button size="xs" variant="outline" disabled={busy} onClick={() => void review()}>
           {busy ? "Opening native review…" : "Review in native desktop dialog"}
         </Button>
       )}
-      {result && <p role="status" className="text-2xs">{result}</p>}
+      {result && (
+        <p role="status" className="text-2xs">
+          {result}
+        </p>
+      )}
     </article>
   );
 }
@@ -187,51 +254,85 @@ export function OpenRigSpawnApprovalPanel({
   seatId,
   seatName,
   onReview,
+  compact = false,
 }: {
   feed: SpawnApprovalFeed;
   seatId: string | null;
   seatName: (seatId: string) => string;
   onReview?: SpawnNativeReview;
+  /** Human Inbox mode: render nothing when there are no requests. */
+  compact?: boolean;
 }) {
   const now = Date.now();
   if (feed.kind === "unavailable")
     return (
-      <div role="status" className="rounded-lg border border-border bg-muted/10 px-3 py-2 text-2xs text-muted-foreground">
+      <div
+        role="status"
+        className="rounded-lg border border-border bg-muted/10 px-3 py-2 text-2xs text-muted-foreground"
+      >
         <p>{feed.reason}</p>
       </div>
     );
-  if (feed.kind === "loading") return <p role="status" className="text-2xs text-muted-foreground">Loading spawn approvals…</p>;
+  if (feed.kind === "loading")
+    return (
+      <p role="status" className="text-2xs text-muted-foreground">
+        Loading spawn approvals…
+      </p>
+    );
   if (feed.kind === "error")
-    return <p role="alert" className="text-2xs text-destructive">Spawn approvals unavailable: {feed.message}</p>;
-  const requests = feed.requests.filter((request) =>
-    seatId === null || request.destinationSeatId === seatId ||
-    (request.requestedBy.kind === "verified-seat" && request.requestedBy.seatId === seatId));
+    return (
+      <p role="alert" className="text-2xs text-destructive">
+        Spawn approvals unavailable: {feed.message}
+      </p>
+    );
+  const requests = feed.requests.filter(
+    (request) =>
+      seatId === null ||
+      request.destinationSeatId === seatId ||
+      (request.requestedBy.kind === "verified-seat" && request.requestedBy.seatId === seatId),
+  );
   if (requests.length === 0)
-    return <p className="text-2xs text-muted-foreground italic">No spawn approval requests{seatId ? " for this seat" : ""}.</p>;
+    return compact ? null : (
+      <p className="text-2xs text-muted-foreground italic">
+        No spawn approval requests{seatId ? " for this seat" : ""}.
+      </p>
+    );
   const pending = requests.filter((request) => request.status === "pending_approval");
   return (
     <div className="space-y-2">
-      {pending.length > 0 && <p className="text-2xs font-semibold text-warning">{pending.length} waiting for a decision</p>}
+      {pending.length > 0 && (
+        <p className="text-2xs font-semibold text-warning">
+          {pending.length} waiting for a decision
+        </p>
+      )}
       {requests.map((request) => (
-        <SpawnApprovalCard key={request.id} request={request} seatName={seatName} now={now} {...(onReview ? { onReview } : {})} />
+        <SpawnApprovalCard
+          key={request.id}
+          request={request}
+          seatName={seatName}
+          now={now}
+          {...(onReview ? { onReview } : {})}
+        />
       ))}
     </div>
   );
 }
 
-
 /** Never infer a verified source environment, caller seat, destination or exemption
  * from a model string. All data comes from the canonical authority projection. */
-export function canonicalApprovalToView(item: DesktopOpenRigNativeApproval): SpawnApprovalRequestView {
+export function canonicalApprovalToView(
+  item: DesktopOpenRigNativeApproval,
+): SpawnApprovalRequestView {
   return {
     id: item.id,
     operationId: item.operationId,
     descriptorSha256: item.descriptorSha256,
     stateVersion: item.stateVersion,
     status: item.status,
-    requestedBy: item.requester.verified && item.requester.callerSeatId
-      ? { kind: "verified-seat", seatId: item.requester.callerSeatId }
-      : { kind: "unknown" },
+    requestedBy:
+      item.requester.verified && item.requester.callerSeatId
+        ? { kind: "verified-seat", seatId: item.requester.callerSeatId }
+        : { kind: "unknown" },
     sourceThread: null,
     verifiedSourceThreadId: item.requester.verified ? item.requester.sourceThreadId : null,
     destinationSeatId: null,
@@ -259,9 +360,12 @@ export function canonicalApprovalToView(item: DesktopOpenRigNativeApproval): Spa
 export function OpenRigCanonicalSpawnApprovals({
   seatId,
   seatName,
+  compact = false,
 }: {
   seatId: string | null;
   seatName: (seatId: string) => string;
+  /** Human Inbox mode: no read-time/refresh chrome, and no region while there is nothing to show. */
+  compact?: boolean;
 }) {
   const [feed, setFeed] = useState<SpawnApprovalFeed>({ kind: "loading" });
   const [recent, setRecent] = useState<readonly DesktopOpenRigNativeApproval[]>([]);
@@ -281,16 +385,30 @@ export function OpenRigCanonicalSpawnApprovals({
       const page = await load();
       // A pending page is a read, not a human approval, reservation or proof
       // that native creation is now enforced in the running T3 executable.
-      if (page.source !== "openrig-canonical-sqlite" || page.address !== "human@kernel" ||
-          page.decisionWriteAvailable !== false || page.executionReserveAvailable !== false ||
-          page.items.length > 50 || page.count < page.items.length) {
+      if (
+        page.source !== "openrig-canonical-sqlite" ||
+        page.address !== "human@kernel" ||
+        page.decisionWriteAvailable !== false ||
+        page.executionReserveAvailable !== false ||
+        page.items.length > 50 ||
+        page.count < page.items.length
+      ) {
         throw new Error("Inconsistent canonical approval read; no decision was requested.");
       }
       const ids = new Set(page.items.map((item) => item.operationId));
       const get = bridge.getOpenRigNativeApproval;
-      const settled = get ? await Promise.all(recent.slice(-8).filter((item) => !ids.has(item.operationId))
-        .map(async (item) => get(item.operationId).catch(() => null))) : [];
-      const items = [...page.items, ...settled.filter((item): item is DesktopOpenRigNativeApproval => item !== null)];
+      const settled = get
+        ? await Promise.all(
+            recent
+              .slice(-8)
+              .filter((item) => !ids.has(item.operationId))
+              .map(async (item) => get(item.operationId).catch(() => null)),
+          )
+        : [];
+      const items = [
+        ...page.items,
+        ...settled.filter((item): item is DesktopOpenRigNativeApproval => item !== null),
+      ];
       setFeed({ kind: "ready", requests: items.map(canonicalApprovalToView) });
       setTruncated(page.truncated);
       setLastRead(new Date().toISOString());
@@ -303,7 +421,9 @@ export function OpenRigCanonicalSpawnApprovals({
 
   useEffect(() => {
     void Promise.resolve().then(refresh);
-    const timer = window.setInterval(() => { void refresh(); }, 45_000);
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 45_000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
@@ -314,26 +434,52 @@ export function OpenRigCanonicalSpawnApprovals({
     const result = await request(operationId);
     if (result.item) {
       if (result.item.operationId !== operationId)
-        throw new Error("Canonical review returned the wrong operation. Do not retry automatically.");
+        throw new Error(
+          "Canonical review returned the wrong operation. Do not retry automatically.",
+        );
       setRecent((prior) =>
-        [result.item!, ...prior.filter((item) => item.operationId !== operationId)].slice(0, 8));
+        [result.item!, ...prior.filter((item) => item.operationId !== operationId)].slice(0, 8),
+      );
     }
     return result;
   }, []);
 
+  // Empty feed: hide the whole region (a truncated page still has requests we can't show).
+  if (compact && feed.kind === "ready" && feed.requests.length === 0 && !truncated) return null;
+
   return (
-    <section aria-label="Canonical native spawn approvals" className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-2xs text-muted-foreground">
-          {lastRead ? `Canonical read ${formatTimestamp(lastRead)}` : "Canonical approval feed not yet confirmed"}
-          {truncated ? " · More requests exist beyond this page" : ""}
-        </span>
-        <Button size="xs" variant="outline" disabled={refreshing} onClick={() => void refresh()}>
-          {refreshing ? "Reading…" : "Refresh approvals"}
-        </Button>
-      </div>
-      <OpenRigSpawnApprovalPanel feed={feed} seatId={seatId} seatName={seatName}
-        {...(canReview ? { onReview: review } : {})} />
+    <section
+      aria-label="Canonical native spawn approvals"
+      className={
+        compact
+          ? "max-h-72 shrink-0 space-y-2 overflow-y-auto border-b border-border px-4 py-2"
+          : "space-y-2"
+      }
+    >
+      {compact ? (
+        truncated && (
+          <p className="text-2xs text-muted-foreground">More requests exist beyond this page</p>
+        )
+      ) : (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-2xs text-muted-foreground">
+            {lastRead
+              ? `Canonical read ${formatTimestamp(lastRead)}`
+              : "Canonical approval feed not yet confirmed"}
+            {truncated ? " · More requests exist beyond this page" : ""}
+          </span>
+          <Button size="xs" variant="outline" disabled={refreshing} onClick={() => void refresh()}>
+            {refreshing ? "Reading…" : "Refresh approvals"}
+          </Button>
+        </div>
+      )}
+      <OpenRigSpawnApprovalPanel
+        feed={feed}
+        seatId={seatId}
+        seatName={seatName}
+        compact={compact}
+        {...(canReview ? { onReview: review } : {})}
+      />
     </section>
   );
 }

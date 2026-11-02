@@ -7,6 +7,10 @@ import { isProviderAvailable, type ModelSelection, type ServerProvider } from "@
  * defaults, project enablement, caller identity, first-message and workspace
  * receipts, and obtain an ONLINE single-use reservation before side effects.
  */
+/** Native child creation remains held until an authenticated one-use approval is consumed. */
+export const NATIVE_SPAWN_APPROVAL_HOLD_CONSTRAINT =
+  "Native creation requires authenticated single-use approval/reservation before dispatch.";
+
 export type NativeSpawnCatalogAssessment =
   | "unverified-target"
   | "human-approval-required"

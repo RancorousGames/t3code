@@ -49,6 +49,7 @@ import {
   type FilesystemBrowseResult,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
+  CHATGPT_WORKER_VISIBILITY_MENU_ACTION,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
@@ -92,6 +93,8 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useLocalStorage } from "../hooks/useLocalStorage";
+import { chatGPTWorkerVisibilityStorageKey } from "../chatGPTWorkerVisibility";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import {
@@ -260,6 +263,9 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
+import { deriveChatGPTSession } from "../chatGPTSessionModel";
+import { availableChatGPTSessionActions, runChatGPTSessionAction } from "../chatGPTSessionActions";
+import { runChatGPTSessionControl } from "../chatGPTSessionControl";
 import { ChatGPTSessionIcon } from "./sidebar/ChatGPTSessionIcon";
 import { threadRecentUse } from "@t3tools/shared/paletteSearch";
 
@@ -460,7 +466,12 @@ function OpenCommandPaletteDialog(props: {
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const { createSession: createChatGPTSession } = useChatGPTBrowserSessions(primaryEnvironmentId);
+  const {
+    createSession: createChatGPTSession,
+    sessions: chatGPTBrowserSessions,
+    setSessionSnooze,
+    setSessionHidden,
+  } = useChatGPTBrowserSessions(primaryEnvironmentId);
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -1241,6 +1252,87 @@ function OpenCommandPaletteDialog(props: {
         params: { browserSessionId: createChatGPTSession(undefined, { explicitlyUserCreated: true }) },
       }),
     });
+  }
+
+  if (window.desktopBridge && primaryEnvironmentId) {
+    actionItems.push({
+      kind: "action",
+      value: "action:chatgpt-dashboard",
+      searchTerms: ["chatgpt", "sessions", "dashboard", "overview", "working"],
+      title: "Open ChatGPT sessions dashboard",
+      icon: <ChatGPTSessionIcon />,
+      run: () => navigate({ to: "/browser" }),
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:chatgpt-transcript-search",
+      searchTerms: ["chatgpt", "conversation", "transcript", "search", "history"],
+      title: "Search ChatGPT conversations",
+      icon: <ChatGPTSessionIcon />,
+      run: () => {
+        window.sessionStorage.setItem("t3code:chatgpt:dashboard-search:v1", "");
+        return navigate({ to: "/browser" });
+      },
+    });
+    for (const session of chatGPTBrowserSessions) {
+      const context = {
+        model: deriveChatGPTSession(
+          {
+            ...(session.hidden !== undefined ? { hidden: session.hidden } : {}),
+            ...(session.snoozedUntil !== undefined ? { snoozedUntil: session.snoozedUntil } : {}),
+          },
+          Date.now(),
+        ),
+        canReload: true,
+      };
+      for (const action of availableChatGPTSessionActions(context)) {
+        if (!["open", "unsnooze", "snooze", "hide", "unhide", "reload"].includes(action.id)) continue;
+        actionItems.push({
+          kind: "action",
+          value: `action:chatgpt-session:${session.id}:${action.id}`,
+          title: `${action.label(context)}: ${session.title}`,
+          searchTerms: ["chatgpt", "session", session.title, session.id, action.id],
+          icon: <ChatGPTSessionIcon />,
+          run: async () => {
+            const result = await runChatGPTSessionAction(
+              action.id,
+              session.id,
+              context,
+              async (id, sessionId) => {
+                if (id === "unsnooze") {
+                  setSessionSnooze([sessionId], null);
+                  return { ok: true };
+                }
+                if (id === "open") {
+                  await navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: sessionId } });
+                  return { ok: true };
+                }
+                if (id === "snooze") {
+                  setSessionSnooze([sessionId], Date.now() + 60 * 60_000);
+                  return { ok: true };
+                }
+                if (id === "hide" || id === "unhide") {
+                  setSessionHidden(sessionId, id === "hide");
+                  return { ok: true };
+                }
+                if (id === "reload") {
+                  await runChatGPTSessionControl({
+                    environmentId: primaryEnvironmentId,
+                    sessions: chatGPTBrowserSessions,
+                    action: "reload",
+                    sessionId,
+                    force: false,
+                  });
+                  return { ok: true };
+                }
+                return { ok: false, message: "Action is not available in the command palette." };
+              },
+            );
+            if (!result.ok) throw new Error(result.message ?? "ChatGPT session action failed.");
+          },
+        });
+      }
+    }
   }
 
   if (projects.length > 0) {

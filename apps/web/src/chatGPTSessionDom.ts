@@ -9,6 +9,8 @@ export interface PageInspection {
   activity: "working" | "idle" | "unknown";
   stuck: boolean;
   connectionInterrupted: boolean;
+  /** Positive, visible hard-limit notice (not text quoted in a chat turn). */
+  conversationFull: boolean;
   /** Sidebar activity probe output; shares exactly its guest-side rules. */
   uiActivity?: string;
   totalTurns: number;
@@ -24,7 +26,12 @@ export interface PageInspection {
   assistantHasContent: boolean;
   messages: PageMessage[];
   url: string;
-  diagnostics?: { roleElements: number; turnElements: number; textLength: number; title: string };
+  diagnostics?: {
+    roleElements: number; turnElements: number; textLength: number; title: string;
+    markerInPage?: boolean; markerInAssistantUnits?: boolean; assistantUnitCount?: number;
+    markerInScripts?: boolean; markerInUserUnits?: boolean; markerInToolPanels?: boolean;
+    markerInAssistantMarkdown?: boolean;
+  };
 }
 
 // Serialized into the authenticated ChatGPT guest, never executed in the T3 host.
@@ -41,6 +48,7 @@ export function inspectChatGPTPage(input: {
       activity: "unknown",
       stuck: false,
       connectionInterrupted: false,
+      conversationFull: false,
       totalTurns: 0,
       lastRole: null,
       lastText: "",
@@ -94,6 +102,13 @@ export function inspectChatGPTPage(input: {
       if (connectionInterrupted) break;
     }
   }
+  // A full conversation is terminal for this ChatGPT conversation, unlike
+  // a temporarily unavailable composer. Ignore quoted code and message bodies.
+  const conversationFull = [...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]')]
+    .some((el) => visible(el) &&
+      !el.closest('[data-message-author-role],pre,code,blockquote') &&
+      /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i.test(
+        (el.textContent ?? '').slice(0, 400)));
   // Evaluating the load-failure probe is delegated to T3's existing detector.
   const stuck = false;
   // ChatGPT changes its message wrappers periodically. Prefer explicit roles,
@@ -170,6 +185,7 @@ export function inspectChatGPTPage(input: {
     activity,
     stuck,
     connectionInterrupted,
+    conversationFull,
     totalTurns,
     lastRole: last?.role ?? null,
     lastText: latestText.slice(-400),
@@ -198,6 +214,22 @@ export function inspectChatGPTPage(input: {
           turnElements: turnNodes.length || contentUnits.length,
           textLength: document.body?.textContent?.length ?? 0,
           title: document.title,
+          markerInPage: (document.body?.textContent ?? "").includes("[T3_ID:"),
+          markerInAssistantUnits: contentUnits.some((node) =>
+            node.getAttribute("data-content-search-unit-key")?.endsWith(":assistant") &&
+            (node.textContent ?? "").includes("[T3_ID:")),
+          assistantUnitCount: contentUnits.filter((node) =>
+            node.getAttribute("data-content-search-unit-key")?.endsWith(":assistant")).length,
+          markerInScripts: [...document.querySelectorAll("script")].some((node) =>
+            (node.textContent ?? "").includes("[T3_ID:")),
+          markerInUserUnits: contentUnits.some((node) =>
+            node.getAttribute("data-content-search-unit-key")?.endsWith(":user") &&
+            (node.textContent ?? "").includes("[T3_ID:")),
+          markerInToolPanels: [...document.querySelectorAll('[data-testid*="tool"]')].some((node) =>
+            (node.textContent ?? "").includes("[T3_ID:")),
+          markerInAssistantMarkdown: [...document.querySelectorAll(
+            '[data-markdown-text-style="assistant-message"],.markdown,.prose',
+          )].some((node) => (node.textContent ?? "").includes("[T3_ID:")),
         }
       : undefined,
   };

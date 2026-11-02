@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ChatGPTSidebarGroup } from "./chatGPTSessionGrouping";
-import { searchChatGPTSessionGroups } from "./chatGPTSessionSearch";
+import { searchChatGPTSessionCatalog, searchChatGPTSessionGroups } from "./chatGPTSessionSearch";
 
 const groups: ChatGPTSidebarGroup[] = [
   {
@@ -60,5 +60,47 @@ describe("ChatGPT sidebar session search", () => {
 
   it("produces no groups for a miss", () => {
     expect(searchChatGPTSessionGroups(groups, "nothing matches")).toEqual([]);
+  });
+});
+
+describe("full ChatGPT session catalog search", () => {
+  const catalog = [
+    { id: "regular", title: "Main session" },
+    { id: "hidden-t3-guid", title: "Hidden one", hidden: true,
+      bootstrapIdentity: { state: "registered" as const, publicId: "public-session-guid",
+        conversationId: "chatgpt-conversation-guid" } },
+    { id: "snooze-guid", title: "Snoozed one", snoozedUntil: 2000 },
+    { id: "worker-guid", title: "Hidden worker" },
+  ];
+
+  it("searches hidden and snoozed and filtered worker records without showing unrelated sessions", () => {
+    const results = searchChatGPTSessionCatalog({
+      groups: [], sessions: catalog, query: "one", now: 1000,
+      hiddenWorkerIds: new Set(["worker-guid"]),
+    });
+    expect(results.map((group) => [group.title, group.rows.map(({ session }) => session.id)])).toEqual([
+      ["Hidden sessions", ["hidden-t3-guid"]],
+      ["Snoozed sessions", ["snooze-guid"]],
+    ]);
+    const workerResults = searchChatGPTSessionCatalog({
+      groups: [], sessions: catalog, query: "worker-guid", now: 1000,
+      hiddenWorkerIds: new Set(["worker-guid"]),
+    });
+    expect(workerResults[0]?.title).toBe("Hidden workers");
+  });
+
+  it("finds both T3 public IDs and ChatGPT conversation IDs and avoids duplicate visible hits", () => {
+    for (const query of ["hidden-t3-guid", "public-session-guid", "chatgpt-conversation-guid"]) {
+      expect(searchChatGPTSessionCatalog({
+        groups: [], sessions: catalog, query, now: 1000,
+      })[0]?.rows.map(({ session }) => session.id)).toEqual(["hidden-t3-guid"]);
+    }
+    const groupsWithRegular: ChatGPTSidebarGroup[] = [{
+      key: "main", title: "Main",
+      rows: [{ session: catalog[0]!, depth: 0, childCount: 0 }],
+    }];
+    expect(searchChatGPTSessionCatalog({
+      groups: groupsWithRegular, sessions: catalog, query: "main", now: 1000,
+    }).flatMap((group) => group.rows).map(({ session }) => session.id)).toEqual(["regular"]);
   });
 });

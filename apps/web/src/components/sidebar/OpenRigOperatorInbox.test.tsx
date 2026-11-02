@@ -81,7 +81,12 @@ beforeEach(() => {
   speak.mockResolvedValue();
   storage.clear();
   vi.stubGlobal("window", {
-    desktopBridge: { readOpenRigOperatorInbox: read, speakOpenRigPreview: speak },
+    desktopBridge: {
+      readOpenRigOperatorInbox: read,
+      speakOpenRigPreview: speak,
+      // OpenRigFloatingWindow subscribes to guest menu actions; inert stub, returns unsubscribe.
+      onMenuAction: vi.fn(() => () => {}),
+    },
     setInterval: globalThis.setInterval,
     clearInterval: globalThis.clearInterval,
     setTimeout: globalThis.setTimeout,
@@ -100,6 +105,7 @@ beforeEach(() => {
   vi.stubGlobal("document", {
     visibilityState: "visible",
     body: { nodeType: 1 },
+    getElementById: () => null,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   });
@@ -169,30 +175,103 @@ describe("OpenRig floating desktop inbox", () => {
     read.mockResolvedValue(sample);
     await mount();
     await click("OpenRig human inbox");
-    expect(rendered!.root.findByProps({ "aria-label": "Human Inbox Received tab" }).props["aria-selected"]).toBe(true);
+    expect(
+      rendered!.root.findByProps({ "aria-label": "Human Inbox Received tab" }).props[
+        "aria-selected"
+      ],
+    ).toBe(true);
     await click("Filter OpenRig inbox: All");
     expect(output()).toContain("Build complete");
     await click("Human Inbox Send tab");
-    expect(rendered!.root.findByProps({ "aria-label": "Human Inbox Send tab" }).props["aria-selected"]).toBe(true);
+    expect(
+      rendered!.root.findByProps({ "aria-label": "Human Inbox Send tab" }).props["aria-selected"],
+    ).toBe(true);
     expect(output()).toContain("Human Inbox Send panel");
     await click("Human Inbox Received tab");
-    expect(rendered!.root.findByProps({ "aria-label": "Human Inbox Received tab" }).props["aria-selected"]).toBe(true);
+    expect(
+      rendered!.root.findByProps({ "aria-label": "Human Inbox Received tab" }).props[
+        "aria-selected"
+      ],
+    ).toBe(true);
     expect(output()).toContain("Build complete");
   });
+  it("renders compact rows: prominent subject, subtle sender beneath, 24h time, pending approvals visible", async () => {
+    read.mockResolvedValue(sample);
+    await mount();
+    await click("OpenRig human inbox");
+    // Real pending approval (human_gate) is visible in the default "For you" view.
+    const row = rendered!.root.findByProps({
+      "aria-label": "Open inbox message: Approval required",
+    });
+    // Document-order text of the row (ReactTestInstance has no toJSON).
+    const textOf = (node: unknown): string =>
+      typeof node === "string" ? node : (node as typeof row).children.map(textOf).join("|");
+    const rowText = textOf(row);
+    expect(rowText.indexOf("Approval required")).toBeGreaterThanOrEqual(0);
+    expect(rowText.indexOf("Approval required")).toBeLessThan(rowText.indexOf("reviewer@rig"));
+    const stamp = row.findByType("time");
+    expect(stamp.props.dateTime).toBe("2026-10-18T13:00:00.000Z");
+    expect(stamp.children.join("")).toMatch(/\b\d{2}:\d{2}\b/u);
+    expect(stamp.children.join("")).not.toMatch(/\b[AP]M\b/iu);
+    // Message copy lives in the per-row context menu, not in a footer.
+    await contextMessage("Approval required");
+    expect(output()).not.toContain("Copy inbox message");
+    expect(output()).not.toContain("Message options");
+  });
+
+  it("exposes Received/Send as accessible, keyboard-navigable tabs", async () => {
+    read.mockResolvedValue(sample);
+    await mount();
+    await click("OpenRig human inbox");
+    const tab = (name: string) =>
+      rendered!.root.findByProps({ "aria-label": `Human Inbox ${name} tab` });
+    expect(rendered!.root.findByProps({ role: "tablist" }).props["aria-label"]).toBe(
+      "Human Inbox tabs",
+    );
+    expect(tab("Received").props).toMatchObject({
+      role: "tab",
+      tabIndex: 0,
+      "aria-selected": true,
+    });
+    expect(tab("Send").props).toMatchObject({ role: "tab", tabIndex: -1, "aria-selected": false });
+    const press = async (name: string, key: string) =>
+      act(async () => tab(name).props.onKeyDown({ key, preventDefault: vi.fn() }));
+    await press("Received", "ArrowRight");
+    expect(tab("Send").props).toMatchObject({ tabIndex: 0, "aria-selected": true });
+    await press("Send", "Home");
+    expect(tab("Received").props["aria-selected"]).toBe(true);
+    await press("Received", "End");
+    expect(tab("Send").props["aria-selected"]).toBe(true);
+    await press("Send", "ArrowLeft");
+    expect(tab("Received").props["aria-selected"]).toBe(true);
+  });
+
   it("dismisses on an outside click, but keeps the inbox while its context menu is open", async () => {
     read.mockResolvedValue(sample);
     await mount();
     await click("OpenRig human inbox");
-    const pointerdown = vi.mocked(document.addEventListener).mock.calls
-      .filter(([name]) => name === "pointerdown").at(-1)?.[1] as ((event: PointerEvent) => void) | undefined;
+    const pointerdown = vi
+      .mocked(document.addEventListener)
+      .mock.calls.filter(([name]) => name === "pointerdown")
+      .at(-1)?.[1] as ((event: PointerEvent) => void) | undefined;
     expect(pointerdown).toBeDefined();
     await manageMessages();
-    await act(async () => pointerdown!({ button: 0, target: document.body } as unknown as PointerEvent));
-    expect(rendered!.root.findAllByProps({ "aria-label": "OpenRig human inbox window" })).toHaveLength(1);
+    await act(async () =>
+      pointerdown!({ button: 0, target: document.body } as unknown as PointerEvent),
+    );
+    expect(
+      rendered!.root.findAllByProps({ "aria-label": "OpenRig human inbox window" }),
+    ).toHaveLength(1);
     await click("Dismiss inbox menu");
-    await act(async () => pointerdown!({ button: 0, target: document.body } as unknown as PointerEvent));
-    expect(rendered!.root.findAllByProps({ "aria-label": "OpenRig human inbox window" })).toHaveLength(0);
-    expect(rendered!.root.findByProps({ "aria-label": "OpenRig human inbox" }).props["aria-expanded"]).toBe(false);
+    await act(async () =>
+      pointerdown!({ button: 0, target: document.body } as unknown as PointerEvent),
+    );
+    expect(
+      rendered!.root.findAllByProps({ "aria-label": "OpenRig human inbox window" }),
+    ).toHaveLength(0);
+    expect(
+      rendered!.root.findByProps({ "aria-label": "OpenRig human inbox" }).props["aria-expanded"],
+    ).toBe(false);
   });
   it("shows decisions and explicitly requested/exceptional updates, with diagnostic history grouped beneath its origin", async () => {
     const requested = {

@@ -1,5 +1,7 @@
 # Recovering embedded ChatGPT conversations
 
+Page refresh/reload **recovers the same conversation**. It must not be confused with [Agent Reboot](agent-reboot.md), which intentionally starts a new conversation for the same OpenRig-managed agent.
+
 T3 Code keeps the original browser session and ChatGPT conversation when ChatGPT is busy, throttled, or temporarily unavailable. It does not create a replacement conversation or hand over your work as an automatic recovery step.
 
 **Red (load failure):** T3 periodically checks the guest and refreshes only when the current page still identifies the original conversation and there is no running response or unsent draft. Retries use a fixed two-minute minimum per session, with at least 30 seconds between recovery actions globally. There is no retry limit or increasing wait.

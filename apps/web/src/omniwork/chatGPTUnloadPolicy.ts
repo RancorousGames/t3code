@@ -8,6 +8,28 @@ import { resolveStorage } from "../lib/storage";
 // This is per-device: only Electron hosts embedded ChatGPT guests to unload.
 export type OmniworkUnloadProfile = "never" | "conservative" | "balanced" | "aggressive";
 export const DEFAULT_OMNIWORK_UNLOAD_PROFILE: OmniworkUnloadProfile = "balanced";
+export const DEFAULT_OMNIWORK_RECENT_GUESTS: number | null = null;
+export const DEFAULT_CHATGPT_WARM_SESSION_COUNT = 8;
+export type LiveTaskStartKind = "chatgpt" | "claude" | "codex";
+export function normalizeLiveTaskStartKind(value: unknown): LiveTaskStartKind {
+  return value === "claude" || value === "codex" ? value : "chatgpt";
+}
+export const CHATGPT_WARM_SESSION_COUNTS = [0, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32] as const;
+
+export function normalizeChatGPTWarmSessionCount(value: unknown): number {
+  return typeof value === "number" &&
+    (CHATGPT_WARM_SESSION_COUNTS as readonly number[]).includes(value)
+    ? value
+    : DEFAULT_CHATGPT_WARM_SESSION_COUNT;
+}
+
+/** Keep ordinary recently used guests in memory, separately from protected sessions. */
+export function normalizeOmniworkRecentGuests(value: unknown): number | null {
+  if (value === null) return null;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 32
+    ? value
+    : DEFAULT_OMNIWORK_RECENT_GUESTS;
+}
 
 export function normalizeOmniworkUnloadProfile(value: unknown): OmniworkUnloadProfile {
   switch (value) {
@@ -43,6 +65,16 @@ export function resolveOmniworkUnloadPolicy(profile: unknown): OmniworkUnloadPol
 
 interface OmniworkPreferences {
   readonly unloadProfile: OmniworkUnloadProfile;
+  readonly recentGuests: number | null;
+  readonly loadAllChatGPTSessionsOnStartup: boolean;
+  readonly chatGPTWarmSessionCount: number;
+  readonly liveTaskStartKind: LiveTaskStartKind;
+  readonly showWorkersWithSelectedParent: boolean;
+  setShowWorkersWithSelectedParent: (enabled: boolean) => void;
+  setLiveTaskStartKind: (kind: LiveTaskStartKind) => void;
+  setLoadAllChatGPTSessionsOnStartup: (enabled: boolean) => void;
+  setChatGPTWarmSessionCount: (count: number) => void;
+  setRecentGuests: (count: number | null) => void;
   setUnloadProfile: (profile: OmniworkUnloadProfile) => void;
 }
 
@@ -50,6 +82,19 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
   persist(
     (set) => ({
       unloadProfile: DEFAULT_OMNIWORK_UNLOAD_PROFILE,
+      recentGuests: DEFAULT_OMNIWORK_RECENT_GUESTS,
+      loadAllChatGPTSessionsOnStartup: false,
+      chatGPTWarmSessionCount: DEFAULT_CHATGPT_WARM_SESSION_COUNT,
+      liveTaskStartKind: "chatgpt",
+      showWorkersWithSelectedParent: false,
+      setShowWorkersWithSelectedParent: (showWorkersWithSelectedParent) =>
+        set({ showWorkersWithSelectedParent }),
+      setLiveTaskStartKind: (liveTaskStartKind) => set({ liveTaskStartKind }),
+      setLoadAllChatGPTSessionsOnStartup: (loadAllChatGPTSessionsOnStartup) =>
+        set({ loadAllChatGPTSessionsOnStartup }),
+      setChatGPTWarmSessionCount: (count) =>
+        set({ chatGPTWarmSessionCount: normalizeChatGPTWarmSessionCount(count) }),
+      setRecentGuests: (recentGuests) => set({ recentGuests: normalizeOmniworkRecentGuests(recentGuests) }),
       setUnloadProfile: (unloadProfile) => set({ unloadProfile }),
     }),
     {
@@ -57,12 +102,32 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
-      partialize: (state) => ({ unloadProfile: state.unloadProfile }),
+      partialize: (state) => ({
+        unloadProfile: state.unloadProfile,
+        recentGuests: state.recentGuests,
+        loadAllChatGPTSessionsOnStartup: state.loadAllChatGPTSessionsOnStartup,
+        chatGPTWarmSessionCount: state.chatGPTWarmSessionCount,
+        liveTaskStartKind: state.liveTaskStartKind,
+        showWorkersWithSelectedParent: state.showWorkersWithSelectedParent,
+      }),
       merge: (saved, current) => ({
         ...current,
         unloadProfile: normalizeOmniworkUnloadProfile(
           (saved as Partial<OmniworkPreferences> | null)?.unloadProfile,
         ),
+        recentGuests: normalizeOmniworkRecentGuests(
+          (saved as Partial<OmniworkPreferences> | null)?.recentGuests,
+        ),
+        loadAllChatGPTSessionsOnStartup:
+          (saved as Partial<OmniworkPreferences> | null)?.loadAllChatGPTSessionsOnStartup === true,
+        chatGPTWarmSessionCount: normalizeChatGPTWarmSessionCount(
+          (saved as Partial<OmniworkPreferences> | null)?.chatGPTWarmSessionCount,
+        ),
+        liveTaskStartKind: normalizeLiveTaskStartKind(
+          (saved as Partial<OmniworkPreferences> | null)?.liveTaskStartKind,
+        ),
+        showWorkersWithSelectedParent:
+          (saved as Partial<OmniworkPreferences> | null)?.showWorkersWithSelectedParent === true,
       }),
     },
   ),

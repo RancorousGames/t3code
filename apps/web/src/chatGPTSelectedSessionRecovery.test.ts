@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./chatGPTBrowserSessions", () => ({
+  isChatGPTConversationUrl: (url: string | null) => /^https:\/\/chatgpt\.com\/c\/[0-9a-f-]{36}$/i.test(url ?? ""),
   readChatGPTBrowserSessions: () => [{ id: "blank-selected", title: "Selected session" }],
   chatGPTBrowserLastUrlKey: () => "saved:selected",
   chatGPTBrowserThreadRef: () => ({ threadId: "blank-selected" }),

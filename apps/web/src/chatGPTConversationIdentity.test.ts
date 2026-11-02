@@ -13,6 +13,7 @@ describe("ChatGPT conversation URL discovery", () => {
       "abc-123",
     );
     expect(chatGPTConversationIdFromUrl("https://chat.openai.com/c/abc-123")).toBe("abc-123");
+    expect(chatGPTConversationIdFromUrl("https://www.chatgpt.com/g/g-custom/c/ABC-123")).toBe("abc-123");
     expect(isChatGPTConversationUrl("https://chatgpt.com/c/abc-123")).toBe(true);
   });
 

@@ -23,18 +23,24 @@ export function beginBrowserSubmission(input: {
   environmentId: string;
   session: AgentProviderV1SessionRef;
   clientRequestId: string;
-  expectedConversation: string;
+  expectedConversation: string | null;
+  delivery?: string;
+  maxActiveWorkers?: number;
   text: string;
   observedAt: string;
 }):
   | { kind: "new" | "duplicate"; operation: AgentProviderV1Operation }
   | { kind: "conflict" | "capacity" } {
   const key = browserOperationKey(input.environmentId, input.session.id, input.clientRequestId);
-  const fingerprint = JSON.stringify([input.expectedConversation, input.text]);
+  const fingerprint = JSON.stringify([input.expectedConversation, input.text,
+    input.delivery ?? "WhenIdle", input.maxActiveWorkers ?? null]);
   const existing = browserKeys.get(key);
   if (existing) {
     if (existing.fingerprint !== fingerprint) return { kind: "conflict" };
-    return { kind: "duplicate", operation: browserOperations.get(existing.operationId)! };
+    const prior = browserOperations.get(existing.operationId)!;
+    return prior.receiptBasis?.startsWith("browser_enqueue_unconfirmed;")
+      ? { kind: "new", operation: prior }
+      : { kind: "duplicate", operation: prior };
   }
   // Never evict a tombstone while this process can still receive retries.
   if (browserKeys.size >= MAX_BROWSER_ATTEMPTS) return { kind: "capacity" };
@@ -53,7 +59,7 @@ export function beginBrowserSubmission(input: {
 
 export function recordBrowserSubmission(
   operationId: string,
-  state: "Delivered" | "Unknown",
+  state: "Delivered" | "Unknown" | "Queued",
   observedAt: string,
   receiptBasis: string,
 ): AgentProviderV1Operation {

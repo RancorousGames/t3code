@@ -1,7 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { CircleIcon, GlobeIcon, LoaderCircleIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { CircleIcon, GlobeIcon, LoaderCircleIcon, MoonIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useBrowserSurfaceStore } from "../../browser/browserSurfaceStore";
 import {
@@ -14,13 +14,26 @@ import {
   useChatGPTGuestHibernation,
 } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
+import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
+import { usePersistentChatGPTSidebarActivity } from "./usePersistentChatGPTSidebarActivity";
+import {
+  hasHostedBrowserGuestTab,
+  subscribeHostedBrowserGuestPresence,
+} from "../../browser/hostedBrowserGuestPresence";
 import { hasVerifiedEmptyChatGPTComposer } from "../../chatGPTDraftInspection";
+import { observeChatGPTIdleSnapshot } from "../../chatGPTIdleTransitions";
 import { inspectChatGPTBrowserHealth } from "../../chatGPTBrowserHealth";
-import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
+import { saveChatGPTPageSnapshot } from "../../chatGPTPageSnapshot";
+import { hasUncertainChatGPTSend, inspectBrowserSession } from "../../chatGPTSessionControl";
+import { ingestChatGPTTranscript } from "../../state/chatGPTTranscriptIndex";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserThreadRef,
   isChatGPTConversationUrl,
+  readChatGPTBrowserSessions,
+  wakeChatGPTBrowserSession,
+  useChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { readThreadPreviewState, useThreadPreviewState } from "../../previewStateStore";
@@ -33,34 +46,57 @@ import {
   type ChatGPTActivityState,
 } from "./chatGPTActivity";
 
-const POLL_INTERVAL_MS = 2_000;
-// Each probe runs inside the guest; dozens of background guests add up.
-const BACKGROUND_POLL_INTERVAL_MS = 6_000;
+// A guest preload pushes DOM-change hints at most once per second. The slow
+// probe heartbeat remains necessary to detect blank or hung renderers.
+const BROWSER_HEARTBEAT_MS = 30_000;
+const ACTIVE_HEARTBEAT_MS = 5_000;
+const UNHEALTHY_HEARTBEAT_MS = 10_000;
 const WORKING_HEARTBEAT_MS = 30_000;
 
 export function useChatGPTBrowserSessionActivity(
   environmentId: EnvironmentId,
   sessionId: string,
+  snoozed = false,
+  selected = false,
 ): {
   age: ChatGPTActivityAge;
   label: string;
   lastWorkingAt: number;
   recoveryProblem: ChatGPTRecoveryProblem | null;
+  /** Chromium host residency, distinct from obsolete Electron webview attachment. */
+  resident?: boolean | null;
 } {
   const threadRef = useMemo(
     () => chatGPTBrowserThreadRef(environmentId, sessionId),
     [environmentId, sessionId],
   );
   const preview = useThreadPreviewState(threadRef);
+  const { markHumanControlled } = useChatGPTBrowserSessions(environmentId);
+  const ingestTranscript = useAtomCommand(ingestChatGPTTranscript, { reportFailure: false });
   const tabId = preview.activeTabId;
   const runtimeTabId = tabId ? previewRuntimeTabId(threadRef, preview.serverEpoch, tabId) : null;
   const unloaded = useChatGPTGuestHibernation((state) =>
     runtimeTabId ? selectChatGPTGuestHibernated(state, runtimeTabId) : false,
   );
+  const attached = useSyncExternalStore(
+    subscribeHostedBrowserGuestPresence,
+    () => runtimeTabId !== null && hasHostedBrowserGuestTab(threadRef, runtimeTabId),
+    () => false,
+  );
   const [lastWorkingAt, setLastWorkingAt] = useLocalStorage(
     chatGPTBrowserLastWorkingKey(environmentId, sessionId),
     0,
     Schema.Number,
+  );
+  const isPersistentChromium = isPersistentChatGPTSessionOptedIn(sessionId);
+  const chromiumActivity = usePersistentChatGPTSidebarActivity(
+    sessionId,
+    environmentId,
+    isPersistentChromium,
+    snoozed,
+    lastWorkingAt,
+    setLastWorkingAt,
+    selected,
   );
   const lastWorkingAtRef = useRef(lastWorkingAt);
   useEffect(() => {
@@ -79,10 +115,71 @@ export function useChatGPTBrowserSessionActivity(
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let inspecting = false;
+    let queuedPush = false;
+    let indexTimer: ReturnType<typeof setTimeout> | undefined;
+    let idleConfirmTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastIndexedRevision = "";
+    let indexing = false;
+    let pendingIndex = false;
+    let latestIndexRevision = "";
+    const queueIndex = (revision: string) => {
+      latestIndexRevision = revision;
+      if (!revision || revision === lastIndexedRevision || disposed) return;
+      if (indexTimer !== undefined) clearTimeout(indexTimer);
+      // Do not index every streaming mutation. Wait for the content to settle,
+      // and read the currently mounted guest only; never wake an unloaded one.
+      indexTimer = setTimeout(() => {
+        indexTimer = undefined;
+        if (indexing) {
+          pendingIndex = true;
+          return;
+        }
+        indexing = true;
+        void (async () => {
+          const entry = readChatGPTBrowserSessions(environmentId).find((s) => s.id === sessionId);
+          if (!entry || disposed || isChatGPTGuestHibernated(runtimeTabId!)) return;
+          const read = await inspectBrowserSession(environmentId, entry, "end", 20, true, 24_000);
+          if (!read.url || !read.conversationId || !read.messages.length || disposed) return;
+          const turns = read.messages.map((message) => ({
+            conversationUrl: read.url!,
+            sessionId,
+            observedAt: read.statusObservedAt,
+            role: message.role,
+            turn: message.turn,
+            index: message.turn,
+            text: message.text,
+            ...(message.turnKey ? { turnKey: message.turnKey } : {}),
+            title: entry.title,
+            project: entry.project ?? null,
+          }));
+          // The server deliberately accepts at most 40 turns per RPC. Never
+          // acknowledge an indexed revision after a silently truncated batch.
+          for (let offset = 0; offset < turns.length; offset += 40) {
+            const batch = turns.slice(offset, offset + 40);
+            const reply = await ingestTranscript({ environmentId, input: { turns: batch } });
+            if (reply._tag !== "Success" || reply.value.processed !== batch.length) return;
+          }
+          lastIndexedRevision = revision;
+        })()
+          .catch((error: unknown) => {
+            console.warn("[ChatGPT transcript index] Ingest unavailable", error);
+          })
+          .finally(() => {
+            indexing = false;
+            if (pendingIndex && !disposed) {
+              pendingIndex = false;
+              queueIndex(latestIndexRevision);
+            }
+          });
+      }, 1_500);
+    };
     previousState.current = "unknown";
     missingComposerObservations.current = 0;
     lastHeartbeatAt.current = 0;
-    if (!runtimeTabId) return;
+    // Snooze blocks automatic loading, but an already-attached page can still
+    // receive external messages. Observe that existing guest without waking it.
+    if (isPersistentChromium || !runtimeTabId || (snoozed && !attached)) return;
     const firstObservedAt = Date.now();
 
     const isOnConversation = () => {
@@ -115,11 +212,69 @@ export function useChatGPTBrowserSessionActivity(
             // identifies these failures, while the old sidebar stayed grey.
             const isLoading = nav?._tag === "Loading" || loading;
             reason = isLoading ? "the page is loading" : reason;
-            const webview = Array.from(document.querySelectorAll("webview")).find(
-              (element) => element.dataset.previewTab === runtimeTabId,
-            );
+            const webview = Array.from(
+              document.querySelectorAll<HTMLElementTagNameMap["webview"]>(
+                'webview, [data-t3-chromium-guest="true"]',
+              ),
+            ).find((element) => element.dataset.previewTab === runtimeTabId);
             if (webview) {
-              const value = await inspectChatGPTBrowserHealth(webview);
+              // Guest preload confirms a new rendered user turn after a trusted
+              // composer submission. No sidebar visibility or cached URL needed.
+              const session = readChatGPTBrowserSessions(environmentId).find(
+                (entry) => entry.id === sessionId,
+              );
+              if (session && !session.humanControlled) {
+                try {
+                  const observed: unknown = await webview.executeJavaScript(
+                    `(() => {
+                      const root = document.documentElement;
+                      const verified = Number(root.getAttribute("data-t3code-human-chat-verified-at"));
+                      return Number.isFinite(verified) && verified > 0;
+                    })()`,
+                  );
+                  if (observed === true) markHumanControlled(sessionId);
+                } catch {
+                  // Guest reloads and navigation races should not affect status.
+                }
+              }
+              const value = await inspectChatGPTBrowserHealth(webview, (snapshot) => {
+                if (saveChatGPTPageSnapshot(environmentId, sessionId, snapshot))
+                  queueIndex(
+                    `${snapshot.conversationId}:${snapshot.contentHash}:${snapshot.turnCount}`,
+                  );
+                const currentSession = readChatGPTBrowserSessions(environmentId).find(
+                  (s) => s.id === sessionId,
+                );
+                const currentNav = tabId
+                  ? readThreadPreviewState(threadRef).sessions[tabId]?.navStatus
+                  : null;
+                if (
+                  !currentSession ||
+                  currentSession.hidden ||
+                  currentNav?._tag !== "Success" ||
+                  currentNav.url !== snapshot.url
+                )
+                  return;
+                const idle = observeChatGPTIdleSnapshot(
+                  environmentId,
+                  sessionId,
+                  currentSession.binding?.boundAt ?? null,
+                  snapshot,
+                );
+                // Confirm apparent completion with a second real guest snapshot,
+                // rather than treating a transient disappearance of Stop as idle.
+                if (idle.confirmAgain && idleConfirmTimer === undefined) {
+                  idleConfirmTimer = setTimeout(() => {
+                    idleConfirmTimer = undefined;
+                    if (!disposed)
+                      window.dispatchEvent(
+                        new CustomEvent("t3:chatgpt-page-push", {
+                          detail: { runtimeTabId },
+                        }),
+                      );
+                  }, 850);
+                }
+              });
               if (
                 value === "working" ||
                 value === "idle" ||
@@ -160,12 +315,35 @@ export function useChatGPTBrowserSessionActivity(
       } else missingComposerObservations.current = 0;
 
       const observedAt = Date.now();
+      const sessions = readChatGPTBrowserSessions(environmentId);
+      const session = sessions.find((entry) => entry.id === sessionId);
+      const managerIds = (() => {
+        try {
+          const raw = localStorage.getItem(
+            `t3code:chatgpt-browser:verified-manager-retention:${environmentId}`,
+          );
+          const parsed: unknown = raw ? JSON.parse(raw) : null;
+          const ids =
+            parsed && typeof parsed === "object" ? (parsed as { ids?: unknown }).ids : null;
+          return Array.isArray(ids) ? ids : [];
+        } catch {
+          return [];
+        }
+      })();
+      const longIdle =
+        !!session &&
+        (session.humanControlled === true ||
+          (!session.markedAsWorkerAt &&
+            (managerIds.includes(sessionId) ||
+              sessions.some((entry) => entry.parentSessionId === sessionId) ||
+              !session.parentSessionId)));
       const touchedAt = chatGPTGuestTouchedAt(runtimeTabId);
       if (visible) touchChatGPTGuest(runtimeTabId, observedAt);
       else if (
         !hibernated &&
         shouldHibernateChatGPTGuest({
           visible,
+          longIdle,
           onConversation: isOnConversation(),
           activity: next,
           lastWorkingAt: lastWorkingAtRef.current,
@@ -176,17 +354,21 @@ export function useChatGPTBrowserSessionActivity(
       ) {
         // Hibernation unmounts the guest and irreversibly loses in-memory
         // composer text. Unknown is NOT empty. Never wake or focus a guest.
-        const attached = Array.from(document.querySelectorAll("webview")).find(
-          (element) => element.dataset.previewTab === runtimeTabId,
-        );
+        const attached = Array.from(
+          document.querySelectorAll<HTMLElementTagNameMap["webview"]>(
+            'webview, [data-t3-chromium-guest="true"]',
+          ),
+        ).find((element) => element.dataset.previewTab === runtimeTabId);
         const latest = tabId ? readThreadPreviewState(threadRef).sessions[tabId]?.navStatus : null;
         const provenEmpty =
           attached &&
           latest?._tag === "Success" &&
           (await hasVerifiedEmptyChatGPTComposer(attached, latest.url)) &&
-          Array.from(document.querySelectorAll("webview")).some(
-            (element) => element === attached && element.dataset.previewTab === runtimeTabId,
-          );
+          Array.from(
+            document.querySelectorAll<HTMLElementTagNameMap["webview"]>(
+              'webview, [data-t3-chromium-guest="true"]',
+            ),
+          ).some((element) => element === attached && element.dataset.previewTab === runtimeTabId);
         // The DOM can change while the two composer checks are pending.
         // Revalidate the actual activity and route before releasing the renderer.
         let stillIdle = false;
@@ -234,23 +416,84 @@ export function useChatGPTBrowserSessionActivity(
         setLastWorkingAt(observedAt);
         setNow(observedAt);
       }
+      if (previousState.current !== next) {
+        if (snoozed && !hibernated && previousState.current !== "unknown" && next !== "unknown") {
+          wakeChatGPTBrowserSession(environmentId, sessionId);
+        }
+        window.dispatchEvent(
+          new CustomEvent("t3:chatgpt-recovery-state-changed", {
+            detail: { environmentId, sessionId },
+          }),
+        );
+      }
       previousState.current = next;
       setResult((current) =>
         current.tabId === runtimeTabId && current.activity === next && current.reason === reason
           ? current
           : { tabId: runtimeTabId, activity: next, reason },
       );
-      timer = setTimeout(
-        () => void inspect(),
-        visible ? POLL_INTERVAL_MS : BACKGROUND_POLL_INTERVAL_MS,
-      );
     };
-    void inspect();
+    const scheduleInspect = () => {
+      if (disposed) return;
+      if (inspecting) {
+        queuedPush = true;
+        return;
+      }
+      if (timer !== undefined) clearTimeout(timer);
+      inspecting = true;
+      void inspect().finally(() => {
+        inspecting = false;
+        if (disposed) return;
+        if (queuedPush) {
+          queuedPush = false;
+          timer = setTimeout(scheduleInspect, 0);
+        } else {
+          const delay =
+            missingComposerObservations.current === 1
+              ? 1_000
+              : previousState.current === "working" || previousState.current === "interrupted"
+                ? ACTIVE_HEARTBEAT_MS
+                : previousState.current === "invalid" || previousState.current === "unknown"
+                  ? UNHEALTHY_HEARTBEAT_MS
+                  : BROWSER_HEARTBEAT_MS;
+          timer = setTimeout(scheduleInspect, delay);
+        }
+      });
+    };
+    const onPagePush = (event: Event) => {
+      const detail = (event as CustomEvent<{ runtimeTabId?: string }>).detail;
+      if (detail?.runtimeTabId === runtimeTabId) scheduleInspect();
+    };
+    window.addEventListener("t3:chatgpt-page-push", onPagePush);
+    scheduleInspect();
     return () => {
       disposed = true;
+      window.removeEventListener("t3:chatgpt-page-push", onPagePush);
       if (timer !== undefined) clearTimeout(timer);
+      if (indexTimer !== undefined) clearTimeout(indexTimer);
+      if (idleConfirmTimer !== undefined) clearTimeout(idleConfirmTimer);
     };
-  }, [runtimeTabId, setLastWorkingAt, tabId, threadRef]);
+  }, [
+    isPersistentChromium,
+    runtimeTabId,
+    setLastWorkingAt,
+    snoozed,
+    attached,
+    tabId,
+    threadRef,
+    ingestTranscript,
+  ]);
+
+  // Browser presence can change without a ChatGPT DOM push (detach, reattach).
+  // Reinspect after attaching rather than waiting for an idle heartbeat.
+  useEffect(() => {
+    if (!isPersistentChromium && attached && runtimeTabId)
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId },
+        }),
+      );
+  }, [isPersistentChromium, attached, runtimeTabId]);
 
   // Reclassify recently finished sessions as old even when the browser
   // remains idle, without making every row repaint once per second.
@@ -263,31 +506,42 @@ export function useChatGPTBrowserSessionActivity(
   }, [lastWorkingAt]);
 
   const activity = result.tabId === runtimeTabId ? result.activity : "unknown";
-  const age = unloaded ? "unloaded" : chatGPTActivityAge(activity, lastWorkingAt, now);
+  // A recent answer or stale navigation overlay is not proof of a resident
+  // browser guest. Missing/hibernated guests must remain visibly unloaded.
+  const notResident = unloaded || !attached;
+  const age = snoozed
+    ? "snoozed"
+    : notResident
+      ? "unloaded"
+      : chatGPTActivityAge(activity, lastWorkingAt, now);
   const reason = result.tabId === runtimeTabId ? result.reason : null;
   const label =
-    age === "unloaded"
-      ? "ChatGPT is unloaded; open to reload the conversation"
-      : age === "working"
-        ? "ChatGPT is working"
-        : age === "recent"
-          ? "ChatGPT worked within the last 15 minutes"
-          : age === "inactive"
-            ? "ChatGPT is inactive; no work in the last 15 minutes"
-            : age === "interrupted"
-              ? "ChatGPT connection interrupted; waiting for the complete answer"
-              : age === "delivery-timeout"
-                ? "ChatGPT message delivery timed out; please try again"
-                : age === "invalid"
-                  ? reason === "browser-unresponsive"
-                    ? "ChatGPT browser is blank or unresponsive; waiting for an instance reset"
-                    : `ChatGPT page unavailable${reason ? `: ${reason}` : ""}`
-                  : `ChatGPT status unknown${reason ? `: ${reason}` : ""}`;
+    age === "snoozed"
+      ? "ChatGPT is snoozed; unsnooze to reload the conversation"
+      : age === "unloaded"
+        ? "ChatGPT is unloaded; open to reload the conversation"
+        : age === "working"
+          ? "ChatGPT is working"
+          : age === "recent"
+            ? "ChatGPT worked within the last 2 hours"
+            : age === "inactive"
+              ? "ChatGPT is inactive; no work in the last 2 hours"
+              : age === "interrupted"
+                ? "ChatGPT connection interrupted; waiting for the complete answer"
+                : age === "delivery-timeout"
+                  ? "ChatGPT message delivery timed out; please try again"
+                  : age === "invalid"
+                    ? reason === "browser-unresponsive"
+                      ? "ChatGPT browser is blank or unresponsive; waiting for an instance reset"
+                      : `ChatGPT page unavailable${reason ? `: ${reason}` : ""}`
+                    : reason === "ChatGPT settings open"
+                      ? "ChatGPT settings open"
+                      : `ChatGPT status unknown${reason ? `: ${reason}` : ""}`;
   const recoveryProblem =
-    !unloaded && result.tabId === runtimeTabId
+    !snoozed && !notResident && result.tabId === runtimeTabId
       ? chatGPTRecoveryProblem(activity === "invalid" ? `invalid: ${reason ?? ""}` : activity)
       : null;
-  return { age, label, lastWorkingAt, recoveryProblem };
+  return isPersistentChromium ? chromiumActivity : { age, label, lastWorkingAt, recoveryProblem };
 }
 
 /** Shared status glyph. Its containing button is also the drag handle. */
@@ -298,6 +552,7 @@ export function ChatGPTBrowserSessionActivityIcon({
   readonly age: ChatGPTActivityAge;
   readonly recovering?: boolean;
 }) {
+  if (age === "snoozed") return <MoonIcon aria-hidden className="size-4" />;
   if (recovering)
     return (
       <LoaderCircleIcon

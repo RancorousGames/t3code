@@ -32,8 +32,11 @@ export const installOpenRigIpcHandlers = Effect.fn("desktop.ipc.installOpenRigHa
     yield* ipc.handle(OpenRigIpc.reconcileOpenRigChatGPTManagedSession);
     yield* ipc.handle(OpenRigIpc.detachOpenRigManagedSession);
     yield* ipc.handle(OpenRigIpc.runOpenRigManagedBrowserLifecycle);
+    yield* ipc.handle(OpenRigIpc.runOpenRigSeatReboot);
     yield* ipc.handle(OpenRigIpc.bindOpenRigAgent);
     yield* ipc.handle(OpenRigIpc.unbindOpenRigAgent);
+    yield* ipc.handle(OpenRigIpc.retireOpenRigAgentSeat);
     yield* ipc.handle(OpenRigIpc.sendOpenRigAgentMessage);
+    yield* ipc.handle(OpenRigIpc.reconcileOpenRigHumanSendIpc);
   },
 );

@@ -63,6 +63,24 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.projectsMutate]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.agentProviderCall]: AuthOrchestrationReadScope,
+  [WS_METHODS.chatGptTranscriptIngest]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptTranscriptSearch]: AuthOrchestrationReadScope,
+  [WS_METHODS.chatGptTranscriptRead]: AuthOrchestrationReadScope,
+  // The desktop registry runs on the same WebSocket as native threads. Every
+  // registry method needs a scope: a missing entry aborts the entire session.
+  [WS_METHODS.chatGptRegistryList]: AuthOrchestrationReadScope,
+  [WS_METHODS.chatGptRegistrySubscribe]: AuthOrchestrationReadScope,
+  [WS_METHODS.chatGptRegistryGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.chatGptRegistryReceipt]: AuthOrchestrationReadScope,
+  [WS_METHODS.chatGptRegistryPatch]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryDriverRegister]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryDriverHeartbeat]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryDriverDisconnect]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistrySync]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryClose]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryAct]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryTake]: AuthOrchestrationOperateScope,
+  [WS_METHODS.chatGptRegistryFinish]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetNpmRelease]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
@@ -279,6 +297,7 @@ const requiredScopesForRpcCall = (
       "sessions.queue",
       "sessions.settings.get",
       "operations.get",
+      "sessions.create.get",
     ].includes(request.method)
       ? [AuthOrchestrationReadScope]
       : [AuthOrchestrationOperateScope];

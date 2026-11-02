@@ -21,13 +21,13 @@ export function WorkspaceDock(props: { readonly onNewTask: () => void }) {
         }}
       >
         <View className="flex-1 flex-row p-1" accessibilityRole="tablist">
-          {(["threads", "pullRequests"] as const).map((tab) => {
+          {(["threads", "pullRequests", "chatGPT"] as const).map((tab) => {
             const selected = workspace.state.selectedTab === tab;
             return (
               <Pressable
                 key={tab}
                 accessibilityRole="tab"
-                accessibilityLabel={tab === "threads" ? "Threads" : "Pull requests"}
+                accessibilityLabel={tab === "threads" ? "Threads" : tab === "pullRequests" ? "Pull requests" : "ChatGPT sessions"}
                 accessibilityState={{ selected }}
                 onPress={() => {
                   if (selected) return;
@@ -41,7 +41,7 @@ export function WorkspaceDock(props: { readonly onNewTask: () => void }) {
                 }
               >
                 <SymbolView
-                  name={tab === "threads" ? "text.bubble" : PullRequestGlyph.pullRequest}
+                  name={tab === "threads" ? "text.bubble" : tab === "pullRequests" ? PullRequestGlyph.pullRequest : tab === "chatGPT" ? "bubble.left.and.bubble.right" : "chart.bar.xaxis"}
                   size={23}
                   tintColorClassName={selected ? "accent-focus" : "accent-icon"}
                 />

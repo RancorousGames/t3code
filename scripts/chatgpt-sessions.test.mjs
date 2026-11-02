@@ -1,6 +1,7 @@
 import * as NodeTest from "node:test";
 import * as NodeAssert from "node:assert/strict";
 import { controlSessions, waitForChatGPTSessions } from "./chatgpt-sessions.mjs";
+import { computeChatGPTCapacityStatus } from "./chatgpt-capacity-status.mjs";
 
 const calls = [];
 const exchange = async (address, request) => {
@@ -8,6 +9,62 @@ const exchange = async (address, request) => {
   return { version: 1, requestId: request.requestId, ok: true, data: { sessions: [], total: 0 } };
 };
 const options = { exchange, home: ".t3" };
+
+NodeTest.test("Bootstrap title proposal is scoped to an exact UUID and never sends a guest message", async () => {
+  const id = "6d50bdf7-bc79-4a94-a938-657f65ee390e";
+  const title = "Improve Misc TaskBoard Implementation";
+  await controlSessions({ action: "bootstrap_title", sessionId: id, proposedTitle: title }, options);
+  const request = calls.at(-1).request;
+  NodeAssert.equal(request.type, "chatgpt.sessions");
+  NodeAssert.equal(request.action, "bootstrap_title");
+  NodeAssert.equal(request.sessionId, id);
+  NodeAssert.equal(request.proposedTitle, title);
+  NodeAssert.equal(request.message, undefined);
+  await NodeAssert.rejects(
+    controlSessions({ action: "bootstrap_title", sessionId: "not-a-uuid", proposedTitle: title }, options),
+    /UUID sessionId/,
+  );
+  await NodeAssert.rejects(
+    controlSessions({ action: "read", sessionId: id, proposedTitle: title }, options),
+    /proposedTitle only applies/,
+  );
+  await NodeAssert.rejects(
+    controlSessions({ action: "bootstrap_title", sessionId: id, proposedTitle: "[T3_ID:fake]" }, options),
+    /safe 3-80/,
+  );
+});
+
+NodeTest.test("T3 alone classifies soft capacity from current working sessions", async () => {
+  const now = Date.now();
+  const projection = computeChatGPTCapacityStatus({
+    total: 4,
+    sessions: [
+      { id: "working", activity: "working", status: "working", statusObservedAt: new Date(now).toISOString() },
+      { id: "idle", activity: "idle", status: "done_or_idle" },
+      { id: "failed", activity: "unknown", status: "pending_or_stalled" },
+      { id: "old", activity: "working", status: "working", statusObservedAt: new Date(now - 90_000).toISOString() },
+    ],
+  }, now);
+  NodeAssert.equal(projection.working, 1);
+  NodeAssert.deepEqual(projection.workingSessionIds, ["working"]);
+  NodeAssert.equal(projection.sessions.find(row => row.id === "failed").state, "error");
+  NodeAssert.equal(projection.complete, true);
+  const response = await controlSessions({ action: "capacity_status" }, {
+    ...options, exchange: async (address, request) => {
+      calls.push({ address, request });
+      return { ok: true, data: { sessions: [
+        { id: "busy", activity: "working", status: "working", statusObservedAt: new Date().toISOString() },
+        { id: "error", activity: "unknown", status: "failed" },
+      ], total: 2 } };
+    },
+  });
+  NodeAssert.equal(calls.at(-1).request.action, "list");
+  NodeAssert.equal(calls.at(-1).request.which, "all");
+  NodeAssert.equal(calls.at(-1).request.includeHidden, true);
+  NodeAssert.equal(response.working, 1);
+  await NodeAssert.rejects(controlSessions({ action: "capacity_status", sessionId: "fake" }, options),
+    /no session overrides/);
+});
 
 NodeTest.test("list sends a correlated request on the existing local named pipe", async () => {
   const response = await controlSessions({ action: "list" }, options);
@@ -18,6 +75,46 @@ NodeTest.test("list sends a correlated request on the existing local named pipe"
   NodeAssert.equal(call.request.action, "list");
   NodeAssert.equal(call.request.which, "visible");
   NodeAssert.match(call.address, /^\\\\\.\\pipe\\t3code-app-/);
+});
+
+NodeTest.test("reconcile_send forwards an exact observed checkpoint without sending", async () => {
+  const conversationId = "6add6211-2198-83eb-afcd-04971b2b0891";
+  await controlSessions(
+    {
+      action: "reconcile_send",
+      sessionId: "existing-session",
+      expectedConversationId: conversationId,
+      message: "Already visible user turn",
+    },
+    {
+      ...options,
+      exchange: async (address, request) => {
+        calls.push({ address, request });
+        return {
+          ok: true,
+          data: {
+            reconciled: true,
+            conversationGuardValidated: true,
+            verifiedConversationId: conversationId,
+          },
+        };
+      },
+    },
+  );
+  NodeAssert.equal(calls.at(-1).request.action, "reconcile_send");
+  NodeAssert.equal(calls.at(-1).request.expectedConversationId, conversationId);
+  NodeAssert.equal(calls.at(-1).request.message, "Already visible user turn");
+  await NodeAssert.rejects(
+    controlSessions(
+      {
+        action: "reconcile_send",
+        sessionId: "existing-session",
+        message: "Already visible user turn",
+      },
+      options,
+    ),
+    /expectedConversationId/,
+  );
 });
 
 NodeTest.test("list forwards all supported UI filters through the desktop socket", async () => {
@@ -42,38 +139,58 @@ NodeTest.test("list explicitly forwards hidden-session opt-in, even for which=al
   );
 });
 
-NodeTest.test("change_state closes only the exact ID and requires persisted acknowledgement", async () => {
-  const requestLog = [];
-  const exchange = async (_address, request) => {
-    requestLog.push(request);
-    return { ok: true, data: {
-      action: "change_state", state: request.state, sessionId: request.sessionId,
-      persisted: true, acknowledged: true, closed: request.state === "closed",
-    }};
-  };
-  for (const state of ["hidden", "unhidden", "closed"]) {
-    const result = await controlSessions(
-      { action: "change_state", sessionId: "exact-target", state }, { exchange, home: ".t3" },
+NodeTest.test(
+  "change_state closes only the exact ID and requires persisted acknowledgement",
+  async () => {
+    const requestLog = [];
+    const exchange = async (_address, request) => {
+      requestLog.push(request);
+      return {
+        ok: true,
+        data: {
+          action: "change_state",
+          state: request.state,
+          sessionId: request.sessionId,
+          persisted: true,
+          acknowledged: true,
+          closed: request.state === "closed",
+        },
+      };
+    };
+    for (const state of ["hidden", "unhidden", "closed"]) {
+      const result = await controlSessions(
+        { action: "change_state", sessionId: "exact-target", state },
+        { exchange, home: ".t3" },
+      );
+      NodeAssert.equal(result.state, state);
+      NodeAssert.equal(requestLog.at(-1).sessionId, "exact-target");
+    }
+    await NodeAssert.rejects(
+      controlSessions(
+        { action: "change_state", sessionId: "exact-target", state: "delete" },
+        options,
+      ),
+      /state=hidden/,
     );
-    NodeAssert.equal(result.state, state);
-    NodeAssert.equal(requestLog.at(-1).sessionId, "exact-target");
-  }
-  await NodeAssert.rejects(
-    controlSessions({ action: "change_state", sessionId: "exact-target", state: "delete" }, options),
-    /state=hidden/,
-  );
-  await NodeAssert.rejects(
-    controlSessions({ action: "change_state", state: "closed" }, options),
-    /sessionId is required/,
-  );
-  await NodeAssert.rejects(
-    controlSessions({ action: "change_state", sessionId: "exact-target", state: "closed" },
-      { exchange: async (_address, request) => ({
-        ok: true, data: { action: "change_state", state: "closed", sessionId: request.sessionId },
-      }), home: ".t3" }),
-    /not confirmed persisted/,
-  );
-});
+    await NodeAssert.rejects(
+      controlSessions({ action: "change_state", state: "closed" }, options),
+      /sessionId is required/,
+    );
+    await NodeAssert.rejects(
+      controlSessions(
+        { action: "change_state", sessionId: "exact-target", state: "closed" },
+        {
+          exchange: async (_address, request) => ({
+            ok: true,
+            data: { action: "change_state", state: "closed", sessionId: request.sessionId },
+          }),
+          home: ".t3",
+        },
+      ),
+      /not confirmed persisted/,
+    );
+  },
+);
 
 NodeTest.test("read forwards session selection and first/last count", async () => {
   await controlSessions({ action: "read", sessionId: "id-123", from: "start", count: 1 }, options);
@@ -96,21 +213,52 @@ NodeTest.test(
 );
 
 NodeTest.test(
-  "send forwards a message and optional caller-reported sender through the same local pipe",
+  "direct send wakes one cold recipient and persists the message instead of clicking its composer",
   async () => {
-    await controlSessions(
+    const conversation = "6ad4addb-8fc0-83eb-832c-47b147adffb2";
+    const seen = [];
+    const result = await controlSessions(
       {
         action: "send",
         sessionId: "id-123",
         message: "Continue implementing.",
         senderSessionId: "source-id",
       },
-      options,
+      {
+        home: ".t3",
+        exchange: async (_address, request) => {
+          seen.push(request);
+          if (request.action === "read")
+            return {
+              ok: true,
+              data: {
+                conversationGuardValidated: true,
+                verifiedConversationId: conversation,
+              },
+            };
+          return {
+            ok: true,
+            data: {
+              messageId: request.messageId,
+              sessionId: request.sessionId,
+              conversationId: conversation,
+              status: "queued",
+            },
+          };
+        },
+      },
     );
-    NodeAssert.equal(calls.at(-1).request.message, "Continue implementing.");
-    NodeAssert.equal(calls.at(-1).request.senderSessionId, "source-id");
-    await controlSessions({ action: "send", sessionId: "id-123", message: "Legacy" }, options);
-    NodeAssert.equal(calls.at(-1).request.senderSessionId, undefined);
+    NodeAssert.deepEqual(
+      seen.map((x) => x.action),
+      ["read", "enqueue"],
+    );
+    NodeAssert.equal(seen[0].wakeForSend, true);
+    NodeAssert.equal(seen[1].expectedConversationId, conversation);
+    NodeAssert.equal(seen[1].message, "Continue implementing.");
+    NodeAssert.equal(result.status, "queued");
+    NodeAssert.equal(result.messageSent, false);
+    NodeAssert.equal(result.delivery, "queued");
+    NodeAssert.equal(result.messageId, seen[1].messageId);
   },
 );
 
@@ -180,7 +328,10 @@ NodeTest.test(
               ...(request.action === "read"
                 ? { session: { id: request.sessionId } }
                 : {
-                    messageSent: true,
+                    messageId: request.messageId,
+                    sessionId: request.sessionId,
+                    conversationId,
+                    status: "queued",
                   }),
             },
           };
@@ -189,9 +340,10 @@ NodeTest.test(
     );
     NodeAssert.deepEqual(
       seen.map((call) => call.action),
-      ["read", "send"],
+      ["read", "enqueue"],
     );
-    NodeAssert.equal(result.messageSent, true);
+    NodeAssert.equal(result.messageSent, false);
+    NodeAssert.equal(result.status, "queued");
   },
 );
 
@@ -220,7 +372,7 @@ NodeTest.test(
             },
           },
         ),
-        /refusing send/,
+        /did not verify the exact mounted conversation|did not confirm expectedConversationId|rejected read/,
       );
       NodeAssert.deepEqual(seen, ["read"]);
     }
@@ -249,7 +401,7 @@ NodeTest.test(
           },
         },
       ),
-      /did not confirm expectedConversationId/,
+      /did not acknowledge the exact durable message/,
     );
     NodeAssert.equal(calls, 2);
   },
@@ -539,3 +691,136 @@ NodeTest.test("returns T3 failures unchanged", async () => {
     /Actively generating/,
   );
 });
+
+NodeTest.test(
+  "degraded manager rollover requires an explicit decision and leaves the old guest intact",
+  async () => {
+    const input = {
+      action: "rollover_finalize",
+      sessionId: "old-manager",
+      successorSessionId: "new-manager",
+      priorConversationId: "6adbcd07-8da8-83ed-b657-31fedcddd634",
+      successorConversationId: "6adc11ea-6620-83eb-98e3-2493fe2c71b9",
+      recoveryMode: true,
+      managerDecision: true,
+      reason: "User authorized refreshing an unavailable manager, preserving its guest",
+    };
+    const sent = [];
+    const exchange = async (_address, request) => {
+      sent.push(request);
+      return {
+        ok: true,
+        data: {
+          action: "rollover_finalize",
+          priorSessionId: request.sessionId,
+          successorSessionId: request.successorSessionId,
+          persisted: true,
+          acknowledged: true,
+          predecessorArchived: true,
+          guestReleased: false,
+        },
+      };
+    };
+    const result = await controlSessions(input, { exchange, home: ".t3" });
+    NodeAssert.equal(result.guestReleased, false);
+    NodeAssert.equal(sent[0].recoveryMode, true);
+    NodeAssert.equal(sent[0].managerDecision, true);
+    NodeAssert.match(sent[0].reason, /unavailable manager/);
+    await NodeAssert.rejects(
+      controlSessions({ ...input, managerDecision: false }, { exchange, home: ".t3" }),
+      /managerDecision/,
+    );
+    await NodeAssert.rejects(
+      controlSessions({ ...input, reason: "" }, { exchange, home: ".t3" }),
+      /reason/,
+    );
+  },
+);
+
+NodeTest.test(
+  "close_status never claims closure without exact persisted desktop evidence",
+  async () => {
+    const seen = [];
+    const expected = { action: "close_status", sessionId: "e94b2d0f-99cd-4bad-a7d8-c23c72d206de" };
+    const exec = (data) =>
+      controlSessions(expected, {
+        home: ".t3",
+        exchange: async (_address, request) => {
+          seen.push(request);
+          return { ok: true, data };
+        },
+      });
+    NodeAssert.equal(
+      (await exec({ ...expected, status: "unknown", persisted: false })).status,
+      "unknown",
+    );
+    NodeAssert.equal(
+      (await exec({ ...expected, status: "closed", persisted: true })).status,
+      "closed",
+    );
+    await NodeAssert.rejects(
+      exec({ ...expected, status: "closed", persisted: false }),
+      /verified close status/,
+    );
+    await NodeAssert.rejects(
+      exec({ ...expected, status: "closed", persisted: true, sessionId: "wrong" }),
+      /verified close status/,
+    );
+    NodeAssert.ok(
+      seen.every(
+        (request) => request.action === "close_status" && request.sessionId === expected.sessionId,
+      ),
+    );
+  },
+);
+
+NodeTest.test(
+  "self-close acceptance is an acknowledged intention, not false persisted closure",
+  async () => {
+    const id = "e94b2d0f-99cd-4bad-a7d8-c23c72d206de";
+    const response = await controlSessions(
+      { action: "change_state", sessionId: id, state: "closed" },
+      {
+        home: ".t3",
+        exchange: async (_address, request) => ({
+          ok: true,
+          data: {
+            action: "change_state",
+            sessionId: request.sessionId,
+            state: "closed",
+            closeAccepted: true,
+            acknowledged: true,
+            persisted: false,
+            closed: false,
+            status: "closing",
+          },
+        }),
+      },
+    );
+    NodeAssert.equal(response.closeAccepted, true);
+    NodeAssert.equal(response.persisted, false);
+    NodeAssert.equal(response.closed, false);
+    await NodeAssert.rejects(
+      controlSessions(
+        { action: "change_state", sessionId: id, state: "closed" },
+        {
+          home: ".t3",
+          exchange: async (_address, request) => ({
+            ok: true,
+            data: {
+              action: "change_state",
+              sessionId: request.sessionId,
+              state: "closed",
+              closeAccepted: true,
+              acknowledged: true,
+              persisted: false,
+              closed: true,
+              status: "closing",
+            },
+          }),
+        },
+      ),
+      /not confirmed persisted/,
+    );
+  },
+);

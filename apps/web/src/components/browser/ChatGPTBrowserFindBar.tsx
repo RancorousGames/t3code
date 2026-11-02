@@ -3,11 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
+import { consumeChatGPTIndexedFind, type ChatGPTIndexedFindRequest } from "../../chatGPTIndexedFind";
 import { useThreadPreviewState } from "../../previewStateStore";
 
 type FindableWebview = HTMLElementTagNameMap["webview"] & {
   findInPage: (text: string, options?: { forward?: boolean; findNext?: boolean }) => number;
   stopFindInPage: (action: "clearSelection" | "keepSelection" | "activateSelection") => void;
+  executeJavaScript?: (script: string) => Promise<unknown>;
 };
 
 type FindResult = Event & {
@@ -27,8 +29,16 @@ export function ChatGPTBrowserFindBar({ threadRef }: { readonly threadRef: Scope
   const runtimeTabId = preview.activeTabId
     ? previewRuntimeTabId(threadRef, preview.serverEpoch, preview.activeTabId)
     : null;
+  const pageLoading = preview.activeTabId ? preview.desktopByTabId[preview.activeTabId]?.loading === true : true;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [indexedTarget, setIndexedTarget] = useState<ChatGPTIndexedFindRequest | null>(null);
+  useEffect(() => {
+    const requested = consumeChatGPTIndexedFind(threadRef);
+    setQuery(requested?.term ?? "");
+    setIndexedTarget(requested);
+    setOpen(Boolean(requested));
+  }, [threadRef.environmentId, threadRef.threadId]);
   const [match, setMatch] = useState<{ active: number; total: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -110,6 +120,43 @@ export function ChatGPTBrowserFindBar({ threadRef }: { readonly threadRef: Scope
       setMatch({ active: 0, total: 0 });
     }
   }, [open, query, runtimeTabId]);
+
+  // An explicitly selected indexed hit has a turn ordinal, unlike a generic
+  // Ctrl+F query. Prefer scrolling to that exact rendered role/turn; if the
+  // guest virtualized it away, the ordinary Find bar remains as a fallback.
+  useEffect(() => {
+    if (!open || !indexedTarget || !runtimeTabId || pageLoading) return;
+    const guest = findWebview(runtimeTabId);
+    if (!guest?.executeJavaScript) return;
+    const { turnIndex, role, term } = indexedTarget;
+    const script = `(() => {
+      const roleNodes = [...document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]')];
+      const turnNodes = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')];
+      const contentUnits = [...document.querySelectorAll('[data-content-search-unit-key$=":user"],[data-content-search-unit-key$=":assistant"]')];
+      const nodes = roleNodes.length ? roleNodes : turnNodes.length ? turnNodes : contentUnits;
+      let turn = -1;
+      for (const node of nodes) {
+        const unit = node.getAttribute('data-content-search-unit-key');
+        const explicit = node.getAttribute('data-message-author-role') ??
+          node.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role') ??
+          (unit?.endsWith(':user') ? 'user' : unit?.endsWith(':assistant') ? 'assistant' : null);
+        const rowRole = explicit === 'user' || explicit === 'assistant' ? explicit :
+          node.querySelector('[data-testid="user-message"],.whitespace-pre-wrap') ? 'user' :
+          node.querySelector('.markdown,.prose,[data-testid="assistant-message"]') ? 'assistant' : null;
+        if (rowRole !== 'user' && rowRole !== 'assistant') continue;
+        if (rowRole === 'user' || turn < 0) turn++;
+        if (turn === ${turnIndex} && rowRole === ${JSON.stringify(role)} &&
+            (node.textContent || '').toLocaleLowerCase().includes(${JSON.stringify(term.toLocaleLowerCase())})) {
+          node.scrollIntoView({block:'center',behavior:'instant'});
+          return true;
+        }
+      }
+      return false;
+    })()`;
+    void guest.executeJavaScript(script).then((found) => {
+      if (found === true) setIndexedTarget(null);
+    }).catch(() => { /* DOM changed or guest detached; ordinary Find remains usable. */ });
+  }, [open, indexedTarget, runtimeTabId, pageLoading]);
 
   const step = (forward: boolean) => {
     if (!query) return;

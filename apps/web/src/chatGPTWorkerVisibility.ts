@@ -5,6 +5,11 @@ import { chatGPTParentIndex } from "./chatGPTSessionLineage";
 export const chatGPTWorkerVisibilityStorageKey = (environmentId: string | null) =>
   `t3code:chatgpt-browser:show-manager-workers:${environmentId ?? "unconnected"}`;
 
+/** A sidebar-only view filter: every session with a parent is a child, regardless of spawn source or role. */
+export function childChatGPTSessionIds(sessions: readonly BrowserSession[]): ReadonlySet<string> {
+  return new Set(sessions.filter((session) => !!session.parentSessionId).map((session) => session.id));
+}
+
 export const chatGPTVerifiedWorkerEvidenceKey = (environmentId: string | null) =>
   `t3code:chatgpt-browser:verified-worker-identity:v1:${environmentId ?? "unconnected"}`;
 
@@ -95,11 +100,24 @@ export function filterChatGPTWorkerGroups(
   workerIds: ReadonlySet<string>,
   showWorkers: boolean,
   persistentGroupKeys: ReadonlySet<string>,
+  selectedParentId?: string,
 ): ChatGPTSidebarGroup[] {
   if (showWorkers) return [...groups];
 
+  // Deep links can select a hidden worker while the global preference remains
+  // "Hide workers". Show only the worker currently selected by the route;
+  // moving away automatically removes that one-off visibility exception.
+  const selectedWorker = typeof window === "undefined"
+    ? null
+    : /^\/browser\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/|$)/i
+      .exec(window.location.pathname)?.[1] ?? null;
+
   return groups.flatMap((group) => {
-    const rows = group.rows.filter(({ session }) => !workerIds.has(session.id));
+    const rows = group.rows.filter(({ session }) =>
+      !workerIds.has(session.id) ||
+      (selectedWorker !== null && session.id === selectedWorker) ||
+      (selectedParentId !== undefined && session.parentSessionId === selectedParentId),
+    );
     if (!rows.length && (!group.key || !persistentGroupKeys.has(group.key))) return [];
 
     const ids = new Set(rows.map(({ session }) => session.id));

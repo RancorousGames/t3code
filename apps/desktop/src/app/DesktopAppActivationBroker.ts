@@ -15,6 +15,21 @@ interface PendingActivation {
 
 type RendererSender = (request: DesktopAppActivationRequest) => void;
 
+function recipientLane(request: DesktopAppActivationRequest): string | undefined {
+  return request.type === "chatgpt.sessions" &&
+    ["read", "send", "reconcile_send"].includes(request.action)
+    ? request.sessionId || undefined
+    : undefined;
+}
+
+// Read-only list and close receipts must remain reachable during slow guest cleanup.
+function independentRead(request: DesktopAppActivationRequest): boolean {
+  return (
+    request.type === "chatgpt.sessions" &&
+    (request.action === "list" || request.action === "close_status")
+  );
+}
+
 function failure(
   requestId: string,
   code: DesktopAppActivationFailure["code"],
@@ -34,6 +49,7 @@ export class DesktopAppActivationBroker {
   readonly #requestTimeoutMs: number;
   readonly #chatGPTRequestTimeoutMs: number;
   readonly #activate: () => void;
+  readonly #trace: (stage: string, requestId: string, detail?: string) => void;
   #renderer: RendererSender | null = null;
   #closed = false;
 
@@ -41,10 +57,12 @@ export class DesktopAppActivationBroker {
     readonly requestTimeoutMs: number;
     readonly chatGPTRequestTimeoutMs?: number;
     readonly activate: () => void;
+    readonly trace?: (stage: string, requestId: string, detail?: string) => void;
   }) {
     this.#requestTimeoutMs = input.requestTimeoutMs;
     this.#chatGPTRequestTimeoutMs = input.chatGPTRequestTimeoutMs ?? input.requestTimeoutMs;
     this.#activate = input.activate;
+    this.#trace = input.trace ?? (() => undefined);
   }
 
   request(request: DesktopAppActivationRequest): Promise<DesktopAppActivationResponse> {
@@ -74,9 +92,16 @@ export class DesktopAppActivationBroker {
       const timeout = setTimeout(
         () => {
           const pending = this.#pending.get(request.requestId);
+          if (request.type === "chatgpt.sessions")
+            this.#trace(
+              "broker-timeout",
+              request.requestId,
+              pending?.dispatched ? "dispatched" : "queued",
+            );
           const uncertain =
             pending?.dispatched &&
-            (request.type === "chatgpt.refresh" ||
+            (request.type === "chatgpt.reboot" ||
+              request.type === "chatgpt.refresh" ||
               request.type === "chatgpt.spawn" ||
               request.type === "chatgpt.sessions" ||
               request.type === "openrig.human_inbox");
@@ -90,7 +115,8 @@ export class DesktopAppActivationBroker {
             ),
           );
         },
-        request.type === "chatgpt.refresh" ||
+        request.type === "chatgpt.reboot" ||
+          request.type === "chatgpt.refresh" ||
           request.type === "chatgpt.spawn" ||
           request.type === "chatgpt.sessions" ||
           request.type === "openrig.human_inbox"
@@ -109,9 +135,10 @@ export class DesktopAppActivationBroker {
     // thread (or a different application). The already-running renderer can
     // create and drive ChatGPT's browser tab without activating the window.
     if (
+      request.type !== "chatgpt.reboot" &&
       request.type !== "chatgpt.refresh" &&
       request.type !== "chatgpt.spawn" &&
-      request.type !== "chatgpt.sessions" &&
+      (request.type !== "chatgpt.sessions" || request.action === "open") &&
       request.type !== "openrig.human_inbox"
     )
       this.#activate();
@@ -129,6 +156,7 @@ export class DesktopAppActivationBroker {
     for (const pending of this.#pending.values()) {
       if (
         pending.dispatched &&
+        pending.request.type !== "chatgpt.reboot" &&
         pending.request.type !== "chatgpt.refresh" &&
         pending.request.type !== "chatgpt.spawn" &&
         pending.request.type !== "chatgpt.sessions" &&
@@ -149,6 +177,11 @@ export class DesktopAppActivationBroker {
   }
 
   complete(response: DesktopAppActivationResponse): void {
+    this.#trace(
+      "broker-complete",
+      response.requestId,
+      this.#pending.has(response.requestId) ? "pending" : "late",
+    );
     this.#settle(response);
   }
 
@@ -184,27 +217,45 @@ export class DesktopAppActivationBroker {
   #flush(): void {
     const renderer = this.#renderer;
     if (renderer === null) return;
-    if ([...this.#pending.values()].some((pending) => pending.dispatched)) return;
-
-    for (const pending of this.#pending.values()) {
-      if (pending.dispatched) continue;
+    const active = [...this.#pending.values()].filter(
+      (pending) => pending.dispatched && !independentRead(pending.request),
+    );
+    const dispatch = (pending: PendingActivation): boolean => {
       try {
         pending.dispatched = true;
+        if (pending.request.type === "chatgpt.sessions")
+          this.#trace("broker-dispatch", pending.request.requestId, pending.request.action);
         renderer(pending.request);
+        return true;
       } catch {
-        // A synchronous bridge failure does not prove that a side-effecting
-        // request was not handed off. Only ordinary workspace requests may be
-        // retried on a newly registered renderer.
+        // Only read-only inspections and ordinary workspace requests are replay-safe.
         if (
-          pending.request.type !== "chatgpt.refresh" &&
-          pending.request.type !== "chatgpt.spawn" &&
-          pending.request.type !== "chatgpt.sessions" &&
-          pending.request.type !== "openrig.human_inbox"
+          independentRead(pending.request) ||
+          (pending.request.type !== "chatgpt.reboot" &&
+            pending.request.type !== "chatgpt.refresh" &&
+            pending.request.type !== "chatgpt.spawn" &&
+            pending.request.type !== "chatgpt.sessions" &&
+            pending.request.type !== "openrig.human_inbox")
         )
           pending.dispatched = false;
         this.#renderer = null;
+        return false;
       }
-      return;
+    };
+    // These reads are allowed past global mutations, including self-close.
+    for (const pending of this.#pending.values()) {
+      if (!pending.dispatched && independentRead(pending.request) && !dispatch(pending)) return;
+    }
+    if (active.some((pending) => !recipientLane(pending.request))) return;
+    for (const pending of this.#pending.values()) {
+      if (pending.dispatched) continue;
+      const lane = recipientLane(pending.request);
+      // Per-recipient work can overlap; global mutations remain a barrier.
+      if (!lane && active.length) return;
+      if (lane && active.some((entry) => recipientLane(entry.request) === lane)) continue;
+      if (!dispatch(pending)) return;
+      active.push(pending);
+      if (!lane) return;
     }
   }
 

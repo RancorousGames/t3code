@@ -83,6 +83,13 @@ describe("T3-0047 conservative unused manual new-chat eligibility", () => {
     expect(evaluate({ activeSessionId: manual.id })).toBe("protected-metadata");
   });
 
+  it("preserves human-adopted and sticky exemptions after sidebar selection or unsnooze", () => {
+    expect(evaluate({ session: { ...manual, humanControlled: true } })).toBe("protected-metadata");
+    expect(evaluate({ session: { ...manual, autoCloseExempt: true } })).toBe("protected-metadata");
+    // Merely clicking the row clears its temporary pin, not its empty-chat provenance.
+    expect(evaluate({ session: { ...manual, manualPinUntilClicked: false } })).toBe("eligible");
+  });
+
   it("fails closed on managers, parents, descendants, in-flight sends, recovery or navigation", () => {
     expect(evaluate({ managerIds: null })).toBe("manager-seat-unknown");
     expect(evaluate({ managerIds: new Set([manual.id]) })).toBe("protected-by-manager-seat");

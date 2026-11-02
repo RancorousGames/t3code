@@ -474,3 +474,19 @@ NodeTest.describe("authoritative T3 native provider discovery", () => {
     );
   });
 });
+
+NodeTest.it("forwards a bounded native run cursor without changing read recipient", async () => {
+  const reply = await controlNativeThreads(
+    { action: "read", threadId, count: 1, runAfterOrdinal: 41, expectedEnvironmentId: "t3-env" },
+    { home, exchange: mockExchange((request) => {
+      NodeAssert.equal(request.threadId, threadId);
+      NodeAssert.equal(request.runAfterOrdinal, 41);
+      NodeAssert.equal(request.action, "read");
+    }) },
+  );
+  NodeAssert.equal(reply.threadId, threadId);
+  await NodeAssert.rejects(() => controlNativeThreads(
+    { action: "read", threadId, runAfterOrdinal: -1 },
+    { home, exchange: () => { throw new Error("invalid input must never dispatch"); } },
+  ), /runAfterOrdinal/);
+});

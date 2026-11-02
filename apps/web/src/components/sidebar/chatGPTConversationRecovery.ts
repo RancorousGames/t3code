@@ -1,6 +1,7 @@
+import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 /**
  * Executed inside a ChatGPT webview. Only recognize the dedicated error panel:
- * a visible exact error string alongside a visible Retry button.
+ * a visible exact error string alongside the provider's Retry/Try again button.
  */
 export function hasChatGPTLoadFailure(): boolean {
   const message = "Could not load this ChatGPT conversation";
@@ -40,7 +41,7 @@ export function hasChatGPTLoadFailure(): boolean {
     let container: Element | null = element;
     for (let depth = 0; container && depth < 5 && container !== body; depth++) {
       for (const button of container.querySelectorAll('button, [role="button"]')) {
-        if (/^retry$/i.test(button.textContent?.trim() ?? "") && visible(button)) return true;
+        if (/^(?:retry|try again)$/i.test(button.textContent?.trim() ?? "") && visible(button)) return true;
       }
       container = container.parentElement;
     }
@@ -57,8 +58,13 @@ export type ChatGPTRecoveryProblem =
 
 export function chatGPTRecoveryProblem(activity: string): ChatGPTRecoveryProblem | null {
   if (activity === "invalid: browser-unresponsive") return "browser-unresponsive";
-  // Every red/invalid ChatGPT guest is a recovery candidate, not just the error panel.
-  if (activity.startsWith("invalid: ")) return "load-failure";
+  // Both the explicit ChatGPT load-error panel and a persistently missing
+  // composer can be repaired. The coordinator gives the ambiguous composer
+  // state its own sustained-failure grace before it may reload.
+  if (
+    activity === "invalid: Could not load this ChatGPT conversation" ||
+    activity === "invalid: the ChatGPT composer is unavailable"
+  ) return "load-failure";
   if (activity === "interrupted" || activity === "delivery-timeout") return activity;
   return null;
 }
@@ -66,13 +72,16 @@ export function chatGPTRecoveryProblem(activity: string): ChatGPTRecoveryProblem
 // Brief interruptions often reconnect by themselves. Avoid refreshing a live
 // generation immediately on the first transient orange status.
 export const RECOVERY_ORANGE_GRACE_MS = 10 * 60_000;
+export const RECOVERY_MISSING_COMPOSER_GRACE_MS = 60_000;
 export const RECOVERY_REFRESH_TIMEOUT_MS = 8_000;
-export const RECOVERY_SCAN_MS = 30_000;
-export const RECOVERY_GLOBAL_MS = 30_000;
+export const RECOVERY_SCAN_MS = 20_000;
+export const RECOVERY_GLOBAL_MS = 20_000;
 export const RECOVERY_PER_SESSION_MS = 2 * 60_000;
 
 export interface RecoveryHistory {
   readonly lastAttemptAt: number;
+  readonly redLastAttemptAt: number;
+  readonly orangeLastAttemptAt: number;
   readonly bySession: Readonly<Record<string, number>>;
 }
 export const recoveryKey = (environmentId: string) =>
@@ -145,6 +154,7 @@ export const orderedCandidates = (
   history: RecoveryHistory,
   mostRecentlyClicked: readonly string[] = [],
   deferredIds: ReadonlySet<string> = new Set(),
+  redIds: ReadonlySet<string> = new Set(),
 ) => {
   const rank = new Map(mostRecentlyClicked.map((id, index) => [id, index]));
   return [...ids].sort((a, b) => {
@@ -153,6 +163,11 @@ export const orderedCandidates = (
     const aDeferred = deferredIds.has(a) ? 1 : 0;
     const bDeferred = deferredIds.has(b) ? 1 : 0;
     if (aDeferred !== bDeferred) return aDeferred - bDeferred;
+    // Without a red per-session cooldown, recent clicks must not starve other red tabs.
+    if (redIds.has(a) && redIds.has(b)) {
+      const difference = (history.bySession[a] ?? 0) - (history.bySession[b] ?? 0);
+      if (difference !== 0) return difference;
+    }
     const aRank = rank.get(a);
     const bRank = rank.get(b);
     if (aRank !== undefined || bRank !== undefined) {
@@ -164,11 +179,9 @@ export const orderedCandidates = (
 
 export function readRecoveryHistory(environmentId: string): RecoveryHistory {
   try {
-    const parsed: unknown = JSON.parse(
-      window.localStorage.getItem(recoveryKey(environmentId)) ?? "null",
-    );
+    const parsed: unknown = getChatGPTSessionPersistedStore(environmentId).getState().recovery.history;
     if (!parsed || typeof parsed !== "object") throw new Error("Invalid history");
-    const data = parsed as { lastAttemptAt?: unknown; bySession?: unknown };
+    const data = parsed as { lastAttemptAt?: unknown; redLastAttemptAt?: unknown; orangeLastAttemptAt?: unknown; bySession?: unknown };
     const bySession: Record<string, number> = {};
     if (data.bySession && typeof data.bySession === "object") {
       for (const [id, value] of Object.entries(data.bySession)) {
@@ -177,10 +190,14 @@ export function readRecoveryHistory(environmentId: string): RecoveryHistory {
     }
     return {
       lastAttemptAt: typeof data.lastAttemptAt === "number" ? data.lastAttemptAt : 0,
+      redLastAttemptAt: typeof data.redLastAttemptAt === "number" ? data.redLastAttemptAt :
+        (typeof data.lastAttemptAt === "number" ? data.lastAttemptAt : 0),
+      orangeLastAttemptAt: typeof data.orangeLastAttemptAt === "number" ? data.orangeLastAttemptAt :
+        (typeof data.lastAttemptAt === "number" ? data.lastAttemptAt : 0),
       bySession,
     };
   } catch {
-    return { lastAttemptAt: 0, bySession: {} };
+    return { lastAttemptAt: 0, redLastAttemptAt: 0, orangeLastAttemptAt: 0, bySession: {} };
   }
 }
 
@@ -189,14 +206,17 @@ export function recordRecoveryAttempt(
   sessionId: string,
   now: number,
   ids: readonly string[],
+  lane: "red" | "orange" = "red",
 ): void {
   const previous = readRecoveryHistory(environmentId);
   const bySession = Object.fromEntries(
     ids.filter((id) => id in previous.bySession).map((id) => [id, previous.bySession[id]]),
   );
   bySession[sessionId] = now;
-  window.localStorage.setItem(
-    recoveryKey(environmentId),
-    JSON.stringify({ lastAttemptAt: now, bySession }),
-  );
+  const history = { lastAttemptAt: now, bySession,
+    redLastAttemptAt: lane === "red" ? now : previous.redLastAttemptAt,
+    orangeLastAttemptAt: lane === "orange" ? now : previous.orangeLastAttemptAt };
+  window.localStorage.setItem(recoveryKey(environmentId), JSON.stringify(history));
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  store.setState((previous) => ({ recovery: { ...previous.recovery, history } }));
 }

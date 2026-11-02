@@ -9,7 +9,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { deriveProjectIdentity } from "../../projectIdentity";
 import {
   CHATGPT_SESSION_BORDER_COLORS,
-  chatGPTSessionBorderRingClass,
+  chatGPTSessionHighlightAccentClass,
+  chatGPTSessionDisplayRole,
   chatGPTSidebarProjectTitles,
   isOpenRigManagerRole,
   verifiedManagerChatGPTTabIds,
@@ -73,7 +74,7 @@ const ledger = (
 ): DesktopOpenRigSeatSessions => ({
   version: 1,
   seatId,
-  primarySessionId: null,
+  primarySessionId: sessions[0]?.id ?? null,
   sessions: [...sessions],
   legacyBinding: null,
   legacyAutoImported: false,
@@ -86,16 +87,59 @@ const ledger = (
   },
 });
 
-describe("persistent ChatGPT session border palette", () => {
-  it("maps every user-selectable color to a stable Tailwind ring and clears unknown/None selections", () => {
+describe("persistent ChatGPT personal highlight palette", () => {
+  it("maps every user-selectable color to a slim left-accent class and clears unknown/None", () => {
     expect(CHATGPT_SESSION_BORDER_COLORS.map((entry) => entry.id)).toEqual([
-      "red", "orange", "yellow", "green", "blue", "purple", "pink",
+      "red",
+      "orange",
+      "yellow",
+      "green",
+      "blue",
+      "purple",
+      "pink",
     ]);
     for (const color of CHATGPT_SESSION_BORDER_COLORS) {
-      expect(chatGPTSessionBorderRingClass(color.id)).toBe(color.ring);
+      expect(chatGPTSessionHighlightAccentClass(color.id)).toBe(color.accent);
     }
-    expect(chatGPTSessionBorderRingClass(undefined)).toBeNull();
-    expect(chatGPTSessionBorderRingClass("unsupported-color")).toBeNull();
+    expect(chatGPTSessionHighlightAccentClass(undefined)).toBeNull();
+    expect(chatGPTSessionHighlightAccentClass("unsupported-color")).toBeNull();
+  });
+});
+
+describe("ChatGPT sidebar session identities", () => {
+  const backend = {
+    id: "worker-1",
+    title: "Worker",
+    creationOrigin: "backend" as const,
+    spawnRequestId: "spawn-1",
+  };
+
+  it("renders only backend-created, unadopted non-managers as workers", () => {
+    expect(chatGPTSessionDisplayRole(backend, false)).toBe("worker");
+    expect(chatGPTSessionDisplayRole({ ...backend, humanControlled: true }, false)).toBe("human");
+    expect(
+      chatGPTSessionDisplayRole(
+        { ...backend, creationOrigin: "manual", spawnRequestId: undefined },
+        false,
+      ),
+    ).toBe("human");
+    expect(chatGPTSessionDisplayRole({ id: "legacy", title: "Legacy" }, false)).toBe("human");
+  });
+
+  it("does not elevate an unverified local manager label to canonical authority", () => {
+    const binding = {
+      role: "manager" as const, seatId: "unverified", parentSessionId: null,
+      taskRef: null, boundAt: "2026-10-29T00:00:00Z", boundBy: "user" as const,
+    };
+    const spoofed = { ...backend, binding };
+    expect(chatGPTSessionDisplayRole(spoofed, false)).not.toBe("manager");
+    expect(chatGPTSessionDisplayRole(spoofed, true)).toBe("manager");
+  });
+  it("never demotes a manager even when its guest was adopted or highlighted", () => {
+    expect(chatGPTSessionDisplayRole(backend, true)).toBe("manager");
+    expect(
+      chatGPTSessionDisplayRole({ ...backend, humanControlled: true, borderColor: "blue" }, true),
+    ).toBe("manager");
   });
 });
 
@@ -111,6 +155,16 @@ describe("verified OpenRig manager browser markers", () => {
   it("recognizes only active managed ChatGPT attachments at authoritative RigSpec manager seats", () => {
     const matches = verifiedManagerChatGPTTabIds(
       topology,
+      [ledger("seat-manager", [session()])],
+      "env-1",
+    );
+    expect([...matches]).toEqual(["browser-session-1"]);
+  });
+
+  it("accepts the live OpenRig rigspec-and-managed-ledger topology source", () => {
+    const enriched = { ...topology, source: "openrig-rigspec-and-managed-ledger" as const };
+    const matches = verifiedManagerChatGPTTabIds(
+      enriched,
       [ledger("seat-manager", [session()])],
       "env-1",
     );
@@ -212,5 +266,26 @@ describe("stable per-project identity in ChatGPT sidebar", () => {
     expect(mapping.get("chat-1")).toBe("Wartribes");
     expect(mapping.get("chat-2")).toBe("Wartribes");
     expect(mapping.has("unknown")).toBe(false);
+  });
+});
+
+describe("recovered manager binding validation", () => {
+  it("rejects non-primary manager records", () => {
+    const result = verifiedManagerChatGPTTabIds(topology, [
+      { ...ledger("seat-manager", [session()]), primarySessionId: "different-session" },
+    ], "env-1");
+    expect([...result]).toEqual([]);
+  });
+
+  it("rejects competing seats claiming the same tab or conversation", () => {
+    for (const tabId of ["browser-session-1", "different-worker-tab"]) {
+      const result = verifiedManagerChatGPTTabIds(topology, [
+        ledger("seat-manager", [session()]),
+        ledger("seat-worker", [session({
+          seatId: "seat-worker", id: "worker-managed", attachedTabUuid: tabId,
+        })]),
+      ], "env-1");
+      expect([...result]).toEqual([]);
+    }
   });
 });

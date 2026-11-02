@@ -2,20 +2,71 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { useCallback } from "react";
+import { useStore } from "zustand";
+import {
+  filterClosedChatGPTSessions,
+  getChatGPTSessionPersistedStore,
+} from "./chatGPTSessionPersistedStore";
 
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
-import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
+import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
+import {
+  nextChatGPTBootstrapGeneration,
+  registerChatGPTBootstrapMarker,
+  type ChatGPTBootstrapObservation,
+} from "./chatGPTBootstrapIdentity";
+import {
+  CANONICAL_CHATGPT_CONVERSATION_ID,
+  chatGPTConversationIdFromUrl,
+} from "./chatGPTConversationIdentity";
 import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPTBrowserPrewarm";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { randomUUID } from "./lib/utils";
-import { finalizeChatGPTRolloverHierarchy, type ChatGPTRolloverPlan } from "./chatGPTRolloverFinalize";
+import { PRIMARY_CHATGPT_PROFILE_ID, readNewChatGPTProfileId, resetNewChatGPTProfileId } from "./chatGPTAccountProfiles";
+import {
+  finalizeChatGPTRolloverHierarchy,
+  type ChatGPTRolloverPlan,
+} from "./chatGPTRolloverFinalize";
 import { readThreadPreviewState } from "./previewStateStore";
+
+export const ChatGPTSessionBinding = Schema.Struct({
+  seatId: Schema.NullOr(Schema.String),
+  role: Schema.Literals(["manager", "worker", "personal"]),
+  parentSessionId: Schema.NullOr(Schema.String),
+  taskRef: Schema.NullOr(Schema.Struct({ board: Schema.String, id: Schema.String })),
+  boundAt: Schema.String,
+  boundBy: Schema.Literals(["omcp_spawn", "openrig", "user"]),
+});
+export type ChatGPTSessionBinding = typeof ChatGPTSessionBinding.Type;
 
 export const BrowserSession = Schema.Struct({
   id: Schema.String,
+  /** Immutable browser-login identity. Absent on old sessions means the first account. */
+  profileId: Schema.optional(Schema.String),
   title: Schema.String,
+  /** User-initiated rename takes precedence over automatic Bootstrap naming. */
+  titleSource: Schema.optional(Schema.Literals(["user", "bootstrap"])),
+  // Absent on legacy sessions, which may still register opportunistically.
+  // See chatGPTBootstrapIdentity.ts for the internal vs public ID model.
+  bootstrapIdentity: Schema.optional(
+    Schema.Struct({
+      state: Schema.Literals(["awaiting_marker", "registered", "mismatch"]),
+      publicId: Schema.optional(Schema.String),
+      conversationId: Schema.optional(Schema.String),
+      reportedId: Schema.optional(Schema.String),
+      titlePendingUntil: Schema.optional(Schema.Number),
+    }),
+  ),
   // Present only for sessions created after timestamp tracking was introduced.
   createdAt: Schema.optional(Schema.Number),
+  // Immutable creation evidence. Older entries without it remain unknown unless
+  // they carry an explicit backend spawn reservation; titles/lineage are not proof.
+  creationOrigin: Schema.optional(Schema.Literals(["manual", "backend"])),
+  // A backend-created worker becomes a personal chat after an actual human send
+  // or a user-assigned highlight. Creation provenance remains unchanged.
+  humanControlled: Schema.optional(Schema.Boolean),
+  // Explicit reversible user designation; timestamp starts worker cleanup grace.
+  markedAsWorkerAt: Schema.optional(Schema.Number),
   // An exact backend spawn reservation. Manual sessions and warm spares never carry it.
   spawnRequestId: Schema.optional(Schema.String),
   // Only explicit UI-created fresh chats carry this; legacy and backend guests do not.
@@ -33,8 +84,13 @@ export const BrowserSession = Schema.Struct({
     }),
   ),
   snoozedUntil: Schema.optional(Schema.Number),
+  snoozedAt: Schema.optional(Schema.Number),
+  // Sticky exemptions: unsnooze or clearing a colored border never reenables auto-close.
+  autoCloseExempt: Schema.optional(Schema.Boolean),
+  lastDirectInteractionAt: Schema.optional(Schema.Number),
   // null explicitly detaches a child; undefined means no lineage was ever recorded.
   parentSessionId: Schema.optional(Schema.NullOr(Schema.String)),
+  binding: Schema.optional(ChatGPTSessionBinding),
   project: Schema.optional(Schema.String),
   // User-chosen sidebar border color name; unknown names render no border.
   borderColor: Schema.optional(Schema.String),
@@ -47,35 +103,104 @@ export const BrowserSession = Schema.Struct({
   ),
 });
 export type BrowserSession = typeof BrowserSession.Type;
-const BrowserSessions = Schema.Array(BrowserSession);
+
+/** Persisted origin has priority except where a backend reservation proves otherwise. */
+export function chatGPTSessionCreationOrigin(
+  session: BrowserSession,
+): "manual" | "backend" | "unknown" {
+  if (session.spawnRequestId?.trim()) return "backend";
+  return session.creationOrigin ?? "unknown";
+}
+
+export const BrowserSessions = Schema.Array(BrowserSession);
 export const chatGPTBrowserSessionsKey = (environmentId: EnvironmentId | null) =>
   `t3code:chatgpt-browser:sessions:${environmentId ?? "unconnected"}`;
+
+/** Only when a different ChatGPT conversation has replaced the current guest:
+ * preserve the permanent T3 ID, then require its first assistant marker again.
+ * No effect on legacy sessions, and no new messages are injected. */
+export function beginChatGPTBootstrapReboot(environmentId: EnvironmentId, sessionId: string): void {
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  const current = store.getState().sessions;
+  const next = current.map((entry) =>
+    entry.id !== sessionId || !entry.bootstrapIdentity
+      ? entry
+      : { ...entry, bootstrapIdentity: nextChatGPTBootstrapGeneration(entry.bootstrapIdentity) },
+  );
+  if (current.every((entry, index) => entry === next[index])) return;
+  setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), next, BrowserSessions);
+  store.setState({ sessions: next });
+}
 
 /** Read the authoritative persisted snapshot during consecutive desktop requests. */
 export function readChatGPTBrowserSessions(
   environmentId: EnvironmentId,
 ): readonly BrowserSession[] {
-  return (
-    getLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), BrowserSessions) ??
-    INITIAL_SESSIONS
-  );
+  if (typeof window === "undefined") return INITIAL_SESSIONS;
+  const sessions = getChatGPTSessionPersistedStore(environmentId).getState().sessions;
+  return sessions.length ? sessions : INITIAL_SESSIONS;
 }
 const INITIAL_SESSIONS: readonly BrowserSession[] = [{ id: "chatgpt", title: "ChatGPT 1" }];
+
+/** Wake an existing snoozed slot for a real message or externally observed state change. */
+export function wakeChatGPTBrowserSession(environmentId: string, sessionId: string): void {
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  const current = store.getState().sessions;
+  const now = Date.now();
+  if (!current.some((session) => session.id === sessionId && (session.snoozedUntil ?? 0) > now)) return;
+  const next = current.map((session) => session.id === sessionId
+    ? { ...session, snoozedUntil: undefined, snoozedAt: undefined, quickSnoozeStep: undefined }
+    : session);
+  setLocalStorageItem(`t3code:chatgpt-browser:sessions:${environmentId}`, next, BrowserSessions);
+  store.setState({ sessions: next });
+}
 const DEFAULT_SESSION_TITLE = /^ChatGPT \d+$/;
+// Delivery markers belong to the conversation's messages, not its sidebar title.
+const DELIVERY_TITLE_MARKER = /^\s*\[T3-MSG:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\]\s*/i;
+export function cleanChatGPTSessionTitle(title: string): string {
+  return title.replace(DELIVERY_TITLE_MARKER, "").trim();
+}
 
 export function chatGPTSessionTitleFromPage(pageTitle: string | null): string | null {
-  const title = (pageTitle ?? "")
+  const title = cleanChatGPTSessionTitle((pageTitle ?? "")
     .trim()
     .replace(/\s+[-–—|]\s+(?:ChatGPT|OpenAI)$/i, "")
-    .replace(/^ChatGPT\s+[-–—|]\s+/i, "")
-    .trim();
+    .replace(/^ChatGPT\s+[-–—|]\s+/i, ""));
   if (!title || /^(?:ChatGPT(?: \d+)?|New chat|Temporary chat|OpenAI)$/i.test(title)) {
     return null;
   }
   return title.length > 80 ? `${title.slice(0, 79).trimEnd()}…` : title;
 }
 
+/** Clean previously saved automatic titles as well as new ChatGPT page titles.
+ * Explicit manual and Bootstrap titles remain authoritative. */
+export function updateChatGPTAutoTitle(session: BrowserSession, pageTitle: string | null): BrowserSession {
+  if (session.titleSource === "user" || session.titleSource === "bootstrap") return session;
+  const cleaned = cleanChatGPTSessionTitle(session.title);
+  if (cleaned !== session.title) {
+    return { ...session, title: cleaned || chatGPTSessionTitleFromPage(pageTitle) || "ChatGPT session" };
+  }
+  const proposed = chatGPTSessionTitleFromPage(pageTitle);
+  return proposed && DEFAULT_SESSION_TITLE.test(session.title) ? { ...session, title: proposed } : session;
+}
+
 export const CHATGPT_DEFAULT_URL = "https://chatgpt.com";
+
+/** Resolve exact persisted conversation ownership; never infer it from titles or T3 session IDs. */
+export function findExistingChatGPTConversation(
+  sessions: readonly BrowserSession[],
+  targetUrl: string,
+  readUrl: (sessionId: string) => string | null,
+): BrowserSession | undefined {
+  const id = chatGPTConversationIdFromUrl(targetUrl);
+  if (!id || !CANONICAL_CHATGPT_CONVERSATION_ID.test(id)) return undefined;
+  return sessions.find(
+    (session) =>
+      chatGPTConversationIdFromUrl(
+        readUrl(session.id) ?? session.archive?.conversationUrl ?? null,
+      ) === id,
+  );
+}
 
 export function isChatGPTConversationUrl(url: string | null): boolean {
   return chatGPTConversationIdFromUrl(url) !== null;
@@ -98,6 +223,7 @@ export type ChatGPTSessionRemovalSource =
   | "desktop-IPC-request"
   | "expiration"
   | "unused-empty-manual"
+  | "completed-worker"
   | "unknown";
 
 export type ChatGPTSessionRemovalReceipt = {
@@ -204,6 +330,7 @@ function isChatGPTSessionRemovalReceipt(value: unknown): value is ChatGPTSession
       entry.source === "desktop-IPC-request" ||
       entry.source === "expiration" ||
       entry.source === "unused-empty-manual" ||
+      entry.source === "completed-worker" ||
       entry.source === "unknown") &&
     entry.authenticatedCaller === "UNKNOWN" &&
     entry.draftSafetyVerified === false &&
@@ -215,6 +342,69 @@ function isChatGPTSessionRemovalReceipt(value: unknown): value is ChatGPTSession
 // Preview uses this owner only to group tabs; no agent conversation is created.
 export const chatGPTBrowserThreadRef = (environmentId: EnvironmentId, sessionId: string) =>
   scopeThreadRef(environmentId, ThreadId.make(`t3-browser-session:${sessionId}`));
+
+/** Accept a bounded, explicitly rendered agent title once; a manual F2/menu
+ * rename is authoritative and is never replaced by future Bootstrap calls. */
+export function applyChatGPTBootstrapTitle(
+  session: BrowserSession,
+  proposedTitle: string | undefined,
+): BrowserSession {
+  if (
+    session.titleSource === "user" ||
+    session.titleSource === "bootstrap" ||
+    typeof proposedTitle !== "string"
+  )
+    return session;
+  if (/[\[\]\x00-\x1f\x7f]/u.test(proposedTitle)) return session;
+  const title = proposedTitle.trim().replace(/\s+/gu, " ");
+  if (title.length < 3 || title.length > 80) return session;
+  return { ...session, title, titleSource: "bootstrap" };
+}
+
+/** A streamed ID may be visible before the next paragraph contains its title.
+ * Register the ID immediately, then accept only the adjacent title from the
+ * same conversation/ID while the brief pending window is open. */
+export function applyChatGPTBootstrapObservation(
+  sessions: readonly BrowserSession[],
+  id: string,
+  observation: ChatGPTBootstrapObservation,
+): readonly BrowserSession[] {
+  const updated = registerChatGPTBootstrapMarker(sessions, id, observation);
+  const entry = updated ?? sessions.find((session) => session.id === id);
+  if (!entry) return sessions;
+  const identity = entry.bootstrapIdentity;
+  const samePendingReply = !updated && identity?.state === "registered" &&
+    (identity.titlePendingUntil ?? 0) > Date.now() &&
+    identity.publicId?.toLowerCase() === observation.markerId.toLowerCase() &&
+    identity.conversationId === observation.conversationId;
+  if (!updated && !samePendingReply) return sessions;
+  const titled = identity?.state === "registered" && (updated || samePendingReply)
+    ? applyChatGPTBootstrapTitle(entry, observation.proposedTitle)
+    : entry;
+  const next = titled !== entry && identity?.titlePendingUntil
+    ? { ...titled, bootstrapIdentity: { ...identity, titlePendingUntil: undefined } }
+    : titled;
+  if (next === sessions.find((session) => session.id === id)) return sessions;
+  return sessions.map((session) => (session.id === id ? next : session));
+}
+
+/** Apply a durable Bootstrap title only after this exact assistant marker has
+ * registered the public ID against the current conversation. */
+export function applyChatGPTBootstrapRegistryTitle(
+  sessions: readonly BrowserSession[],
+  id: string,
+  markerId: string,
+  conversationId: string,
+  title: string | null,
+): readonly BrowserSession[] {
+  if (!title) return sessions;
+  const session = sessions.find((entry) => entry.id === id);
+  if (session?.bootstrapIdentity?.state !== "registered" ||
+      session.bootstrapIdentity.publicId?.toLowerCase() !== markerId.toLowerCase() ||
+      session.bootstrapIdentity.conversationId !== conversationId) return sessions;
+  const next = applyChatGPTBootstrapTitle(session, title);
+  return next === session ? sessions : sessions.map((entry) => entry.id === id ? next : entry);
+}
 
 /** Move a session within its visible or hidden section without changing the other section. */
 export function reorderChatGPTSessions(
@@ -326,11 +516,13 @@ export const CHATGPT_HIDDEN_EXPIRY_MS = 3 * 24 * 60 * 60 * 1000;
 export function expiredHiddenSessionIds(
   sessions: readonly BrowserSession[],
   now: number,
+  protectedIds: ReadonlySet<string> = new Set(),
 ): string[] {
   return sessions
     .filter(
       (session) =>
         session.hidden === true &&
+        !protectedIds.has(session.id) &&
         // A manager archive survives indefinitely; only a plain UI hide expires.
         !(session.archive && !session.archive.restoredAt) &&
         typeof session.hiddenAt === "number" &&
@@ -342,10 +534,28 @@ export function expiredHiddenSessionIds(
 }
 
 export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
-  const [sessions, setSessions] = useLocalStorage(
-    chatGPTBrowserSessionsKey(environmentId),
-    INITIAL_SESSIONS,
-    BrowserSessions,
+  const sessionStore = getChatGPTSessionPersistedStore(environmentId ?? "unconnected");
+  const storedSessions = useStore(sessionStore, (state) => state.sessions);
+  const sessions = storedSessions.length ? storedSessions : INITIAL_SESSIONS;
+  const setSessions = useCallback(
+    (
+      update:
+        | readonly BrowserSession[]
+        | ((current: readonly BrowserSession[]) => readonly BrowserSession[]),
+    ) => {
+      const current = sessionStore.getState().sessions;
+      const proposed =
+        typeof update === "function" ? update(current.length ? current : INITIAL_SESSIONS) : update;
+      // A second renderer may still hold a snapshot from before a close.
+      const next = filterClosedChatGPTSessions(
+        environmentId ?? "unconnected",
+        proposed,
+        window.localStorage,
+      );
+      setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), next, BrowserSessions);
+      sessionStore.setState({ sessions: next });
+    },
+    [sessionStore, environmentId],
   );
   const [prewarmedSessionId, setPrewarmedSessionId] = useLocalStorage(
     chatGPTPrewarmKey(environmentId ?? "unconnected"),
@@ -362,13 +572,62 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         initialConversationUrl?: string;
         spawnRequestId?: string;
         explicitlyUserCreated?: boolean;
+        /** Explicit profile for a new manual session; ignored for backend workers. */
+        profileId?: string;
+        binding?: ChatGPTSessionBinding;
       },
     ) => {
+      // Opening a known /c/ conversation reuses the original T3 identity.
+      // Do not replace the guest or its composer draft, even for hidden/snoozed owners.
+      if (environmentId && metadata?.initialConversationUrl && !metadata.spawnRequestId) {
+        const requestedId = chatGPTConversationIdFromUrl(metadata.initialConversationUrl);
+        if (
+          !requestedId ||
+          metadata.initialConversationUrl !== `https://chatgpt.com/c/${requestedId}`
+        )
+          throw new Error("Only an exact canonical ChatGPT conversation URL may seed a session.");
+        const owner = findExistingChatGPTConversation(
+          readChatGPTBrowserSessions(environmentId),
+          metadata.initialConversationUrl,
+          (id) => getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id), Schema.String),
+        );
+        if (owner) {
+          setSessions((current) =>
+            current.map((session) =>
+              session.id === owner.id
+                ? {
+                    ...session,
+                    hidden: false,
+                    hiddenAt: undefined,
+                    snoozedUntil: undefined,
+                    ...(session.archive
+                      ? {
+                          archive: { ...session.archive, restoredAt: new Date().toISOString() },
+                        }
+                      : {}),
+                  }
+                : session,
+            ),
+          );
+          return owner.id;
+        }
+      }
+      const profileId = metadata?.spawnRequestId
+        ? PRIMARY_CHATGPT_PROFILE_ID
+        : metadata?.profileId ?? (metadata?.explicitlyUserCreated && !metadata?.initialConversationUrl
+          ? readNewChatGPTProfileId(environmentId) : PRIMARY_CHATGPT_PROFILE_ID);
       let id = randomUUID();
       // Read the current slot synchronously: multiple buttons, the palette and
       // desktop automation can request sessions without waiting for a render.
-      // Backend spawns always get a fresh UUID/guest, never the user-facing warm spare.
-      if (environmentId && !metadata?.initialConversationUrl && !metadata?.spawnRequestId) {
+      // A warm spare belongs only to an explicit human UI action. Backend or
+      // unspecified callers always receive a fresh UUID/guest, even without a receipt.
+      if (
+        environmentId &&
+        metadata?.explicitlyUserCreated === true &&
+        profileId === PRIMARY_CHATGPT_PROFILE_ID &&
+        !metadata.initialConversationUrl &&
+        !metadata.spawnRequestId
+      ) {
         const spareId = getLocalStorageItem(chatGPTPrewarmKey(environmentId), Schema.String);
         if (spareId) {
           const threadRef = chatGPTBrowserThreadRef(environmentId, spareId);
@@ -384,18 +643,23 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
                 element.dataset.previewTab ===
                 previewRuntimeTabId(threadRef, state.serverEpoch, tabId),
             );
-          if (
-            !sessions.some((session) => session.id === spareId) &&
+          // A native spare is owned by Electron, not a preview-tab webview.
+          // Only a ready, unconsumed spare is eligible for manual new chats.
+          const nativeSpare = isPersistentChatGPTSessionOptedIn(spareId);
+          const legacySpareReady =
             nav?._tag === "Success" &&
             isChatGPTHomeUrl(nav.url) &&
             overlay?.hasWebContents &&
             !overlay.loading &&
-            attached &&
+            attached;
+          if (
+            !sessions.some((session) => session.id === spareId) &&
+            (nativeSpare || legacySpareReady) &&
             takeChatGPTSpare(environmentId, spareId)
           ) {
             id = spareId;
-            // The consumed webview remains mounted under its original preview
-            // owner; replenishment gets a different owner and a fresh page.
+            // Preserve the adopted Chromium renderer (or legacy webview).
+            // Replenishment uses a new UUID, never navigation of this page.
             setPrewarmedSessionId(randomUUID());
           }
         }
@@ -421,9 +685,21 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           ...current,
           {
             id,
-            title: name?.trim() || `ChatGPT ${number}`,
+            profileId,
+            title: cleanChatGPTSessionTitle(name ?? "") || `ChatGPT ${number}`,
             createdAt,
-            ...(metadata?.spawnRequestId ? { spawnRequestId: metadata.spawnRequestId } : {}),
+            ...(metadata?.spawnRequestId
+              ? {
+                  creationOrigin: "backend" as const,
+                  spawnRequestId: metadata.spawnRequestId,
+                  bootstrapIdentity: { state: "awaiting_marker" as const, publicId: id },
+                }
+              : metadata?.explicitlyUserCreated && !metadata.initialConversationUrl
+                ? {
+                    creationOrigin: "manual" as const,
+                    bootstrapIdentity: { state: "awaiting_marker" as const },
+                  }
+                : {}),
             ...(metadata?.explicitlyUserCreated &&
             !name &&
             !metadata.initialConversationUrl &&
@@ -432,14 +708,35 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             !metadata.project
               ? { manualEmptyCandidateCreatedAt: Date.now() }
               : {}),
-            ...(metadata?.parentSessionId ? { parentSessionId: metadata.parentSessionId } : {}),
+            ...(metadata?.binding
+              ? { binding: metadata.binding, parentSessionId: metadata.binding.parentSessionId }
+              : metadata?.parentSessionId
+                ? { parentSessionId: metadata.parentSessionId }
+                : {}),
             ...(metadata?.project ? { project: metadata.project } : {}),
           },
         ];
       });
+      // The selected profile was captured above for this session. After a
+      // successful manual creation, make the NEXT chat default to blue.
+      if (metadata?.explicitlyUserCreated && !metadata.spawnRequestId) {
+        resetNewChatGPTProfileId(environmentId);
+      }
       return id;
     },
     [environmentId, sessions, setPrewarmedSessionId, setSessions],
+  );
+
+  const registerBootstrapMarker = useCallback(
+    (id: string, observation: ChatGPTBootstrapObservation) =>
+      setSessions((current) => applyChatGPTBootstrapObservation(current, id, observation)),
+    [setSessions],
+  );
+
+  const resolveBootstrapTitle = useCallback(
+    (id: string, markerId: string, conversationId: string, title: string | null) =>
+      setSessions((current) => applyChatGPTBootstrapRegistryTitle(current, id, markerId, conversationId, title)),
+    [setSessions],
   );
 
   const disqualifyManualEmptyCandidate = useCallback(
@@ -495,9 +792,51 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             ? {
                 ...session,
                 parentSessionId: parentId,
+                ...(session.binding
+                  ? {
+                      binding: {
+                        ...session.binding,
+                        parentSessionId: parentId,
+                        boundAt: new Date().toISOString(),
+                        boundBy: "user" as const,
+                      },
+                    }
+                  : {}),
                 project: parentId
                   ? (byId.get(parentId)?.project ?? session.project)
                   : session.project,
+              }
+            : session,
+        );
+      });
+    },
+    [setSessions],
+  );
+
+  const setSessionBinding = useCallback(
+    (id: string, binding: ChatGPTSessionBinding | null) => {
+      setSessions((current) => {
+        const entry = current.find((session) => session.id === id);
+        if (!entry) return current;
+        if (
+          binding?.parentSessionId === id ||
+          (binding?.parentSessionId &&
+            !current.some((session) => session.id === binding.parentSessionId))
+        )
+          return current;
+        let cursor = binding?.parentSessionId ?? null;
+        const visited = new Set<string>();
+        while (cursor) {
+          if (cursor === id || visited.has(cursor)) return current;
+          visited.add(cursor);
+          cursor = current.find((session) => session.id === cursor)?.parentSessionId ?? null;
+        }
+        return current.map((session) =>
+          session.id === id
+            ? {
+                ...session,
+                binding: binding ?? undefined,
+                ...(binding ? { parentSessionId: binding.parentSessionId } : {}),
               }
             : session,
         );
@@ -517,7 +856,14 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       const targets = new Set(ids);
       setSessions((current) =>
         current.map((session) =>
-          targets.has(session.id) ? { ...session, snoozedUntil: until ?? undefined } : session,
+          targets.has(session.id)
+            ? {
+                ...session,
+                snoozedUntil: until ?? undefined,
+                snoozedAt: until === null ? undefined : Date.now(),
+                autoCloseExempt: session.autoCloseExempt === true || until !== null,
+              }
+            : session,
         ),
       );
     },
@@ -528,9 +874,41 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     (id: string, color: string | null) =>
       setSessions((current) =>
         current.map((session) =>
-          session.id === id ? { ...session, borderColor: color ?? undefined } : session,
+          session.id === id
+            ? {
+                ...session,
+                borderColor: color ?? undefined,
+                humanControlled: session.humanControlled === true || color !== null,
+                autoCloseExempt: session.autoCloseExempt === true || color !== null,
+              }
+            : session,
         ),
       ),
+    [setSessions],
+  );
+
+  const markHumanControlled = useCallback(
+    (id: string) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id && !session.humanControlled
+            ? { ...session, humanControlled: true, autoCloseExempt: true }
+            : session,
+        ),
+      ),
+    [setSessions],
+  );
+
+  const markDirectInteraction = useCallback(
+    (id: string, at = Date.now()) => {
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id && at > (session.lastDirectInteractionAt ?? 0)
+            ? { ...session, lastDirectInteractionAt: at }
+            : session,
+        ),
+      );
+    },
     [setSessions],
   );
 
@@ -569,8 +947,8 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   );
 
   const pruneExpiredHidden = useCallback(
-    (now: number) => {
-      const expired = expiredHiddenSessionIds(sessions, now);
+    (now: number, protectedIds: ReadonlySet<string> = new Set()) => {
+      const expired = expiredHiddenSessionIds(sessions, now, protectedIds);
       if (!expired.length) return [] as string[];
       const ids = new Set(expired);
       let removed: BrowserSession[] = [];
@@ -596,7 +974,22 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       const trimmed = title.trim();
       if (!trimmed) return;
       setSessions((current) =>
-        current.map((session) => (session.id === id ? { ...session, title: trimmed } : session)),
+        current.map((session) =>
+          session.id === id
+            ? { ...session, title: trimmed, titleSource: "user" as const }
+            : session,
+        ),
+      );
+    },
+    [setSessions],
+  );
+
+  const suggestBootstrapTitle = useCallback(
+    (id: string, title: string) => {
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id ? applyChatGPTBootstrapTitle(session, title) : session,
+        ),
       );
     },
     [setSessions],
@@ -604,14 +997,9 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
 
   const renameSessionFromPageTitle = useCallback(
     (id: string, pageTitle: string | null) => {
-      const title = chatGPTSessionTitleFromPage(pageTitle);
-      if (!title) return;
+      if (!chatGPTSessionTitleFromPage(pageTitle)) return;
       setSessions((current) =>
-        current.map((session) =>
-          session.id === id && DEFAULT_SESSION_TITLE.test(session.title)
-            ? { ...session, title }
-            : session,
-        ),
+        current.map((session) => session.id === id ? updateChatGPTAutoTitle(session, pageTitle) : session),
       );
     },
     [setSessions],
@@ -645,6 +1033,30 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
 
+  const setSessionWorker = useCallback(
+    (id: string, worker: boolean) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id !== id
+            ? session
+            : worker
+              ? {
+                  ...session,
+                  markedAsWorkerAt: Date.now(),
+                  humanControlled: false,
+                  autoCloseExempt: false,
+                }
+              : {
+                  ...session,
+                  markedAsWorkerAt: undefined,
+                  humanControlled: true,
+                  autoCloseExempt: true,
+                },
+        ),
+      ),
+    [setSessions],
+  );
+
   const setSessionArchived = useCallback(
     (id: string, archive: NonNullable<BrowserSession["archive"]>) =>
       setSessions((current) => setChatGPTSessionArchived(current, id, archive)),
@@ -656,18 +1068,25 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     prewarmedSessionId,
     setPrewarmedSessionId,
     createSession,
+    registerBootstrapMarker,
+    resolveBootstrapTitle,
     disqualifyManualEmptyCandidate,
     reorderSessions,
     renameSession,
+    suggestBootstrapTitle,
     renameSessionFromPageTitle,
     removeSession,
     setSessionHidden,
+    setSessionWorker,
     setSessionArchived,
     setSessionProject,
     setSessionParent,
+    setSessionBinding,
     finalizeRollover,
     setSessionSnooze,
     setSessionBorderColor,
+    markHumanControlled,
+    markDirectInteraction,
     setSessionCompletion,
     syncInferredMetadata,
     pruneExpiredHidden,

@@ -472,7 +472,24 @@ const make = Effect.gen(function* () {
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
-      const customConfig = runtimeConfig.keybindings;
+      // Older installations persisted this default before ChatGPT introduced
+      // Ctrl+Shift+H for worker visibility. Restrict only the unchanged native
+      // host-switch shortcut so it cannot steal that chord on ChatGPT routes.
+      const legacyHostShortcut = {
+        key: "mod+shift+h",
+        command: "composer.host",
+        when: "!terminalFocus",
+      } as const;
+      const scopedHostShortcut = {
+        ...legacyHostShortcut,
+        when: "!terminalFocus && !chatgptBrowserRoute",
+      } as const;
+      const customConfig = runtimeConfig.keybindings.map((entry) =>
+        isSameKeybindingRule(entry, legacyHostShortcut) ? scopedHostShortcut : entry,
+      );
+      const migratedHostShortcut = customConfig.some(
+        (entry, index) => entry !== runtimeConfig.keybindings[index],
+      );
       const existingCommands = new Set(customConfig.map((entry) => entry.command));
       const missingDefaults: KeybindingRule[] = [];
       const shortcutConflictWarnings: Array<{
@@ -542,7 +559,7 @@ const make = Effect.gen(function* () {
           commands: skippedDefaults.map((rule) => rule.command),
         });
       }
-      if (defaultsToAppend.length > 0) {
+      if (defaultsToAppend.length > 0 || migratedHostShortcut) {
         yield* writeConfigAtomically([...defaultsToAppend, ...customConfig]);
       }
       const settledLateDefaults = pendingLateDefaults.filter(

@@ -1,4 +1,8 @@
 import {
+  AgentProviderV1CreateRequest,
+  AgentProviderV1CreateGet,
+  AgentProviderV1QueueRequest,
+  AgentProviderV1InterruptRequest,
   AgentProviderV1DesktopSnapshot,
   AgentProviderV1DesktopWorkResult,
   AgentProviderV1HistoryPage,
@@ -17,6 +21,7 @@ import {
   readDesktopCatalog,
   disconnectDesktopCatalog,
   dispatchBrowserWork,
+  hasUniqueDesktopCreator,
   takeDesktopWork,
   finishDesktopWork,
 } from "./agentProviderBridge.ts";
@@ -34,10 +39,18 @@ import {
   nativeUpdateCursor,
   parseNativeUpdateCursor,
 } from "./agentProviderOperations.ts";
+import {
+  startBrowserCreate,
+  getCreateReceipt,
+  hasBrowserCreateRequest,
+} from "./agentProviderCreate.ts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
+import { queuedRunsInDeliveryOrder } from "./orchestration-v2/QueuedRunOrder.ts";
+import * as ChatGPTTranscript from "./chatGPTTranscriptIndex.ts";
+import * as ChatGPTRegistry from "./chatGPTSessionRegistry.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1950,7 +1963,275 @@ export const layerWsRpc = (
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
 
+      const localChatGPTRegistryEnvironmentId = yield* serverEnvironment.getEnvironmentId;
+      const registryEnvironmentMatches = (requested: string) =>
+        requested === localChatGPTRegistryEnvironmentId;
+      // ClientSurface is an attribution query parameter, not authentication.
+      // A paired web caller can spoof ?clientSurface=desktop; only the
+      // authenticated local desktop-bootstrap grant may own the guest driver.
+      const isAuthenticatedChatGPTDesktopDriver =
+        clientOrigin.surface === "desktop" && currentSession.subject === "desktop-bootstrap";
       const handlers = ServerWsRpcGroup.of({
+        [WS_METHODS.chatGptRegistryList]: ({ environmentId }) =>
+          Effect.gen(function* () {
+            if (!registryEnvironmentMatches(environmentId))
+              return {
+                sessions: [],
+                driver: { environmentId, driverId: null, online: false, lastSeenAt: null },
+              };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const sessions = yield* registry.list(environmentId);
+            const driver = yield* registry.driver(environmentId);
+            return { sessions: [...sessions], driver };
+          }).pipe(Effect.orDie),
+        [WS_METHODS.chatGptRegistrySubscribe]: ({ environmentId }) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              if (!registryEnvironmentMatches(environmentId))
+                return Stream.succeed({
+                  sessions: [],
+                  driver: { environmentId, driverId: null, online: false, lastSeenAt: null },
+                });
+              const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+              const snapshot = Effect.gen(function* () {
+                const sessions = yield* registry.list(environmentId);
+                const driver = yield* registry.driver(environmentId);
+                return { sessions: [...sessions], driver };
+              }).pipe(Effect.orDie);
+              // Poll the persistent registry, never the renderer or a hibernated guest.
+              // A new subscriber gets an immediate snapshot; change-only updates
+              // include the driver's expiry/offline transitions.
+              return Stream.concat(
+                Stream.succeed(undefined),
+                Stream.tick(Duration.seconds(5)),
+              ).pipe(
+                Stream.mapEffect(() => snapshot),
+                Stream.changesWith(
+                  (previous, next) => JSON.stringify(previous) === JSON.stringify(next),
+                ),
+              );
+            }),
+          ),
+        [WS_METHODS.chatGptRegistryGet]: ({ environmentId, sessionId }) =>
+          Effect.gen(function* () {
+            if (!registryEnvironmentMatches(environmentId)) return null;
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            return yield* registry.get(environmentId, sessionId);
+          }).pipe(Effect.orDie),
+        [WS_METHODS.chatGptRegistryPatch]: ({
+          environmentId,
+          sessionId,
+          expectedUpdatedAt,
+          patch,
+        }) =>
+          Effect.gen(function* () {
+            if (!registryEnvironmentMatches(environmentId))
+              return {
+                ok: false,
+                session: null,
+                reason: "Wrong environment for ChatGPT metadata.",
+              };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const existing = yield* registry.get(environmentId, sessionId);
+            if (!existing)
+              return {
+                ok: false,
+                session: null,
+                reason: "ChatGPT session not found or unregistered.",
+              };
+            const session = yield* registry.patchMetadata(
+              environmentId,
+              existing.sessionId,
+              expectedUpdatedAt,
+              patch,
+            );
+            return { ok: true, session };
+          }).pipe(
+            Effect.catchTag("ChatGPTDriverUnavailable", (error) =>
+              Effect.succeed({ ok: false, session: null, reason: error.message }),
+            ),
+            Effect.orDie,
+          ),
+        [WS_METHODS.chatGptRegistryDriverRegister]: ({ environmentId, driverId }) =>
+          Effect.gen(function* () {
+            if (!isAuthenticatedChatGPTDesktopDriver || !registryEnvironmentMatches(environmentId))
+              return {
+                ok: false,
+                reason: "Only the owning desktop environment may register the ChatGPT driver.",
+              };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            yield* registry.registerDriver(environmentId, driverId);
+            return { ok: true };
+          }).pipe(
+            Effect.catchTag("ChatGPTDriverUnavailable", (error) =>
+              Effect.succeed({ ok: false, reason: error.message }),
+            ),
+            Effect.orDie,
+          ),
+        [WS_METHODS.chatGptRegistryDriverHeartbeat]: ({ environmentId, driverId }) =>
+          Effect.gen(function* () {
+            if (!isAuthenticatedChatGPTDesktopDriver || !registryEnvironmentMatches(environmentId))
+              return {
+                ok: false,
+                reason: "Only the owning desktop environment may heartbeat the ChatGPT driver.",
+              };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const ok = yield* registry.heartbeat(environmentId, driverId);
+            return ok ? { ok: true } : { ok: false, reason: "ChatGPT driver disconnected" };
+          }).pipe(Effect.orDie),
+        [WS_METHODS.chatGptRegistryDriverDisconnect]: ({ environmentId, driverId }) =>
+          Effect.gen(function* () {
+            if (!isAuthenticatedChatGPTDesktopDriver || !registryEnvironmentMatches(environmentId))
+              return {
+                ok: false,
+                reason: "Only the owning desktop environment may disconnect the ChatGPT driver.",
+              };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            yield* registry.disconnectDriver(environmentId, driverId);
+            return { ok: true };
+          }).pipe(Effect.orDie),
+        [WS_METHODS.chatGptRegistrySync]: ({ driverId, initial, changes }) =>
+          Effect.gen(function* () {
+            if (
+              !isAuthenticatedChatGPTDesktopDriver ||
+              changes.some((change) => !registryEnvironmentMatches(change.environmentId))
+            )
+              return {
+                ok: false,
+                count: 0,
+                reason: "Only the owning desktop environment may publish ChatGPT sessions.",
+              };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const count = yield* registry.sync(driverId, changes, initial);
+            return { ok: true, count };
+          }).pipe(
+            Effect.catchTag("ChatGPTDriverUnavailable", (error) =>
+              Effect.succeed({ ok: false, count: 0, reason: error.message }),
+            ),
+            Effect.orDie,
+          ),
+        [WS_METHODS.chatGptRegistryClose]: ({ environmentId, driverId, receipts }) =>
+          Effect.gen(function* () {
+            if (
+              !isAuthenticatedChatGPTDesktopDriver ||
+              !registryEnvironmentMatches(environmentId)
+            ) {
+              return {
+                ok: false,
+                closed: 0,
+                reason: "Only the owning desktop can report ChatGPT removals.",
+              };
+            }
+            if (receipts.length > 128)
+              return { ok: false, closed: 0, reason: "Too many removal receipts." };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const closed = yield* registry.closeFromReceipts(environmentId, driverId, receipts);
+            return { ok: true, closed };
+          }).pipe(
+            Effect.catchTag("ChatGPTDriverUnavailable", (error) =>
+              Effect.succeed({ ok: false, closed: 0, reason: error.message }),
+            ),
+            Effect.orDie,
+          ),
+        [WS_METHODS.chatGptRegistryAct]: (request) =>
+          Effect.gen(function* () {
+            if (!registryEnvironmentMatches(request.environmentId))
+              return { ok: false, action: null, reason: "Wrong environment for ChatGPT action." };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const action = yield* registry.requestAction(request);
+            return { ok: true, action };
+          }).pipe(
+            Effect.catchTag("ChatGPTDriverUnavailable", (error) =>
+              Effect.succeed({ ok: false, action: null, reason: error.message }),
+            ),
+            Effect.orDie,
+          ),
+        [WS_METHODS.chatGptRegistryTake]: ({ environmentId, driverId }) =>
+          Effect.gen(function* () {
+            if (!isAuthenticatedChatGPTDesktopDriver || !registryEnvironmentMatches(environmentId))
+              return {
+                ok: false,
+                actions: [],
+                reason: "Only the owning desktop environment may take ChatGPT actions.",
+              };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const actions = yield* registry.takeActions(environmentId, driverId);
+            return { ok: true, actions: [...actions] };
+          }).pipe(
+            Effect.catchTag("ChatGPTDriverUnavailable", (error) =>
+              Effect.succeed({ ok: false, actions: [], reason: error.message }),
+            ),
+            Effect.orDie,
+          ),
+        [WS_METHODS.chatGptRegistryFinish]: ({ requestId, driverId, result }) =>
+          Effect.gen(function* () {
+            if (!isAuthenticatedChatGPTDesktopDriver)
+              return {
+                ok: false,
+                reason: "Only the authenticated desktop may finish ChatGPT actions.",
+              };
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const original = yield* registry.getAction(requestId);
+            if (!original || !registryEnvironmentMatches(original.environmentId))
+              return { ok: false, reason: "Wrong environment for ChatGPT action." };
+            const ok = yield* registry.finishAction(requestId, driverId, result);
+            return ok
+              ? { ok: true }
+              : { ok: false, reason: "ChatGPT operation not owned or already resolved" };
+          }).pipe(Effect.orDie),
+        [WS_METHODS.chatGptRegistryReceipt]: ({ requestId }) =>
+          Effect.gen(function* () {
+            const registry = yield* ChatGPTRegistry.ChatGPTSessionRegistry;
+            const action = yield* registry.getAction(requestId);
+            return action && registryEnvironmentMatches(action.environmentId) ? action : null;
+          }).pipe(Effect.orDie),
+        [WS_METHODS.chatGptTranscriptIngest]: ({ turns }) =>
+          Effect.gen(function* () {
+            const index = yield* ChatGPTTranscript.ChatGPTTranscriptIndex;
+            // Reject oversized batches explicitly. Silently slicing them
+            // reports success while dropping transcript history permanently.
+            if (turns.length > 40) return { processed: 0 };
+            yield* Effect.forEach(
+              turns,
+              (turn) =>
+                index.ingest({
+                  conversationUrl: turn.conversationUrl,
+                  sessionId: turn.sessionId,
+                  observedAt: turn.observedAt,
+                  role: turn.role,
+                  turn: turn.turn,
+                  index: turn.index,
+                  text: turn.text,
+                  ...(turn.turnKey !== undefined ? { turnKey: turn.turnKey } : {}),
+                  ...(turn.possiblyTruncated !== undefined
+                    ? { possiblyTruncated: turn.possiblyTruncated }
+                    : {}),
+                  ...(turn.title !== undefined ? { title: turn.title } : {}),
+                  ...(turn.project !== undefined ? { project: turn.project } : {}),
+                }),
+              { concurrency: 1 },
+            );
+            return { processed: turns.length };
+          }).pipe(Effect.orDie),
+        [WS_METHODS.chatGptTranscriptRead]: (query) =>
+          Effect.gen(function* () {
+            const index = yield* ChatGPTTranscript.ChatGPTTranscriptIndex;
+            return yield* index.read({
+              conversationId: query.conversationId,
+              ...(query.limit !== undefined ? { limit: query.limit } : {}),
+            });
+          }).pipe(Effect.orDie),
+        [WS_METHODS.chatGptTranscriptSearch]: (query) =>
+          Effect.gen(function* () {
+            const index = yield* ChatGPTTranscript.ChatGPTTranscriptIndex;
+            return yield* index.search({
+              query: query.query,
+              ...(query.phrase !== undefined ? { phrase: query.phrase } : {}),
+              ...(query.role !== undefined ? { role: query.role } : {}),
+              ...(query.project !== undefined ? { project: query.project } : {}),
+              ...(query.limit !== undefined ? { limit: query.limit } : {}),
+            });
+          }).pipe(Effect.orDie),
         [WS_METHODS.agentProviderCall]: (request) =>
           Effect.gen(function* () {
             const reply = (data: unknown) => ({
@@ -1988,9 +2269,77 @@ export const layerWsRpc = (
                 environmentId,
                 epoch: agentProviderEpoch,
                 supportedKinds: ["t3/thread", "t3/chatgpt"],
-                capabilities: ["ReadHistory", "Submit", "IdempotentSubmit"],
+                capabilities: [
+                  "ReadHistory",
+                  "Submit",
+                  "IdempotentSubmit",
+                  ...(hasUniqueDesktopCreator(environmentId) ? ["CreateSession"] : []),
+                ],
                 sourceUpdatesComplete: false,
               });
+            }
+            if (request.method === "sessions.create" || request.method === "sessions.create.get") {
+              if (request.method === "sessions.create.get") {
+                const decoded = yield* Effect.result(
+                  Schema.decodeUnknownEffect(AgentProviderV1CreateGet)(request.params),
+                );
+                if (Result.isFailure(decoded))
+                  return error("InvalidInput", "Invalid create receipt identity.");
+                const input = decoded.success;
+                if (input.expectedEnvironmentId !== environmentId)
+                  return error(
+                    "EnvironmentChanged",
+                    "Create receipt belongs to a different environment.",
+                  );
+                const found = getCreateReceipt(
+                  environmentId,
+                  input.clientRequestId,
+                  input.operationId,
+                );
+                return found
+                  ? reply(yield* Effect.promise(() => found))
+                  : error(
+                      "NotFound",
+                      "Create receipt unavailable in this server epoch; reconcile desktop receipts.",
+                    );
+              }
+              const decoded = yield* Effect.result(
+                Schema.decodeUnknownEffect(AgentProviderV1CreateRequest)(request.params),
+              );
+              if (Result.isFailure(decoded))
+                return error("InvalidInput", "Invalid create request.");
+              const input = decoded.success;
+              if (input.kind !== "t3/chatgpt")
+                return error("Unsupported", "Native T3 MAIN CreateSession is not permitted.");
+              if (input.expectedEnvironmentId !== environmentId)
+                return error("EnvironmentChanged", "Create environment does not match.");
+              if (
+                !hasUniqueDesktopCreator(environmentId) &&
+                !hasBrowserCreateRequest(environmentId, input.clientRequestId)
+              )
+                return error("Unavailable", "No unique active desktop ChatGPT creator.");
+              const started = startBrowserCreate({
+                environmentId,
+                clientRequestId: input.clientRequestId,
+                title: input.title,
+                ...(input.initialMessage !== undefined
+                  ? { initialMessage: input.initialMessage }
+                  : {}),
+                ...(input.project !== undefined ? { project: input.project } : {}),
+                ...(input.parentSessionId !== undefined
+                  ? { parentSessionId: input.parentSessionId }
+                  : {}),
+              });
+              if (started.kind === "conflict")
+                return error(
+                  "Conflict",
+                  "The clientRequestId belongs to different create parameters.",
+                );
+              if (started.kind === "capacity")
+                return error("Unavailable", "Create receipt ledger is full.");
+              if (!("receipt" in started))
+                return error("Unavailable", "Create receipt unexpectedly unavailable.");
+              return reply(yield* Effect.promise(() => started.receipt));
             }
             if (request.method === "desktop.sessions.publish") {
               // The existing authenticated WS operation scope and desktop
@@ -2024,7 +2373,9 @@ export const layerWsRpc = (
                     session.capabilities.some(
                       (capability) => capability !== "ReadHistory" && capability !== "Submit",
                     ) ||
-                    session.deliveryModes.some((mode) => mode !== "WhenIdle") ||
+                    session.deliveryModes.some(
+                      (mode) => mode !== "WhenIdle" && mode !== "WaitForSlot" && mode !== "Steer",
+                    ) ||
                     session.deliveryModes.includes("WhenIdle") !==
                       session.capabilities.includes("Submit"),
                 )
@@ -2082,6 +2433,44 @@ export const layerWsRpc = (
                 ),
               });
             }
+            if (request.method === "sessions.visibility") {
+              const p = request.params as {
+                expectedEnvironmentId?: string;
+                session?: { provider?: string; id?: string };
+                visibility?: { hidden?: boolean; snoozedUntil?: number | null };
+              } | null;
+              if (!p || p.expectedEnvironmentId !== environmentId)
+                return error(
+                  "EnvironmentChanged",
+                  "Visibility update targets a different environment.",
+                );
+              const id = p.session?.id;
+              const patch = p.visibility;
+              if (
+                p.session?.provider !== "t3" ||
+                !id ||
+                id.startsWith("thread:") ||
+                !patch ||
+                (patch.hidden === undefined && patch.snoozedUntil === undefined) ||
+                (patch.hidden !== undefined && typeof patch.hidden !== "boolean") ||
+                (patch.snoozedUntil !== undefined &&
+                  patch.snoozedUntil !== null &&
+                  (!Number.isSafeInteger(patch.snoozedUntil) || patch.snoozedUntil < 0))
+              )
+                return error(
+                  "InvalidInput",
+                  "Expected browser session and valid visibility fields.",
+                );
+              const result = yield* Effect.promise(() =>
+                dispatchBrowserWork(environmentId, id, null, "visibility", undefined, {
+                  visibility: patch,
+                }),
+              );
+              if (!result)
+                return error("Unavailable", "Desktop visibility update outcome unconfirmed.");
+              if (!result.ok) return error(result.code, result.message);
+              return reply({ state: "Delivered", session: p.session });
+            }
             if (request.method === "sessions.list") {
               // Capture before the shell read so replay can duplicate, but
               // never miss, native changes committed during the snapshot.
@@ -2128,7 +2517,13 @@ export const layerWsRpc = (
                     },
                     // The native command queue already exists. No CreateSession,
                     // browser send, or management capabilities are implied.
-                    capabilities: ["ReadHistory", "Submit", "IdempotentSubmit"],
+                    capabilities: [
+                      "ReadHistory",
+                      "Submit",
+                      "IdempotentSubmit",
+                      "NativeQueue",
+                      "Interrupt",
+                    ],
                     deliveryModes: ["Queue"],
                     // updatedAt may reflect titles or other metadata, not
                     // verified message activity; do not claim lastActivityAt.
@@ -2312,6 +2707,86 @@ export const layerWsRpc = (
                 complete: false, // Native cursor is resumable; mixed browser deltas are not.
               });
             }
+            if (request.method === "sessions.queue" || request.method === "sessions.interrupt") {
+              const isInterrupt = request.method === "sessions.interrupt";
+              const decoded = yield* Effect.result(
+                Schema.decodeUnknownEffect(
+                  isInterrupt ? AgentProviderV1InterruptRequest : AgentProviderV1QueueRequest,
+                )(request.params),
+              );
+              if (Result.isFailure(decoded))
+                return error("InvalidInput", "Invalid native queue/interrupt request.");
+              const input = decoded.success;
+              if (input.expectedEnvironmentId !== environmentId)
+                return error("EnvironmentChanged", "Native queue environment mismatch.");
+              const rawId = rawNativeThreadId(input.session);
+              if (rawId === null)
+                return error(
+                  "Unsupported",
+                  "Browser sessions do not have native queue/interrupt controls.",
+                );
+              const threadId = ThreadId.make(rawId);
+              const shell = yield* Effect.result(threadManagement.getThreadShell(threadId));
+              if (
+                Result.isFailure(shell) ||
+                shell.success === null ||
+                shell.success.deletedAt !== null ||
+                shell.success.archivedAt !== null
+              )
+                return error("NotFound", "Native thread no longer active.");
+              if (!isInterrupt) {
+                const records = yield* Effect.result(
+                  threadManagement.getThreadRecords(threadId, ["runs", "messages"]),
+                );
+                if (Result.isFailure(records))
+                  return error("Unavailable", "Native queue projection unavailable.");
+                const queued = queuedRunsInDeliveryOrder(records.success).map((run, position) => ({
+                  id: run.id,
+                  position,
+                  ordinal: run.ordinal,
+                  status: run.status,
+                  userMessageId: run.userMessageId,
+                  held: run.queueHeld === true,
+                  text:
+                    records.success.messages.find((m) => m.id === run.userMessageId)?.text ?? null,
+                }));
+                return reply({ items: queued, complete: true, source: "native_queue_projection" });
+              }
+              const mutation = input as typeof AgentProviderV1InterruptRequest.Type;
+              const seed = [environmentId, rawId, mutation.clientRequestId, mutation.runId ?? ""]
+                .map((v) => `${v.length}:${v}`)
+                .join("");
+              const digest = yield* crypto
+                .digest("SHA-256", new TextEncoder().encode(seed))
+                .pipe(Effect.orDie);
+              const id = Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join(
+                "",
+              );
+              const interrupted = yield* Effect.result(
+                threadManagement.interruptThread({
+                  projectId: shell.success.projectId,
+                  threadId,
+                  commandId: CommandId.make("provider-v1-interrupt:" + id),
+                  ...(mutation.runId ? { runId: mutation.runId as never } : {}),
+                  reason: "Requested through authenticated T3 provider v1",
+                }),
+              );
+              if (Result.isFailure(interrupted))
+                return error("Conflict", "Native interrupt was refused by its run-state guard.");
+              const result = interrupted.success;
+              return reply({
+                operationId: "provider-v1-interrupt:" + id,
+                clientRequestId: mutation.clientRequestId,
+                session: mutation.session,
+                state: result.type === "interrupt_requested" ? "Accepted" : "Completed",
+                confirmedStage: result.type === "interrupt_requested" ? "Accepted" : "Completed",
+                observedAt: DateTime.formatIso(yield* DateTime.now),
+                receiptBasis:
+                  result.type === "interrupt_requested"
+                    ? "native_interrupt_command_accepted;run_terminal_not_observed"
+                    : result.type,
+              });
+            }
             if (request.method === "sessions.history" || request.method === "sessions.submit") {
               const isSubmit = request.method === "sessions.submit";
               let input:
@@ -2350,9 +2825,13 @@ export const layerWsRpc = (
                     "Expected browser environment does not match.",
                   );
                 const expected = input.expectedConversation;
+                const capacitySubmit =
+                  isSubmit &&
+                  (input as typeof AgentProviderV1Submit.Type).delivery === "WaitForSlot";
                 if (
-                  typeof expected !== "string" ||
-                  !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expected)
+                  !(capacitySubmit && expected == null) &&
+                  (typeof expected !== "string" ||
+                    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expected))
                 )
                   return error(
                     "InvalidInput",
@@ -2367,10 +2846,18 @@ export const layerWsRpc = (
                 if (isSubmit) {
                   const submit = input as typeof AgentProviderV1Submit.Type;
                   const text = nativeTextContent(submit.content);
-                  if (submit.delivery !== "WhenIdle" || text === null)
+                  if (
+                    !["WhenIdle", "WaitForSlot", "Steer"].includes(submit.delivery) ||
+                    text === null ||
+                    (submit.delivery === "WaitForSlot" &&
+                      submit.maxActiveWorkers !== undefined &&
+                      (!Number.isSafeInteger(submit.maxActiveWorkers) ||
+                        submit.maxActiveWorkers < 1 ||
+                        submit.maxActiveWorkers > 100))
+                  )
                     return error(
                       "Unsupported",
-                      "Browser submit requires WhenIdle with one nonempty text part.",
+                      "Browser submit requires WhenIdle, Steer or WaitForSlot, valid capacity limit and one nonempty text part.",
                     );
                   if (text.length > 30_000)
                     return error("InvalidInput", "Browser prompt exceeds 30,000 characters.");
@@ -2384,7 +2871,15 @@ export const layerWsRpc = (
                       environmentId,
                       session: input.session,
                       clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
-                      expectedConversation: expected,
+                      expectedConversation: expected ?? null,
+                      delivery: (input as typeof AgentProviderV1Submit.Type).delivery,
+                      ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers !==
+                      undefined
+                        ? {
+                            maxActiveWorkers: (input as typeof AgentProviderV1Submit.Type)
+                              .maxActiveWorkers!,
+                          }
+                        : {}),
                       text: message!,
                       observedAt: DateTime.formatIso(yield* DateTime.now),
                     })
@@ -2403,9 +2898,26 @@ export const layerWsRpc = (
                   dispatchBrowserWork(
                     environmentId,
                     browserSessionId,
-                    expected,
+                    expected ?? null,
                     isSubmit ? "submit" : "history",
                     message,
+                    isSubmit
+                      ? {
+                          delivery: (input as typeof AgentProviderV1Submit.Type).delivery as
+                            | "WhenIdle"
+                            | "WaitForSlot"
+                            | "Steer",
+                          clientRequestId: (input as typeof AgentProviderV1Submit.Type)
+                            .clientRequestId,
+                          ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers !==
+                          undefined
+                            ? {
+                                maxActiveWorkers: (input as typeof AgentProviderV1Submit.Type)
+                                  .maxActiveWorkers!,
+                              }
+                            : {}),
+                        }
+                      : undefined,
                   ),
                 );
                 if (result === null) {
@@ -2419,7 +2931,7 @@ export const layerWsRpc = (
                       browserOperationId!,
                       "Unknown",
                       DateTime.formatIso(yield* DateTime.now),
-                      "browser_handoff_timeout;send_may_have_happened;never_auto_replay",
+                      "browser_enqueue_unconfirmed;retry_idempotently_with_same_clientRequestId",
                     ),
                   );
                 }
@@ -2430,7 +2942,7 @@ export const layerWsRpc = (
                       browserOperationId!,
                       "Unknown",
                       DateTime.formatIso(yield* DateTime.now),
-                      `browser_handoff_refused_or_uncertain:${result.code};never_auto_replay`,
+                      `browser_enqueue_unconfirmed;retry_idempotently_with_same_clientRequestId:${result.code}`,
                     ),
                   );
                 }
@@ -2450,18 +2962,25 @@ export const layerWsRpc = (
                   !receipt ||
                   typeof receipt !== "object" ||
                   !("verifiedConversationId" in receipt) ||
-                  receipt.verifiedConversationId !== expected ||
+                  receipt.verifiedConversationId !== (expected ?? null) ||
                   !("delivery" in receipt) ||
-                  (receipt.delivery !== "user_turn_observed" && receipt.delivery !== "unknown")
+                  (receipt.delivery !== "user_turn_observed" &&
+                    receipt.delivery !== "queued" &&
+                    receipt.delivery !== "unknown")
                 )
                   return reply(
                     recordBrowserSubmission(
                       browserOperationId!,
                       "Unknown",
                       DateTime.formatIso(yield* DateTime.now),
-                      "browser_receipt_unverifiable;never_auto_replay",
+                      "browser_enqueue_unconfirmed;retry_idempotently_with_same_clientRequestId;receipt_unverifiable",
                     ),
                   );
+                const queued =
+                  receipt.delivery === "queued" &&
+                  "messageId" in receipt &&
+                  typeof receipt.messageId === "string" &&
+                  /^[a-f0-9-]{36}$/i.test(receipt.messageId);
                 const delivered =
                   receipt.delivery === "user_turn_observed" &&
                   "messageSent" in receipt &&
@@ -2469,11 +2988,13 @@ export const layerWsRpc = (
                 return reply(
                   recordBrowserSubmission(
                     browserOperationId!,
-                    delivered ? "Delivered" : "Unknown",
+                    delivered ? "Delivered" : queued ? "Queued" : "Unknown",
                     DateTime.formatIso(yield* DateTime.now),
                     delivered
                       ? "observed_matching_user_dom_turn;not_assistant_completion"
-                      : "browser_send_attempt_uncertain;never_auto_replay",
+                      : queued
+                        ? `browser_delivery_queued:${receipt.messageId}`
+                        : "browser_send_attempt_uncertain;never_auto_replay",
                   ),
                 );
               }
@@ -4110,6 +4631,8 @@ export const layer = Layer.unwrap(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),
+              Layer.provide(ChatGPTTranscript.layer),
+              Layer.provide(ChatGPTRegistry.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),

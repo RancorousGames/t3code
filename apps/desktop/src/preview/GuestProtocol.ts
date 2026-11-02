@@ -1,3 +1,4 @@
+export const CHATGPT_PAGE_PUSH_CHANNEL = "preview:chatgpt-page-push";
 export const START_PICK_CHANNEL = "preview:start-pick";
 export const CANCEL_PICK_CHANNEL = "preview:cancel-pick";
 export const ELEMENT_PICKED_CHANNEL = "preview:element-picked";

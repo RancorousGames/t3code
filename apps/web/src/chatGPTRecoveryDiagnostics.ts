@@ -1,5 +1,4 @@
-import { RECOVERY_PER_SESSION_MS } from "./components/sidebar/chatGPTConversationRecovery";
-
+import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 /** Bounded, content-free diagnostic history readable through T3 session control. */
 export interface ChatGPTRecoveryEvent {
   readonly at: number;
@@ -17,8 +16,7 @@ export function readChatGPTRecoveryEvents(
   count = 20,
 ): ChatGPTRecoveryEvent[] {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(logKey(environmentId)) ?? "[]");
-    if (!Array.isArray(value)) return [];
+    const value = readAllEvents(environmentId);
     return value
       .filter(
         (item): item is ChatGPTRecoveryEvent =>
@@ -55,10 +53,11 @@ export function recordChatGPTRecoveryEvent(
   };
   console.info("[ChatGPT recovery]", entry);
   try {
-    localStorage.setItem(
-      logKey(environmentId),
-      JSON.stringify([...current, entry].slice(-MAX_EVENTS)),
-    );
+    const diagnostics = [...current, entry].slice(-MAX_EVENTS);
+    localStorage.setItem(logKey(environmentId), JSON.stringify(diagnostics));
+    const store = getChatGPTSessionPersistedStore(environmentId);
+    store.setState((previous) => ({ recovery: { ...previous.recovery, diagnostics } }));
+    window.dispatchEvent(new CustomEvent("chatgpt-recovery-diagnostics-updated"));
   } catch {
     // Diagnostic writes must never block recovery.
   }
@@ -66,22 +65,25 @@ export function recordChatGPTRecoveryEvent(
 
 function readAllEvents(environmentId: string): ChatGPTRecoveryEvent[] {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(logKey(environmentId)) ?? "[]");
-    return Array.isArray(value) ? value.slice(-MAX_EVENTS) : [];
+    return [
+      ...getChatGPTSessionPersistedStore(environmentId).getState().recovery.diagnostics,
+    ].slice(-MAX_EVENTS);
   } catch {
     return [];
   }
 }
 
+/** Read-only recovery history for the dashboard; never modifies retry state. */
+export function readAllChatGPTRecoveryEvents(environmentId: string): ChatGPTRecoveryEvent[] {
+  return readAllEvents(environmentId);
+}
+
 /** Persisted scheduler state, not proof that a reload completed successfully. */
 export function readChatGPTRecoveryState(environmentId: string, sessionId: string) {
   try {
-    const root: unknown = JSON.parse(
-      localStorage.getItem(`t3code:chatgpt-browser:bounded-recovery:${environmentId}`) ?? "{}",
-    );
-    const history: unknown = JSON.parse(
-      localStorage.getItem(`t3code:chatgpt-browser:recovery:${environmentId}`) ?? "{}",
-    );
+    const recovery = getChatGPTSessionPersistedStore(environmentId).getState().recovery;
+    const root: unknown = recovery.bounded;
+    const history: unknown = recovery.history;
     const state = root && typeof root === "object" ? (root as Record<string, unknown>) : {};
     const info = history && typeof history === "object" ? (history as Record<string, unknown>) : {};
     const red =
@@ -101,12 +103,8 @@ export function readChatGPTRecoveryState(environmentId: string, sessionId: strin
     return {
       lastAttemptAt: typeof bySession === "number" ? bySession : null,
       retryCount: typeof r.attempts === "number" ? r.attempts : 0,
-      nextRetryAt:
-        typeof r.nextAt === "number"
-          ? typeof bySession === "number"
-            ? bySession + RECOVERY_PER_SESSION_MS
-            : Math.min(r.nextAt, Date.now() + RECOVERY_PER_SESSION_MS)
-          : null,
+      // Red failures have no per-session cooldown; the global queue is the limit.
+      nextRetryAt: null,
       orangeStage: typeof o.stage === "string" ? o.stage : null,
       // A legacy escalation must never hide a recovery candidate or stop wakeup.
       escalationReason: null,

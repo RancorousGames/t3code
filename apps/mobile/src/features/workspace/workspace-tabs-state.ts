@@ -18,7 +18,7 @@ export type WorkspaceSearchMode = "resting" | "active" | "expanded";
 
 /** Settings, Chats and pull requests pair a list with a detail column; Usage is one page. */
 export function workspaceUsesColumns(tab: WorkspaceTab, settingsOpen = false) {
-  return settingsOpen || tab === "threads" || tab === "pullRequests";
+  return settingsOpen || tab === "threads" || tab === "pullRequests" || tab === "chatGPT";
 }
 
 export interface WorkspaceTabState {
@@ -45,6 +45,7 @@ export function initialWorkspaceTabsState(): WorkspaceTabsState {
     tabs: {
       threads: emptyTab(),
       pullRequests: emptyTab(),
+      chatGPT: emptyTab(),
       usage: emptyTab(),
       settings: emptyTab(),
     },
@@ -72,7 +73,7 @@ export function workspaceTabsReducer(
           selectionRevision: state.selectionRevision + 1,
         };
   const tab = action.tab ?? state.selectedTab;
-  if (tab !== "threads" && tab !== "pullRequests" && tab !== "settings") return state;
+  if (tab !== "threads" && tab !== "pullRequests" && tab !== "chatGPT" && tab !== "settings") return state;
   const current = state.tabs[tab];
   let next: WorkspaceTabState;
   switch (action.type) {
@@ -117,7 +118,7 @@ export function shouldRestoreNativeSearch(tab: WorkspaceTabState, keepsEmptySear
 }
 
 export const WORKSPACE_TOOLBAR = { height: 48, expandedGap: 10, edge: 16, gap: 8 };
-export const WORKSPACE_DOCK = { height: 48, tabsWidth: 176, gap: 12, bottomGap: 6 };
+export const WORKSPACE_DOCK = { height: 48, tabsWidth: 210, gap: 12, bottomGap: 6 };
 
 export function workspaceDockBottomClearance(input: {
   readonly bottomInset: number;

@@ -5,15 +5,65 @@ import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { controlAddress, sendAppControlRequest } from "./spawn-chatgpt-session.mjs";
+import { sanitizeRecoveryAggregate } from "./chatgpt-recovery-metrics.mjs";
+import { computeChatGPTCapacityStatus } from "./chatgpt-capacity-status.mjs";
 
 export async function controlSessions(
   input,
   { home = NodePath.resolve(import.meta.dirname, "../.t3"), exchange = sendAppControlRequest } = {},
 ) {
-  const allowed = ["list", "read", "send", "reload", "complete", "archive", "restore", "change_state", "wait"];
+  if (input?.action === "capacity_status") {
+    if (Object.keys(input).some((field) => field !== "action"))
+      throw new Error("capacity_status is a read-only global T3 snapshot with no session overrides.");
+    const inventory = await controlSessions({ action: "list", which: "all", includeHidden: true },
+      { home, exchange });
+    return computeChatGPTCapacityStatus(inventory);
+  }
+  if (input?.action === "open-task") {
+    const { openTaskSession } = await import("./open-task-session.mjs");
+    return openTaskSession(input, { home, exchange, control: controlSessions });
+  }
+  const allowed = [
+    "list",
+    "preferences",
+    "open",
+    "focus",
+    "read",
+    "recovery_metrics",
+    "marker_probe",
+    "experimental_evaluate",
+    "bootstrap_title",
+    "ask_user",
+    "send",
+    "reconcile_send",
+    "enqueue",
+    "delivery_status",
+    "delivery_list",
+    "cancel_delivery",
+    "idle_status",
+    "idle_wait",
+    "reload",
+    "complete",
+    "archive",
+    "restore",
+    "change_state",
+    "close_status",
+    "rollover_finalize",
+    "wait",
+  ];
   if (input?.action === "wait") return waitForChatGPTSessions(input, { home, exchange });
+  // Aggregate telemetry must be independent of any guest and carry no private fields.
+  if (
+    input?.action === "recovery_metrics" &&
+    Object.keys(input).some((field) => field !== "action")
+  )
+    throw new Error(
+      "recovery_metrics is read-only and environment-level; guest/session fields are forbidden.",
+    );
   if (!input || !allowed.includes(input.action))
-    throw new Error("action must be list, read, send, reload, complete, archive, restore, change_state or wait.");
+    throw new Error(
+      "action must be list, open, read, send, reconcile_send, reload, complete, archive, restore, change_state, close_status, rollover_finalize or wait.",
+    );
   if (
     input.which !== undefined &&
     (input.action !== "list" ||
@@ -22,17 +72,162 @@ export async function controlSessions(
     throw new Error(
       "which applies only to list and must be visible, recent, working, blocked or all.",
     );
-  if (input.action !== "list" && !(typeof input.sessionId === "string" && input.sessionId.trim()))
-    throw new Error("sessionId is required for read, send, reload, complete, archive, restore and change_state.");
-  if (input.includeHidden !== undefined &&
-      (input.action !== "list" || typeof input.includeHidden !== "boolean"))
+  if (["idle_status", "idle_wait"].includes(input.action)) {
+    if (typeof input.environmentId !== "string" || !input.environmentId.trim() ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
+        (input.afterSequence !== undefined && (!Number.isSafeInteger(input.afterSequence) || input.afterSequence < 0)) ||
+        (input.timeoutMs !== undefined && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 0 || input.timeoutMs > 30_000)))
+      throw new Error("idle_status/idle_wait require environmentId, exact session UUID, bounded optional sequence/timeout.");
+  } else if (input.afterSequence !== undefined || input.timeoutMs !== undefined) {
+    throw new Error("Idle event fields require idle_status or idle_wait.");
+  }
+  if (input.action === "bootstrap_title" &&
+    (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
+      typeof input.proposedTitle !== "string" ||
+      input.proposedTitle.length < 3 || input.proposedTitle.length > 80 ||
+      /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle)))
+    throw new Error("bootstrap_title requires a UUID sessionId and safe 3-80 character proposedTitle.");
+  if (input.proposedTitle !== undefined && input.action !== "bootstrap_title")
+    throw new Error("proposedTitle only applies to bootstrap_title.");
+  if (input.action === "ask_user") {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.questionId ?? "") ||
+        typeof input.question !== "string" || !input.question.trim() || input.question.length > 4000 ||
+        (input.options !== undefined && (!Array.isArray(input.options) || input.options.length > 8 ||
+          input.options.some(s => typeof s !== "string" || !s.trim() || s.length > 180))) ||
+        (input.allowCustom !== undefined && typeof input.allowCustom !== "boolean") ||
+        ((!input.options || !input.options.length) && input.allowCustom === false))
+      throw new Error("ask_user requires exact session/question UUIDs, question text and optional choices.");
+  } else if (input.questionId !== undefined || input.question !== undefined ||
+             input.options !== undefined || input.allowCustom !== undefined) {
+    throw new Error("Question fields apply only to ask_user.");
+  }
+  if (input.action === "marker_probe" && !/^T3_SELF_[A-F0-9]{32}$/.test(input.marker ?? ""))
+    throw new Error("marker_probe requires the exact self-identification token.");
+  if (input.marker !== undefined && input.action !== "marker_probe")
+    throw new Error("marker applies only to marker_probe.");
+  if (input.action === "experimental_evaluate" &&
+      (typeof input.expression !== "string" || !input.expression.trim() ||
+       input.expression.length > 8_000))
+    throw new Error("experimental_evaluate requires a 1..8000 character JS expression. An expectedConversationId is optional only for verified backend-created fresh chats.");
+  if (input.expression !== undefined && input.action !== "experimental_evaluate")
+    throw new Error("expression is valid only for experimental_evaluate.");
+  if (
+    ![
+      "list",
+      "preferences",
+      "recovery_metrics",
+      "delivery_status",
+      "delivery_list",
+      "cancel_delivery",
+    ].includes(input.action) &&
+    !(typeof input.sessionId === "string" && input.sessionId.trim())
+  )
+    throw new Error(
+      "sessionId is required for read, send, reload, complete, archive, restore and change_state.",
+    );
+  if (
+    input.includeHidden !== undefined &&
+    (input.action !== "list" || typeof input.includeHidden !== "boolean")
+  )
     throw new Error("includeHidden is a boolean applying only to list.");
-  if (input.action === "change_state" ?
-      !["hidden", "unhidden", "closed"].includes(input.state) :
-      input.state !== undefined)
+  if (
+    input.action === "change_state"
+      ? !["hidden", "unhidden", "closed"].includes(input.state)
+      : input.state !== undefined
+  )
     throw new Error("state=hidden|unhidden|closed is required only for change_state.");
-  if (input.action === "send" && !(typeof input.message === "string" && input.message.trim()))
-    throw new Error("Nonempty message required for send.");
+  if (
+    ["send", "reconcile_send", "enqueue"].includes(input.action) &&
+    !(typeof input.message === "string" && input.message.trim())
+  )
+    throw new Error("Nonempty original message required for send or reconcile_send.");
+  if (
+    input.action === "enqueue" &&
+    !(typeof input.expectedConversationId === "string" && typeof input.messageId === "string")
+  )
+    throw new Error("enqueue requires expectedConversationId and caller-stable messageId.");
+  if (
+    ["enqueue", "delivery_status", "cancel_delivery"].includes(input.action) &&
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(input.messageId ?? "")
+  )
+    throw new Error("A stable UUID messageId is required.");
+  if (input.action === "reconcile_send" && !input.expectedConversationId)
+    throw new Error("reconcile_send requires expectedConversationId.");
+  if (input.wakeForSend !== undefined && (input.action !== "read" || input.wakeForSend !== true))
+    throw new Error("wakeForSend=true is only valid for one direct-send read preflight.");
+  if (input.action === "send") {
+    if (
+      input.senderSessionId !== undefined &&
+      (typeof input.senderSessionId !== "string" || !input.senderSessionId.trim())
+    )
+      throw new Error("senderSessionId must be a nonempty source ID.");
+    if (
+      input.expectedConversationId !== undefined &&
+      (typeof input.expectedConversationId !== "string" ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.expectedConversationId))
+    )
+      throw new Error(
+        "expectedConversationId must be a canonical lowercase ChatGPT conversation UUID.",
+      );
+    if (
+      input.messageId !== undefined &&
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(input.messageId)
+    )
+      throw new Error("Optional direct-send messageId must be a stable UUID.");
+    // Legacy/direct T3 sends are durable too. A busy, recovering or cold guest
+    // must NOT turn an instruction into a transient rejected click.
+    // Resolve/wake only the exact addressed session, then persist the payload.
+    // T3's desktop delivery queue owns ordered retries, not this CLI.
+    const observed = await controlSessions(
+      {
+        action: "read",
+        sessionId: input.sessionId,
+        count: 1,
+        wakeForSend: true,
+        ...(input.expectedConversationId
+          ? {
+              expectedConversationId: input.expectedConversationId,
+            }
+          : {}),
+      },
+      { home, exchange },
+    );
+    const conversationId = observed.verifiedConversationId;
+    if (
+      observed.conversationGuardValidated !== true ||
+      typeof conversationId !== "string" ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(conversationId) ||
+      (input.expectedConversationId && input.expectedConversationId !== conversationId)
+    )
+      throw new Error("T3 did not verify the exact mounted conversation; no direct send enqueued.");
+    const messageId = input.messageId ?? NodeCrypto.randomUUID();
+    const accepted = await controlSessions(
+      {
+        action: "enqueue",
+        messageId,
+        sessionId: input.sessionId,
+        expectedConversationId: conversationId,
+        message: input.message,
+      },
+      { home, exchange },
+    );
+    if (
+      accepted.messageId !== messageId ||
+      accepted.conversationId !== conversationId ||
+      accepted.sessionId !== input.sessionId ||
+      !accepted.status
+    )
+      throw new Error("T3 did not acknowledge the exact durable message and recipient.");
+    return {
+      ...accepted,
+      action: "send",
+      messageSent: accepted.status === "delivered",
+      delivery: accepted.status === "delivered" ? "user_turn_observed" : "queued",
+      conversationGuardValidated: true,
+      verifiedConversationId: conversationId,
+    };
+  }
   if (
     input.senderSessionId !== undefined &&
     (input.action !== "send" ||
@@ -42,7 +237,7 @@ export async function controlSessions(
     throw new Error("senderSessionId is a nonempty source ID used only with send.");
   if (
     input.expectedConversationId !== undefined &&
-    (!["read", "send"].includes(input.action) ||
+    (!(["read", "send", "reconcile_send", "enqueue", "experimental_evaluate"].includes(input.action)) ||
       typeof input.expectedConversationId !== "string" ||
       !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.expectedConversationId))
   ) {
@@ -50,16 +245,35 @@ export async function controlSessions(
       "expectedConversationId is a canonical lowercase /c/<uuid> ID for read or send.",
     );
   }
+  if (
+    input.action === "rollover_finalize" &&
+    (!(typeof input.successorSessionId === "string" && input.successorSessionId.trim()) ||
+      input.successorSessionId === input.sessionId ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.priorConversationId ?? "") ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.successorConversationId ?? ""))
+  )
+    throw new Error(
+      "rollover_finalize requires distinct exact T3 browser IDs and two canonical conversation UUIDs.",
+    );
+  if (
+    input.action !== "rollover_finalize" &&
+    (input.successorSessionId !== undefined ||
+      input.priorConversationId !== undefined ||
+      input.successorConversationId !== undefined ||
+      input.recoveryMode !== undefined)
+  )
+    throw new Error("Rollover identity fields apply only to rollover_finalize.");
   if (input.managerSessionId !== undefined)
     throw new Error("managerSessionId is not an authenticated authorization token.");
   if (
     input.managerDecision !== undefined &&
-    (input.action !== "archive" || typeof input.managerDecision !== "boolean")
+    (!["archive", "rollover_finalize"].includes(input.action) ||
+      typeof input.managerDecision !== "boolean")
   )
     throw new Error("managerDecision is a boolean supported only for archive.");
   if (
     input.reason !== undefined &&
-    (input.action !== "archive" ||
+    (!["archive", "rollover_finalize"].includes(input.action) ||
       typeof input.reason !== "string" ||
       !input.reason.trim() ||
       input.reason.length > 500 ||
@@ -68,18 +282,48 @@ export async function controlSessions(
     throw new Error("reason requires archive managerDecision=true and 1..500 characters.");
   if (input.action === "archive" && input.managerDecision === true && !input.reason?.trim())
     throw new Error("managerDecision requires a nonempty reason.");
+  if (
+    input.action === "rollover_finalize" &&
+    input.recoveryMode === true &&
+    (input.managerDecision !== true || !input.reason?.trim())
+  )
+    throw new Error("Degraded rollover requires explicit managerDecision and a reason.");
+  if (input.recoveryMode !== undefined && typeof input.recoveryMode !== "boolean")
+    throw new Error("recoveryMode must be boolean.");
   const request = {
     version: 1,
     requestId: NodeCrypto.randomUUID(),
     type: "chatgpt.sessions",
     action: input.action,
-    ...(input.action === "list" ? { which: input.which ?? "visible", includeHidden: input.includeHidden === true } : {}),
+    ...(input.action === "marker_probe" ? { marker: input.marker } : {}),
+    ...(input.action === "experimental_evaluate" ? { expression: input.expression } : {}),
+    ...(input.action === "bootstrap_title" ? { proposedTitle: input.proposedTitle } : {}),
+    ...(input.action === "ask_user" ? { questionId: input.questionId, question: input.question,
+      ...(input.options ? { options: input.options } : {}),
+      ...(input.allowCustom !== undefined ? { allowCustom: input.allowCustom } : {}) } : {}),
+    ...(input.action === "list"
+      ? { which: input.which ?? "visible", includeHidden: input.includeHidden === true }
+      : {}),
     ...(input.action === "change_state" ? { state: input.state } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.action === "idle_status" || input.action === "idle_wait"
+      ? { environmentId: input.environmentId, ...(input.afterSequence !== undefined ? { afterSequence: input.afterSequence } : {}),
+          ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}) }
+      : {}),
+    ...(input.action === "rollover_finalize"
+      ? {
+          successorSessionId: input.successorSessionId,
+          priorConversationId: input.priorConversationId,
+          successorConversationId: input.successorConversationId,
+          ...(input.recoveryMode !== undefined ? { recoveryMode: input.recoveryMode } : {}),
+        }
+      : {}),
     ...(input.from ? { from: input.from } : {}),
     ...(input.count !== undefined ? { count: input.count } : {}),
     ...(input.maxMessageChars !== undefined ? { maxMessageChars: input.maxMessageChars } : {}),
     ...(input.message !== undefined ? { message: input.message } : {}),
+    ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
+    ...(input.wakeForSend === true ? { wakeForSend: true } : {}),
     ...(input.senderSessionId !== undefined ? { senderSessionId: input.senderSessionId } : {}),
     ...(input.expectedConversationId !== undefined
       ? { expectedConversationId: input.expectedConversationId }
@@ -124,18 +368,53 @@ export async function controlSessions(
     throw new Error(
       "T3 Code did not return session data. Rebuild and restart the updated desktop app.",
     );
+  if (input.action === "recovery_metrics") {
+    if (
+      response.data?.action !== "recovery_metrics" ||
+      !response.data.metrics ||
+      typeof response.data.metrics !== "object" ||
+      Array.isArray(response.data.metrics)
+    )
+      throw new Error(
+        "Desktop did not confirm telemetry-only recovery_metrics response; update T3 desktop.",
+      );
+    return {
+      action: "recovery_metrics",
+      metrics: sanitizeRecoveryAggregate(response.data.metrics),
+    };
+  }
   if (
-    ["archive", "restore", "change_state"].includes(input.action) &&
-    (response.data?.sessionId !== input.sessionId ||
-      response.data?.persisted !== true ||
+    ["archive", "restore", "change_state", "rollover_finalize"].includes(input.action) &&
+    ((input.action === "rollover_finalize"
+      ? response.data?.priorSessionId
+      : response.data?.sessionId) !== input.sessionId ||
+      (input.action === "change_state" &&
+      input.state === "closed" &&
+      response.data?.closeAccepted === true
+        ? !["closing", "closed"].includes(response.data?.status) ||
+          (response.data?.closed === true && response.data?.persisted !== true) ||
+          (response.data?.status === "closed" && response.data?.persisted !== true)
+        : response.data?.persisted !== true) ||
       response.data?.acknowledged !== true ||
       response.data?.action !== input.action ||
       (input.action === "change_state" && response.data?.state !== input.state))
   ) {
-    throw new Error(`Desktop has not confirmed persisted ${input.action}; no success assumed.`);
+    throw new Error(
+      `Desktop has not confirmed persisted or accepted ${input.action}; no success assumed.`,
+    );
+  }
+  if (
+    input.action === "close_status" &&
+    (response.data?.action !== "close_status" ||
+      response.data?.sessionId !== input.sessionId ||
+      !["open", "closing", "closed", "unknown"].includes(response.data?.status) ||
+      (response.data?.status === "closed" && response.data?.persisted !== true))
+  ) {
+    throw new Error("Desktop did not return verified close status; outcome UNKNOWN.");
   }
   if (
     input.expectedConversationId !== undefined &&
+    input.action !== "enqueue" &&
     (response.data?.conversationGuardValidated !== true ||
       response.data?.verifiedConversationId !== input.expectedConversationId)
   ) {

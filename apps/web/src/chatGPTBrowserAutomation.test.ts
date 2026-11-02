@@ -26,10 +26,14 @@ function fixture() {
       loading: false,
     })),
     waitFor: vi.fn(async () => undefined),
-    type: vi.fn(async () => undefined),
-    press: vi.fn(async () => undefined),
-    evaluate: vi.fn(async (_runtime: string, { expression }: { expression: string }) =>
-      expression.includes("const el = document.querySelector") ? true : false,
+    type: vi.fn(async (_runtime: string, _payload: { text: string }) => undefined),
+    press: vi.fn(async (_runtime: string, _payload: { expectedComposerText: string }) => undefined),
+    evaluate: vi.fn(async (_runtime: string, { expression }: { expression: string }): Promise<boolean | { ok: boolean; reason?: string }> =>
+      expression.includes("const draftEditor =") || expression.includes("const expectedDraft =")
+        ? { ok: true }
+        : expression.includes("const el = document.querySelector")
+          ? true
+          : false,
     ),
   };
   const input = {
@@ -91,13 +95,82 @@ describe("initial ChatGPT prompt delivery receipt", () => {
     expect(automation.press).not.toHaveBeenCalled();
   });
 
-  it("preserves an existing draft without clearing it or sending", async () => {
+  it("replaces a restored draft when starting an automated worker or reboot", async () => {
+    for (const newManagedWorker of [true, false]) {
+      const { input, automation } = fixture();
+      const result = await sendInitialChatGPTPrompt({ ...input, newManagedWorker });
+      // No user turn is rendered in this fixture, so the submission is UNKNOWN.
+      expect(result).toMatchObject({ delivery: "unknown", sendAttempted: true });
+      expect(automation.evaluate).toHaveBeenCalledWith(
+        "runtime",
+        expect.objectContaining({
+          expression: expect.stringContaining("document.execCommand('delete', false)"),
+        }),
+      );
+      const clearedAt = automation.evaluate.mock.invocationCallOrder[0];
+      const typedAt = automation.type.mock.invocationCallOrder[0];
+      const verifiedAt = automation.evaluate.mock.invocationCallOrder[1];
+      const pressedAt = automation.press.mock.invocationCallOrder[0];
+      expect(clearedAt).toBeLessThan(typedAt!);
+      expect(typedAt).toBeLessThan(verifiedAt!);
+      expect(verifiedAt).toBeLessThan(pressedAt!);
+      expect(automation.type).toHaveBeenCalledWith(
+        "runtime",
+        expect.objectContaining({
+          clear: true,
+          text: expect.stringContaining("Do exactly one job"),
+        }),
+      );
+      expect(automation.press).toHaveBeenCalledWith(
+        "runtime",
+        expect.objectContaining({
+          key: "Enter",
+          expectedComposerText: expect.stringContaining("Do exactly one job"),
+        }),
+      );
+    }
+  });
+  it("types the final execution instruction after routing on a continuous worker reboot", async () => {
     const { input, automation } = fixture();
-    automation.evaluate.mockResolvedValueOnce(false);
+    await sendInitialChatGPTPrompt({
+      ...input,
+      newManagedWorker: false,
+      resumeWorkAfterReboot: true,
+    });
+    const typed = automation.type.mock.calls[0]?.[1] as { text: string };
+    const submitted = automation.press.mock.calls[0]?.[1] as { expectedComposerText: string };
+    expect(typed.text).toBe(submitted.expectedComposerText);
+    expect(typed.text).toContain("not authority to access other sessions.");
+    expect(typed.text.trimEnd().endsWith("Begin doing actual work now!")).toBe(true);
+  });
+
+  it("never types or sends when an inherited draft could not be cleared", async () => {
+    const { input, automation } = fixture();
+    automation.evaluate.mockResolvedValueOnce({
+      ok: false,
+      reason: "Could not clear restored ChatGPT draft.",
+    });
     const result = await sendInitialChatGPTPrompt(input);
-    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
-    expect(result.reason).toContain("preserving the existing draft");
+    expect(result.delivery).toBe("not_sent");
+    expect(result.reason).toContain("Could not clear restored ChatGPT draft");
     expect(automation.type).not.toHaveBeenCalled();
+    expect(automation.press).not.toHaveBeenCalled();
+  });
+
+  it("never sends if stale text reappears after typing the startup prompt", async () => {
+    const { input, automation } = fixture();
+    automation.evaluate.mockImplementation(
+      async (_runtime: string, { expression }: { expression: string }) =>
+        expression.includes("const draftEditor =")
+          ? { ok: true }
+          : expression.includes("const expectedDraft =")
+            ? { ok: false, reason: "Automatic startup composer differs from intended prompt." }
+            : false,
+    );
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result.delivery).toBe("not_sent");
+    expect(result.reason).toContain("composer differs from intended prompt");
+    expect(automation.type).toHaveBeenCalledTimes(1);
     expect(automation.press).not.toHaveBeenCalled();
   });
 
@@ -118,8 +191,10 @@ describe("initial ChatGPT prompt delivery receipt", () => {
     const { input, automation } = fixture();
     automation.evaluate.mockImplementation(
       async (_runtime: string, { expression }: { expression: string }) =>
-        expression.includes("const el = document.querySelector") ||
-        expression.includes("data-message-author-role"),
+        expression.includes("const draftEditor =") || expression.includes("const expectedDraft =")
+          ? { ok: true }
+          : expression.includes("const el = document.querySelector") ||
+            expression.includes("data-message-author-role"),
     );
     const result = await sendInitialChatGPTPrompt(input);
     expect(result).toEqual({ delivery: "user_turn_observed", sendAttempted: true });

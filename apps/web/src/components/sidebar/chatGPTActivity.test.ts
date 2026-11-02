@@ -8,6 +8,7 @@ import {
   CHATGPT_RECENT_ACTIVITY_MS,
   chatGPTActivityAge,
   chatGPTActivityColorClass,
+  chatGPTVerificationTitleColorClass,
 } from "./chatGPTActivity";
 
 const readActivity = () => window.eval(CHATGPT_ACTIVITY_EXPRESSION);
@@ -32,24 +33,25 @@ afterEach(() => {
 });
 
 describe("ChatGPT activity recency", () => {
-  const now = 1_800_000;
+  const now = 18_000_000;
 
   it("keeps an actively working session green regardless of previous activity", () => {
     expect(chatGPTActivityAge("working", 0, now)).toBe("working");
     expect(chatGPTActivityColorClass("working")).toBe("text-lime-500! dark:text-lime-400!");
   });
 
-  it("shows blue for 15 minutes after the last observed work", () => {
+  it("shows blue for 2 hours after the last observed work", () => {
     expect(chatGPTActivityAge("idle", now - CHATGPT_RECENT_ACTIVITY_MS + 1, now)).toBe("recent");
     expect(chatGPTActivityColorClass("recent")).toContain("text-[#5d82a9]!");
   });
 
-  it("shows inactive grey after 15 minutes or without any recorded work", () => {
+  it("shows inactive grey after 2 hours or without any recorded work", () => {
     expect(chatGPTActivityAge("idle", now - CHATGPT_RECENT_ACTIVITY_MS, now)).toBe("inactive");
     for (const timestamp of [0, -1, NaN, Infinity, now + 1]) {
       expect(chatGPTActivityAge("idle", timestamp, now)).toBe("inactive");
     }
     expect(chatGPTActivityColorClass("inactive")).toBe("text-muted-foreground!");
+    expect(chatGPTActivityColorClass("unloaded")).toBe("text-zinc-600! dark:text-zinc-600!");
   });
 
   it("reserves a different grey for unknown, regardless of historical activity", () => {
@@ -67,6 +69,26 @@ describe("ChatGPT activity recency", () => {
     expect(chatGPTActivityColorClass("delivery-timeout")).toBe(
       chatGPTActivityColorClass("interrupted"),
     );
+  });
+});
+
+describe("verification title colors", () => {
+  it("preserves operational status colors for verification-pending sessions", () => {
+    for (const age of ["working", "invalid", "interrupted", "delivery-timeout", "unloaded", "unknown"] as const) {
+      expect(chatGPTVerificationTitleColorClass(age, true)).toBe(chatGPTActivityColorClass(age));
+    }
+  });
+
+  it("turns otherwise light-grey or blue verification titles amber", () => {
+    for (const age of ["inactive", "recent", "snoozed"] as const) {
+      expect(chatGPTVerificationTitleColorClass(age, true)).toBe("text-amber-700! dark:text-amber-200!");
+    }
+  });
+
+  it("does not change title colors without verification pending", () => {
+    for (const age of ["working", "invalid", "interrupted", "unloaded", "inactive", "recent", "snoozed"] as const) {
+      expect(chatGPTVerificationTitleColorClass(age, false)).toBe(chatGPTActivityColorClass(age));
+    }
   });
 });
 

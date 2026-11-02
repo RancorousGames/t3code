@@ -1,8 +1,15 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
-import { chatGPTBrowserThreadRef, readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
+import {
+  CHATGPT_DEFAULT_URL,
+  chatGPTBrowserThreadRef,
+  readChatGPTBrowserSessions,
+} from "./chatGPTBrowserSessions";
 import { isChatGPTHomeUrl } from "./chatGPTBrowserPrewarm";
+import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
+import { nativeChatGPTInitialPromptAutomation } from "./browser/nativeChatGPTInitialPromptAutomation";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
+import { publicChatGPTParentId } from "./chatGPTBootstrapIdentity";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { acquireBrowserSurfaceActivity } from "./browser/browserSurfaceStore";
 import { wakeChatGPTGuest } from "./browser/chatGPTGuestHibernation";
@@ -49,6 +56,9 @@ export async function sendInitialChatGPTPrompt(input: {
   sessionId: string;
   requestId: string;
   prompt: string;
+  /** Reboots are not new managed workers; do not inject worker onboarding. */
+  newManagedWorker?: boolean;
+  resumeWorkAfterReboot?: boolean;
   readSessions?: typeof readChatGPTBrowserSessions;
   automation?: ChatGPTPromptAutomation;
   readState?: typeof readThreadPreviewState;
@@ -57,9 +67,8 @@ export async function sendInitialChatGPTPrompt(input: {
   timeoutMs?: number;
   acquireActivity?: (runtimeId: string) => () => void;
 }): Promise<ChatGPTInitialPromptReceipt> {
-  const automation = input.automation ?? (previewBridge ? chatGPTWebviewAutomation : undefined);
-  if (!automation) throw new Error("ChatGPT automation requires T3 Code desktop.");
-  const session = (input.readSessions ?? readChatGPTBrowserSessions)(input.environmentId).find(
+  const sessions = (input.readSessions ?? readChatGPTBrowserSessions)(input.environmentId);
+  const session = sessions.find(
     (entry) =>
       entry.id === input.sessionId && !entry.hidden && entry.spawnRequestId === input.requestId,
   );
@@ -69,10 +78,28 @@ export async function sendInitialChatGPTPrompt(input: {
       sendAttempted: false,
       reason: "ChatGPT guest does not belong to this exact backend spawn reservation.",
     };
+  const nativeBridge =
+    !input.automation && isPersistentChatGPTSessionOptedIn(input.sessionId)
+      ? window.desktopBridge?.stableChatGPTViewRequest
+      : undefined;
+  const automation =
+    input.automation ??
+    (nativeBridge
+      ? nativeChatGPTInitialPromptAutomation(nativeBridge, input.environmentId, input.sessionId)
+      : previewBridge
+        ? chatGPTWebviewAutomation
+        : undefined);
+  if (!automation) throw new Error("ChatGPT automation requires T3 Code desktop.");
   const prompt = buildChatGPTSessionHandoffPrompt(
     input.prompt,
     session.id,
-    session.parentSessionId,
+    publicChatGPTParentId(sessions, session),
+    {
+      newManagedWorker: input.newManagedWorker !== false,
+      resumeWorkAfterReboot: input.resumeWorkAfterReboot === true,
+      ...(session.project === undefined ? {} : { project: session.project }),
+      ...(session.binding ? { role: session.binding.role } : {}),
+    },
   );
   const readState = input.readState ?? readThreadPreviewState;
   const now = input.now ?? Date.now;
@@ -92,20 +119,37 @@ export async function sendInitialChatGPTPrompt(input: {
   // selected. Temporarily keep this guest composited behind the app so browser
   // automation works without navigating to it or taking the user's focus.
   try {
+    if (nativeBridge) {
+      // A newly reserved native session has no legacy preview tab. Attach its
+      // Electron-owned page directly; an existing page is never navigated.
+      await nativeBridge({
+        operation: "attach",
+        identity: {
+          environmentId: input.environmentId,
+          sessionId: input.sessionId,
+          profileId: "default",
+        },
+        url: CHATGPT_DEFAULT_URL,
+      });
+    }
     while (now() < deadline) {
-      const state = readState(threadRef);
-      const tabId = state.activeTabId ?? state.snapshot?.tabId;
+      const state = nativeBridge ? null : readState(threadRef);
+      const tabId = nativeBridge ? input.sessionId : (state!.activeTabId ?? state!.snapshot?.tabId);
       // The upstream server-hosted browser can mount its Electron guest before
       // the desktop overlay reports hasWebContents. Resolve readiness from the
       // actual guest rather than waiting on that eventually consistent overlay.
       if (tabId) {
-        const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
-        // A fresh background session has no work history yet; keep it loaded.
-        wakeChatGPTGuest(runtimeId);
-        if (runtimeId !== activeRuntimeId) {
-          releaseActivity?.();
-          releaseActivity = acquireActivity(runtimeId);
-          activeRuntimeId = runtimeId;
+        const runtimeId = nativeBridge
+          ? input.sessionId
+          : previewRuntimeTabId(threadRef, state!.serverEpoch, tabId);
+        if (!nativeBridge) {
+          // Only the legacy webview needs a preview-runtime wake and activity lease.
+          wakeChatGPTGuest(runtimeId);
+          if (runtimeId !== activeRuntimeId) {
+            releaseActivity?.();
+            releaseActivity = acquireActivity(runtimeId);
+            activeRuntimeId = runtimeId;
+          }
         }
         try {
           const status = await automation.status(runtimeId);
@@ -117,20 +161,9 @@ export async function sendInitialChatGPTPrompt(input: {
               selector: COMPOSER_SELECTOR,
               timeoutMs: Math.min(COMPOSER_WAIT_MS, Math.max(1, deadline - now())),
             });
-            // Even a freshly reserved guest might be opened by the user before
-            // dispatch. Never clear or replace anything already in its composer.
-            const emptyComposer = await automation.evaluate(runtimeId, {
-              expression: `(() => {
-                const el = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
-                if (!(el instanceof HTMLElement)) return false;
-                const text = el instanceof HTMLTextAreaElement ? el.value : (el.innerText || el.textContent || '');
-                return text.trim().length === 0;
-              })()`,
-            });
-            if (emptyComposer !== true) {
-              rejectedGuest = true;
-              throw new Error("ChatGPT composer was not empty; preserving the existing draft.");
-            }
+            // ChatGPT can restore a stale draft from another empty chat here.
+            // Automatic spawn/reboot replaces it with the intended bootstrap;
+            // exact guest, reservation and home-URL checks remain in place.
             // Prevent a removed/replaced reservation from writing to an orphaned guest.
             if (
               !(input.readSessions ?? readChatGPTBrowserSessions)(input.environmentId).some(
@@ -143,7 +176,53 @@ export async function sendInitialChatGPTPrompt(input: {
               rejectedGuest = true;
               throw new Error("ChatGPT spawn reservation changed before dispatch.");
             }
+            // The ChatGPT home composer may contain a draft restored from an
+            // unrelated empty chat. Clear that exact guest editor first, rather
+            // than relying on an insert to replace the old text. This is only
+            // used for an owned automatic spawn/reboot, never for manual chats.
+            // Treat a partial clear as an attempted mutation; do not retry it
+            // against a potentially different guest.
             startedTyping = true;
+            const cleared = await automation.evaluate(runtimeId, {
+              expression: `(() => {
+                if (!['chatgpt.com', 'chat.openai.com'].includes(location.hostname) ||
+                    location.pathname !== '/')
+                  return { ok: false, reason: 'Guest left the new-chat home before clearing draft.' };
+                const draftEditor = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+                if (!(draftEditor instanceof HTMLElement) ||
+                    (!draftEditor.isContentEditable &&
+                     !(draftEditor instanceof HTMLTextAreaElement)))
+                  return { ok: false, reason: 'New-chat composer is not editable.' };
+                const read = () => draftEditor instanceof HTMLTextAreaElement
+                  ? draftEditor.value : (draftEditor.innerText || draftEditor.textContent || '');
+                if (!read().trim()) return { ok: true };
+                draftEditor.focus();
+                if (draftEditor.isContentEditable) {
+                  const selection = document.getSelection();
+                  const range = document.createRange();
+                  range.selectNodeContents(draftEditor);
+                  selection?.removeAllRanges();
+                  selection?.addRange(range);
+                } else {
+                  draftEditor.select();
+                }
+                document.execCommand('delete', false);
+                // The command's boolean return is unreliable across browser
+                // versions; the editor's actual content is the safety check.
+                return { ok: !read().trim(),
+                  reason: 'Could not clear restored ChatGPT draft.' };
+              })()`,
+            });
+            if (
+              typeof cleared !== "object" ||
+              cleared === null ||
+              !("ok" in cleared) ||
+              cleared.ok !== true
+            ) {
+              throw new Error(
+                `ChatGPT automatic startup draft clear failed: ${JSON.stringify(cleared)}`,
+              );
+            }
             try {
               await automation.type(runtimeId, {
                 selector: COMPOSER_SELECTOR,
@@ -201,9 +280,39 @@ export async function sendInitialChatGPTPrompt(input: {
                 });
               }
             }
+            // A draft can be restored again after clearing, or a type helper
+            // can append instead of replace. Never press Send unless this
+            // exact new-chat editor contains only the intended handoff.
+            const verified = await automation.evaluate(runtimeId, {
+              expression: `(() => {
+                if (!['chatgpt.com', 'chat.openai.com'].includes(location.hostname) ||
+                    location.pathname !== '/')
+                  return { ok: false, reason: 'Guest left the new-chat home before dispatch.' };
+                const editor = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+                if (!(editor instanceof HTMLElement) ||
+                    (!editor.isContentEditable && !(editor instanceof HTMLTextAreaElement)))
+                  return { ok: false, reason: 'New-chat composer is not editable before dispatch.' };
+                const expectedDraft = ${JSON.stringify(prompt)};
+                const actualDraft = editor instanceof HTMLTextAreaElement
+                  ? editor.value : (editor.innerText || editor.textContent || '');
+                const normalize = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+                return { ok: normalize(actualDraft) === normalize(expectedDraft),
+                  reason: 'Automatic startup composer differs from intended prompt.' };
+              })()`,
+            });
+            if (
+              typeof verified !== "object" ||
+              verified === null ||
+              !("ok" in verified) ||
+              verified.ok !== true
+            ) {
+              throw new Error(
+                `ChatGPT automatic startup prompt verification failed: ${JSON.stringify(verified)}`,
+              );
+            }
             // Dispatch through ChatGPT's enabled Send control in the guest DOM.
             sendAttempted = true;
-            await automation.press(runtimeId, { key: "Enter" });
+            await automation.press(runtimeId, { key: "Enter", expectedComposerText: prompt });
 
             // Neither a new conversation URL nor an empty composer confirms
             // delivery. Require the exact rendered user turn before acknowledging.

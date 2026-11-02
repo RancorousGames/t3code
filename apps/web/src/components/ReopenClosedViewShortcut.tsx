@@ -4,7 +4,7 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { CHATGPT_WORKER_VISIBILITY_MENU_ACTION, type ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 
@@ -201,6 +201,7 @@ export function ReopenClosedViewShortcut() {
         modelPickerOpen: false,
         isDesktop: true,
         isWeb: false,
+        chatgptBrowserRoute: true,
       },
     };
     // Guest browser processes miss app keydown listeners; desktop forwards the chords as menu actions.
@@ -208,6 +209,12 @@ export function ReopenClosedViewShortcut() {
       ...(hasHistory ? (["view.reopenClosed"] as const) : []),
       ...PREVIEW_FORWARDED_COMMANDS,
       "chatgpt.newSession",
+      "chatgpt.openDashboard",
+      "chatgpt.reloadSession",
+      "chatgpt.snoozeSession",
+      "chatgpt.unsnoozeSession",
+      "chatgpt.copySessionId",
+      CHATGPT_WORKER_VISIBILITY_MENU_ACTION,
       "chat.new",
       "chat.newLocal",
       "chat.newWithoutProject",

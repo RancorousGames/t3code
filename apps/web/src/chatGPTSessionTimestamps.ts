@@ -4,11 +4,12 @@ import * as Schema from "effect/Schema";
 import type { BrowserSession } from "./chatGPTBrowserSessions";
 import { chatGPTBrowserLastWorkingKey } from "./chatGPTBrowserSessions";
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
+import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 
 // Store the two newer observations separately from the sidebar session array:
 // a working ChatGPT guest can produce frequent heartbeats without rewriting
 // the complete session list. Existing last-working history remains authoritative.
-const timeKey = (environmentId: string, sessionId: string, kind: "active" | "refresh") =>
+const timeKey = (environmentId: string, sessionId: string, kind: "active" | "refresh" | "reboot") =>
   `t3code:chatgpt-browser:last-${kind}:${environmentId}:${sessionId}`;
 
 function readTime(key: string): number | null {
@@ -20,12 +21,19 @@ function readTime(key: string): number | null {
   }
 }
 
-function recordTime(key: string, at: number): void {
+function recordTime(environmentId: string, sessionId: string, kind: "active" | "refresh" | "reboot", at: number): void {
+  const key = timeKey(environmentId, sessionId, kind);
   if (!Number.isFinite(at) || at <= 0 || at > Date.now()) return;
   const previous = readTime(key);
   if (previous !== null && previous >= at) return;
   try {
     setLocalStorageItem(key, at, Schema.Number);
+    const store = getChatGPTSessionPersistedStore(environmentId);
+    store.setState((state) => {
+      const entry = state.timeline[sessionId] ?? {};
+      if ((entry[kind] ?? 0) >= at) return state;
+      return { timeline: { ...state.timeline, [sessionId]: { ...entry, [kind]: at } } };
+    });
   } catch {
     // A storage outage must not obstruct opening or refreshing a session.
   }
@@ -37,16 +45,25 @@ export function recordChatGPTSessionActiveAt(
   sessionId: string,
   at = Date.now(),
 ): void {
-  recordTime(timeKey(environmentId, sessionId, "active"), at);
+  recordTime(environmentId, sessionId, "active", at);
 }
 
-/** Call only after a refresh bridge resolves or a rollover is confirmed committed. */
+/** Browser page reload recovery only; an Agent Reboot starts a new ChatGPT conversation. */
 export function recordChatGPTSessionRefreshedAt(
   environmentId: string,
   sessionId: string,
   at = Date.now(),
 ): void {
-  recordTime(timeKey(environmentId, sessionId, "refresh"), at);
+  recordTime(environmentId, sessionId, "refresh", at);
+}
+
+/** Record a verified same-seat Agent Reboot, not an ordinary browser reload. */
+export function recordChatGPTSessionRebootedAt(
+  environmentId: string,
+  sessionId: string,
+  at = Date.now(),
+): void {
+  recordTime(environmentId, sessionId, "reboot", at);
 }
 
 export function readChatGPTSessionTimeline(
@@ -58,6 +75,7 @@ export function readChatGPTSessionTimeline(
   createdAt: number | null;
   lastActiveAt: number | null;
   lastRefreshAt: number | null;
+  lastRebootAt: number | null;
 } {
   const createdAt = session.createdAt ?? verifiedSpawnCreatedAt;
   const working =
@@ -65,7 +83,8 @@ export function readChatGPTSessionTimeline(
       ? observedLastWorkingAt
       : (readTime(chatGPTBrowserLastWorkingKey(EnvironmentId.make(environmentId), session.id)) ??
         0);
-  const active = readTime(timeKey(environmentId, session.id, "active")) ?? 0;
+  const timeline = getChatGPTSessionPersistedStore(environmentId).getState().timeline[session.id];
+  const active = timeline?.active ?? 0;
   const lastActiveAt = Math.max(
     Number.isFinite(working) && working > 0 && working <= Date.now() ? working : 0,
     active,
@@ -81,7 +100,8 @@ export function readChatGPTSessionTimeline(
         ? createdAt
         : null,
     lastActiveAt: lastActiveAt > 0 ? lastActiveAt : null,
-    lastRefreshAt: readTime(timeKey(environmentId, session.id, "refresh")),
+    lastRefreshAt: timeline?.refresh ?? null,
+    lastRebootAt: timeline?.reboot ?? null,
   };
 }
 

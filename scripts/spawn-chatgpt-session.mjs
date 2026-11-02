@@ -25,6 +25,11 @@ export function parseArguments(args) {
     messageFile: "",
     parentSessionId: "",
     project: "",
+    seatId: "",
+    role: "",
+    taskBoard: "",
+    taskId: "",
+    requestId: "",
     requireParent: false,
     dryRun: false,
   };
@@ -40,6 +45,11 @@ export function parseArguments(args) {
       arg === "--message-file" ||
       arg === "--parent-session-id" ||
       arg === "--project" ||
+      arg === "--seat-id" ||
+      arg === "--role" ||
+      arg === "--task-board" ||
+      arg === "--task-id" ||
+      arg === "--request-id" ||
       arg === "--home"
     ) {
       if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}.`);
@@ -48,7 +58,15 @@ export function parseArguments(args) {
           ? "messageFile"
           : arg === "--parent-session-id"
             ? "parentSessionId"
-            : arg.slice(2)
+            : arg === "--request-id"
+              ? "requestId"
+              : arg === "--seat-id"
+                ? "seatId"
+                : arg === "--task-board"
+                  ? "taskBoard"
+                  : arg === "--task-id"
+                    ? "taskId"
+                    : arg.slice(2)
       ] = args[++i];
     } else if (arg === "--help" || arg === "-h") {
       return null;
@@ -70,6 +88,12 @@ export function parseArguments(args) {
     throw new Error(
       "--require-parent needs an explicit --parent-session-id (T3 browser UUID). The desktop pipe cannot infer the caller.",
     );
+  if (options.role && !["manager", "worker", "personal"].includes(options.role))
+    throw new Error("--role must be manager, worker or personal.");
+  if ((options.seatId || options.taskId || options.taskBoard) && !options.role)
+    throw new Error("--role is required with --seat-id or task binding.");
+  if (Boolean(options.taskId) !== Boolean(options.taskBoard))
+    throw new Error("Both --task-board and --task-id are required for a task binding.");
   return options;
 }
 
@@ -131,6 +155,13 @@ export function createChatGPTSpawnRequest(options, requestId = NodeCrypto.random
     prompt: options.message,
     ...(options.parentSessionId.trim() ? { parentSessionId: options.parentSessionId.trim() } : {}),
     ...(options.project.trim() ? { project: options.project.trim() } : {}),
+    ...(options.seatId?.trim() ? { seatId: options.seatId.trim() } : {}),
+    ...(options.role?.trim() ? { role: options.role.trim() } : {}),
+    ...(options.taskBoard?.trim() && options.taskId?.trim()
+      ? {
+          taskRef: { board: options.taskBoard.trim(), id: options.taskId.trim() },
+        }
+      : {}),
   };
 }
 
@@ -234,20 +265,29 @@ export function classifySpawnResponse(response, request) {
     data.created === true &&
     typeof data.sessionId === "string" &&
     data.sessionId.length > 0 &&
-    ["unknown", "not_sent"].includes(data.promptDelivery) &&
-    data.messageSent === false
+    ["pending", "unknown", "not_sent", "user_turn_observed"].includes(data.promptDelivery) &&
+    data.messageSent === (data.promptDelivery === "user_turn_observed")
   ) {
     return {
       requestId: request.requestId,
-      outcome: "created",
+      outcome: data.messageSent ? "delivered" : "created",
       created: true,
       sessionId: data.sessionId,
       ...observedSpawnParent(request, data, Object.hasOwn(data, "parentSessionId")),
-      messageSent: false,
-      promptDelivery: data.promptDelivery,
+      messageSent: data.messageSent,
+      // The launcher returns before the background initial delivery completes.
+      // For external spawn consumers, "pending" is not evidence of delivery:
+      // preserve creation identity while reporting the unconfirmed state as UNKNOWN.
+      // OMCP's strict receipt contract intentionally accepts only terminal
+      // delivery states (unknown/not_sent/user_turn_observed).
+      promptDelivery: data.promptDelivery === "pending" ? "unknown" : data.promptDelivery,
+      ...(data.promptDelivery === "pending" ? { deliveryPending: true } : {}),
       sendAttempted: data.sendAttempted ?? null,
       ...(data.reason ? { reason: data.reason } : {}),
-      next: "Inspect exact session with chatgpt.sessions read/list before any manual decision; do not automatically resend.",
+      next:
+        data.promptDelivery === "pending"
+          ? "The child ID is reserved; initial delivery continues. Use read/list for status. Do not spawn or submit the initial prompt again."
+          : "Inspect exact session with chatgpt.sessions read/list before any manual decision; do not automatically resend.",
     };
   }
   throw new Error("T3 Code did not provide a valid ChatGPT initial prompt delivery receipt.");
@@ -261,7 +301,7 @@ export async function main(args = process.argv.slice(2)) {
     );
     return;
   }
-  const request = createChatGPTSpawnRequest(options);
+  const request = createChatGPTSpawnRequest(options, options.requestId || NodeCrypto.randomUUID());
   const address = controlAddress(options.home);
   if (Buffer.byteLength(JSON.stringify(request), "utf8") + 1 > 64 * 1024) {
     throw new Error("Message exceeds the desktop control socket's 64 KiB request limit.");
