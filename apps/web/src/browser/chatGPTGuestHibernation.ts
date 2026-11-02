@@ -15,6 +15,8 @@ export const CHATGPT_GUEST_HIBERNATE_AFTER_MS = 15 * 60 * 1_000;
 
 interface ChatGPTGuestHibernationState {
   readonly hibernated: Record<string, true>;
+  /** Explicit user unloads must not be undone by the automatic warm scheduler. */
+  readonly manuallyUnloaded: Record<string, true>;
   /** Explicitly woken guests attach immediately instead of queueing behind restores. */
   readonly woken: Record<string, true>;
   readonly touchedAt: Record<string, number>;
@@ -22,12 +24,12 @@ interface ChatGPTGuestHibernationState {
 }
 
 export const useChatGPTGuestHibernation = create<ChatGPTGuestHibernationState>()(
-  persist(() => ({ hibernated: {}, woken: {}, touchedAt: {}, retained: {} }), {
+  persist(() => ({ hibernated: {}, manuallyUnloaded: {}, woken: {}, touchedAt: {}, retained: {} }), {
     name: "t3code:chatgpt-guest-hibernation:v1",
     storage: createJSONStorage(() =>
       resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
     ),
-    partialize: (state) => ({ hibernated: state.hibernated, touchedAt: state.touchedAt }),
+    partialize: (state) => ({ hibernated: state.hibernated, manuallyUnloaded: state.manuallyUnloaded, touchedAt: state.touchedAt }),
   }),
 );
 
@@ -40,6 +42,19 @@ export function chatGPTGuestKey(runtimeTabId: string): string {
     // Not a runtime tab id; use it as is.
   }
   return runtimeTabId;
+}
+
+export function isChatGPTGuestManuallyUnloaded(runtimeTabId: string): boolean {
+  return useChatGPTGuestHibernation.getState().manuallyUnloaded?.[chatGPTGuestKey(runtimeTabId)] === true;
+}
+
+/** Explicit user-initiated unload; automatic idle hibernation does not set this. */
+export function manuallyUnloadChatGPTGuest(runtimeTabId: string): void {
+  const key = chatGPTGuestKey(runtimeTabId);
+  useChatGPTGuestHibernation.setState((state) => ({
+    hibernated: { ...state.hibernated, [key]: true },
+    manuallyUnloaded: { ...state.manuallyUnloaded, [key]: true },
+  }));
 }
 
 export function isChatGPTGuestHibernated(runtimeTabId: string): boolean {
@@ -125,8 +140,10 @@ export function wakeChatGPTGuest(runtimeTabId: string, now = Date.now()): void {
   const key = chatGPTGuestKey(runtimeTabId);
   useChatGPTGuestHibernation.setState((state) => {
     const { [key]: _wasHibernated, ...hibernated } = state.hibernated;
+    const { [key]: _wasManuallyUnloaded, ...manuallyUnloaded } = state.manuallyUnloaded ?? {};
     return {
       hibernated,
+      manuallyUnloaded,
       woken: state.woken[key] ? state.woken : { ...state.woken, [key]: true },
       touchedAt: { ...state.touchedAt, [key]: now },
     };

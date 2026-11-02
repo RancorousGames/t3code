@@ -1,10 +1,11 @@
 import { useEffect, useRef } from "react";
-import { useEnvironments } from "../state/environments";
+import { useEnvironmentProviders, useEnvironments } from "../state/environments";
 import { playNotificationSound, unlockNotificationAudio } from "../threadNotifications";
 
 /** Notify only for reset deadlines observed while this renderer is running. */
 export function ProviderResetSound() {
   const { environments } = useEnvironments();
+  const providersByEnvironment = useEnvironmentProviders();
   const deadlines = useRef(new Map<string, number>());
   const initialized = useRef(false);
   const notified = useRef(new Set<string>());
@@ -33,7 +34,7 @@ export function ProviderResetSound() {
   useEffect(() => {
     const observed = new Map<string, number>();
     for (const environment of environments) {
-      for (const provider of environment.serverConfig?.providers ?? []) {
+      for (const provider of providersByEnvironment.get(environment.environmentId) ?? []) {
         for (const window of provider.usageLimits?.windows ?? []) {
           if (window.windowDurationMins !== 300 && window.id !== "five_hour") continue;
           const at = Date.parse(window.resetsAt ?? "");
@@ -48,6 +49,6 @@ export function ProviderResetSound() {
       initialized.current = true;
     }
     deadlines.current = observed;
-  }, [environments]);
+  }, [environments, providersByEnvironment]);
   return null;
 }

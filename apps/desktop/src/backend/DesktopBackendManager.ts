@@ -248,7 +248,7 @@ export interface DesktopBackendInstance {
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
   readonly waitForReady: (timeout: Duration.Duration) => Effect.Effect<boolean>;
   /** Read-only inactive process witness; null for ordinary production runs. */
-  readonly inactiveWindowsWitnessSnapshot: Effect.Effect<WindowsBackendProcessWitnessSnapshot | null>;
+  readonly inactiveWindowsWitnessSnapshot?: Effect.Effect<WindowsBackendProcessWitnessSnapshot | null>;
 }
 
 export interface BackendInstanceSpec {

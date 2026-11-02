@@ -12,7 +12,7 @@ import { useState } from "react";
 import { buildThreadRouteParams } from "../../threadRoutes";
 
 import { useProjects } from "../../state/entities";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironmentProviders } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
@@ -274,7 +274,7 @@ export function ProviderResetWakeSettings() {
   const { target } = useSettingsScope();
   const settings = useScopedSettings();
   const [showAdditionalAccounts, setShowAdditionalAccounts] = useState(false);
-  const { environments } = useEnvironments();
+  const providersByEnvironment = useEnvironmentProviders();
   const projects = useProjects().filter(
     (project) => project.environmentId === target?.environmentId,
   );
@@ -282,10 +282,7 @@ export function ProviderResetWakeSettings() {
     id: project.id,
     label: project.title,
   }));
-  const presentation = environments.find(
-    (environment) => environment.environmentId === target?.environmentId,
-  );
-  const providers = (presentation?.serverConfig?.providers ?? []).filter(
+  const providers = (target ? providersByEnvironment.get(target.environmentId) ?? [] : []).filter(
     (provider) => provider.driver === "codex" || provider.driver === "claudeAgent",
   );
   // Built-in instance ids (codex / claudeAgent) are the main accounts.

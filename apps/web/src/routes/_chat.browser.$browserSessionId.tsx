@@ -216,7 +216,6 @@ function ChatGPTBrowserView({
           <PreviewView
             threadRef={threadRef}
             visible={view === "browser"}
-            standalone
             configuredUrls={[CHATGPT_DEFAULT_URL]}
           />
         )}

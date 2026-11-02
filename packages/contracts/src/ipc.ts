@@ -1282,6 +1282,9 @@ export type DesktopOpenRigBindInput = typeof DesktopOpenRigBindInputSchema.Type;
 export const DesktopOpenRigSendInputSchema = Schema.Struct({
   id: Schema.String,
   message: Schema.String,
+  /** Optional, stable managed delivery identity; both fields are required together by sender validation. */
+  messageId: Schema.optional(Schema.String),
+  expectedConversationId: Schema.optional(Schema.String),
 });
 export type DesktopOpenRigSendInput = typeof DesktopOpenRigSendInputSchema.Type;
 /** Exact-route reconciliation never treats an absent message as permission to resend. */

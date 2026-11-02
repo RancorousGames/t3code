@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import { isElectron } from "../../env";
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironmentProviders, usePrimaryEnvironmentId } from "../../state/environments";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -285,6 +285,16 @@ export function QuotaPacingWidget({
   const canvas = useChatCanvas();
   const viewportHasRoom = useMediaQuery("(min-width: 1024px) and (min-height: 480px)");
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const providersByEnvironment = useEnvironmentProviders();
+  const limitPresentations = useMemo(() => new Map(
+    [...presentations].map(([environmentId, presentation]) => [environmentId, {
+      entry: presentation.entry,
+      serverConfig: presentation.serverConfig === null ? null : {
+        ...presentation.serverConfig,
+        providers: providersByEnvironment.get(environmentId) ?? [],
+      },
+    }] as const),
+  ), [presentations, providersByEnvironment]);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const activeSamples = useChatGPTActiveHistory(primaryEnvironmentId, isElectron);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
@@ -299,7 +309,7 @@ export function QuotaPacingWidget({
       return {};
     }
   });
-  const accounts = useMemo(() => collectLimitAccounts(presentations), [presentations]);
+  const accounts = useMemo(() => collectLimitAccounts(limitPresentations), [limitPresentations]);
   const observedNow = Math.max(
     now,
     ...accounts.map((account) => Date.parse(account.limits.checkedAt)).filter(Number.isFinite),

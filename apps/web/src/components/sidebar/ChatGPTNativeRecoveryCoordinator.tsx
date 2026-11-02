@@ -253,13 +253,13 @@ export function ChatGPTNativeRecoveryCoordinator({
           // A canonical URL alone cannot establish that the correct T3
           // conversation is loaded. Require an existing stored binding.
           const expectedConversation = storedConversation ?? boundConversation;
+          const ctx = context();
           if (!expectedConversation || actualConversation !== expectedConversation) {
             // Report the error even if navigation never reached the expected route.
             // Never attempt automatic recovery without a matching binding.
             noteRecoveryFailure(env, id, failure, ctx);
             continue;
           }
-          const ctx = context();
           noteRecoveryFailure(env, id, failure, ctx);
           const queue = reconcileRecoveryQueue(env, ctx);
           const entry = queue.failures[id];

@@ -202,7 +202,7 @@ function SortableBrowserSessionRow({
   activity: ReturnType<typeof useChatGPTBrowserSessionActivity>;
   recoveryPhase: ChatGPTRecoveryPhase | null;
   now: number;
-  verifiedSpawnCreatedAt?: number;
+  verifiedSpawnCreatedAt?: number | undefined;
   disabled: boolean;
   children: (
     dragHandleProps: ReturnType<typeof useSortable>,
@@ -213,7 +213,7 @@ function SortableBrowserSessionRow({
   const model = useChatGPTSession(environmentId, session, activity, {
     now,
     phase: recoveryPhase,
-    verifiedSpawnCreatedAt,
+    ...(verifiedSpawnCreatedAt === undefined ? {} : { verifiedSpawnCreatedAt }),
   });
   const sortable = useSortable({ id, disabled });
   return (
@@ -613,7 +613,7 @@ export function ChatGPTBrowserSidebarEntry({
     return () => clearTimeout(timer);
   }, [keepAwakeFeedback]);
   const snoozePresets = useMemo(
-    () => (contextMenu ? resolveSnoozePresets(new Date(), timestampFormat) : []),
+    () => (contextMenu && environmentId ? resolveSnoozePresets(new Date(), timestampFormat, environmentId) : []),
     [contextMenu, timestampFormat],
   );
   useEffect(() => {

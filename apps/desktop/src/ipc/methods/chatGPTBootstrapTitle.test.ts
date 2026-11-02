@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { readLocalChatGPTBootstrapTitle } from "./chatGPTBootstrapTitle";
+import { readLocalChatGPTBootstrapTitle } from "./chatGPTBootstrapTitle.ts";
 
 const id = "6d50bdf7-bc79-4a94-a938-657f65ee390e";
 

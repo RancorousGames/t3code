@@ -56,8 +56,13 @@ export function ChatGPTRecoveryExperimentObserver() {
         const registered = readChatGPTBrowserSessions(environmentId);
         const snapshotBySession = getChatGPTSessionPersistedStore(environmentId).getState().snapshots;
         const snapshots = registered.flatMap(session => {
-          const snapshot = snapshotBySession[session.id];
-          return snapshot ? [{ activity: snapshot.activity, observedAt: snapshot.observedAt }] : [];
+          const raw = snapshotBySession[session.id];
+          if (!raw || typeof raw !== "object") return [];
+          const snapshot = raw as { activity?: unknown; observedAt?: unknown };
+          return [{
+            ...(typeof snapshot.activity === "string" ? { activity: snapshot.activity } : {}),
+            ...(typeof snapshot.observedAt === "number" ? { observedAt: snapshot.observedAt } : {}),
+          }];
         });
         // Include *all* registered sessions in the possible account load.
         // A missing or stale observation might still be generating server-side.

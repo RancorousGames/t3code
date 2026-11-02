@@ -13,6 +13,8 @@ export type ChatGPTActivityAge =
   | "working"
   | "snoozed"
   | "unloaded"
+  | "unloaded-working"
+  | "unloaded-recent"
   | "recent"
   | "inactive"
   | "unknown"
@@ -24,8 +26,10 @@ export type ChatGPTActivityAge =
 export function chatGPTActivityColorClass(age: ChatGPTActivityAge): string {
   switch (age) {
     case "working":
+    case "unloaded-working":
       return "text-lime-500! dark:text-lime-400!";
     case "recent":
+    case "unloaded-recent":
       return "text-[#5d82a9]! dark:text-[#88a9c8]!";
     case "snoozed":
     case "inactive":
@@ -48,6 +52,17 @@ export function chatGPTVerificationTitleColorClass(age: ChatGPTActivityAge, pend
   return pending && (age === "inactive" || age === "recent" || age === "snoozed")
     ? "text-amber-700! dark:text-amber-200!"
     : chatGPTActivityColorClass(age);
+}
+
+/** Keep recently active sessions tinted even when their native page is unloaded. */
+export function unloadedChatGPTActivityAge(
+  lastWorkingAt: number,
+  activeBeforeFailure: boolean,
+  now: number,
+): ChatGPTActivityAge {
+  const recent = Number.isFinite(lastWorkingAt) && lastWorkingAt > 0 &&
+    lastWorkingAt <= now && now - lastWorkingAt < CHATGPT_RECENT_ACTIVITY_MS;
+  return activeBeforeFailure && recent ? "unloaded-working" : recent ? "unloaded-recent" : "unloaded";
 }
 
 export function chatGPTActivityAge(

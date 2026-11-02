@@ -64,8 +64,6 @@ import * as PreviewPasskeys from "./Passkeys.ts";
 import {
   activeChatGPTBrowserSessionId,
   CLOSE_CHATGPT_SESSION_MENU_ACTION,
-  RENAME_CHATGPT_SESSION_MENU_ACTION,
-  isChatGPTRenameShortcut,
   isChatGPTCloseShortcut,
   isChatGPTSessionPreviewTab,
 } from "../window/ChatGPTCloseShortcut.ts";
@@ -1587,12 +1585,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       ) {
         event.preventDefault();
         if (!input.isAutoRepeat) main?.webContents.send(MENU_ACTION_CHANNEL, "chatgpt.find");
-        return;
-      }
-      if (selectedChatGPTGuest && isChatGPTRenameShortcut(input)) {
-        event.preventDefault();
-        if (!input.isAutoRepeat)
-          main?.webContents.send(MENU_ACTION_CHANNEL, RENAME_CHATGPT_SESSION_MENU_ACTION);
         return;
       }
       if (selectedChatGPTGuest && isChatGPTCloseShortcut(input, hostPlatform)) {

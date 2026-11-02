@@ -22,7 +22,7 @@ import {
   readOmniHubKeepAwakeForT3,
 } from "../../omniwork/omniHubKeepAwakeClient";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { formatRelativeTimeLabel, formatRelativeTimeUntil } from "../../timestampFormat";
+import { formatRelativeElapsed, formatRelativeTimeLabel } from "../../timestampFormat";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -52,11 +52,27 @@ import {
   type OmniHubKeepAwakeReader,
   type OmniHubKeepAwakeTarget,
 } from "./omniHubKeepAwake.logic";
-import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
+import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 // Snapshots are cheap local reads; 15s keeps "next attempt" honest without
 // polling hard. Polling pauses while the window is hidden.
 const AUTO_REFRESH_MS = 15_000;
+
+function useRelativeTimeTick(intervalMs: number): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const refresh = () => setNowMs(Date.now());
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, intervalMs);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [intervalMs]);
+  return nowMs;
+}
 
 /**
  * `failed` is the reader rejecting (e.g. IPC error), distinct from an `unavailable` result.
@@ -212,12 +228,10 @@ function TimeValue({ ms, nowMs, missing }: { ms: number | null; nowMs: number; m
   if (ms === null) return <span className="text-muted-foreground">{missing}</span>;
   const iso = new Date(ms).toISOString();
   const absolute = new Date(ms).toLocaleString();
-  const until = ms > nowMs ? formatRelativeTimeUntil(iso) : null;
-  const relative = until
-    ? until.suffix
-      ? `in ${until.value}`
-      : until.value.toLowerCase()
-    : formatRelativeTimeLabel(iso);
+  const remainingMs = ms - nowMs;
+  const relative = remainingMs > 0
+    ? remainingMs < 60_000 ? "in a moment" : `in ${formatRelativeElapsed(remainingMs).value}`
+    : formatRelativeTimeLabel(iso, nowMs);
   return (
     <span title={absolute}>
       {relative}

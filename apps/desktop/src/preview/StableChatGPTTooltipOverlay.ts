@@ -123,7 +123,7 @@ export function createStableChatGPTTooltipOverlay(owner: BrowserWindow) {
   owner.on("resize", move);
   owner.on("hide", hide);
   owner.on("blur", hide);
-  owner.webContents.on("did-start-navigation", hide);
+  owner.webContents.on("did-start-loading", () => hide());
   owner.on("closed", () => {
     destroyed = true;
     hide();

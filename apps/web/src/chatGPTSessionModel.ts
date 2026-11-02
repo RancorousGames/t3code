@@ -41,23 +41,23 @@ export interface ChatGPTSessionTimeline {
 
 /** Raw observations stay independent: a failed page can also have an unconfirmed send. */
 export interface RawChatGPTSessionSignals {
-  age?: ChatGPTActivityAge;
-  attached?: boolean;
-  status?: string | null;
-  label?: string;
-  lastWorkingAt?: number;
-  hidden?: boolean;
-  snoozedUntil?: number | null;
-  hibernated?: boolean;
-  warm?: boolean;
-  loading?: boolean;
-  unloaded?: boolean;
-  browserUnavailable?: boolean;
-  uncertainSend?: boolean;
-  completionValid?: boolean;
-  recovery?: Partial<ChatGPTSessionRecovery>;
-  timeline?: ChatGPTSessionTimeline | null;
-  events?: readonly ChatGPTRecoveryEvent[];
+  age?: ChatGPTActivityAge | undefined;
+  attached?: boolean | undefined;
+  status?: string | null | undefined;
+  label?: string | undefined;
+  lastWorkingAt?: number | undefined;
+  hidden?: boolean | undefined;
+  snoozedUntil?: number | null | undefined;
+  hibernated?: boolean | undefined;
+  warm?: boolean | undefined;
+  loading?: boolean | undefined;
+  unloaded?: boolean | undefined;
+  browserUnavailable?: boolean | undefined;
+  uncertainSend?: boolean | undefined;
+  completionValid?: boolean | undefined;
+  recovery?: Partial<ChatGPTSessionRecovery> | undefined;
+  timeline?: ChatGPTSessionTimeline | null | undefined;
+  events?: readonly ChatGPTRecoveryEvent[] | undefined;
 }
 
 export interface ChatGPTSessionModel {

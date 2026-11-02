@@ -100,7 +100,10 @@ export const recordIdle = DesktopIpc.makeIpcMethod({
   result: Schema.Boolean,
   handler: Effect.fn("desktop.ipc.appActivation.recordIdle")(function* (event) {
     const activation = yield* DesktopAppActivation.DesktopAppActivation;
-    return yield* activation.recordChatGPTIdleTransition(event);
+    const { kind, ...verified } = event;
+    return yield* activation.recordChatGPTIdleTransition(
+      kind === undefined ? verified : { ...verified, kind },
+    );
   }),
 });
 
