@@ -868,6 +868,15 @@
       "name": "iobuffer",
       "license": "MIT",
       "sourceUrl": "https://github.com/image-js/iobuffer"
+    },
+    {
+      "name": "@nodable/entities",
+      "license": "MIT",
+      "sourceUrl": "https://github.com/nodable/val-parsers",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) Amit Gupta"]
+      }
     }
   ]
 }
