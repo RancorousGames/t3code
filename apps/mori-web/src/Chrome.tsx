@@ -24,7 +24,7 @@ const VIEW_TITLES: Record<Screen, string> = {
 };
 
 export function Titlebar() {
-  const { project, screen, view, bindings, openModal, openPop } = useApp();
+  const { project, screen, view, bindings, openModal, go } = useApp();
   const [googleConnected, setGoogleConnected] = useState(false);
   useEffect(() => {
     let mounted = true;
@@ -62,7 +62,10 @@ export function Titlebar() {
         {bindings.palette && <KeyCaps binding={bindings.palette} />}
       </button>
       <div className="tb-right">
-        <button type="button" className="sync" onClick={event => openPop({ kind: "integrations", anchor: event.currentTarget })}>
+        <button type="button" className="sync" onClick={() => {
+          go("settings");
+          requestAnimationFrame(() => document.getElementById("mori-google-workspace")?.scrollIntoView({ behavior: "smooth", block: "center" }));
+        }}>
           <span className={googleConnected ? "ldot" : "ldot off"} />
           Google Workspace · {googleConnected ? "connected" : "not connected"}
         </button>

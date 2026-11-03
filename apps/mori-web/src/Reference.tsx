@@ -418,7 +418,9 @@ export function SettingsScreen() {
             Reset columns
           </button>
         </div>
-        <GoogleConnect />
+        <div id="mori-google-workspace">
+          <GoogleConnect showImportDestinations onImport={(tables, destination) => openModal({ kind: "import", step: 2, add: destination !== "new", tables })} />
+        </div>
       </div>
     </div>
   );

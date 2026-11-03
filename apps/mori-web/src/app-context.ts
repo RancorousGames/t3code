@@ -6,6 +6,7 @@ import type { MoriActions, SaveState } from "./store.ts";
 import type { ViewFilters } from "./insights.ts";
 import type { LibraryEntry } from "./library.ts";
 import type { PopAlign } from "./Overlays.tsx";
+import type { GoogleStagedTable } from "./google-sync.ts";
 
 export type Screen = "matrix" | "focus" | "characters" | "glossary" | "context" | "project" | "settings" | "chatgpt";
 export type EditorClickSelection = { kind: "position"; offset: number } | { kind: "selectAll" };
@@ -22,7 +23,7 @@ export type PopState = {
 export type ModalState =
   | { kind: "shortcuts" }
   | { kind: "palette" }
-  | { kind: "import"; step: 1 | 2 | 3 }
+  | { kind: "import"; step: 1 | 2 | 3; /** Add files to open project. */ add?: boolean; tables?: GoogleStagedTable[] }
   | { kind: "templates" };
 
 export interface AppValue {

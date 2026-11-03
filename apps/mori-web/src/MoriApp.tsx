@@ -11,6 +11,7 @@ import { Inspector } from "./Inspector.tsx";
 import { MatrixScreen } from "./Matrix.tsx";
 import { Modal, PopoverFrame } from "./Overlays.tsx";
 import { NotificationViewport, notify } from "./Notifications.tsx";
+import type { GoogleStagedTable } from "./google-sync.ts";
 import { PopoverContent } from "./Popovers.tsx";
 import { ContextScreen, CharactersScreen, GlossaryScreen, ProjectScreen, SettingsScreen } from "./Reference.tsx";
 import { Sidebar } from "./Sidebar.tsx";
@@ -430,7 +431,7 @@ export function MoriApp() {
             )}
           </div>
         </div>
-        {modal?.kind === "import" && <ImportModal step={modal.step} onClose={closeModal} onCreate={createProject} />}
+        {modal?.kind === "import" && <ImportModal step={modal.step} tables={modal.tables} onClose={closeModal} onCreate={createProject} />}
       </>
     );
   }
@@ -467,20 +468,21 @@ export function MoriApp() {
       {modal && modal.kind === "shortcuts" && <Modal onClose={closeModal} className="narrow"><ShortcutsModal /></Modal>}
       {modal && modal.kind === "palette" && <Modal onClose={closeModal} className="pal"><PaletteModal /></Modal>}
       {modal && modal.kind === "templates" && <Modal onClose={closeModal} className="narrow"><TemplatesModal /></Modal>}
-      {modal && modal.kind === "import" && <ImportModal step={modal.step} onClose={closeModal} onCreate={createProject} />}
+      {modal && modal.kind === "import" && <ImportModal step={modal.step} tables={modal.tables} onClose={closeModal} onCreate={createProject} />}
       <NotificationViewport />
     </AppContext.Provider>
   );
 }
 
-function ImportModal({ step, onClose, onCreate }: {
+function ImportModal({ step, tables, onClose, onCreate }: {
   step: 1 | 2 | 3;
+  tables?: GoogleStagedTable[] | undefined;
   onClose: () => void;
   onCreate: (project: MoriProject) => Promise<void>;
 }) {
   return (
     <Modal onClose={onClose} className="wide">
-      <ImportWizard initialStep={step} onClose={onClose} onCreate={onCreate} />
+      <ImportWizard initialStep={step} initialTables={tables} onClose={onClose} onCreate={onCreate} />
     </Modal>
   );
 }

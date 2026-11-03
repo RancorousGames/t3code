@@ -7,7 +7,8 @@ const SHEET_MIME = "application/vnd.google-apps.spreadsheet";
 const DOC_MIME = "application/vnd.google-apps.document";
 type GoogleStatus = { configured: boolean; connected: boolean; scopes: string[] };
 interface Props {
-  onImport?: (tables: GoogleStagedTable[]) => void;
+  onImport?: (tables: GoogleStagedTable[], destination?: "current" | "new") => void;
+  showImportDestinations?: boolean;
 }
 const explain = (error: unknown) => error instanceof Error ? error.message : "Google Workspace request failed.";
 
@@ -23,7 +24,7 @@ function base64ToFile(base64: string, name: string) {
  * A deliberate button creates a Monku-owned copy before any document is
  * imported. Original Drive IDs are never used as sync-write destinations.
  */
-export function GoogleConnect({ onImport }: Props) {
+export function GoogleConnect({ onImport, showImportDestinations = false }: Props) {
   const api = nativeMori();
   const [status, setStatus] = useState<GoogleStatus | null>(null);
   const [files, setFiles] = useState<GoogleDriveFile[]>([]);
@@ -50,7 +51,7 @@ export function GoogleConnect({ onImport }: Props) {
     setFiles(current => page ? [...current, ...result.files] : result.files);
     setNextPage(result.nextPageToken);
   };
-  const doImport = async (source: GoogleDriveFile) => {
+  const doImport = async (source: GoogleDriveFile, destination?: "current" | "new") => {
     if (!api || !onImport) return;
     const isSheet = source.mimeType === SHEET_MIME;
     if (!isSheet && source.mimeType !== DOC_MIME) throw Error("Only Google Docs and Sheets are supported.");
@@ -84,13 +85,13 @@ export function GoogleConnect({ onImport }: Props) {
         });
       }
       if (!tables.length) throw Error("The copied spreadsheet has no extractable translation tables.");
-      onImport(tables);
+      onImport(tables, destination);
     } else {
       const exported = await api.googleExport(copy.id, "doc");
       const downloaded = base64ToFile(exported.data, source.name + ".docx");
       const tables = await readFile(downloaded, `Google Drive/${source.name}`);
       // Docs are imported safely but have no editable row/cell mapping yet.
-      onImport(tables);
+      onImport(tables, destination);
     }
   };
 
@@ -118,7 +119,10 @@ export function GoogleConnect({ onImport }: Props) {
             <div className="set-row" key={file.id}>
               <div><b>{file.name}</b><span>{file.mimeType === SHEET_MIME ? "Google Sheets" : "Google Docs"} · {file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : "Drive file"}</span></div>
               <span className="grow" />
-              {onImport ? <button type="button" className="btn outline sm" disabled={busy} onClick={() => void operation(() => doImport(file))}>Copy & import</button> : <span className="muted" style={{ fontSize: 11 }}>Import from New project</span>}
+              {onImport && (showImportDestinations ? <div style={{ display: "flex", gap: 6 }}>
+                <button type="button" className="btn outline sm" disabled={busy} onClick={() => void operation(() => doImport(file, "current"))}>Add to project</button>
+                <button type="button" className="btn outline sm" disabled={busy} onClick={() => void operation(() => doImport(file, "new"))}>Import as new</button>
+              </div> : <button type="button" className="btn outline sm" disabled={busy} onClick={() => void operation(() => doImport(file))}>Copy & import</button>)}
             </div>
           ))}
         </div>

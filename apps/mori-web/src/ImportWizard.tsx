@@ -51,14 +51,17 @@ async function collectEntry(entry: FileSystemEntry, prefix: string): Promise<{ f
 
 const emptyPlan = { rows: [], characters: [], issues: [], warnings: [], sourceFiles: [], stats: { lines: 0, existing: 0, duplicateLines: 0, speakers: 0, sheets: 0 } };
 
-export function ImportWizard({ initialStep, onClose, onCreate }: {
+export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: {
   initialStep: 1 | 2 | 3;
+  initialTables?: GoogleStagedTable[] | undefined;
   onClose: () => void;
   onCreate: (project: MoriProject) => Promise<void>;
 }) {
   const templates = useTemplates();
   const [step, setStep] = useState<1 | 2 | 3>(initialStep);
-  const [sources, setSources] = useState<StagedSource[]>([]);
+  const [sources, setSources] = useState<StagedSource[]>(() => (initialTables ?? []).map((table, index) => ({
+    ...table, id: index + 1, signature: signatureOf(table.headers),
+  })));
   const [mappings, setMappings] = useState<Record<string, Mapping>>({});
   const [modes, setModes] = useState<Record<string, "processed" | "raw">>({});
   const [previewId, setPreviewId] = useState<number | null>(null);
@@ -71,7 +74,7 @@ export function ImportWizard({ initialStep, onClose, onCreate }: {
   const [glossaryId, setGlossaryId] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const nextId = useRef(1);
+  const nextId = useRef((initialTables?.length ?? 0) + 1);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
 
