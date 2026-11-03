@@ -672,3 +672,8 @@ input,textarea,select{font:inherit;color:inherit}
 .mori-notification-close:focus-visible{outline:2px solid var(--moss);outline-offset:2px}
 @keyframes mori-notification-enter{from{opacity:0;transform:translateX(22px)}to{opacity:1;transform:translateX(0)}}
 @media(prefers-reduced-motion:reduce){.mori-notification{animation:none}}
+
+/* T3-equivalent error glyphs for failed and interrupted ChatGPT sessions. */
+.mori-ai-status-glyph{display:grid;place-items:center;width:16px;height:16px;border:1.5px solid currentColor;border-radius:50%;font-size:11px;font-weight:800;line-height:1;flex:none}
+.mori-ai-session[data-age="invalid"] .mori-ai-handle,.mori-ai-session[data-age="invalid"] .mori-ai-row-title{color:#fda4af}
+.mori-ai-session[data-age="interrupted"] .mori-ai-handle,.mori-ai-session[data-age="interrupted"] .mori-ai-row-title{color:#fb923c}

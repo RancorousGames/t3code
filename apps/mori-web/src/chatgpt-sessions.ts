@@ -16,6 +16,10 @@ export interface MoriChatSession {
   lastWorkingAt?: number | undefined;
   lastSeenAt?: number | undefined;
   activity?: MoriChatActivity | undefined;
+  activityReason?: string | undefined;
+  problemSince?: number | undefined;
+  lastRecoveryAt?: number | undefined;
+  recoveryAttempts?: number | undefined;
   snoozedUntil?: number | undefined;
   quickSnoozeStep?: number | undefined;
   borderColor?: string | undefined;
@@ -81,6 +85,10 @@ export function deserializeChatSessions(raw: unknown): MoriChatSession[] {
       ...(num(item.snoozedUntil) !== undefined ? { snoozedUntil: num(item.snoozedUntil) } : {}),
       ...(num(item.quickSnoozeStep) !== undefined ? { quickSnoozeStep: num(item.quickSnoozeStep) } : {}),
       ...(activity ? { activity } : {}),
+      ...(typeof item.activityReason === "string" ? { activityReason: item.activityReason.slice(0, 150) } : {}),
+      ...(num(item.problemSince) !== undefined ? { problemSince: num(item.problemSince) } : {}),
+      ...(num(item.lastRecoveryAt) !== undefined ? { lastRecoveryAt: num(item.lastRecoveryAt) } : {}),
+      ...(num(item.recoveryAttempts) !== undefined ? { recoveryAttempts: num(item.recoveryAttempts) } : {}),
       ...(typeof item.borderColor === "string" ? { borderColor: item.borderColor.slice(0, 20) } : {}),
       ...(item.verificationPending === true ? { verificationPending: true } : {}),
       ...(num(item.markedAsWorkerAt) !== undefined ? { markedAsWorkerAt: num(item.markedAsWorkerAt) } : {}),

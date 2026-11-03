@@ -9,6 +9,7 @@ import {
 } from "./chatgpt-sessions.ts";
 import { chatGPTConversationIdFromUrl } from "../../web/src/chatGPTConversationIdentity.ts";
 import { inspectChatGPTPage, type PageInspection } from "../../web/src/chatGPTSessionDom.ts";
+import { CHATGPT_ACTIVITY_EXPRESSION } from "../../web/src/components/sidebar/chatGPTActivity.ts";
 import { buildChatGPTSessionContextMenu, buildChatGPTProjectContextMenu } from "../../web/src/chatGPTSessionContextMenu.ts";
 import { useChatBatchWorker } from "./useChatBatchWorker.ts";
 
@@ -19,7 +20,19 @@ type Guest = HTMLElement & {
 };
 
 const HOME = "https://chatgpt.com/";
-const INSPECT = `(${inspectChatGPTPage.toString()})({from:"end",count:0,includeMessages:false,maxMessageChars:1})`;
+const INSPECT = `(() => ({page: (${inspectChatGPTPage.toString()})({from:"end",count:0,includeMessages:false,maxMessageChars:1}), status: ${CHATGPT_ACTIVITY_EXPRESSION}}))()`;
+const RECOVERY_PER_SESSION_MS = 2 * 60_000;
+const RED_GRACE_MS = 10_000;
+const NO_COMPOSER_GRACE_MS = 60_000;
+const ORANGE_GRACE_MS = 10 * 60_000;
+const SAFE_TO_RELOAD = `(() => {
+  const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"]');
+  if (stop && stop.getClientRects().length && !stop.hasAttribute("disabled")) return false;
+  const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][role="textbox"],textarea');
+  if (!editor) return true;
+  const draft = editor instanceof HTMLTextAreaElement ? editor.value : editor.textContent;
+  return !draft?.trim();
+})()`;
 const ACTIVE_KEY = (projectId: string) => `mori.ai-chats.active:${projectId}`;
 const PREF_OPEN_KEY = "mori.ai-chats.sidebar-open";
 const GROUPS_KEY = (projectId: string) => `mori.ai-chats.sidebar-groups:${projectId}`;
@@ -56,10 +69,11 @@ function snoozePresets(now: Date) {
   ];
 }
 
-function browserActivity(page: PageInspection): MoriChatActivity {
-  if (page.connectionInterrupted) return "interrupted";
-  if (page.conversationFull || page.stuck) return "invalid";
-  return page.activity;
+function browserActivity(page: PageInspection, status: string): MoriChatActivity {
+  if (status === "interrupted" || status === "delivery-timeout" || page.connectionInterrupted) return "interrupted";
+  if (status.startsWith("invalid:") || page.conversationFull || page.stuck) return "invalid";
+  if (status === "working" || status === "idle") return status;
+  return "unknown";
 }
 
 interface FallbackMenuState {
@@ -92,7 +106,7 @@ function FallbackMenu({ state, close }: { state: FallbackMenuState; close: () =>
 }
 
 export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
-  const { project, prefs, actions, toast, go } = useApp();
+  const { project, prefs, actions, activeRow, toast, go } = useApp();
   const [sessions, setSessions] = useState<MoriChatSession[]>(loadChatSessions);
   const sessionsRef = useRef(sessions);
   const [selectedId, setSelectedId] = useState<string | null>(() => selectInitial(project.id, sessions));
@@ -107,6 +121,7 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
   const [fallbackMenu, setFallbackMenu] = useState<FallbackMenuState | null>(null);
   const view = useRef<Guest | null>(null);
   const loadedRef = useRef<string | null>(null);
+  const recoveryInFlight = useRef(false);
 
   const projectSessions = sessions.filter(s => s.projectId === project.id);
   const active = projectSessions.find(s => s.id === selectedId && !s.hidden) ?? null;
@@ -162,17 +177,48 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
     const guest = view.current;
     if (!guest || loadedRef.current !== id) return;
     try {
-      const page = await guest.executeJavaScript(INSPECT) as PageInspection;
+      const { page, status } = await guest.executeJavaScript(INSPECT) as { page: PageInspection; status: string };
       if (loadedRef.current !== id) return;
       const at = Date.now();
-      const activity = browserActivity(page);
+      const activity = browserActivity(page, status);
+      const reason = activity === "invalid" || activity === "interrupted" ? status : undefined;
+      const previous = sessionsRef.current.find(s => s.id === id);
+      const firstProblemAt = previous?.activity === activity && previous.problemSince
+        ? previous.problemSince : at;
       changeUrl(id, page.url);
       patchOne(id, s => {
         const lastWorkingAt = activity === "working" ? at : s.lastWorkingAt;
-        if (activity === s.activity && lastWorkingAt === s.lastWorkingAt &&
+        const problemSince = reason ? s.activity === activity && s.problemSince || at : undefined;
+        if (activity === s.activity && reason === s.activityReason &&
+            problemSince === s.problemSince && lastWorkingAt === s.lastWorkingAt &&
             (s.lastSeenAt ?? 0) > at - 30_000) return s;
-        return { ...s, activity, lastSeenAt: at, lastWorkingAt };
+        console.info("[Mori AI Chats status]", id, s.activity, "→", activity, reason ?? "");
+        return { ...s, activity, activityReason: reason, problemSince, lastSeenAt: at, lastWorkingAt };
       });
+      // T3-style recovery: mark red/orange immediately, then guarded reload
+      // with a per-session cooldown. Never send or repeat an AI request.
+      const grace = activity === "interrupted" ? ORANGE_GRACE_MS :
+        status === "invalid: the ChatGPT composer is unavailable" ? NO_COMPOSER_GRACE_MS :
+        RED_GRACE_MS;
+      if ((activity === "invalid" || activity === "interrupted") &&
+          at - firstProblemAt >= grace &&
+          at - (previous?.lastRecoveryAt ?? 0) >= RECOVERY_PER_SESSION_MS &&
+          !recoveryInFlight.current) {
+        recoveryInFlight.current = true;
+        try {
+          if (!await guest.executeJavaScript(SAFE_TO_RELOAD)) return;
+          if (loadedRef.current !== id || view.current !== guest) return;
+          const attempt = (previous?.recoveryAttempts ?? 0) + 1;
+          // Keep the row red/orange throughout recovery, like T3.
+          patchOne(id, s => ({ ...s, lastRecoveryAt: at, recoveryAttempts: attempt }));
+          console.info("[Mori AI Chats recovery]", { sessionId: id, attempt, reason: status, action: "reload" });
+          guest.reload();
+        } catch (error) {
+          console.warn("[Mori AI Chats recovery] could not reload", id, error);
+        } finally {
+          recoveryInFlight.current = false;
+        }
+      }
     } catch {
       // The guest may be navigating or detaching. Never infer an error from a
       // transient inspection failure and never retry user messages.
@@ -267,7 +313,7 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
     if (presets[step]) snooze(s.id, presets[step].until, step);
   };
   const worker = useChatBatchWorker({
-    project, prefs, actions, activeId, guestRef: view, readyIdRef: loadedRef,
+    project, prefs, actions, activeId, focusRowId: activeRow?.id ?? null, guestRef: view, readyIdRef: loadedRef,
     toast, openSession: choose,
   });
 

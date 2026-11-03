@@ -21,6 +21,8 @@ type PendingJob = {
   folder: string | null;
   proposals?: { id: string; japanese: string }[];
   error?: string | undefined;
+  invalidResponseFingerprint?: string | undefined;
+  invalidResponseSince?: number | undefined;
 };
 
 const storageKey = (id: string) => `mori.ai-chat.batch:${id}`;
@@ -54,12 +56,13 @@ export function useChatBatchWorker(input: {
   prefs: MoriPrefs;
   actions: MoriActions;
   activeId: string | null;
+  focusRowId?: string | null;
   guestRef: React.RefObject<Guest | null>;
   readyIdRef: React.RefObject<string | null>;
   toast: (text: string) => void;
   openSession: (id: string) => void;
 }) {
-  const { project, prefs, actions, activeId, guestRef, readyIdRef, toast, openSession } = input;
+  const { project, prefs, actions, activeId, focusRowId, guestRef, readyIdRef, toast, openSession } = input;
   const [job, setJob] = useState<PendingJob | null>(() => restore(project.id));
   const [sending, setSending] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -68,7 +71,7 @@ export function useChatBatchWorker(input: {
   projectRef.current = project;
   const applying = useRef(false);
   const inFlight = useRef(false);
-  const draftable = chooseChatBatch(project, CHAT_BATCH_SIZE);
+  const draftable = chooseChatBatch(project, CHAT_BATCH_SIZE, focusRowId);
 
   const updateJob = useCallback((next: PendingJob | null) => {
     jobRef.current = next;
@@ -180,7 +183,8 @@ export function useChatBatchWorker(input: {
 
   const check = useCallback(async () => {
     const pending = jobRef.current;
-    if (!pending || (pending.stage !== "sent" && pending.stage !== "unknown") ||
+    if (!pending || (pending.stage !== "sent" && pending.stage !== "unknown" &&
+        !(pending.stage === "failed" && pending.error?.includes("parseable JSON"))) ||
         !guestRef.current || readyIdRef.current !== pending.request.sessionId ||
         activeId !== pending.request.sessionId || inFlight.current) return;
     inFlight.current = true;
@@ -202,23 +206,35 @@ export function useChatBatchWorker(input: {
         updateJob(ready);
         commitReady(ready);
       } catch (cause) {
-        // A non-JSON partial answer is not accepted. It can still be streaming
-        // even if the page briefly appears idle: keep polling unless the page
-        // is definitely completed, in which case show a recoverable parse error.
-        if (page.activity === "idle") {
-          const message = cause instanceof Error ? cause.message : "Invalid ChatGPT JSON response.";
-          updateJob({ ...pending, stage: "failed", error: message });
-          notify(message, "warning");
+        // ChatGPT may briefly report idle while its JSON answer is still
+        // streaming. A single invalid/partial response is NOT a failed batch.
+        // Require the SAME invalid answer to remain unchanged for 20 seconds.
+        if (page.activity !== "idle") return;
+        const fingerprint = `${response.text.length}:${response.text.slice(-180)}`;
+        const stableSince = pending.invalidResponseFingerprint === fingerprint
+          ? pending.invalidResponseSince ?? Date.now() : Date.now();
+        if (pending.stage === "failed") return; // Manual Check reply may recover later.
+        if (Date.now() - stableSince < 20_000) {
+          updateJob({ ...pending, invalidResponseFingerprint: fingerprint, invalidResponseSince: stableSince });
+          return;
         }
+        const message = cause instanceof Error ? cause.message : "Invalid ChatGPT JSON response.";
+        updateJob({ ...pending, stage: "failed", error: message });
+        notify(message, "warning");
       }
     } catch { /* Navigation or guest teardown; don't resend. */ }
     finally { inFlight.current = false; setChecking(false); }
   }, [activeId, guestRef, readyIdRef, updateJob, commitReady]);
 
   useEffect(() => {
-    if (!job || (job.stage !== "sent" && job.stage !== "unknown") || activeId !== job.request.sessionId) return;
+    if (!job || (job.stage !== "sent" && job.stage !== "unknown" &&
+        !(job.stage === "failed" && job.error?.includes("parseable JSON"))) ||
+        activeId !== job.request.sessionId) return;
     const immediate = window.setTimeout(() => { void check(); }, 1800);
-    const poll = window.setInterval(() => { void check(); }, 5000);
+    // After a renderer restart, guest DOM often becomes ready *after* the
+    // initial failed-job probe. Continue checking that exact response without
+    // ever re-sending the request; malformed replies can be repaired later.
+    const poll = window.setInterval(() => { void check(); }, job.stage === "failed" ? 15_000 : 5_000);
     return () => { window.clearTimeout(immediate); window.clearInterval(poll); };
   }, [job?.request.requestId, job?.stage, job?.request.sessionId, activeId, check]);
 

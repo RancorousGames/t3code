@@ -5,7 +5,7 @@ import type { MoriProject, MoriRow } from "./model.ts";
 import { projectForTranslation, type MoriPrefs } from "./prefs.ts";
 
 const MAX_MESSAGE = 24_000;
-export const CHAT_BATCH_SIZE = 3;
+export const CHAT_BATCH_SIZE = 5;
 
 /** An app-owned materialized file. This is sent INLINE to ChatGPT as well as
  * snapshotted on disk; ChatGPT cannot access an absolute local path. */
@@ -49,10 +49,18 @@ function glossaryFile(project: MoriProject, rows: MoriRow[]): string | null {
   ).join("\n");
 }
 
-export function chooseChatBatch(project: MoriProject, count = CHAT_BATCH_SIZE): MoriRow[] {
-  // Only new drafts: do not silently replace existing AI work.
-  return project.rows.filter(row => canDraft(row) && !row.ai?.trim())
-    .slice(0, Math.min(AI_BATCH_LIMIT, count));
+export function chooseChatBatch(project: MoriProject, count = CHAT_BATCH_SIZE, focusRowId?: string | null): MoriRow[] {
+  // Prioritize the line selected in Matrix, followed by nearby eligible lines.
+  // No row is reordered or modified in the project itself.
+  const eligible = (row: MoriRow) => canDraft(row) && !row.ai?.trim();
+  const limit = Math.min(AI_BATCH_LIMIT, count);
+  const index = project.rows.findIndex(row => row.id === focusRowId && eligible(row));
+  if (index < 0) return project.rows.filter(eligible).slice(0, limit);
+  return [
+    project.rows[index]!,
+    ...[...project.rows.slice(index + 1), ...project.rows.slice(0, index)]
+      .filter(eligible).slice(0, Math.max(0, limit - 1)),
+  ];
 }
 
 /** Immutable batch payload. Terms/characters are included only if enabled.

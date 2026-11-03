@@ -14,6 +14,10 @@ export type MoriSidebarAge =
 
 export function moriSidebarAge(session: MoriChatSession, activeId: string | null, now: number): MoriSidebarAge {
   if ((session.snoozedUntil ?? 0) > now) return "snoozed";
+  // Like T3, keep an errored session visibly red/orange even when unloaded.
+  // Otherwise changing tabs silently turns a failed session grey.
+  if (session.activity === "invalid") return "invalid";
+  if (session.activity === "interrupted") return "interrupted";
   const selected = session.id === activeId;
   if (!selected) {
     const elapsed = now - (session.lastSeenAt ?? 0);
@@ -23,8 +27,6 @@ export function moriSidebarAge(session: MoriChatSession, activeId: string | null
       : "unloaded";
   }
   if (session.activity === "working") return "working";
-  if (session.activity === "interrupted") return "interrupted";
-  if (session.activity === "invalid") return "invalid";
   if (session.activity === "loading") return "loading";
   if (session.activity === "unknown") return "unknown";
   return (session.lastWorkingAt ?? 0) > now - 2 * 60 * 60_000 ? "recent" : "inactive";
@@ -218,12 +220,14 @@ export function AIChatsSidebar({
                 onDrop={e => onDrop(e, session)}
                 onContextMenu={e => contextMenu(session, e)}
                 style={{ paddingLeft: parent ? 18 : 4 }}
-                title={`${session.title}\n${age.replaceAll("-", " ")}${parent ? `\nChild of: ${parent.title}` : ""}\nRight-click for session menu`}>
+                title={`${session.title}\n${session.activityReason ?? age.replaceAll("-", " ")}${session.recoveryAttempts ? `\nRecovery attempts: ${session.recoveryAttempts}` : ""}${parent ? `\nChild of: ${parent.title}` : ""}\nRight-click for session menu`}>
                 <button type="button" className="mori-ai-handle" draggable
                   onDragStart={e => { e.dataTransfer.setData("text/x-mori-session", session.id); e.dataTransfer.effectAllowed = "move"; setDragged(session.id); }}
                   onDragEnd={() => setDragged(null)}
                   title="Drag to reorder · Shift-drop to set parent" aria-label={`Drag ${session.title}`}>
-                  {parent ? <Icon name="chevron-right" size="xs" /> : <ChatGPTSessionIcon />}
+                  {age === "invalid" ? <span className="mori-ai-status-glyph" aria-label="Session error">!</span> :
+                    age === "interrupted" ? <span className="mori-ai-status-glyph" aria-label="Session interrupted">!</span> :
+                    parent ? <Icon name="chevron-right" size="xs" /> : <ChatGPTSessionIcon />}
                 </button>
                 {renaming === session.id ? <input className="mori-ai-rename" autoFocus
                     value={draftTitle} onChange={e => setDraftTitle(e.target.value)}
@@ -260,7 +264,7 @@ export function AIChatsSidebar({
         {batchStatus && <span className="mori-ai-batch-status" role="status" title={batchStatus}>{batchStatus}</span>}
         <button type="button" className="mori-ai-batch-button" disabled={batchBusy || batchPending || !batchCount}
           onClick={onRunBatch}
-          title="Translate up to three untouched lines, automatically saving valid JSON results as AI drafts">
+          title="Translate up to five untouched lines, automatically saving valid JSON results as AI drafts">
           <Icon name="sparkle" size="xs" />
           {batchBusy ? "Sending…" : batchPending ? "Batch in progress" : `Translate ${batchCount} ${batchCount === 1 ? "line" : "lines"}`}
         </button>

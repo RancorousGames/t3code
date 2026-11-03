@@ -1,4 +1,4 @@
-import { hasChatGPTLoadFailure } from "./chatGPTConversationRecovery";
+import { hasChatGPTLoadFailure } from "./chatGPTLoadFailureProbe";
 
 export const CHATGPT_RECENT_ACTIVITY_MS = 2 * 60 * 60 * 1_000;
 
