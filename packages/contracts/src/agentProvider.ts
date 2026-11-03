@@ -95,6 +95,8 @@ export const AgentProviderV1Session = Schema.Struct({
   capabilities: Schema.Array(AgentProviderV1Capability),
   deliveryModes: Schema.Array(AgentProviderV1Delivery),
   lastActivityAt: Schema.optional(Schema.NullOr(Schema.String)),
+  // Session creation time, distinct from last verified message activity.
+  createdAt: Schema.optional(Schema.Number),
   // Authoritative T3 desktop sidebar state, not an OmniHub-local projection.
   visibility: Schema.optional(
     Schema.Struct({

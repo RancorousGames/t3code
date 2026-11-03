@@ -2505,6 +2505,7 @@ export const layerWsRpc = (
                     source: { environmentId, rawThreadId: thread.id, projectId: thread.projectId },
                     workspace: thread.worktreePath,
                     title: thread.title,
+                    createdAt: DateTime.toEpochMillis(thread.createdAt),
                     ...(thread.lineage.parentThreadId === null
                       ? {}
                       : { parent: threadRef(thread.lineage.parentThreadId) }),
