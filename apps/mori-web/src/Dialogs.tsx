@@ -224,6 +224,9 @@ export function TemplatesModal() {
         <button type="button" className="ib" aria-label="Close" onClick={closeModal}><Icon name="x" size="sm" /></button>
       </div>
       <div className="m-body">
+        <p className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>
+          Templates save reusable characters, project context, and glossaries for other projects. Applying one makes a copy; deleting a saved template does not change projects already using it.
+        </p>
         {templates.length === 0 && (
           <p className="muted" style={{ fontSize: 12.5 }}>
             Nothing saved yet. Save a character from its speaker card, a glossary from the Glossary screen, or a context from the Templates menu.

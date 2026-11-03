@@ -261,6 +261,7 @@ function TemplatesPopover() {
 
   return (
     <>
+      <p className="pop-note">Templates are reusable presets for characters, project context, and glossaries. Save them once, then apply them to other projects.</p>
       <PopLabel>Context</PopLabel>
       {contexts.map(t => t.kind === "context" && (
         <Opt key={t.id} onPick={() => applyContext(t)}>
