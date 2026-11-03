@@ -34,7 +34,7 @@ export async function controlSessions(
     const { action: _action, op, ...args } = input;
     const response = await exchange(controlAddress(home), {
       version: 1, requestId: NodeCrypto.randomUUID(), type: "caffy", action: op, ...args,
-    }, 95_000);
+    }, op === "capacity" ? 15_000 : 95_000);
     if (!response.ok) throw new Error(`T3 Caffy ${op} failed: ${response.message}`);
     if (!Object.hasOwn(response, "data")) throw new Error("T3 Caffy result missing.");
     return response.data;
