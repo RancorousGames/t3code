@@ -21,6 +21,7 @@ import { usePrefs } from "./prefs.ts";
 import { createSampleProject } from "./sampleProject.ts";
 import { keyString, loadBindings, matchAction, saveBindings, type ActionId, type Bindings } from "./shortcuts.ts";
 import { useProjectStore, type SaveState } from "./store.ts";
+import { useUiLocalization } from "./ui-localization.ts";
 
 const DEFAULT_VIEW: ViewFilters = { filter: "all", query: "", speaker: "any", file: null };
 
@@ -32,6 +33,7 @@ const editorSelector = "textarea[data-editor]";
 
 export function MoriApp() {
   const { project, save, actions, load, unload, forget } = useProjectStore();
+  useUiLocalization(project);
   const { prefs, update: updatePrefs, setColumn } = usePrefs();
   const [bindings, setBindingsState] = useState<Bindings>(loadBindings);
   const [screen, setScreen] = useState<Screen>("matrix");

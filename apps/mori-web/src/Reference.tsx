@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useApp } from "./app-context.ts";
+import { tr, useUiLanguage } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { findUsages, statusOf } from "./insights.ts";
 import { JA_FONTS, DEFAULT_COLUMN_PREFS } from "./prefs.ts";
@@ -338,22 +339,30 @@ export function ProjectScreen() {
 
 export function SettingsScreen() {
   const { prefs, setPrefs, setColumn, openModal } = useApp();
+  const { language, setLanguage, translated } = useUiLanguage();
   return (
     <div className="screen">
-      <ScreenHeader title="Settings" description="How the workspace looks. Translation data is never stored here." />
+      <ScreenHeader title={tr("Settings")} description={tr("How the workspace looks. Translation data is never stored here.")} />
       <div className="panel" style={{ maxWidth: 720 }}>
         <div className="set-row">
-          <div><b>Row density</b><span>Comfortable shows more room around each line; compact fits more lines on screen.</span></div>
+          <div><b>{tr("Language")}</b><span>Choose the application interface language. Japanese uses translations from the “Monku no Mori · Interface” project ({translated} available); untranslated labels remain English.</span></div>
+          <div className="seg wide" role="group" aria-label="Interface language">
+            <button type="button" className={language === "en" ? "on" : ""} onClick={() => setLanguage("en")}>English</button>
+            <button type="button" className={language === "ja" ? "on" : ""} onClick={() => setLanguage("ja")}>日本語</button>
+          </div>
+        </div>
+        <div className="set-row">
+          <div><b>{tr("Row density")}</b><span>Comfortable shows more room around each line; compact fits more lines on screen.</span></div>
           <div className="seg wide">
             {(["comfortable", "compact"] as const).map(density => (
               <button key={density} type="button" className={prefs.density === density ? "on" : ""} onClick={() => setPrefs({ density })}>
-                {density === "comfortable" ? "Comfortable" : "Compact"}
+                {tr(density === "comfortable" ? "Comfortable" : "Compact")}
               </button>
             ))}
           </div>
         </div>
         <div className="set-row">
-          <div><b>Japanese text size</b><span>Scales translation text in the Matrix and the editor.</span></div>
+          <div><b>{tr("Japanese text size")}</b><span>{tr("Scales translation text in the Matrix and the editor.")}</span></div>
           <div className="seg wide">
             {([["sm", "Small"], ["md", "Medium"], ["lg", "Large"]] as const).map(([size, label]) => (
               <button key={size} type="button" className={prefs.textSize === size ? "on" : ""} onClick={() => setPrefs({ textSize: size })}>{label}</button>
@@ -361,13 +370,13 @@ export function SettingsScreen() {
           </div>
         </div>
         <div className="set-row">
-          <div><b>Japanese font</b><span>Used for Japanese text. BIZ UDPGothic is the most legible on most systems.</span></div>
+          <div><b>{tr("Japanese font")}</b><span>{tr("Used for Japanese text. BIZ UDPGothic is the most legible on most systems.")}</span></div>
           <select className="sel" style={{ width: 260 }} value={prefs.jaFont} onChange={event => setPrefs({ jaFont: event.target.value })}>
             {JA_FONTS.map(font => <option key={font.value} value={font.value}>{font.label}</option>)}
           </select>
         </div>
         <div className="set-row">
-          <div><b>Japanese field click</b><span>When you click a translation in the Matrix to start editing, choose where the cursor goes.</span></div>
+          <div><b>{tr("Japanese field click")}</b><span>When you click a translation in the Matrix to start editing, choose where the cursor goes.</span></div>
           <div className="seg wide" role="group" aria-label="Japanese field click behavior">
             {([["position", "Where clicked"], ["end", "At end"], ["selectAll", "Select all"]] as const).map(([mode, label]) => (
               <button key={mode} type="button" className={prefs.japaneseClickMode === mode ? "on" : ""} onClick={() => setPrefs({ japaneseClickMode: mode })}>{label}</button>
@@ -375,14 +384,14 @@ export function SettingsScreen() {
           </div>
         </div>
         <div className="set-row">
-          <div><b>Characters</b><span>Hide character tools, speaker controls and voice context in translation requests. Existing characters are preserved.</span></div>
+          <div><b>{tr("Characters")}</b><span>Hide character tools, speaker controls and voice context in translation requests. Existing characters are preserved.</span></div>
           <div className="seg wide" role="group" aria-label="Enable characters">
             <button type="button" className={prefs.charactersEnabled ? "on" : ""} onClick={() => setPrefs({ charactersEnabled: true })}>On</button>
             <button type="button" className={!prefs.charactersEnabled ? "on" : ""} onClick={() => setPrefs({ charactersEnabled: false })}>Off</button>
           </div>
         </div>
         <div className="set-row">
-          <div><b>Glossary</b><span>Hide terminology tools and stop using glossary terms for translation suggestions, highlights or warnings. Saved terms are preserved.</span></div>
+          <div><b>{tr("Glossary")}</b><span>Hide terminology tools and stop using glossary terms for translation suggestions, highlights or warnings. Saved terms are preserved.</span></div>
           <div className="seg wide" role="group" aria-label="Enable glossary">
             <button type="button" className={prefs.glossaryEnabled ? "on" : ""} onClick={() => setPrefs({ glossaryEnabled: true })}>On</button>
             <button type="button" className={!prefs.glossaryEnabled ? "on" : ""} onClick={() => setPrefs({ glossaryEnabled: false })}>Off</button>
@@ -396,8 +405,8 @@ export function SettingsScreen() {
           </div>
         </div>
         <div className="set-row">
-          <div><b>Keyboard shortcuts</b><span>Change any shortcut. Press F1 at any time to open the list.</span></div>
-          <button type="button" className="btn outline sm" onClick={() => openModal({ kind: "shortcuts" })}>Edit shortcuts</button>
+          <div><b>{tr("Keyboard shortcuts")}</b><span>Change any shortcut. Press F1 at any time to open the list.</span></div>
+          <button type="button" className="btn outline sm" onClick={() => openModal({ kind: "shortcuts" })}>{tr("Edit shortcuts")}</button>
         </div>
         <div className="set-row">
           <div><b>Columns</b><span>Put the Matrix columns back to their starting widths and visibility.</span></div>

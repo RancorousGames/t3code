@@ -1,0 +1,3623 @@
+{
+  "id": "mori_self_ui_ja",
+  "name": "Monku no Mori · Interface (EN → JA)",
+  "rows": [
+    {
+      "id": "ui.8ea3907c9443a2",
+      "source": "— Empty",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:523 (text); src/ImportWizard.tsx:536 (text)"
+    },
+    {
+      "id": "ui.e9bf85f3f385d8",
+      "source": ". New AI drafts use",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:138 (text)"
+    },
+    {
+      "id": "ui.8231683d8f0405",
+      "source": ". Saving updates it.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:79 (text)"
+    },
+    {
+      "id": "ui.03dc3db6418bde",
+      "source": ". Untick any line to keep it. Your current text stays in Versions; locked lines are skipped.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:147 (text)"
+    },
+    {
+      "id": "ui.f6d5d63004e6dc",
+      "source": "” appears in",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:123 (text)"
+    },
+    {
+      "id": "ui.c77e2405b62437",
+      "source": "” isn’t in any line yet. New lines that use it are checked.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:123 (text)"
+    },
+    {
+      "id": "ui.e3194569c31037",
+      "source": "” should be",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:208 (text)"
+    },
+    {
+      "id": "ui.2c8f357eab9cae",
+      "source": "% translated",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Sidebar.tsx",
+      "note": "src/Sidebar.tsx:80 (text)"
+    },
+    {
+      "id": "ui.f8b8883f0c9d8d",
+      "source": "1 hour",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:52 (label)"
+    },
+    {
+      "id": "ui.508fe49743f3b7",
+      "source": "3 hours",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:53 (label)"
+    },
+    {
+      "id": "ui.d7e8cdb181eb95",
+      "source": "A normalized EN→JA list, for handing over or reviewing elsewhere.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:320 (text)"
+    },
+    {
+      "id": "ui.73ee4507a50988",
+      "source": "A note for yourself or the dev team…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:305 (placeholder)"
+    },
+    {
+      "id": "ui.5a9251bed8f056",
+      "source": "Accept into AI drafts",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:87 (text)"
+    },
+    {
+      "id": "ui.9fd728c66c9a25",
+      "source": "Add",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:349 (text); src/Matrix.tsx:565 (text)"
+    },
+    {
+      "id": "ui.8143aa12e22ea9",
+      "source": "Add a character to start.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:104 (text)"
+    },
+    {
+      "id": "ui.727765544ebbe3",
+      "source": "Add a term before saving the glossary as a template.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:119 (toast)"
+    },
+    {
+      "id": "ui.8e31b1bb655972",
+      "source": "Add files to this project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Sidebar.tsx",
+      "note": "src/Sidebar.tsx:120 (title); src/Sidebar.tsx:120 (aria-label)"
+    },
+    {
+      "id": "ui.6cf5c9fe581184",
+      "source": "Add term",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:255 (text); src/Reference.tsx:135 (text)"
+    },
+    {
+      "id": "ui.b92cfd151e6761",
+      "source": "Add to “",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:495 (text)"
+    },
+    {
+      "id": "ui.067166c5d868b8",
+      "source": "Add to glossary",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:56 (text)"
+    },
+    {
+      "id": "ui.11fb682be0a023",
+      "source": "AI",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:136 (text)"
+    },
+    {
+      "id": "ui.22a65461bf9b44",
+      "source": "AI assistance",
+      "ai": "",
+      "final": "AI支援",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.4b62311150d1c9",
+      "source": "AI can suggest these mappings once an AI provider is connected in Settings.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:482 (text)"
+    },
+    {
+      "id": "ui.62e74382a14a81",
+      "source": "AI Chats",
+      "ai": "",
+      "final": "AIチャット",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:465 (aria-label); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.356716972ceae3",
+      "source": "AI Chats sessions",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:155 (aria-label)"
+    },
+    {
+      "id": "ui.923ff8a3fbd9f9",
+      "source": "AI draft",
+      "ai": "",
+      "final": "AI下書き",
+      "status": "translated",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:78 (label); src/Matrix.tsx:31 (label); src/Popovers.tsx:139 (label); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.af0d24c1255397",
+      "source": "AI drafts ahead",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:460 (text); src/Reference.tsx:461 (aria-label)"
+    },
+    {
+      "id": "ui.a52ace420f2175",
+      "source": "All",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:40 (label)"
+    },
+    {
+      "id": "ui.2f2b467abeb011",
+      "source": "All active sessions",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:182 (text)"
+    },
+    {
+      "id": "ui.1c5f0dacdc174b",
+      "source": "all good",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:84 (text)"
+    },
+    {
+      "id": "ui.bff7997551bd80",
+      "source": "Already in the glossary as",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:79 (text)"
+    },
+    {
+      "id": "ui.ba1180a7315362",
+      "source": "already use",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:127 (text)"
+    },
+    {
+      "id": "ui.29efb97f10327f",
+      "source": "Also select the Japanese in this line to fill in both sides",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:561 (title)"
+    },
+    {
+      "id": "ui.8890f264bb0dcc",
+      "source": "An empty project. Add sources later from Files.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:550 (text)"
+    },
+    {
+      "id": "ui.73843394f5eeba",
+      "source": "Any speaker",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:113 (text)"
+    },
+    {
+      "id": "ui.4740b07f0a0d1c",
+      "source": "Assign speaker",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:158 (text)"
+    },
+    {
+      "id": "ui.9b4a14d13b83c2",
+      "source": "At end",
+      "ai": "",
+      "final": "末尾",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.10da9283742bcf",
+      "source": "available); untranslated labels remain English.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:407 (text)"
+    },
+    {
+      "id": "ui.b05093f407473e",
+      "source": "Awaiting verification",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:235 (title)"
+    },
+    {
+      "id": "ui.76900f1bfd16c8",
+      "source": "Back",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:192 (text); src/ImportWizard.tsx:591 (text)"
+    },
+    {
+      "id": "ui.0a80c30b5ace16",
+      "source": "Back into the original files",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:306 (text)"
+    },
+    {
+      "id": "ui.75b9f1c69aff65",
+      "source": "Browse Drive files",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:110 (text)"
+    },
+    {
+      "id": "ui.19766ed6ccb2f4",
+      "source": "Cancel",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:593 (text); src/TermModal.tsx:85 (text)"
+    },
+    {
+      "id": "ui.44067f4dc9e06f",
+      "source": "Cannot unload a session with unsent composer text.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:399 (toast)"
+    },
+    {
+      "id": "ui.8f60d3fc26a628",
+      "source": "casual · 17 y/o",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:86 (placeholder)"
+    },
+    {
+      "id": "ui.b101ba02b70ff2",
+      "source": "Change any shortcut. Press F1 at any time to open the list.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:475 (text)"
+    },
+    {
+      "id": "ui.d8bd8799d5e990",
+      "source": "Change speaker",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:119 (aria-label)"
+    },
+    {
+      "id": "ui.6fac39e2845bb8",
+      "source": "Characters",
+      "ai": "",
+      "final": "キャラクター",
+      "status": "translated",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:528 (text); src/Popovers.tsx:273 (text); src/Reference.tsx:58 (title); src/Reference.tsx:344 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.f685225552cb5c",
+      "source": "chars · source",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Chrome.tsx",
+      "note": "src/Chrome.tsx:96 (text)"
+    },
+    {
+      "id": "ui.50a4122943273a",
+      "source": "ChatGPT",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:157 (text)"
+    },
+    {
+      "id": "ui.9a66349131370d",
+      "source": "ChatGPT is still generating. Reload this session anyway?",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:342 (confirm)"
+    },
+    {
+      "id": "ui.8fec81657ba8eb",
+      "source": "Check reply",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:497 (text)"
+    },
+    {
+      "id": "ui.de07d07209556c",
+      "source": "Checks",
+      "ai": "",
+      "final": "チェック",
+      "status": "translated",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:166 (title); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.c7f937836f5d82",
+      "source": "Choose",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:468 (text)"
+    },
+    {
+      "id": "ui.6d4e30eea6946a",
+      "source": "Choose files…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:299 (text)"
+    },
+    {
+      "id": "ui.6e8eb2b02596d8",
+      "source": "Choose folder…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:302 (text)"
+    },
+    {
+      "id": "ui.fc8c5efac1fbde",
+      "source": "Choose Google OAuth client…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:101 (text)"
+    },
+    {
+      "id": "ui.793b188375badd",
+      "source": "Choose the application interface language. Japanese uses translations from the “Monku no Mori · Interface” project (",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:407 (text)"
+    },
+    {
+      "id": "ui.3b7ea51793e9d9",
+      "source": "Clear search",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:188 (title)"
+    },
+    {
+      "id": "ui.bf3eb3095af897",
+      "source": "Click a shortcut and press new keys. Shortcuts pause while the Japanese IME is composing.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:116 (text)"
+    },
+    {
+      "id": "ui.e6c86393621358",
+      "source": "Click, then press the new keys",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:85 (title)"
+    },
+    {
+      "id": "ui.7d9eb7acb13e24",
+      "source": "Close",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:130 (aria-label); src/Dialogs.tsx:224 (aria-label); src/ImportWizard.tsx:273 (aria-label); src/TermModal.tsx:58 (aria-label); src/TermModal.tsx:119 (aria-label); src/WindowControls.tsx:36 (aria-label); src/WindowControls.tsx:36 (title)"
+    },
+    {
+      "id": "ui.8bac9aaa7bbd11",
+      "source": "Close local session",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:243 (title)"
+    },
+    {
+      "id": "ui.e503367c41c06b",
+      "source": "Close session",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:328 (label)"
+    },
+    {
+      "id": "ui.2dc2308a0f0d67",
+      "source": "Collapse AI Chats sidebar",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:175 (aria-label)"
+    },
+    {
+      "id": "ui.0aadc075cc4e94",
+      "source": "Collapse column",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:497 (title)"
+    },
+    {
+      "id": "ui.b085369075ac56",
+      "source": "Collapse right sidebar",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:175 (title)"
+    },
+    {
+      "id": "ui.4712303dea9a2d",
+      "source": "Collapsed columns stay as a thin strip. A dot shows when a line has content there.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:157 (text)"
+    },
+    {
+      "id": "ui.53aade77cd69a7",
+      "source": "Columns",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:146 (text); src/Reference.tsx:479 (text)"
+    },
+    {
+      "id": "ui.bfed87639ca86f",
+      "source": "Columns & density",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:451 (title)"
+    },
+    {
+      "id": "ui.9aec0c12c412d8",
+      "source": "Columns and density",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:452 (aria-label)"
+    },
+    {
+      "id": "ui.459a23a5980fd5",
+      "source": "Comfortable",
+      "ai": "",
+      "final": "ゆったり",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.267a553e5b78a9",
+      "source": "Comfortable shows more room around each line; compact fits more lines on screen.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:414 (text)"
+    },
+    {
+      "id": "ui.99452646e34b69",
+      "source": "Compact",
+      "ai": "",
+      "final": "コンパクト",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.d3059be27b20ed",
+      "source": "Connect or sign out from Settings. Use New project → Sources to browse private Drive Docs and Sheets, create protected copies, and import them.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:313 (text)"
+    },
+    {
+      "id": "ui.a6e600a10fede4",
+      "source": "Context",
+      "ai": "",
+      "final": "コンテキスト",
+      "status": "translated",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:521 (text); src/Popovers.tsx:265 (text); src/Reference.tsx:202 (title); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.31fbef162594de",
+      "source": "Continue",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:601 (text)"
+    },
+    {
+      "id": "ui.593e5fe9624a6d",
+      "source": "Copy & import",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:118 (text)"
+    },
+    {
+      "id": "ui.b1c0540d4d935a",
+      "source": "Copy ChatGPT URL",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:326 (label)"
+    },
+    {
+      "id": "ui.4b8eacea37b775",
+      "source": "CSV (Excel-friendly)",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:323 (text)"
+    },
+    {
+      "id": "ui.c8ebeb3728bc16",
+      "source": "Curated text only",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:330 (text)"
+    },
+    {
+      "id": "ui.533b58fa63ed14",
+      "source": "Current run finishes or times out automatically",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:71 (title)"
+    },
+    {
+      "id": "ui.fd8b8dae442166",
+      "source": "Danger zone",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:388 (text)"
+    },
+    {
+      "id": "ui.e2d0a54968ead2",
+      "source": "Delete",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:242 (text)"
+    },
+    {
+      "id": "ui.7ede8c92eda0f4",
+      "source": "Delete character",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:100 (text)"
+    },
+    {
+      "id": "ui.9c0b617e79e94d",
+      "source": "Delete project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:392 (text)"
+    },
+    {
+      "id": "ui.a1c06240a02b55",
+      "source": "Delete term",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:175 (aria-label)"
+    },
+    {
+      "id": "ui.c1fbcfd2534217",
+      "source": "Deleting removes this project from the library. Desktop recovery snapshots may restore it.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:390 (text)"
+    },
+    {
+      "id": "ui.367c602c86cec7",
+      "source": "Desktop app. Mori keeps AI drafts ready for this many lines after the one you are on, using Codex Luna 6 (low). Drafts never replace your text, and a draft that misses a glossary term is redone.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:460 (text)"
+    },
+    {
+      "id": "ui.9a338849bafc57",
+      "source": "Dev draft",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:79 (label); src/Matrix.tsx:30 (label); src/Popovers.tsx:138 (label)"
+    },
+    {
+      "id": "ui.bf56ebba684c6f",
+      "source": "Discard proposals",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:88 (text)"
+    },
+    {
+      "id": "ui.5374e72a5302d8",
+      "source": "Discard tracking",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:498 (text)"
+    },
+    {
+      "id": "ui.48845bff334a50",
+      "source": "Dismiss",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:281 (aria-label); src/Notifications.tsx:85 (title)"
+    },
+    {
+      "id": "ui.b7bb3f342402da",
+      "source": "Dismiss notification",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Notifications.tsx",
+      "note": "src/Notifications.tsx:85 (aria-label)"
+    },
+    {
+      "id": "ui.6491a847cd6ff2",
+      "source": "Docs and Sheets",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:336 (text)"
+    },
+    {
+      "id": "ui.11a6767d5674c7",
+      "source": "Done",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:121 (label); src/Dialogs.tsx:248 (text); src/Inspector.tsx:137 (text); src/TermModal.tsx:170 (text)"
+    },
+    {
+      "id": "ui.c9725b8c9e108f",
+      "source": "Done: replaced in",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:161 (text)"
+    },
+    {
+      "id": "ui.0ca9f9fe82be94",
+      "source": "Draft only",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:42 (label); src/Reference.tsx:342 (text)"
+    },
+    {
+      "id": "ui.e9a88691df3595",
+      "source": "Draft up to 5 unfinished lines",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:66 (text)"
+    },
+    {
+      "id": "ui.2a3c41b58ac8e3",
+      "source": "Drag to reorder · Shift-drop to set parent",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:225 (title)"
+    },
+    {
+      "id": "ui.dc94eb66542cb2",
+      "source": "Drag to resize · double-click to reset",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:507 (title)"
+    },
+    {
+      "id": "ui.e21d7bef1015b3",
+      "source": "Drop files or folders here",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:295 (text)"
+    },
+    {
+      "id": "ui.72ffe6724adccf",
+      "source": "e.g. Ember",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:69 (placeholder)"
+    },
+    {
+      "id": "ui.7d90df4c971a77",
+      "source": "e.g. 残り火",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:72 (placeholder)"
+    },
+    {
+      "id": "ui.7d9889d74dd943",
+      "source": "Edit shortcuts",
+      "ai": "",
+      "final": "ショートカットを編集",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.773dbe3eef2b4d",
+      "source": "Edit voice",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:139 (text)"
+    },
+    {
+      "id": "ui.b6858518c2f0b3",
+      "source": "EN → JA",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Chrome.tsx",
+      "note": "src/Chrome.tsx:102 (text)"
+    },
+    {
+      "id": "ui.d9dc3d03a72a00",
+      "source": "EN → JA ·",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:203 (text)"
+    },
+    {
+      "id": "ui.916fb40bdc0a59",
+      "source": "Enable characters",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:447 (aria-label)"
+    },
+    {
+      "id": "ui.e4962546b4121f",
+      "source": "Enable glossary",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:454 (aria-label)"
+    },
+    {
+      "id": "ui.ba118bf7fc9c1a",
+      "source": "English",
+      "ai": "",
+      "final": "英語",
+      "status": "translated",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:29 (label); src/Popovers.tsx:137 (label); src/Reference.tsx:139 (text); src/Reference.tsx:409 (text); src/TermModal.tsx:68 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.b0743af92dedfb",
+      "source": "English source",
+      "ai": "",
+      "final": "英語の原文",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.0687fb92b14ff3",
+      "source": "English term",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:147 (aria-label)"
+    },
+    {
+      "id": "ui.458c1fed574354",
+      "source": "Evening",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:54 (label)"
+    },
+    {
+      "id": "ui.3db8a3c12ca6f8",
+      "source": "Existing translation",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:631 (text)"
+    },
+    {
+      "id": "ui.d56e4bf4050c08",
+      "source": "existing translations",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:554 (text)"
+    },
+    {
+      "id": "ui.6808184362598b",
+      "source": "Export .mori backup",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:300 (text)"
+    },
+    {
+      "id": "ui.df339cb8da1471",
+      "source": "Export format",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:322 (aria-label)"
+    },
+    {
+      "id": "ui.49f983b685f5f2",
+      "source": "Export table…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:325 (text)"
+    },
+    {
+      "id": "ui.463bb0335cb180",
+      "source": "Export translations",
+      "ai": "",
+      "final": "翻訳を書き出す",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:303 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.9b1b32df6fe5f8",
+      "source": "Extra placeholder",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:197 (text)"
+    },
+    {
+      "id": "ui.abc7e9892806b0",
+      "source": "Files",
+      "ai": "",
+      "final": "ファイル",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.1bc63344b4432b",
+      "source": "Filter files by name…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:111 (placeholder)"
+    },
+    {
+      "id": "ui.d4192919eeea7b",
+      "source": "Filter lines",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:418 (aria-label)"
+    },
+    {
+      "id": "ui.da8a78c49cc63f",
+      "source": "Find a Drive file",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:111 (aria-label)"
+    },
+    {
+      "id": "ui.42dc364d2e0281",
+      "source": "Find a shortcut",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:105 (placeholder)"
+    },
+    {
+      "id": "ui.2262c414722e17",
+      "source": "Find AI sessions",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:187 (aria-label)"
+    },
+    {
+      "id": "ui.e49df49340e10f",
+      "source": "Find in lines",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:436 (placeholder)"
+    },
+    {
+      "id": "ui.e5a78058be3c64",
+      "source": "Find or create a speaker…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:59 (placeholder)"
+    },
+    {
+      "id": "ui.a247dd6fd8be36",
+      "source": "Find sessions…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:187 (placeholder)"
+    },
+    {
+      "id": "ui.a45d026ae7d4b7",
+      "source": "Finish local save first",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleSyncPanel.tsx",
+      "note": "src/GoogleSyncPanel.tsx:72 (text)"
+    },
+    {
+      "id": "ui.5ec9391b203c8c",
+      "source": "Fix these before starting:",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:571 (text)"
+    },
+    {
+      "id": "ui.5fd97744889078",
+      "source": "Folders are scanned recursively. Your original files are never changed; export writes translated copies.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:296 (text)"
+    },
+    {
+      "id": "ui.218197693424e0",
+      "source": "From",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:514 (text)"
+    },
+    {
+      "id": "ui.2e16edd69259fa",
+      "source": "From templates",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:83 (text)"
+    },
+    {
+      "id": "ui.5201a39b08bfe6",
+      "source": "Gettext PO",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:323 (text)"
+    },
+    {
+      "id": "ui.1d59a5e097147b",
+      "source": "Global rules",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:207 (text)"
+    },
+    {
+      "id": "ui.1af8632de10237",
+      "source": "Glossaries",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:285 (text)"
+    },
+    {
+      "id": "ui.4c4e436f9a453c",
+      "source": "Glossary",
+      "ai": "",
+      "final": "用語集",
+      "status": "translated",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:534 (text); src/Reference.tsx:133 (title); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.ffb999a4360050",
+      "source": "Glossary in this line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:234 (title)"
+    },
+    {
+      "id": "ui.232a73072d0edf",
+      "source": "Glossary term isn’t in your text.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:209 (text)"
+    },
+    {
+      "id": "ui.83e54b20fee3d1",
+      "source": "Glossary terms",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:345 (text)"
+    },
+    {
+      "id": "ui.e8da58933ba835",
+      "source": "Glossary terms used",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:228 (text)"
+    },
+    {
+      "id": "ui.3b65573942ac93",
+      "source": "Google authentication is available in the installed Monku Windows app.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:94 (text)"
+    },
+    {
+      "id": "ui.30170e4b9491b0",
+      "source": "Google Sheets synchronization",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleSyncPanel.tsx",
+      "note": "src/GoogleSyncPanel.tsx:50 (text)"
+    },
+    {
+      "id": "ui.a95f0555c0219e",
+      "source": "Google worksheet",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:561 (text)"
+    },
+    {
+      "id": "ui.e12154eb4ca974",
+      "source": "Google Workspace",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:98 (text); src/ImportWizard.tsx:336 (text); src/Popovers.tsx:309 (text)"
+    },
+    {
+      "id": "ui.8dbb16383d4f5b",
+      "source": "Google Workspace ·",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Chrome.tsx",
+      "note": "src/Chrome.tsx:66 (text)"
+    },
+    {
+      "id": "ui.abd6532ea33e08",
+      "source": "Google Workspace account",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:312 (text)"
+    },
+    {
+      "id": "ui.dca382564b4f08",
+      "source": "Header: row",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:389 (text)"
+    },
+    {
+      "id": "ui.7e6fefff0f0aeb",
+      "source": "Hidden",
+      "ai": "",
+      "final": "非表示",
+      "status": "translated",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:184 (text); src/AIChatsSidebar.tsx:269 (text); src/Reference.tsx:471 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.4cae557d8e8745",
+      "source": "Hide character tools, speaker controls and voice context in translation requests. Existing characters are preserved.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:446 (text)"
+    },
+    {
+      "id": "ui.6676e30f7159bf",
+      "source": "Hide terminology tools and stop using glossary terms for translation suggestions, highlights or warnings. Saved terms are preserved.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:453 (text)"
+    },
+    {
+      "id": "ui.1a12c033712488",
+      "source": "Hide unloaded",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:181 (text)"
+    },
+    {
+      "id": "ui.a99994a4d456bc",
+      "source": "How the workspace looks. Translation data is never stored here.",
+      "ai": "",
+      "final": "作業画面の表示設定です。翻訳データはここには保存されません。",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.871d945bdfeb9d",
+      "source": "Import from New project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:118 (text)"
+    },
+    {
+      "id": "ui.8bc1d53cc57c24",
+      "source": "In",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:147 (text)"
+    },
+    {
+      "id": "ui.4ca06a005d299a",
+      "source": "In this project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:60 (text)"
+    },
+    {
+      "id": "ui.8aa318eb7eaa23",
+      "source": "Insert",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:186 (text)"
+    },
+    {
+      "id": "ui.da188e3b1cefc8",
+      "source": "Inspector",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:468 (text)"
+    },
+    {
+      "id": "ui.5eaf4cfeb16f08",
+      "source": "Install the Monku desktop application to run subscription translation through Codex.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:74 (text)"
+    },
+    {
+      "id": "ui.8027f432a7fb7c",
+      "source": "Interface language",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:408 (aria-label)"
+    },
+    {
+      "id": "ui.5d64f839bd1c36",
+      "source": "It’s in the source but not in your text.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:178 (text)"
+    },
+    {
+      "id": "ui.be4ee906d3efec",
+      "source": "Japanese",
+      "ai": "",
+      "final": "日本語",
+      "status": "translated",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:32 (label); src/Reference.tsx:139 (text); src/TermModal.tsx:71 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.a62cf07e0f035c",
+      "source": "Japanese field click",
+      "ai": "",
+      "final": "日本語欄のクリック",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.aba289c61f916b",
+      "source": "Japanese field click behavior",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:439 (aria-label)"
+    },
+    {
+      "id": "ui.5a93621db47ae2",
+      "source": "Japanese font",
+      "ai": "",
+      "final": "日本語フォント",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.bc5548ca42ab69",
+      "source": "Japanese term",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:153 (aria-label)"
+    },
+    {
+      "id": "ui.8c415b73246754",
+      "source": "Japanese text size",
+      "ai": "",
+      "final": "日本語テキストのサイズ",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.b1753576cb804b",
+      "source": "JSON interchange",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:323 (text)"
+    },
+    {
+      "id": "ui.a52904fed6e1dd",
+      "source": "Kept as dev drafts, never as your final text.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:554 (text)"
+    },
+    {
+      "id": "ui.e9bef0b0f3c25e",
+      "source": "Keyboard shortcuts",
+      "ai": "",
+      "final": "キーボードショートカット",
+      "status": "translated",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:101 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.a4fe65264ef7db",
+      "source": "Language",
+      "ai": "",
+      "final": "表示言語",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.a511909161e1b8",
+      "source": "Layout",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:367 (text); src/ImportWizard.tsx:445 (text)"
+    },
+    {
+      "id": "ui.d7852cd0d2453e",
+      "source": "Line",
+      "ai": "",
+      "final": "行",
+      "status": "translated",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:27 (label); src/Popovers.tsx:135 (label); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.d299c5d36950e0",
+      "source": "Line breaks match",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:225 (text)"
+    },
+    {
+      "id": "ui.029e9f4ffacb06",
+      "source": "Line note",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:302 (title); src/Inspector.tsx:306 (aria-label)"
+    },
+    {
+      "id": "ui.3b26a5427458ed",
+      "source": "Lines",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:139 (text); src/Reference.tsx:340 (text)"
+    },
+    {
+      "id": "ui.e877133d7d3004",
+      "source": "lines ·",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:203 (text)"
+    },
+    {
+      "id": "ui.acf932d9f0e496",
+      "source": "lines already in the project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:557 (text)"
+    },
+    {
+      "id": "ui.93ccff89ef581b",
+      "source": "lines from",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:553 (text)"
+    },
+    {
+      "id": "ui.363cb87b623d04",
+      "source": "lines with duplicate English",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:559 (text)"
+    },
+    {
+      "id": "ui.9105f01a3036d5",
+      "source": "Load more…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:122 (text)"
+    },
+    {
+      "id": "ui.1803aa5595d876",
+      "source": "Loading your projects…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:431 (text)"
+    },
+    {
+      "id": "ui.a424e33d90931d",
+      "source": "Locked",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:93 (text); src/Matrix.tsx:44 (label)"
+    },
+    {
+      "id": "ui.15297923dfdf89",
+      "source": "Locked as final",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:343 (text)"
+    },
+    {
+      "id": "ui.467aecca615ced",
+      "source": "LOW COST TEST MODE",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:60 (text)"
+    },
+    {
+      "id": "ui.2bd2820325d22d",
+      "source": "Manage templates…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:96 (text); src/Popovers.tsx:300 (text)"
+    },
+    {
+      "id": "ui.78611a0882f688",
+      "source": "Map fields",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:596 (text)"
+    },
+    {
+      "id": "ui.4028aadcb2f8e1",
+      "source": "mapped rows · column",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleSyncPanel.tsx",
+      "note": "src/GoogleSyncPanel.tsx:62 (text)"
+    },
+    {
+      "id": "ui.76a2171c057b73",
+      "source": "Matrix",
+      "ai": "",
+      "final": "マトリクス",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.d72e311c4ddaf4",
+      "source": "Minimize",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/WindowControls.tsx",
+      "note": "src/WindowControls.tsx:28 (aria-label); src/WindowControls.tsx:28 (title)"
+    },
+    {
+      "id": "ui.9b38c30acb826d",
+      "source": "Missing placeholder",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:177 (text)"
+    },
+    {
+      "id": "ui.b11f1aa2104216",
+      "source": "Monku keeps previous versions of local project files. Export independent .mori backups too.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:371 (text)"
+    },
+    {
+      "id": "ui.bbf7fcfd800cea",
+      "source": "Monku no Mori",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Chrome.tsx",
+      "note": "src/Chrome.tsx:46 (alt); src/MoriApp.tsx:426 (text)"
+    },
+    {
+      "id": "ui.2f5875bf399bbb",
+      "source": "Monku writes only to copies it creates. Source documents remain unchanged. The translator must review changes before syncing.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:125 (text)"
+    },
+    {
+      "id": "ui.1c83da139d0804",
+      "source": "Monku-owned Google copy ·",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleSyncPanel.tsx",
+      "note": "src/GoogleSyncPanel.tsx:62 (text)"
+    },
+    {
+      "id": "ui.dcd1d5223f73b3",
+      "source": "Name",
+      "ai": "",
+      "final": "名前",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:78 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.912759f4fdc46c",
+      "source": "Name this context template",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:252 (prompt); src/Reference.tsx:192 (prompt)"
+    },
+    {
+      "id": "ui.2bf1c88cba98a0",
+      "source": "Name this glossary template",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:122 (prompt)"
+    },
+    {
+      "id": "ui.6cb7dad53219a6",
+      "source": "Narrator",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:636 (text)"
+    },
+    {
+      "id": "ui.18fdd549b2ed36",
+      "source": "New",
+      "ai": "",
+      "final": "新規",
+      "status": "translated",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:272 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.4708d98a07ebcf",
+      "source": "New character",
+      "ai": "",
+      "final": "新規キャラクター",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:59 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.db18382a249e02",
+      "source": "New chat",
+      "ai": "",
+      "final": "新しいチャット",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:476 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.ccc4c2eb42e924",
+      "source": "New ChatGPT session",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:160 (title); src/AIChatsSidebar.tsx:160 (aria-label)"
+    },
+    {
+      "id": "ui.5d6167ef4766f7",
+      "source": "New lines join the project with their own file group. Speakers it already knows keep their voice notes; new speakers become characters. Lines the project already has from the same file are skipped, so adding an updated file only brings in what changed.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:503 (text)"
+    },
+    {
+      "id": "ui.a41eb2bf7245d3",
+      "source": "New project",
+      "ai": "",
+      "final": "新しいプロジェクト",
+      "status": "translated",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:498 (text); src/MoriApp.tsx:437 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.cf8d3c2d8e84bb",
+      "source": "New project…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:211 (text)"
+    },
+    {
+      "id": "ui.66d64278b4c150",
+      "source": "New session group name",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:357 (prompt)"
+    },
+    {
+      "id": "ui.dc76f83181f492",
+      "source": "Next line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:99 (aria-label)"
+    },
+    {
+      "id": "ui.380371b9e23522",
+      "source": "No active Stop control found.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:392 (toast)"
+    },
+    {
+      "id": "ui.d6a2ad7e85635f",
+      "source": "No AI chat selected",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:475 (text)"
+    },
+    {
+      "id": "ui.9dc15423f1e8ac",
+      "source": "No AI draft on this line.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:181 (toast)"
+    },
+    {
+      "id": "ui.dedc5d13072ebf",
+      "source": "No characters yet.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:73 (text)"
+    },
+    {
+      "id": "ui.0709f10582eccf",
+      "source": "No dev draft on this line.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:185 (toast)"
+    },
+    {
+      "id": "ui.4585399900d70b",
+      "source": "No glossary terms in this line.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:251 (text)"
+    },
+    {
+      "id": "ui.17388859d01c51",
+      "source": "No ID column, so lines get IDs from their file and row, like “chapter1:12”.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:470 (text)"
+    },
+    {
+      "id": "ui.a5f746f26b1b99",
+      "source": "No lines match",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:519 (text)"
+    },
+    {
+      "id": "ui.1b5927013668cb",
+      "source": "No missing placeholders.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:190 (toast)"
+    },
+    {
+      "id": "ui.610521342aa316",
+      "source": "No projects in this browser yet.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:224 (text)"
+    },
+    {
+      "id": "ui.eb177654c6d02b",
+      "source": "No saved context templates yet.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:272 (text)"
+    },
+    {
+      "id": "ui.28d5573eb6d067",
+      "source": "No saved value for this session.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:335 (toast)"
+    },
+    {
+      "id": "ui.31468ca4beb5ef",
+      "source": "No snapshots yet. Monku snapshots older project versions during saves.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:385 (text)"
+    },
+    {
+      "id": "ui.e624562fd557be",
+      "source": "No source files recorded.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:365 (text)"
+    },
+    {
+      "id": "ui.d0cc33d34565a2",
+      "source": "No source files yet.",
+      "ai": "",
+      "final": "原文ファイルはまだありません。",
+      "status": "translated",
+      "sourceFile": "src/Sidebar.tsx",
+      "note": "src/Sidebar.tsx:148 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.2193b1bd96c2c4",
+      "source": "No speaker",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:149 (text)"
+    },
+    {
+      "id": "ui.e216097ca0cea5",
+      "source": "No speaker column, so lines go to Narrator. You can reassign them later.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:472 (text)"
+    },
+    {
+      "id": "ui.56e54b1f971ce4",
+      "source": "No synchronized Google spreadsheet is linked. Import a private Google Sheet with a mapped Japanese column to create one.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleSyncPanel.tsx",
+      "note": "src/GoogleSyncPanel.tsx:57 (text)"
+    },
+    {
+      "id": "ui.05eb4103672dc1",
+      "source": "No terms yet.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:184 (text)"
+    },
+    {
+      "id": "ui.c2dba10649df57",
+      "source": "No versions yet.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:298 (text)"
+    },
+    {
+      "id": "ui.28793a8b05701b",
+      "source": "Not added again; their translations stay. The project keeps this newer copy of the file for export.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:557 (text)"
+    },
+    {
+      "id": "ui.ec110e5ea9374c",
+      "source": "Not in the source. The game may show it raw.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:198 (text)"
+    },
+    {
+      "id": "ui.4895f73177ab5d",
+      "source": "Not set",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Overlays.tsx",
+      "note": "src/Overlays.tsx:113 (text)"
+    },
+    {
+      "id": "ui.3f59d8d369db77",
+      "source": "not translated yet",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:138 (text)"
+    },
+    {
+      "id": "ui.d8da2c49df39d9",
+      "source": "Note",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:139 (text); src/Reference.tsx:160 (aria-label); src/TermModal.tsx:74 (text)"
+    },
+    {
+      "id": "ui.eb1fa11281bc28",
+      "source": "Nothing found.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:202 (text)"
+    },
+    {
+      "id": "ui.f78832fb4082fb",
+      "source": "Nothing left to do in this view.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:160 (toast)"
+    },
+    {
+      "id": "ui.057b0b09c4e1fe",
+      "source": "Nothing saved yet. Save a character from its speaker card, a glossary from the Glossary screen, or a context from the Templates menu.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:231 (text)"
+    },
+    {
+      "id": "ui.a3c4b0c36d7d09",
+      "source": "Nothing staged yet. Add files above, or start an empty project.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:412 (text)"
+    },
+    {
+      "id": "ui.788011833a5a0f",
+      "source": "Notifications",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Notifications.tsx",
+      "note": "src/Notifications.tsx:94 (aria-label)"
+    },
+    {
+      "id": "ui.d08d62282644eb",
+      "source": "of 3",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:585 (text)"
+    },
+    {
+      "id": "ui.e32df1da6b1582",
+      "source": "of your translations don’t",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:131 (text)"
+    },
+    {
+      "id": "ui.ca7981b46ecf2c",
+      "source": "Off",
+      "ai": "",
+      "final": "オフ",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:449 (text); src/Reference.tsx:456 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.13001175612531",
+      "source": "On",
+      "ai": "",
+      "final": "オン",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:448 (text); src/Reference.tsx:455 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.ac98902e3a62a3",
+      "source": "on this line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Chrome.tsx",
+      "note": "src/Chrome.tsx:99 (text)"
+    },
+    {
+      "id": "ui.7849b5e475c5ee",
+      "source": "One table of every line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:319 (text)"
+    },
+    {
+      "id": "ui.89cf5166e1cb7e",
+      "source": "Only Codex Luna 6 at low reasoning is used by these translation buttons. No fallback to other models. Locked and curated text stays protected.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:91 (text)"
+    },
+    {
+      "id": "ui.1808f0c78919bc",
+      "source": "Only lines whose English uses this glossary term",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:403 (title)"
+    },
+    {
+      "id": "ui.1e848b37800b8d",
+      "source": "Only writes human-curated translations to a copy created in Google Drive during import. Original documents remain untouched. Remote edits trigger a conflict rather than a silent overwrite. Google Sheets has no atomic compare-and-set, so simultaneous changes during a write cannot be fully prevented.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleSyncPanel.tsx",
+      "note": "src/GoogleSyncPanel.tsx:51 (text)"
+    },
+    {
+      "id": "ui.99b568367ea672",
+      "source": "Open a .mori file…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:215 (text)"
+    },
+    {
+      "id": "ui.0f488b78644538",
+      "source": "Open batch session",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:496 (text)"
+    },
+    {
+      "id": "ui.b205bb47f81a30",
+      "source": "Open session",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:324 (label)"
+    },
+    {
+      "id": "ui.653a4ab74b7fea",
+      "source": "Opening Mori",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:431 (text)"
+    },
+    {
+      "id": "ui.8f838ebe56bdd4",
+      "source": "optional. You can edit everything afterwards.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:519 (text)"
+    },
+    {
+      "id": "ui.6bc8faf9a5543e",
+      "source": "or a public link",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:339 (text)"
+    },
+    {
+      "id": "ui.baa3a7526da1ce",
+      "source": "Or select a word in the Matrix",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:253 (title)"
+    },
+    {
+      "id": "ui.850049933ba780",
+      "source": "Other is reserved for ungrouped sessions.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:435 (toast)"
+    },
+    {
+      "id": "ui.523839adf84c8e",
+      "source": "Paste a public Google Sheets URL",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:343 (placeholder)"
+    },
+    {
+      "id": "ui.349f2bf10c9b27",
+      "source": "Placeholders match",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:222 (text)"
+    },
+    {
+      "id": "ui.324b134f57c70c",
+      "source": "Preview",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:396 (aria-label)"
+    },
+    {
+      "id": "ui.aa9a890936f6fb",
+      "source": "Preview raw content",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:396 (title)"
+    },
+    {
+      "id": "ui.43fd77d2ed8dcd",
+      "source": "Previous line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:96 (aria-label)"
+    },
+    {
+      "id": "ui.98595978531974",
+      "source": "Project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Sidebar.tsx",
+      "note": "src/Sidebar.tsx:88 (aria-label)"
+    },
+    {
+      "id": "ui.57fc7f2f17da52",
+      "source": "Project & files",
+      "ai": "",
+      "final": "プロジェクトとファイル",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:299 (title); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.cfbf99f17e86d8",
+      "source": "Project deleted.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:291 (toast)"
+    },
+    {
+      "id": "ui.25498193b89819",
+      "source": "Project name",
+      "ai": "",
+      "final": "プロジェクト名",
+      "status": "translated",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:510 (text); src/Reference.tsx:336 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.04e2a9728af758",
+      "source": "Projects",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:197 (text)"
+    },
+    {
+      "id": "ui.9de05f33794e0e",
+      "source": "Public Google Sheets URL",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:344 (aria-label)"
+    },
+    {
+      "id": "ui.3447cb6338d786",
+      "source": "Public links are imported read-only. Signed-in Drive imports create a separate Monku copy and keep sheet-to-row mappings for optional manual sync.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:351 (text)"
+    },
+    {
+      "id": "ui.f8e40a3a13f15d",
+      "source": "Public links are read-only; signed-in Drive imports can sync curated text to their Monku-created copies.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:561 (text)"
+    },
+    {
+      "id": "ui.64c43fef596245",
+      "source": "Public links import read-only. Signed-in imports make new copies, with optional manual Japanese-only sync to those copies from Project & files.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:317 (text)"
+    },
+    {
+      "id": "ui.86d21738af13e7",
+      "source": "Put the Matrix columns back to their starting widths and visibility.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:479 (text)"
+    },
+    {
+      "id": "ui.617425d4f786d7",
+      "source": "Reasoning: low · ChatGPT subscription sign-in via installed Codex CLI",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:58 (text)"
+    },
+    {
+      "id": "ui.e9ed09ca7272ef",
+      "source": "Recovery snapshots",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:370 (text)"
+    },
+    {
+      "id": "ui.71bf90935fc231",
+      "source": "Reference",
+      "ai": "",
+      "final": "参考資料",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.f40c20a80c51cd",
+      "source": "Reload session",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:325 (label)"
+    },
+    {
+      "id": "ui.c3812fc4acb861",
+      "source": "Remove",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:399 (aria-label)"
+    },
+    {
+      "id": "ui.24d3bc83dd3f1c",
+      "source": "Remove from this import",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:399 (title)"
+    },
+    {
+      "id": "ui.3064d79a295cef",
+      "source": "Rename",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:251 (text)"
+    },
+    {
+      "id": "ui.ef361f8d136209",
+      "source": "Rename (F2)",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:250 (title)"
+    },
+    {
+      "id": "ui.bcf9f0d07e7aa3",
+      "source": "Rename chat session",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:231 (aria-label)"
+    },
+    {
+      "id": "ui.f8e7078c0fec8d",
+      "source": "Rename session group",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:433 (prompt)"
+    },
+    {
+      "id": "ui.95e154398a4bc0",
+      "source": "Replace",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:144 (text)"
+    },
+    {
+      "id": "ui.99a38501936be0",
+      "source": "Replace in",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:168 (text)"
+    },
+    {
+      "id": "ui.645982c52b7c11",
+      "source": "Reset all",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:119 (text)"
+    },
+    {
+      "id": "ui.9c42c073aa81ac",
+      "source": "Reset columns",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:169 (text); src/Reference.tsx:484 (text)"
+    },
+    {
+      "id": "ui.a76e13b9839270",
+      "source": "Restore",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:383 (text)"
+    },
+    {
+      "id": "ui.da55fcf48ba9c7",
+      "source": "Restore this snapshot? Save a .mori backup first. Current unsaved edits will be replaced.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:377 (confirm)"
+    },
+    {
+      "id": "ui.aff0766a5290e1",
+      "source": "Review",
+      "ai": "",
+      "final": "レビュー",
+      "status": "translated",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:169 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.eeae19712c445b",
+      "source": "Review & sync curated text to Google copies…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleSyncPanel.tsx",
+      "note": "src/GoogleSyncPanel.tsx:71 (text)"
+    },
+    {
+      "id": "ui.a92546a1532cf3",
+      "source": "Review suggested Japanese",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:76 (text)"
+    },
+    {
+      "id": "ui.14736a2eb9f415",
+      "source": "Role",
+      "ai": "",
+      "final": "役割",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:81 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.93a6a5e7e8bb5a",
+      "source": "Row density",
+      "ai": "",
+      "final": "行の密度",
+      "status": "translated",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:159 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.b1e1bcd1d3c67c",
+      "source": "Rules the translation should follow. Global rules are for every project; project rules are for this one.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:202 (description)"
+    },
+    {
+      "id": "ui.3d1b466939ee09",
+      "source": "Runs as you type: placeholders, line breaks",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:168 (text)"
+    },
+    {
+      "id": "ui.b4f9b3025c7d2c",
+      "source": "Same English elsewhere",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:260 (title)"
+    },
+    {
+      "id": "ui.c1d1b58c644975",
+      "source": "Save a glossary from the Glossary screen.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:292 (text)"
+    },
+    {
+      "id": "ui.c4fcbe6866f556",
+      "source": "Save as template",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:141 (text); src/Reference.tsx:98 (text); src/Reference.tsx:134 (text); src/Reference.tsx:203 (text)"
+    },
+    {
+      "id": "ui.aa0e5922bb4aad",
+      "source": "Save templates from the Templates menu, the Glossary screen or a speaker card.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:542 (text)"
+    },
+    {
+      "id": "ui.431e4352cedef9",
+      "source": "Save this project’s context as template",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:296 (text)"
+    },
+    {
+      "id": "ui.b32fac26844c0c",
+      "source": "Saved in the Monku project library (native on Windows, browser storage in the web preview).",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:578 (text)"
+    },
+    {
+      "id": "ui.91a42dc8d385cf",
+      "source": "Scales translation text in the Matrix and the editor.",
+      "ai": "",
+      "final": "マトリクスとエディター内の訳文の文字サイズを変更します。",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.4634e16f080eec",
+      "source": "Search lines, characters, actions",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:179 (aria-label)"
+    },
+    {
+      "id": "ui.0d36de627cb863",
+      "source": "Search lines, characters, actions…",
+      "ai": "",
+      "final": "行・キャラクター・操作を検索…",
+      "status": "translated",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:178 (placeholder); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.8cb650539ec84a",
+      "source": "Search sessions",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:167 (title); src/AIChatsSidebar.tsx:167 (aria-label)"
+    },
+    {
+      "id": "ui.cf49a0effbf235",
+      "source": "See how this term is used",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:168 (title)"
+    },
+    {
+      "id": "ui.b0fae89e9b4a75",
+      "source": "Select a line to see its details.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:19 (text)"
+    },
+    {
+      "id": "ui.1fc9a387654d41",
+      "source": "Select all",
+      "ai": "",
+      "final": "すべて選択",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.742ab447c91df1",
+      "source": "Session actions",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:245 (title)"
+    },
+    {
+      "id": "ui.67c075652cdec8",
+      "source": "Session list options",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:171 (title); src/AIChatsSidebar.tsx:171 (aria-label)"
+    },
+    {
+      "id": "ui.74a883a037bc22",
+      "source": "Settings",
+      "ai": "",
+      "final": "設定",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.46e978d0c19397",
+      "source": "Shortcuts",
+      "ai": "",
+      "final": "ショートカット",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.720a8eabea0caa",
+      "source": "Show AI Chats sidebar",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:148 (title); src/AIChatsSidebar.tsx:149 (aria-label)"
+    },
+    {
+      "id": "ui.c2537726334a05",
+      "source": "Show all files",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:413 (title); src/Matrix.tsx:413 (aria-label)"
+    },
+    {
+      "id": "ui.947f259f43574e",
+      "source": "Show all lines",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:405 (title)"
+    },
+    {
+      "id": "ui.7438137873b17d",
+      "source": "Show available snapshots",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:372 (text)"
+    },
+    {
+      "id": "ui.2daa234ebe967a",
+      "source": "Show lines spoken by",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:111 (text)"
+    },
+    {
+      "id": "ui.ed2d52e614481a",
+      "source": "Show or hide inspector",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:461 (aria-label)"
+    },
+    {
+      "id": "ui.54a4eec3d39244",
+      "source": "Show workers",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:180 (text)"
+    },
+    {
+      "id": "ui.6ba2a0e0afd03f",
+      "source": "Shown",
+      "ai": "",
+      "final": "表示",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:470 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.2a84b34a233079",
+      "source": "Shown side by side so you can reuse a translation.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:559 (text)"
+    },
+    {
+      "id": "ui.1dbcee68244321",
+      "source": "Sign in with Google",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:104 (text)"
+    },
+    {
+      "id": "ui.48f0d3d397d49f",
+      "source": "Sign out",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:103 (text)"
+    },
+    {
+      "id": "ui.fb7f28fffefbb2",
+      "source": "Sign-in opens your default browser. If Google restricts this app to test users, the Google Cloud OAuth configuration must allow this account.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:107 (text)"
+    },
+    {
+      "id": "ui.5b7e4e69b16061",
+      "source": "Snooze for how many minutes?",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:374 (prompt)"
+    },
+    {
+      "id": "ui.748abe03ef42c2",
+      "source": "Snooze group for how many minutes?",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:446 (prompt)"
+    },
+    {
+      "id": "ui.88096584e4a882",
+      "source": "Snoozed",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:183 (text); src/AIChatsSidebar.tsx:270 (text)"
+    },
+    {
+      "id": "ui.5bd638b645eb32",
+      "source": "Source (EN)",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:631 (text)"
+    },
+    {
+      "id": "ui.fa125556f136a7",
+      "source": "Source files",
+      "ai": "",
+      "final": "原文ファイル",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:354 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.a9e0c70585121f",
+      "source": "Speaker",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:631 (text); src/Inspector.tsx:106 (title); src/Matrix.tsx:28 (label); src/Popovers.tsx:136 (label)"
+    },
+    {
+      "id": "ui.b4e1e1050c09d5",
+      "source": "Speakers become characters. A name that matches a saved character template fills in its voice notes.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:529 (text)"
+    },
+    {
+      "id": "ui.9b66106890a843",
+      "source": "spoken by",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:96 (text)"
+    },
+    {
+      "id": "ui.daec459ab6cce9",
+      "source": "Staged",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:357 (text)"
+    },
+    {
+      "id": "ui.aa17b38f6c562d",
+      "source": "Start empty project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:587 (text)"
+    },
+    {
+      "id": "ui.1c84f1c021fca1",
+      "source": "Start from templates",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:519 (text)"
+    },
+    {
+      "id": "ui.920e413c7d411b",
+      "source": "Status",
+      "ai": "",
+      "final": "状態",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.8e6a6cca7aae1d",
+      "source": "Step",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:585 (text)"
+    },
+    {
+      "id": "ui.a13bc11d1e8530",
+      "source": "Stop filtering by term",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:405 (aria-label)"
+    },
+    {
+      "id": "ui.876cb3d80e47da",
+      "source": "Suggest mapping",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:484 (text)"
+    },
+    {
+      "id": "ui.733378b2ef6991",
+      "source": "Template deleted. Projects that already used it keep their copy.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:216 (toast)"
+    },
+    {
+      "id": "ui.56b564b75c7fdb",
+      "source": "Templates",
+      "ai": "",
+      "final": "テンプレート",
+      "status": "translated",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:222 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.16d4c9148c42aa",
+      "source": "Templates are reusable presets for characters, project context, and glossaries. Save them once, then apply them to other projects.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:264 (text)"
+    },
+    {
+      "id": "ui.d8bb094e902d89",
+      "source": "Templates save reusable characters, project context, and glossaries for other projects. Applying one makes a copy; deleting a saved template does not change projects already using it.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Dialogs.tsx",
+      "note": "src/Dialogs.tsx:227 (text)"
+    },
+    {
+      "id": "ui.e04caac22065ea",
+      "source": "Terms that must stay consistent. Lines that use a term are underlined in the Matrix and checked. Tip: select a word in the Matrix to add it.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:133 (description)"
+    },
+    {
+      "id": "ui.9c84020d4f5105",
+      "source": "Text ID",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:631 (text)"
+    },
+    {
+      "id": "ui.cb380dc8dd691a",
+      "source": "Text to use",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:327 (text)"
+    },
+    {
+      "id": "ui.015ac0aa81ee25",
+      "source": "That project is no longer in this library.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:328 (toast)"
+    },
+    {
+      "id": "ui.95d2eb4bc9e0fa",
+      "source": "The ChatGPT composer contains unsent text. Close this local tab anyway?",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:245 (confirm)"
+    },
+    {
+      "id": "ui.2221524edb7d5e",
+      "source": "The panel on the right of the Matrix with checks, versions and voice notes.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:468 (text)"
+    },
+    {
+      "id": "ui.0f5dda71fe7429",
+      "source": "The speaker column is collapsed. Expand it to pick a speaker.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:199 (toast)"
+    },
+    {
+      "id": "ui.008cfadb77318c",
+      "source": "This line is locked. Unlock it first.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:122 (toast)"
+    },
+    {
+      "id": "ui.d0f62545074d3f",
+      "source": "This project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:212 (text)"
+    },
+    {
+      "id": "ui.f4b06ef6d3c814",
+      "source": "To",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:516 (text)"
+    },
+    {
+      "id": "ui.f21bb6fa756196",
+      "source": "to continue.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:468 (text)"
+    },
+    {
+      "id": "ui.217655f48dde4e",
+      "source": "to do",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Sidebar.tsx",
+      "note": "src/Sidebar.tsx:91 (text)"
+    },
+    {
+      "id": "ui.100ec1bc78a4cc",
+      "source": "To do",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:41 (label)"
+    },
+    {
+      "id": "ui.e8f585eec943d0",
+      "source": "to fix",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:83 (text)"
+    },
+    {
+      "id": "ui.249a20756dacd3",
+      "source": "to glossary",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:568 (text)"
+    },
+    {
+      "id": "ui.9c46b38e241584",
+      "source": "to sync",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleSyncPanel.tsx",
+      "note": "src/GoogleSyncPanel.tsx:65 (text)"
+    },
+    {
+      "id": "ui.06bb3f7fe22ce5",
+      "source": "Toggle session sort",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:164 (aria-label)"
+    },
+    {
+      "id": "ui.456a73bbcefb1d",
+      "source": "Tomorrow",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:55 (label)"
+    },
+    {
+      "id": "ui.c2c8b72e302ec7",
+      "source": "Tone",
+      "ai": "",
+      "final": "口調",
+      "status": "translated",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:85 (text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.8fe147696fbf47",
+      "source": "Translate",
+      "ai": "",
+      "final": "翻訳",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.92b788c239b20b",
+      "source": "Translate selected line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:64 (text)"
+    },
+    {
+      "id": "ui.35decc88c994b6",
+      "source": "Translate up to three untouched lines, automatically saving valid JSON results as AI drafts",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:263 (title)"
+    },
+    {
+      "id": "ui.abbc13c13e35c8",
+      "source": "Translated",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:43 (label); src/Reference.tsx:341 (text)"
+    },
+    {
+      "id": "ui.6fbd766b1a71cc",
+      "source": "Translation",
+      "ai": "",
+      "final": "翻訳",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.743957bbd62bca",
+      "source": "Translation engine: Codex Luna 6",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:58 (text)"
+    },
+    {
+      "id": "ui.4ba5c6645965bf",
+      "source": "Translation source",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:329 (aria-label)"
+    },
+    {
+      "id": "ui.da7c98b4e627e8",
+      "source": "Try another filter or clear the search.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:519 (text)"
+    },
+    {
+      "id": "ui.5bc5c6a24e44c6",
+      "source": "Type your translation…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:132 (placeholder)"
+    },
+    {
+      "id": "ui.14d33bd014e6b4",
+      "source": "Unassigned",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Popovers.tsx",
+      "note": "src/Popovers.tsx:71 (text); src/Popovers.tsx:126 (text)"
+    },
+    {
+      "id": "ui.94798842ac921e",
+      "source": "Unsnooze",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:240 (title)"
+    },
+    {
+      "id": "ui.c1c1009d3f37ec",
+      "source": "Update",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:164 (text)"
+    },
+    {
+      "id": "ui.c36d819e7bc6d2",
+      "source": "Use",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:267 (text)"
+    },
+    {
+      "id": "ui.5296a833f19e0d",
+      "source": "Use AI/dev draft when not curated (review carefully)",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:330 (text)"
+    },
+    {
+      "id": "ui.5dcef62a0e33b0",
+      "source": "Used for Japanese text. BIZ UDPGothic is the most legible on most systems.",
+      "ai": "",
+      "final": "日本語の表示に使うフォントです。多くの環境では BIZ UDPGothic が読みやすくなります。",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.f89ea27036ac1d",
+      "source": "Versions",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:279 (title)"
+    },
+    {
+      "id": "ui.1e85dc470fd0f3",
+      "source": "Visible sessions",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:158 (title)"
+    },
+    {
+      "id": "ui.496bcd8a502bab",
+      "source": "Voice notes",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:126 (aria-label); src/Reference.tsx:88 (text)"
+    },
+    {
+      "id": "ui.6ec69e8ca662ef",
+      "source": "Voice notes appear here once assigned.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:150 (text)"
+    },
+    {
+      "id": "ui.653c0461d90a92",
+      "source": "Voice notes saved. Every line by this character uses them.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:59 (toast)"
+    },
+    {
+      "id": "ui.f221e4c9140411",
+      "source": "What this project holds and where it is kept.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:299 (description)"
+    },
+    {
+      "id": "ui.df1af37e0d703b",
+      "source": "When to use it, or what to avoid",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/TermModal.tsx",
+      "note": "src/TermModal.tsx:75 (placeholder)"
+    },
+    {
+      "id": "ui.ac3d4a4e2d9ef5",
+      "source": "When you click a translation in the Matrix to start editing, choose where the cursor goes.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:438 (text)"
+    },
+    {
+      "id": "ui.c4dcd99ebee1ab",
+      "source": "Where clicked",
+      "ai": "",
+      "final": "クリック位置",
+      "status": "translated",
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.cc59bf326ab87e",
+      "source": "Where the lines go",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:493 (aria-label)"
+    },
+    {
+      "id": "ui.fc9c7f74dbbab3",
+      "source": "Which row holds the column names",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:383 (title)"
+    },
+    {
+      "id": "ui.af7c3334b6c47b",
+      "source": "Who speaks, how they talk. Every line by a character uses these notes.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:58 (description)"
+    },
+    {
+      "id": "ui.9cea69fd345a9c",
+      "source": "Window controls",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/WindowControls.tsx",
+      "note": "src/WindowControls.tsx:27 (aria-label)"
+    },
+    {
+      "id": "ui.a67b04cd5c491d",
+      "source": "Worker",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/AIChatsSidebar.tsx",
+      "note": "src/AIChatsSidebar.tsx:236 (title)"
+    },
+    {
+      "id": "ui.6d64d501d4fe22",
+      "source": "Working with Google Workspace…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:124 (text)"
+    },
+    {
+      "id": "ui.5474eef8d0f179",
+      "source": "Working…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/CodexTranslationPanel.tsx",
+      "note": "src/CodexTranslationPanel.tsx:71 (text)"
+    },
+    {
+      "id": "ui.54b26f7d3d0ddc",
+      "source": "Yours",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Inspector.tsx",
+      "note": "src/Inspector.tsx:73 (label); src/Inspector.tsx:76 (label)"
+    }
+  ],
+  "characters": [],
+  "glossary": [
+    {
+      "id": "self-glossary-0",
+      "en": "Matrix",
+      "jp": "マトリクス",
+      "explanation": "UI terminology; remain consistent."
+    },
+    {
+      "id": "self-glossary-1",
+      "en": "AI Chats",
+      "jp": "AIチャット",
+      "explanation": "UI terminology; remain consistent."
+    },
+    {
+      "id": "self-glossary-2",
+      "en": "Characters",
+      "jp": "キャラクター",
+      "explanation": "UI terminology; remain consistent."
+    },
+    {
+      "id": "self-glossary-3",
+      "en": "Glossary",
+      "jp": "用語集",
+      "explanation": "UI terminology; remain consistent."
+    },
+    {
+      "id": "self-glossary-4",
+      "en": "Settings",
+      "jp": "設定",
+      "explanation": "UI terminology; remain consistent."
+    },
+    {
+      "id": "self-glossary-5",
+      "en": "Draft",
+      "jp": "下書き",
+      "explanation": "UI terminology; remain consistent."
+    },
+    {
+      "id": "self-glossary-6",
+      "en": "Project",
+      "jp": "プロジェクト",
+      "explanation": "UI terminology; remain consistent."
+    }
+  ],
+  "context": {
+    "global": "Translate concise, natural Japanese UI strings. Preserve variables, placeholders, keyboard shortcuts, product names and punctuation. Prefer standard Japanese desktop application terminology. Do not translate code identifiers or HTML markup.",
+    "project": "You are localizing Monku no Mori itself: an EN→JA desktop translation editor with a Matrix, AI Chats, glossary, characters, project imports and exports. These strings are button labels, tooltips, instructions, menus and status text, not story dialogue. Source locations are in each row's notes."
+  },
+  "sourceFiles": [
+    "src/ImportWizard.tsx",
+    "src/TermModal.tsx",
+    "src/Inspector.tsx",
+    "src/Sidebar.tsx",
+    "src/ChatGPTScreen.tsx",
+    "src/Reference.tsx",
+    "src/CodexTranslationPanel.tsx",
+    "localization/seed.ja.json",
+    "src/AIChatsSidebar.tsx",
+    "src/Matrix.tsx",
+    "src/Popovers.tsx",
+    "src/GoogleConnect.tsx",
+    "src/Chrome.tsx",
+    "src/Dialogs.tsx",
+    "src/Notifications.tsx",
+    "src/GoogleSyncPanel.tsx",
+    "src/MoriApp.tsx",
+    "src/WindowControls.tsx",
+    "src/Overlays.tsx"
+  ],
+  "lastModified": "2026-11-03T21:43:46.470Z"
+}

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useApp, type Screen } from "./app-context.ts";
+import { tr } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { statusOf, checkRow } from "./insights.ts";
 import type { MoriProject } from "./model.ts";
@@ -85,39 +86,39 @@ export function Sidebar() {
       </button>
 
       <nav className="nav" aria-label="Project">
-        <div className="nav-label">Translate</div>
+        <div className="nav-label">{tr("Translate")}</div>
         <button type="button" className={navClass(onMatrix && view.filter !== "warnings")} onClick={() => { setView({ filter: "all", file: view.file }); showScreen("matrix"); }}>
-          <Icon name="table" />Matrix<span className="count tabnum">{todo} to do</span>
+          <Icon name="table" />{tr("Matrix")}<span className="count tabnum">{todo} to do</span>
         </button>
         <button type="button" className={navClass(screen === "focus")} onClick={() => showScreen("focus")}>
           <Icon name="target" />Focus
         </button>
         <button type="button" className={navClass(onMatrix && view.filter === "warnings")} onClick={() => { setView({ filter: "warnings" }); showScreen("matrix"); }}>
-          <Icon name="review" />Review<span className={`count warn tabnum`}>{warnings || ""}</span>
+          <Icon name="review" />{tr("Review")}<span className={`count warn tabnum`}>{warnings || ""}</span>
         </button>
 
-        <div className="nav-label">AI assistance</div>
+        <div className="nav-label">{tr("AI assistance")}</div>
         <button type="button" className={navClass(screen === "chatgpt")} onClick={() => showScreen("chatgpt")}>
-          <Icon name="sparkle" />AI Chats
+          <Icon name="sparkle" />{tr("AI Chats")}
         </button>
 
-        <div className="nav-label">Reference</div>
+        <div className="nav-label">{tr("Reference")}</div>
         {prefs.charactersEnabled && <button type="button" className={navClass(screen === "characters")} onClick={() => showScreen("characters")}>
-          <Icon name="users" />Characters<span className="count">{project.characters.length}</span>
+          <Icon name="users" />{tr("Characters")}<span className="count">{project.characters.length}</span>
         </button>}
         {prefs.glossaryEnabled && <button type="button" className={navClass(screen === "glossary")} onClick={() => showScreen("glossary")}>
-          <Icon name="book" />Glossary<span className="count">{project.glossary.length}</span>
+          <Icon name="book" />{tr("Glossary")}<span className="count">{project.glossary.length}</span>
         </button>}
         <button type="button" className={navClass(screen === "context")} onClick={() => showScreen("context")}>
-          <Icon name="scroll" />Context
+          <Icon name="scroll" />{tr("Context")}
         </button>
         <button type="button" className={navClass(screen === "project")} onClick={() => showScreen("project")}>
-          <Icon name="folder" />Project &amp; files
+          <Icon name="folder" />{tr("Project & files")}
         </button>
 
         <div className="nav-label">
           <button type="button" className="files-toggle" aria-expanded={prefs.filesExpanded} aria-controls="mori-sidebar-files" onClick={() => setPrefs({ filesExpanded: !prefs.filesExpanded })}>
-            <Icon name="chevron-down" size="xs" className="files-chev" />Files
+            <Icon name="chevron-down" size="xs" className="files-chev" />{tr("Files")}
           </button>
           <button type="button" title="Import files into a new project" aria-label="Import files into a new project" onClick={() => { setPrefs({ filesExpanded: true }); openModal({ kind: "import", step: 1 }); }}>
             <Icon name="plus" size="xs" />
@@ -153,10 +154,10 @@ export function Sidebar() {
 
       <div className="side-foot">
         <button type="button" className="ni" onClick={event => openPop({ kind: "templates", anchor: event.currentTarget, width: 320, align: "right" })}>
-          <Icon name="layers" />Templates
+          <Icon name="layers" />{tr("Templates")}
         </button>
         <button type="button" className={navClass(screen === "settings")} onClick={() => showScreen("settings")}>
-          <Icon name="sliders" />Settings
+          <Icon name="sliders" />{tr("Settings")}
         </button>
       </div>
     </aside>

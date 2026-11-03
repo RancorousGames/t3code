@@ -7,6 +7,7 @@ import { keyLabel } from "./shortcuts.ts";
 import type { SaveState } from "./store.ts";
 import { nativeMori } from "./backend.ts";
 import { WindowControls } from "./WindowControls.tsx";
+import { tr } from "./ui-localization.ts";
 
 // The window has no menu bar: commands live in the search bar (Ctrl+K), keys are listed in F1,
 // and every other action sits next to the thing it changes.
@@ -46,7 +47,7 @@ export function Titlebar() {
         <div className="crumb">
           <b>{project.name}</b>
           <Icon name="chevron-right" size="xs" />
-          <span className={view.file ? "" : "cur"}>{viewTitle}</span>
+          <span className={view.file ? "" : "cur"}>{tr(viewTitle)}</span>
           {view.file && (
             <>
               <Icon name="chevron-right" size="xs" />
@@ -57,7 +58,7 @@ export function Titlebar() {
       </div>
       <button type="button" className="cmd" onClick={() => openModal({ kind: "palette" })}>
         <Icon name="search" size="sm" />
-        <span>Search lines, characters, actions…</span>
+        <span>{tr("Search lines, characters, actions…")}</span>
         {bindings.palette && <KeyCaps binding={bindings.palette} />}
       </button>
       <div className="tb-right">
@@ -101,7 +102,7 @@ export function StatusBar() {
         <span className="sb">{prefs.jaFont}</span>
         <button type="button" className="sbb" onClick={() => openModal({ kind: "shortcuts" })}>
           <Icon name="keyboard" size="sm" />
-          Shortcuts
+          {tr("Shortcuts")}
           {bindings.shortcuts && <span className="kbd">{keyLabel(bindings.shortcuts)}</span>}
         </button>
       </footer>
