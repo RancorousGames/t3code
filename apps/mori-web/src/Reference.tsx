@@ -367,6 +367,14 @@ export function SettingsScreen() {
           </select>
         </div>
         <div className="set-row">
+          <div><b>Japanese field click</b><span>When you click a translation in the Matrix to start editing, choose where the cursor goes.</span></div>
+          <div className="seg wide" role="group" aria-label="Japanese field click behavior">
+            {([["position", "Where clicked"], ["end", "At end"], ["selectAll", "Select all"]] as const).map(([mode, label]) => (
+              <button key={mode} type="button" className={prefs.japaneseClickMode === mode ? "on" : ""} onClick={() => setPrefs({ japaneseClickMode: mode })}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div className="set-row">
           <div><b>Inspector</b><span>The panel on the right of the Matrix with checks, versions and voice notes.</span></div>
           <div className="seg wide">
             <button type="button" className={prefs.inspectorOpen ? "on" : ""} onClick={() => setPrefs({ inspectorOpen: true })}>Shown</button>

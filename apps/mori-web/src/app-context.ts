@@ -8,6 +8,7 @@ import type { LibraryEntry } from "./library.ts";
 import type { PopAlign } from "./Overlays.tsx";
 
 export type Screen = "matrix" | "focus" | "characters" | "glossary" | "context" | "project" | "settings" | "chatgpt";
+export type EditorClickSelection = { kind: "position"; offset: number } | { kind: "selectAll" };
 
 export type PopState = {
   kind: "speaker" | "speakerFilter" | "columns" | "projects" | "templates" | "integrations";
@@ -43,7 +44,7 @@ export interface AppValue {
   visible: MoriRow[];
   activeId: string | null;
   activeRow: MoriRow | null;
-  select: (id: string, focus?: boolean) => void;
+  select: (id: string, focus?: boolean, clickSelection?: EditorClickSelection) => void;
   step: (delta: 1 | -1) => void;
   /** Folded state for file groups ("group:<path>") and inspector sections ("sec:<name>"). */
   folded: Set<string>;

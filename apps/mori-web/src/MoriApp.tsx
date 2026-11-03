@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AppContext, type AppValue, type ModalState, type PopState, type Screen } from "./app-context.ts";
+import { AppContext, type AppValue, type EditorClickSelection, type ModalState, type PopState, type Screen } from "./app-context.ts";
 import { StatusBar, Titlebar } from "./Chrome.tsx";
 import { WindowControls } from "./WindowControls.tsx";
 import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
@@ -45,6 +45,7 @@ export function MoriApp() {
   const [bootError, setBootError] = useState<string | null>(null);
   const capturingRef = useRef(false);
   const focusOnRender = useRef(false);
+  const clickSelectionOnRender = useRef<EditorClickSelection | null>(null);
   const caretOnRender = useRef<number | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const bootStarted = useRef(false);
@@ -90,9 +91,12 @@ export function MoriApp() {
     setScreen("matrix");
   }, []);
 
-  const select = useCallback((id: string, focus = false) => {
+  const select = useCallback((id: string, focus = false, clickSelection?: EditorClickSelection) => {
     setActiveId(id);
-    if (focus) focusOnRender.current = true;
+    if (focus) {
+      focusOnRender.current = true;
+      clickSelectionOnRender.current = clickSelection ?? null;
+    }
   }, []);
 
   const step = useCallback((delta: 1 | -1) => {
@@ -236,14 +240,21 @@ export function MoriApp() {
   useLayoutEffect(() => {
     const editor = document.querySelector<HTMLTextAreaElement>(editorSelector);
     if (!editor) return;
-    if (caretOnRender.current !== null) {
-      editor.setSelectionRange(caretOnRender.current, caretOnRender.current);
+    const insertedCaret = caretOnRender.current;
+    if (insertedCaret !== null) {
+      editor.setSelectionRange(insertedCaret, insertedCaret);
       caretOnRender.current = null;
     }
     if (focusOnRender.current) {
       focusOnRender.current = false;
+      const selection = clickSelectionOnRender.current;
+      clickSelectionOnRender.current = null;
       editor.focus();
-      editor.setSelectionRange(editor.value.length, editor.value.length);
+      if (selection?.kind === "selectAll") editor.select();
+      else {
+        const offset = selection?.kind === "position" ? selection.offset : insertedCaret ?? editor.value.length;
+        editor.setSelectionRange(offset, offset);
+      }
     }
   });
 

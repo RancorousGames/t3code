@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 // Workspace preferences only. Translation data is never stored here.
 export type ResizableColumn = "speaker" | "src" | "dev" | "ai" | "tr";
+export type JapaneseClickMode = "position" | "end" | "selectAll";
 
 export interface ColumnPref {
   collapsed: boolean;
@@ -13,6 +14,8 @@ export interface MoriPrefs {
   density: "comfortable" | "compact";
   textSize: "sm" | "md" | "lg";
   jaFont: string;
+  /** Cursor placement when clicking a Japanese translation cell to start editing. */
+  japaneseClickMode: JapaneseClickMode;
   inspectorOpen: boolean;
   columns: Record<ResizableColumn, ColumnPref>;
 }
@@ -39,6 +42,7 @@ const defaults: MoriPrefs = {
   density: "comfortable",
   textSize: "md",
   jaFont: "BIZ UDPGothic",
+  japaneseClickMode: "position",
   inspectorOpen: true,
   // The dev draft column starts collapsed: it is reference material, not the working text.
   columns: DEFAULT_COLUMN_PREFS,
@@ -52,6 +56,8 @@ const load = (): MoriPrefs => {
     return {
       ...defaults,
       ...stored,
+      japaneseClickMode: stored.japaneseClickMode === "end" || stored.japaneseClickMode === "selectAll"
+        ? stored.japaneseClickMode : "position",
       columns: { ...defaults.columns, ...stored.columns },
     };
   } catch {

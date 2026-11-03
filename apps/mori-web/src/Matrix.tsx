@@ -47,6 +47,23 @@ const FILTERS: { id: RowFilter; label: string }[] = [
 
 const isResizable = (key: ColumnKey): key is ResizableColumn => key === "speaker" || key === "src" || key === "dev" || key === "ai" || key === "tr";
 
+/** Map the position clicked in the rendered (glossary-marked) text to a textarea offset.
+ * Marked renders each newline as one ↵ character plus a br, so the selected text's
+ * UTF-16 length matches the raw translation string, including multiline values. */
+function clickedTextOffset(cell: HTMLElement, value: string, x: number, y: number): number {
+  const position = document.caretPositionFromPoint?.(x, y);
+  const range = position ? null : document.caretRangeFromPoint?.(x, y);
+  const node = position?.offsetNode ?? range?.startContainer;
+  const offset = position?.offset ?? range?.startOffset;
+  if (!node || offset === undefined || !cell.contains(node)) {
+    return x < cell.getBoundingClientRect().left + 20 ? 0 : value.length;
+  }
+  const before = document.createRange();
+  before.selectNodeContents(cell);
+  before.setEnd(node, offset);
+  return Math.min(value.length, before.toString().length);
+}
+
 /** Grid template for the Matrix. Collapsed columns become a thin strip; dragged columns get a px width. */
 function columnTemplate(prefs: MoriPrefs, overrides: Partial<Record<ResizableColumn, number>> = {}): string {
   return COLUMN_DEFS.map(def => {
@@ -212,9 +229,18 @@ function LineRow({ row, dupes, active }: { row: MoriRow; dupes: string[]; active
       className={`row${active ? " active" : ""}${row.isLocked ? " locked" : ""}`}
       data-row-id={row.id}
       onClick={event => {
-        // Clicking the translation of another line moves there and focuses its editor.
+        // Clicking the translation of another line opens its editor with the chosen selection.
         if (active || window.getSelection()?.toString()) return;
-        select(row.id, !!(event.target as HTMLElement).closest(".c-tr"));
+        const cell = (event.target as HTMLElement).closest<HTMLElement>(".c-tr");
+        if (!cell || row.isLocked) {
+          select(row.id);
+        } else if (prefs.japaneseClickMode === "selectAll") {
+          select(row.id, true, { kind: "selectAll" });
+        } else if (prefs.japaneseClickMode === "position") {
+          select(row.id, true, { kind: "position", offset: clickedTextOffset(cell, row.final, event.clientX, event.clientY) });
+        } else {
+          select(row.id, true);
+        }
       }}
     >
       {COLUMN_DEFS.map(def => cell(def))}
