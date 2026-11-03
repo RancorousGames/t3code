@@ -113,6 +113,30 @@ function saveNativeOrangeEpisode(env: string, id: string, episode: NativeOrangeE
   try { localStorage.setItem(orangeKey(env, id), JSON.stringify(episode)); return true; }
   catch { return false; }
 }
+/** Preserve observed orange failure age through a T3 restart. The queue itself
+ * intentionally resets per launch, but a verified unchanged conversation
+ * should not wait another full grace period after each reboot. */
+const failureAgeKey = (env: string, id: string) =>
+  `t3code:chatgpt-native-failure-age:v1:${env}:${id}`;
+function durableFailureAge(env: string, id: string, conversationId: string,
+  failure: string, firstSeenAt: number): number {
+  const key = failureAgeKey(env, id);
+  let since = firstSeenAt;
+  try {
+    const old = JSON.parse(localStorage.getItem(key) ?? "null") as {
+      conversationId?: string; failure?: string; firstSeenAt?: number;
+    } | null;
+    if (old?.conversationId === conversationId && old.failure === failure &&
+        typeof old.firstSeenAt === "number" && old.firstSeenAt > 0 &&
+        old.firstSeenAt <= firstSeenAt) since = old.firstSeenAt;
+    localStorage.setItem(key, JSON.stringify({ conversationId, failure, firstSeenAt: since }));
+  } catch { /* Without storage, use this scan's verified first observation. */ }
+  return since;
+}
+function clearDurableFailureAge(env: string, id: string): void {
+  try { localStorage.removeItem(failureAgeKey(env, id)); }
+  catch { /* best effort */ }
+}
 /** Every action checks the exact route, turn, editor and status inside its own guest JS turn. */
 function nativeOrangeExpression(url: string, episode: NativeOrangeEpisode, action: "stop" | "type" | "send"): string {
   return `(() => {
@@ -456,6 +480,7 @@ export function ChatGPTNativeRecoveryCoordinator({
             try { localStorage.removeItem(orangeKey(env, id)); } catch { /* best effort */ }
           }
           if (healthy(first)) {
+            clearDurableFailureAge(env, id);
             const wasQueued = !!readRecoveryQueue(env).failures[id];
             noteRecoveryVerified(env, id);
             if (wasQueued) logChatGPTRecoveryTimeline(env, "native", "health",
@@ -502,9 +527,10 @@ export function ChatGPTNativeRecoveryCoordinator({
             continue;
           }
           const settings = readChatGPTRecoverySettings();
+          const firstSeenAt = durableFailureAge(env, id, expectedConversation, failure, entry.firstSeenAt);
           if (failure === "missing-composer" &&
               (first.draftEmpty === false || first.stopVisible ||
-                Date.now() - entry.firstSeenAt < settings.missingComposerSeconds * 1_000)) {
+                Date.now() - firstSeenAt < settings.missingComposerSeconds * 1_000)) {
             decision(id, "composer-grace", "Composer absent; waiting for sustained failure and guarding drafts/generation.");
             continue;
           }
@@ -526,11 +552,17 @@ export function ChatGPTNativeRecoveryCoordinator({
             },
             {
               code: "orange-grace",
-              until: entry.red ? 0 : entry.firstSeenAt + settings.orangeGraceMinutes * 60_000,
+              // A visible, independently rechecked delivery-timeout notice
+              // is terminal enough to try recovery after one minute; ordinary
+              // transient interruption retains user-configured grace.
+              until: entry.red ? 0 : firstSeenAt +
+                (failure === "delivery-timeout"
+                  ? Math.min(settings.orangeGraceMinutes, 1)
+                  : settings.orangeGraceMinutes) * 60_000,
             },
             {
               code: "session-cooldown",
-              until: entry.red || !(history.bySession[id] > 0) ? 0 :
+              until: entry.red || !((history.bySession[id] ?? 0) > 0) ? 0 :
                 history.bySession[id]! + settings.perSessionSeconds * 1_000,
             },
           ].find((block) => block.until > now);
