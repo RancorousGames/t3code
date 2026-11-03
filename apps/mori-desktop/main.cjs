@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, safeStorage } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const crypto = require("node:crypto");
@@ -34,7 +34,11 @@ if (!acquiredLock) {
       try { await googleWorkspace.configure(bundled); }
       catch (error) { console.warn("[Mori] Google OAuth client unavailable:", error.message); }
     }
+    Menu.setApplicationMenu(null);
     const mainWindow = new BrowserWindow({
+      titleBarStyle: "hidden",
+      titleBarOverlay: { color: "#090d0c", symbolColor: "#a6b6ac", height: 40 },
+      autoHideMenuBar: true,
       width: 1400,
       height: 900,
       minWidth: 850,
