@@ -44,6 +44,7 @@ export interface AIChatsSidebarProps {
   onGroupMenu: (group: string, point: { x: number; y: number }) => void;
   permanentGroups: readonly string[];
   onMove: (id: string, overId: string, asParent: boolean) => void;
+  onAssignGroup: (id: string, group: string) => void;
   onDoubleClick: (session: MoriChatSession) => void;
   onUnsnooze: (id: string) => void;
   now: number;
@@ -68,12 +69,16 @@ function orderedSessions(items: MoriChatSession[], activeId: string | null, now:
 
 export function AIChatsSidebar({
   sessions, activeId, collapsed, onCollapse, onCreate, onSelect, onClose,
-  onRename, onMenu, onGroupMenu, permanentGroups, onMove, onDoubleClick, onUnsnooze, now,
+  onRename, onMenu, onGroupMenu, permanentGroups, onMove, onAssignGroup, onDoubleClick, onUnsnooze, now,
 }: AIChatsSidebarProps) {
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<ViewMode>("normal");
-  const [sort, setSort] = useState<"activity" | "started" | "manual">("activity");
+  const [sort, setSort] = useState<"activity" | "started" | "manual">(() => {
+    const saved = localStorage.getItem("mori.ai-chats.sidebar-sort");
+    return saved === "started" || saved === "manual" ? saved : "activity";
+  });
+  useEffect(() => localStorage.setItem("mori.ai-chats.sidebar-sort", sort), [sort]);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [showWorkers, setShowWorkers] = useState(true);
   const [hideUnloaded, setHideUnloaded] = useState(false);
@@ -186,6 +191,8 @@ export function AIChatsSidebar({
             {group.name && <button type="button" className="mori-ai-group-heading"
               aria-expanded={!foldedGroups.has(group.name)}
               onContextMenu={event => { event.preventDefault(); onGroupMenu(group.name, { x: event.clientX, y: event.clientY }); }}
+              onDragOver={e => { if (dragged) e.preventDefault(); }}
+              onDrop={e => { e.preventDefault(); const source = e.dataTransfer.getData("text/x-mori-session") || dragged; if (source) onAssignGroup(source, group.name); setDragged(null); }}
               onClick={() => setFoldedGroups(old => {
                 const next = new Set(old); if (next.has(group.name)) next.delete(group.name); else next.add(group.name); return next;
               })}>

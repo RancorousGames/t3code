@@ -477,7 +477,9 @@ export function ChatGPTScreen() {
         onRename={(id, title) => patchOne(id, s => ({ ...s, title, titleSource: "user" }))}
         onMenu={(session, point) => { void contextMenu(session, point); }}
         onGroupMenu={(group, point) => { void showGroupMenu(group, point); }} permanentGroups={permanentGroups}
-        onMove={move} onDoubleClick={quickSnooze} onUnsnooze={unsnooze} />
+        onMove={move}
+        onAssignGroup={(id, group) => patchOne(id, s => ({ ...s, project: group === "Other" ? undefined : group }))}
+        onDoubleClick={quickSnooze} onUnsnooze={unsnooze} />
       {fallbackMenu && <FallbackMenu state={fallbackMenu} close={() => setFallbackMenu(null)} />}
     </div>
   );
