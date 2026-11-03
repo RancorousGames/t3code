@@ -18,6 +18,8 @@ import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
 import { sendInitialChatGPTPrompt } from "../../chatGPTBrowserAutomation";
 import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
+import { warmMissingNativeChatGPT } from "../../browser/nativeChatGPTWarmSession";
+import { resolveWarmChatGPTConversationUrl } from "../../omniwork/chatGPTWarmConversationUrl";
 import { rebootChatGPTDesktop } from "../../chatGPTSameBrowserRebootDesktop";
 import {
   recordChatGPTSpawnCreated,
@@ -175,6 +177,20 @@ export function DesktopAppActivationCoordinator() {
           if (!held.has(item.sessionId)) {
             requestChatGPTDeliveryMount(idleEnvironmentId, item.sessionId);
             held.add(item.sessionId);
+          }
+          // Native Chromium is not mounted by legacy preview retention. A
+          // queued Caffy message must revive its own exact recipient even when
+          // background warming is paused or at zero capacity. Never navigate
+          // an existing native page; attach only after an authoritative miss.
+          if (isPersistentChatGPTSessionOptedIn(item.sessionId)) {
+            const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+            const saved = getLocalStorageItem(
+              chatGPTBrowserLastUrlKey(idleEnvironmentId, item.sessionId), Schema.String,
+            );
+            const url = resolveWarmChatGPTConversationUrl(session, saved);
+            if (bridge && url && chatGPTConversationIdFromUrl(url) === item.conversationId) {
+              await warmMissingNativeChatGPT(bridge, idleEnvironmentId, item.sessionId, url);
+            }
           }
           // Report a mounted recipient even if the normal warm scheduler is
           // disabled. An idle partial/user-only turn is safe to *release* to
