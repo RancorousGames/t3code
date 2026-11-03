@@ -206,7 +206,7 @@ export class TaskBoardWorkCoordinator {
           if (this.reservations.some(row =>
               row.taskId === task.id && rootKey(row.boardRoot) === rootKey(project.path))) continue;
           candidates.push({
-            boardRoot: project.path, taskId: task.id, queueRequest: meta.queue_request,
+            boardRoot: project.path, taskId: task.id, queueRequest: meta.queue_request!,
             priority: task.attention?.includes("priority") ? 0 : 1,
             created: task.created ?? "9999",
           });
