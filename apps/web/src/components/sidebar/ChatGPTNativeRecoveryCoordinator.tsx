@@ -13,6 +13,9 @@ import {
   recordRecoveryAttempt,
 } from "./chatGPTConversationRecovery";
 import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
+import { inspectChatGPTPage } from "../../chatGPTSessionDom";
+import { allowsChatGPTOrangeRecoveryAction } from "../../chatGPTOrangeRecoveryStrategy";
+import { recordChatGPTRecoveryAttemptLog } from "../../chatGPTRecoveryAttemptLog";
 import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import { recordChatGPTRecoveryEvent } from "../../chatGPTRecoveryDiagnostics";
 import { recordChatGPTRecoveryObservation } from "../../chatGPTRecoveryMetrics";
@@ -41,6 +44,11 @@ interface NativeState {
   loading: boolean;
   loadError: string | null;
   explicitLoadFailure: boolean;
+  lastUserTurnKey: string | null;
+  lastUserTurn: number | null;
+  lastUserIsRecoveryContinue: boolean;
+  draftEmpty: boolean | null;
+  stopVisible: boolean;
 }
 type NativeBridge = NonNullable<NonNullable<Window["desktopBridge"]>["stableChatGPTViewRequest"]>;
 
@@ -48,6 +56,15 @@ const PROBE = `(() => ({
   url: location.href,
   activity: ${CHATGPT_ACTIVITY_EXPRESSION},
   explicitLoadFailure: (${hasChatGPTLoadFailure.toString()})(),
+  ...(() => {
+    const page = (${inspectChatGPTPage.toString()})({from:"end",count:1,includeMessages:false});
+    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]');
+    const draft = editor instanceof HTMLTextAreaElement ? editor.value : editor instanceof HTMLElement ? (editor.innerText || editor.textContent || "") : null;
+    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+    return {lastUserTurnKey:page.lastUserTurnKey,lastUserTurn:page.lastUserTurn,
+      lastUserIsRecoveryContinue:page.lastUserIsRecoveryContinue,draftEmpty:draft === null ? null : !draft.trim(),
+      stopVisible:!!stop && stop.getClientRects().length > 0 && !stop.hasAttribute("disabled")};
+  })(),
 }))()`;
 
 /** Only click the Retry button inside a positively verified load-error page.
@@ -76,11 +93,89 @@ function nativeRetryExpression(expectedUrl: string, networkFailure = false): str
   })()`;
 }
 
+type NativeOrangeStage = "stop-pending" | "stop" | "type-pending" | "typed" | "send-pending" | "sent";
+interface NativeOrangeEpisode {
+  conversationId: string;
+  turnKey: string;
+  turn: number;
+  stage: NativeOrangeStage;
+}
+const orangeKey = (env: string, id: string) => `t3code:chatgpt-native-orange-action:${env}:${id}`;
+function nativeOrangeEpisode(env: string, id: string): NativeOrangeEpisode | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(orangeKey(env, id)) ?? "null") as NativeOrangeEpisode | null;
+    return value && typeof value.conversationId === "string" && typeof value.turnKey === "string" &&
+      Number.isSafeInteger(value.turn) && ["stop-pending", "stop", "type-pending", "typed", "send-pending", "sent"].includes(value.stage) ? value : null;
+  } catch { return null; }
+}
+function saveNativeOrangeEpisode(env: string, id: string, episode: NativeOrangeEpisode): boolean {
+  try { localStorage.setItem(orangeKey(env, id), JSON.stringify(episode)); return true; }
+  catch { return false; }
+}
+/** Every action checks the exact route, turn, editor and status inside its own guest JS turn. */
+function nativeOrangeExpression(url: string, episode: NativeOrangeEpisode, action: "stop" | "type" | "send"): string {
+  return `(() => {
+    if (location.href !== ${JSON.stringify(url)}) return "route-changed";
+    const page = (${inspectChatGPTPage.toString()})({from:"end",count:1,includeMessages:false});
+    if (page.lastUserTurnKey !== ${JSON.stringify(episode.turnKey)} ||
+        page.lastUserTurn !== ${episode.turn} || page.lastUserIsRecoveryContinue) return "turn-changed";
+    const activity = ${CHATGPT_ACTIVITY_EXPRESSION};
+    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]');
+    if (!(editor instanceof HTMLElement)) return "editor-missing";
+    const draft = editor instanceof HTMLTextAreaElement ? editor.value : (editor.innerText || editor.textContent || "");
+    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+    if (document.querySelector('[data-testid*="upload-preview"],[data-state="recording"],[data-state="uploading"],[aria-label^="Remove file"],[aria-label^="Remove attachment"]') ||
+        [...document.querySelectorAll('input[type="file"]')].some(el => el.files?.length)) return "attachment-present";
+    if (${JSON.stringify(action)} === "stop") {
+      if (!["interrupted","delivery-timeout"].includes(activity) || draft.trim() ||
+          !(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return "stop-unsafe";
+      stop.click(); return "stop-clicked";
+    }
+    if (activity !== "idle" || (stop && stop.getClientRects().length && !stop.hasAttribute("disabled"))) return "not-idle";
+    if (${JSON.stringify(action)} === "type") {
+      if (draft.trim()) return "draft-present";
+      editor.focus();
+      if (editor.isContentEditable) {
+        const selection = document.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        selection?.removeAllRanges(); selection?.addRange(range);
+      } else if (editor instanceof HTMLTextAreaElement) editor.select();
+      else return "editor-unsupported";
+      const inserted = document.execCommand("insertText",false,"Continue.");
+      const after = editor instanceof HTMLTextAreaElement ? editor.value : (editor.innerText || editor.textContent || "");
+      return inserted && after.trim() === "Continue." ? "continue-typed" : "type-unconfirmed";
+    }
+    if (draft.trim() !== "Continue.") return "draft-changed";
+    const buttons = ['[data-testid="send-button"]','[data-testid="composer-submit-button"]','button[aria-label="Send prompt"]','button[aria-label="Send message"]','button[aria-label="Send"]','button[type="submit"]'];
+    const send = buttons.flatMap(selector => [...document.querySelectorAll(selector)])
+      .find(el => el instanceof HTMLButtonElement && !el.disabled && el.getAttribute("aria-disabled") !== "true");
+    if (!(send instanceof HTMLButtonElement)) return "send-unavailable";
+    send.click(); return "continue-clicked";
+  })()`;
+}
+/** A missing composer must stay broken across two observations and a full grace period.
+ * Unlike normal reload, there is no editor available to check for an unsent draft. */
+function nativeMissingComposerReloadExpression(url: string): string {
+  return `(() => {
+    if (location.href !== ${JSON.stringify(url)} ||
+        ${CHATGPT_ACTIVITY_EXPRESSION} !== "invalid: the ChatGPT composer is unavailable") return "state-changed";
+    const editors = [...document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]')];
+    if (editors.some(el => (el instanceof HTMLTextAreaElement ? el.value : (el.innerText || el.textContent || "")).trim())) return "draft-present";
+    const stop = document.querySelector('[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+    if (stop && stop.getClientRects().length && !stop.hasAttribute("disabled")) return "generation-present";
+    if (document.querySelector('[data-testid*="upload-preview"],[data-state="recording"],[data-state="uploading"],[aria-label^="Remove file"],[aria-label^="Remove attachment"]') ||
+        [...document.querySelectorAll('input[type="file"]')].some(el => el.files?.length)) return "attachment-present";
+    location.reload(); return "reload-issued";
+  })()`;
+}
 const healthy = (state: NativeState) => state.activity === "working" || state.activity === "idle";
-const reason = (state: NativeState): "load-failure" | "interrupted" | "delivery-timeout" | null => {
+const reason = (state: NativeState): "load-failure" | "interrupted" | "delivery-timeout" | "missing-composer" | null => {
   if (state.explicitLoadFailure || state.loadError) return "load-failure";
   if (state.activity === "interrupted" || state.activity === "delivery-timeout")
     return state.activity;
+  if (state.activity === "invalid: the ChatGPT composer is unavailable")
+    return "missing-composer";
   return null;
 };
 
@@ -109,6 +204,8 @@ async function observeNative(
             loading: false,
             loadError: host.loadError,
             explicitLoadFailure: false,
+            lastUserTurnKey: null, lastUserTurn: null, lastUserIsRecoveryContinue: false,
+            draftEmpty: null, stopVisible: false,
           };
         if (host.loading)
           return {
@@ -117,9 +214,11 @@ async function observeNative(
             loading: true,
             loadError: null,
             explicitLoadFailure: false,
+            lastUserTurnKey: null, lastUserTurn: null, lastUserIsRecoveryContinue: false,
+            draftEmpty: null, stopVisible: false,
           };
         const reply = (await bridge({ operation: "evaluate", identity, expression: PROBE })) as {
-          result?: { url?: string; activity?: string; explicitLoadFailure?: boolean } | string;
+          result?: Partial<NativeState> | string;
         };
         if (!reply.result || typeof reply.result !== "object" || reply.result.url !== host.url)
           return null;
@@ -129,6 +228,11 @@ async function observeNative(
           loadError: host.loadError ?? null,
           activity: reply.result.activity ?? "unknown",
           explicitLoadFailure: reply.result.explicitLoadFailure === true,
+          lastUserTurnKey: reply.result.lastUserTurnKey ?? null,
+          lastUserTurn: reply.result.lastUserTurn ?? null,
+          lastUserIsRecoveryContinue: reply.result.lastUserIsRecoveryContinue === true,
+          draftEmpty: reply.result.draftEmpty ?? null,
+          stopVisible: reply.result.stopVisible === true,
         };
       })(),
       new Promise<null>((resolve) => {
@@ -228,6 +332,74 @@ export function ChatGPTNativeRecoveryCoordinator({
           const first = await observeNative(bridge, env, id);
           if (!first || first.loading) continue;
           lastObservedAt = Date.now();
+          const existingEpisode = nativeOrangeEpisode(env, id);
+          if (existingEpisode && chatGPTConversationIdFromUrl(first.url) === existingEpisode.conversationId) {
+            const sameTurn = first.lastUserTurnKey === existingEpisode.turnKey &&
+              first.lastUserTurn === existingEpisode.turn;
+            if (sameTurn && ["stop-pending", "type-pending", "send-pending"].includes(existingEpisode.stage)) {
+              // A guest mutation with an unknown outcome must never be replayed.
+              if (existingEpisode.stage === "send-pending" && first.activity === "working")
+                noteRecoveryVerified(env, id);
+              continue;
+            }
+            if (sameTurn && (existingEpisode.stage === "stop" || existingEpisode.stage === "typed") &&
+                (first.activity === "idle" || first.activity === "working")) {
+              if (first.activity === "working") {
+                // A genuinely resumed answer needs no synthetic Continue.
+                noteRecoveryVerified(env, id);
+                continue;
+              }
+              if (readChatGPTRecoverySettings().paused || hasUncertainChatGPTSend(env, id))
+                continue;
+              const next = existingEpisode.stage === "stop" ? "type" : "send";
+              if (next === "send" && !allowsChatGPTOrangeRecoveryAction(
+                readChatGPTRecoverySettings().orangeStrategy, "continue")) continue;
+              const lease = tryAcquireChatGPTRecoveryMutation(env, id, "automatic", "continue");
+              if (!lease) continue;
+              try {
+                // Persist an at-most-once marker before invoking the guest. A lost
+                // IPC reply must not cause a duplicate Continue on the next scan.
+                const updated = { ...existingEpisode, stage: next === "type" ? "type-pending" as const : "send-pending" as const };
+                if (!saveNativeOrangeEpisode(env, id, updated)) continue;
+                recordChatGPTRecoveryAttemptLog(env, {
+                  at: Date.now(), kind: "attempt", sessionId: id,
+                  attemptNumber: readRecoveryQueue(env).failures[id]?.attempts ?? 0,
+                  detail: next === "type" ? "native orange Continue typing" : "native orange Continue send",
+                });
+                const identity = { environmentId: env, sessionId: id,
+                  profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find(s => s.id === id)) };
+                const response = await bridge({
+                  operation: "evaluate", identity,
+                  expression: nativeOrangeExpression(first.url, existingEpisode, next),
+                }) as { result?: string };
+                if (response.result === (next === "type" ? "continue-typed" : "continue-clicked"))
+                  saveNativeOrangeEpisode(env, id, {
+                    ...updated, stage: next === "type" ? "typed" : "sent",
+                  });
+                recordChatGPTRecoveryEvent(env, id, "native-orange-action",
+                  `${next}:${response.result ?? "unconfirmed"}`);
+              } catch (error) {
+                recordChatGPTRecoveryEvent(env, id, "native-orange-action",
+                  `${next}:bridge-unconfirmed`);
+                console.warn("[T3 native recovery] Orange follow-up outcome unknown:", error);
+              } finally { lease.release(); }
+              continue;
+            }
+            if (sameTurn && existingEpisode.stage !== "sent") continue;
+            if (sameTurn && existingEpisode.stage === "sent") {
+              // An idle page alone is not proof that the synthetic send landed.
+              if (first.activity === "working") noteRecoveryVerified(env, id);
+              continue;
+            }
+            if (["sent", "send-pending"].includes(existingEpisode.stage) && first.lastUserIsRecoveryContinue) {
+              // The new user turn is positive evidence the single Continue was delivered.
+              noteRecoveryVerified(env, id);
+              continue;
+            }
+            // Only a distinct, positively identified human turn can rearm.
+            if (!first.lastUserTurnKey || first.lastUserIsRecoveryContinue) continue;
+            try { localStorage.removeItem(orangeKey(env, id)); } catch { /* best effort */ }
+          }
           if (healthy(first)) {
             noteRecoveryVerified(env, id);
             continue;
@@ -265,6 +437,10 @@ export function ChatGPTNativeRecoveryCoordinator({
           const entry = queue.failures[id];
           if (!entry || !queue.targets.includes(id)) continue;
           const settings = readChatGPTRecoverySettings();
+          if (failure === "missing-composer" &&
+              (first.draftEmpty === false || first.stopVisible ||
+                Date.now() - entry.firstSeenAt < settings.missingComposerSeconds * 1_000))
+            continue;
           const now = Date.now();
           const history = readRecoveryHistory(env);
           const lane = entry.red ? "red" : "orange";
@@ -290,7 +466,16 @@ export function ChatGPTNativeRecoveryCoordinator({
             if (second && healthy(second)) noteRecoveryVerified(env, id);
             continue;
           }
-          const lease = tryAcquireChatGPTRecoveryMutation(env, id, "automatic", "reload");
+          const specialStop = failure !== "load-failure" && failure !== "missing-composer" &&
+            second.stopVisible && second.draftEmpty === true &&
+            !!second.lastUserTurnKey && second.lastUserTurn !== null &&
+            !second.lastUserIsRecoveryContinue &&
+            allowsChatGPTOrangeRecoveryAction(settings.orangeStrategy, "stop") &&
+            allowsChatGPTOrangeRecoveryAction(settings.orangeStrategy, "continue");
+          // An interrupted page retaining Stop cannot pass the safe reload
+          // guard. Use the exact-turn Stop/Continue sequence instead.
+          const lease = tryAcquireChatGPTRecoveryMutation(
+            env, id, "automatic", specialStop ? "stop" : "reload");
           if (!lease) continue;
           let pendingAction: Promise<unknown> | null = null;
           let yielded = false;
@@ -310,7 +495,29 @@ export function ChatGPTNativeRecoveryCoordinator({
             if (attempt === null) continue;
             recordRecoveryAttempt(env, id, Date.now(), ctx.eligibleIds, lane);
             recordChatGPTRecoveryEvent(env, id, "native-recovery-attempt", failure);
-            if (failure === "load-failure") {
+            if (specialStop) {
+              const episode: NativeOrangeEpisode = {
+                conversationId: expectedConversation, turnKey: second.lastUserTurnKey!,
+                turn: second.lastUserTurn!, stage: "stop-pending",
+              };
+              if (!saveNativeOrangeEpisode(env, id, episode)) {
+                finishRecoveryAttempt(env, id, "Cannot persist at-most-once Stop marker");
+                continue;
+              }
+              const identity = { environmentId: env, sessionId: id,
+                profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find(s => s.id === id)) };
+              pendingAction = bridge({
+                operation: "evaluate", identity,
+                expression: nativeOrangeExpression(second.url, episode, "stop"),
+              });
+            } else if (failure === "missing-composer") {
+              const identity = { environmentId: env, sessionId: id,
+                profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find(s => s.id === id)) };
+              pendingAction = bridge({
+                operation: "evaluate", identity,
+                expression: nativeMissingComposerReloadExpression(second.url),
+              });
+            } else if (failure === "load-failure") {
               const identity = { environmentId: env, sessionId: id, profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find((entry) => entry.id === id)) };
               pendingAction = bridge({
                 operation: "evaluate",
@@ -352,9 +559,16 @@ export function ChatGPTNativeRecoveryCoordinator({
               finishRecoveryAttempt(env, id, "Native action rejected; no verified recovery");
             } else {
               const result = settled.value as { result?: string } | null;
+              if (specialStop && result?.result === "stop-clicked" &&
+                  second.lastUserTurnKey && second.lastUserTurn !== null)
+                saveNativeOrangeEpisode(env, id, {
+                  conversationId: expectedConversation, turnKey: second.lastUserTurnKey,
+                  turn: second.lastUserTurn, stage: "stop",
+                });
               const confirmed =
-                failure === "load-failure"
-                  ? result?.result === "retry-issued"
+                specialStop ? result?.result === "stop-clicked"
+                : failure === "missing-composer" ? result?.result === "reload-issued"
+                : failure === "load-failure" ? result?.result === "retry-issued"
                   : !!result &&
                     typeof result === "object" &&
                     ("nativeReloadIssued" in result || "requestedNavigation" in result);
@@ -363,7 +577,7 @@ export function ChatGPTNativeRecoveryCoordinator({
                 id,
                 confirmed
                   ? "Native action dispatched; independent health verification pending"
-                  : "Native action not dispatched (changed state or unsafe)",
+                  : `Native action not dispatched: ${result?.result ?? "changed state or unsafe"}`,
               );
             }
           } finally {
