@@ -11,7 +11,11 @@ import {
   useChatGPTRecoverySettings,
 } from "../../chatGPTRecoverySettings";
 import type { ChatGPTOrangeRecoveryStrategy } from "../../chatGPTOrangeRecoveryStrategy";
-import { CHATGPT_BROWSER_ENGINE_KEY, configuredChatGPTBrowserEngine, type ChatGPTBrowserEngine } from "../../browser/persistentChatGPTSessionMode";
+import {
+  CHATGPT_BROWSER_ENGINE_KEY,
+  configuredChatGPTBrowserEngine,
+  type ChatGPTBrowserEngine,
+} from "../../browser/persistentChatGPTSessionMode";
 import { OmniworkToolsSection } from "./OmniworkToolsSection";
 import { ChatGPTRecoverySettingsControls } from "../sidebar/ChatGPTRecoverySettingsControls";
 import { useChatGPTDefaultView } from "../../chatGPTSessionViewPreferences";
@@ -86,11 +90,16 @@ export function OmniworkSettingsPanel() {
     setLiveTaskStartKind,
     showWorkersWithSelectedParent,
     setShowWorkersWithSelectedParent,
+    erroredSessionsAtBottom,
+    setErroredSessionsAtBottom,
   } = useOmniworkPreferences();
   const desktop = isDesktop();
-  const [browserEngine, setBrowserEngine] = useState<ChatGPTBrowserEngine>(configuredChatGPTBrowserEngine);
+  const [browserEngine, setBrowserEngine] = useState<ChatGPTBrowserEngine>(
+    configuredChatGPTBrowserEngine,
+  );
   const [defaultChatGPTView, setDefaultChatGPTView] = useChatGPTDefaultView();
-  const [resumeManagedAfterRestart, setResumeManagedAfterRestart] = useChatGPTRestartContinuationEnabled();
+  const [resumeManagedAfterRestart, setResumeManagedAfterRestart] =
+    useChatGPTRestartContinuationEnabled();
   const recoverySettings = useChatGPTRecoverySettings();
   const orangeRecoverySelection = ORANGE_RECOVERY_STRATEGIES.find(
     ({ value }) => value === recoverySettings.orangeStrategy,
@@ -204,7 +213,10 @@ export function OmniworkSettingsPanel() {
             </Select>
           }
         />
-        <div className="rounded-md border border-border/50 px-4 py-3" aria-label="ChatGPT automatic recovery timing and cooldown settings">
+        <div
+          className="rounded-md border border-border/50 px-4 py-3"
+          aria-label="ChatGPT automatic recovery timing and cooldown settings"
+        >
           <ChatGPTRecoverySettingsControls />
         </div>
       </SettingsSection>
@@ -214,14 +226,19 @@ export function OmniworkSettingsPanel() {
           title="ChatGPT browser engine"
           description="Native Chromium preserves browser pages during safe UI rebuilds. Original Webviews restores the previous Electron webview integration. Changing engines requires a hard T3 restart and reloads ChatGPT pages."
           control={
-            <Select value={browserEngine} disabled={!desktop}
+            <Select
+              value={browserEngine}
+              disabled={!desktop}
               onValueChange={(value) => {
                 if (value !== "native" && value !== "webview") return;
                 localStorage.setItem(CHATGPT_BROWSER_ENGINE_KEY, value);
                 setBrowserEngine(value);
-              }}>
+              }}
+            >
               <SelectTrigger size="sm" aria-label="ChatGPT browser engine">
-                <SelectValue>{browserEngine === "native" ? "Native Chromium (default)" : "Original Webviews"}</SelectValue>
+                <SelectValue>
+                  {browserEngine === "native" ? "Native Chromium (default)" : "Original Webviews"}
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 <SelectItem value="native">Native Chromium (default)</SelectItem>
@@ -245,7 +262,9 @@ export function OmniworkSettingsPanel() {
               }}
             >
               <SelectTrigger size="sm" aria-label="Default ChatGPT view">
-                <SelectValue>{defaultChatGPTView === "session" ? "Session (default)" : "Browser"}</SelectValue>
+                <SelectValue>
+                  {defaultChatGPTView === "session" ? "Session (default)" : "Browser"}
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 <SelectItem value="session">Session (default)</SelectItem>
@@ -263,8 +282,7 @@ export function OmniworkSettingsPanel() {
               value={resumeManagedAfterRestart ? "on" : "off"}
               disabled={!desktop}
               onValueChange={(value) => {
-                if (value === "on" || value === "off")
-                  setResumeManagedAfterRestart(value === "on");
+                if (value === "on" || value === "off") setResumeManagedAfterRestart(value === "on");
               }}
             >
               <SelectTrigger size="sm" aria-label="Resume managed ChatGPT work after restart">
@@ -325,6 +343,25 @@ export function OmniworkSettingsPanel() {
               <SelectPopup>
                 <SelectItem value="off">Off (default)</SelectItem>
                 <SelectItem value="on">On</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
+          id="omniwork-errored-session-order"
+          title="Errored ChatGPT sessions"
+          description="Choose whether errored sessions remain with their project groups or always float below idle sessions."
+          control={
+            <Select
+              value={erroredSessionsAtBottom ? "bottom" : "project"}
+              onValueChange={(value) => setErroredSessionsAtBottom(value !== "project")}
+            >
+              <SelectTrigger size="sm" aria-label="Errored ChatGPT session sorting">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="bottom">Always at bottom (default)</SelectItem>
+                <SelectItem value="project">Follow projects</SelectItem>
               </SelectPopup>
             </Select>
           }

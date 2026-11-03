@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - Independent OS browser broker boundary.
-// Native child-window Chromium transport for T3-managed ChatGPT sessions.
-// All pages are owned by one independent v3 process and survive T3 restarts.
+// Broker for T3-managed ChatGPT pages. All pages are owned by one independent
+// v3 process and survive T3 restarts; T3 presents them as owned windows.
 import * as Crypto from "node:crypto";
 import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
@@ -19,7 +19,11 @@ const dataDir = () =>
     // live ChatGPT documents owned by the earlier detached process.
     "persistent-browser-host-v3",
   );
+// Keep in step with HOST_PROTOCOL in scripts/persistent-chatgpt-offscreen-host.cjs.
+const HOST_PROTOCOL = 5;
+let cachedToken: string | null = null;
 const tokenFor = (directory: string): string => {
+  if (cachedToken) return cachedToken;
   NodeFs.mkdirSync(directory, { recursive: true });
   const file = NodePath.join(directory, "owner-token");
   try {
@@ -29,6 +33,7 @@ const tokenFor = (directory: string): string => {
   }
   const token = NodeFs.readFileSync(file, "utf8").trim();
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error("Persistent Chromium token is invalid");
+  cachedToken = token;
   return token;
 };
 const socketFor = (dir: string) => {
@@ -82,6 +87,82 @@ const request = async (
     req.end(body === undefined ? undefined : JSON.stringify(body));
   });
 
+/** Things the host tells T3, because Windows delivers input straight to the page. */
+export type PersistentChatGPTHostEvent =
+  | { type: "close-requested"; sessionId: string }
+  | { type: "interaction"; sessionId: string }
+  | {
+      type: "key";
+      sessionId: string;
+      input: {
+        type: "keyDown";
+        key: string;
+        code: string;
+        control: boolean;
+        meta: boolean;
+        shift: boolean;
+        alt: boolean;
+        isAutoRepeat: boolean;
+      };
+    };
+let hostEventListener: ((event: PersistentChatGPTHostEvent) => void) | null = null;
+export const onPersistentChatGPTHostEvent = (
+  listener: (event: PersistentChatGPTHostEvent) => void,
+): void => {
+  hostEventListener = listener;
+};
+
+// One stream per host. Holding it open also tells the host when T3 has died, so
+// it can hide the on-screen page. If it drops, the next request reopens it.
+let eventStream: NodeHttp.ClientRequest | null = null;
+const subscribeToHostEvents = (socketPath: string): void => {
+  if (eventStream) return;
+  const req = NodeHttp.request(
+    {
+      socketPath,
+      method: "GET",
+      path: "/events",
+      headers: { authorization: "Bearer " + tokenFor(dataDir()) },
+    },
+    (res) => {
+      let buffered = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => {
+        buffered += chunk;
+        const lines = buffered.split("\n");
+        buffered = lines.pop() ?? "";
+        for (const line of lines)
+          hostEventListener?.(JSON.parse(line) as PersistentChatGPTHostEvent);
+      });
+      res.once("close", () => {
+        if (eventStream === req) eventStream = null;
+      });
+    },
+  );
+  req.once("error", () => {
+    if (eventStream === req) eventStream = null;
+  });
+  req.end();
+  eventStream = req;
+};
+
+/** Stop a host running older code. Its pages are recreated from their URLs on
+ * the next attach. The pid comes from the authenticated pipe, so it is that host. */
+const retireOutdatedHost = async (pipe: string, pid: number | undefined): Promise<void> => {
+  await request(pipe, "POST", "/shutdown").catch(() => undefined);
+  if (!pid) return;
+  const running = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (let waited = 0; running() && waited < 5_000; waited += 100) await delay(100);
+  if (running()) process.kill(pid);
+  for (let waited = 0; running() && waited < 2_000; waited += 100) await delay(100);
+};
 
 let launching: Promise<string> | null = null;
 const ensure = (): Promise<string> => {
@@ -90,8 +171,9 @@ const ensure = (): Promise<string> => {
     const dir = dataDir();
     const pipe = socketFor(dir);
     try {
-      await request(pipe, "GET", "/health");
-      return pipe;
+      const health = (await request(pipe, "GET", "/health")) as { protocol?: number; pid?: number };
+      if (health.protocol === HOST_PROTOCOL) return pipe;
+      await retireOutdatedHost(pipe, health.pid);
     } catch (error) {
       if (!["ENOENT", "ECONNREFUSED"].includes((error as NodeJS.ErrnoException)?.code ?? ""))
         throw error;
@@ -220,7 +302,7 @@ export type PersistentChatGPTRequest =
       environmentId?: string;
       profileId?: string;
     }
-  | { operation: "resize"; sessionId: string; width: number; height: number }
+  | { operation: "resize"; sessionId: string; x: number; y: number; width: number; height: number }
   | { operation: "visibility"; sessionId: string; visible: boolean }
   | { operation: "input"; sessionId: string; input: Record<string, unknown> }
   | { operation: "evaluate"; sessionId: string; expression: string }
@@ -352,6 +434,7 @@ export async function persistentChatGPTRequest(input: PersistentChatGPTRequest):
   if (input.operation === "find" && (!input.text.trim() || input.text.length > 500))
     throw new Error("Find text must be 1..500 characters");
   const socket = await ensure();
+  subscribeToHostEvents(socket);
   try {
     switch (input.operation) {
       case "attach": {
@@ -392,7 +475,8 @@ export async function persistentChatGPTRequest(input: PersistentChatGPTRequest):
               !message.includes("Scoped ChatGPT sign-in transfer failed") ||
               !remainingCookies ||
               attempt >= 12
-            ) throw error;
+            )
+              throw error;
             const rejected = /Cookie (\d+)\/(\d+) for /.exec(message);
             const index = rejected ? Number(rejected[1]) - 1 : -1;
             if (index < 0 || index >= remainingCookies.length) {
@@ -442,7 +526,9 @@ export async function persistentChatGPTRequest(input: PersistentChatGPTRequest):
   } catch (error) {
     // A disconnected host is rediscovered on the NEXT request. Never replay
     // this request: keyboard/send/eval may already have executed before loss.
-    if (["ENOENT", "ECONNREFUSED", "EPIPE"].includes((error as NodeJS.ErrnoException)?.code ?? "")) {
+    if (
+      ["ENOENT", "ECONNREFUSED", "EPIPE"].includes((error as NodeJS.ErrnoException)?.code ?? "")
+    ) {
       launching = null;
     }
     // Never replay an ambiguous failed request, especially keyboard/send/eval.

@@ -103,6 +103,7 @@ import {
   useChatGPTDeliveryMountRequests,
 } from "../../chatGPTDeliveryMountRequest";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
+import { useChatGPTWarmSessions } from "../../omniwork/chatGPTWarmSessionPolicy";
 
 const key = (id: string) => JSON.stringify(["env", `t3-browser-session:${id}`]);
 let renderer: ReactTestRenderer | undefined;
@@ -110,6 +111,7 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
   vi.useFakeTimers();
   useChatGPTDeliveryMountRequests.setState({ required: {} });
+  useChatGPTWarmSessions.setState({ byEnvironment: {}, loadingAt: {} });
   mocks.activeSessionId = undefined;
   mocks.managerIds = null;
   mocks.cachedManagers = null;
@@ -133,6 +135,16 @@ afterEach(async () => {
 });
 
 describe("ChatGPT recent guest retention", () => {
+  it("mounts a warmed runtime when Settings has no ordinary sidebar owner", async () => {
+    mocks.sessions = [{ id: "worker" }];
+    useChatGPTWarmSessions.setState({ byEnvironment: { env: ["worker"] }, loadingAt: {} });
+    await act(async () => {
+      renderer = create(<ChatGPTGuestRetention sidebarRuntimesAvailable={false} />);
+    });
+    expect(renderer!.root.findAllByProps({ "data-delivery-runtime": "worker" })).toHaveLength(1);
+    await act(async () => requestChatGPTDeliveryMount("env", "worker"));
+    expect(renderer!.root.findAllByProps({ "data-delivery-runtime": "worker" })).toHaveLength(1);
+  });
   it("starts a targeted cold runtime without changing the selected session and releases it", async () => {
     mocks.activeSessionId = "7";
     mocks.sessions[0]!.snoozedUntil = Date.now() + 60_000;

@@ -82,12 +82,18 @@ afterEach(async () => {
 });
 
 it("loads a selected conversation even if the Session overlay leaves its browser surface invisible", async () => {
-  useBrowserSurfaceStore.getState().present(runtimeTabId, owner,
-    { x: 0, y: 0, width: 1, height: 1 }, false, 0, 0);
+  useBrowserSurfaceStore
+    .getState()
+    .present(runtimeTabId, owner, { x: 0, y: 0, width: 1, height: 1 }, false, 0, 0);
   useChatGPTGuestHibernation.setState({
-    hibernated: { [guestKey]: true }, woken: {}, retained: {}, touchedAt: {},
+    hibernated: { [guestKey]: true },
+    woken: {},
+    retained: {},
+    touchedAt: {},
   });
-  await act(async () => { renderer = create(renderGuest("https://chatgpt.com/c/123")); });
+  await act(async () => {
+    renderer = create(renderGuest("https://chatgpt.com/c/123"));
+  });
   expect(mocks.liveGuests.size).toBe(0);
   expect(useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible).toBe(false);
   await act(async () => wakeChatGPTGuest(guestKey));
@@ -121,6 +127,26 @@ it("keeps a restored snoozed guest unmounted until its snooze expires", async ()
   await act(async () => {
     await vi.advanceTimersByTimeAsync(60_000);
   });
+  expect(mocks.liveGuests.has(runtimeTabId)).toBe(true);
+});
+
+it("clears stale unloaded residency when a background delivery mounts the guest", async () => {
+  useBrowserSurfaceStore.getState().release(runtimeTabId, owner);
+  useChatGPTGuestHibernation.setState({
+    hibernated: { [guestKey]: true },
+    woken: {},
+    retained: {},
+    touchedAt: {},
+  });
+  await act(async () => {
+    renderer = create(renderGuest());
+  });
+  expect(mocks.liveGuests.size).toBe(0);
+  await act(async () => requestChatGPTDeliveryMount("env", "session"));
+  expect(mocks.liveGuests.has(runtimeTabId)).toBe(true);
+  expect(useChatGPTGuestHibernation.getState().hibernated[guestKey]).toBeUndefined();
+  expect(useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible).not.toBe(true);
+  await act(async () => releaseChatGPTDeliveryMount("env", "session"));
   expect(mocks.liveGuests.has(runtimeTabId)).toBe(true);
 });
 

@@ -2179,7 +2179,10 @@ export interface DesktopBridge {
   appActivation: {
     setReady: (ready: boolean) => Promise<void>;
     complete: (response: DesktopAppActivationResponse) => Promise<void>;
-    reportChatGPTRecipientMounted: (event: { sessionId: string; conversationId: string }) => Promise<boolean>;
+    reportChatGPTRecipientMounted: (event: {
+      sessionId: string;
+      conversationId: string;
+    }) => Promise<boolean>;
     reportChatGPTIdleTransition: (event: {
       environmentId: string;
       sessionId: string;
@@ -2189,7 +2192,7 @@ export interface DesktopBridge {
       eventId: string;
       observedAt: number;
       turnCount: number;
-      kind?: "completed" | "stopped";
+      kind?: "completed" | "stopped" | "quiescent";
     }) => Promise<boolean>;
     enqueueChatGPT: (input: {
       messageId: string;

@@ -13,8 +13,8 @@ export type ChatGPTActivityAge =
   | "working"
   | "snoozed"
   | "unloaded"
-  | "unloaded-working"
   | "unloaded-recent"
+  | "unloaded-working"
   | "recent"
   | "inactive"
   | "unknown"
@@ -26,11 +26,13 @@ export type ChatGPTActivityAge =
 export function chatGPTActivityColorClass(age: ChatGPTActivityAge): string {
   switch (age) {
     case "working":
-    case "unloaded-working":
       return "text-lime-500! dark:text-lime-400!";
     case "recent":
-    case "unloaded-recent":
       return "text-[#5d82a9]! dark:text-[#88a9c8]!";
+    case "unloaded-recent":
+      return "text-[#485c73]! dark:text-[#546c85]!";
+    case "unloaded-working":
+      return "text-[#49684e]! dark:text-[#587a5d]!";
     case "snoozed":
     case "inactive":
       return "text-muted-foreground!";
@@ -48,21 +50,35 @@ export function chatGPTActivityColorClass(age: ChatGPTActivityAge): string {
 }
 
 /** Verification keeps operational colors; only ordinary idle/blue titles turn amber. */
-export function chatGPTVerificationTitleColorClass(age: ChatGPTActivityAge, pending: boolean): string {
+export function chatGPTVerificationTitleColorClass(
+  age: ChatGPTActivityAge,
+  pending: boolean,
+): string {
   return pending && (age === "inactive" || age === "recent" || age === "snoozed")
     ? "text-amber-700! dark:text-amber-200!"
     : chatGPTActivityColorClass(age);
 }
 
-/** Keep recently active sessions tinted even when their native page is unloaded. */
+/** Hide Unloaded excludes only ordinary unloaded sessions, not recent activity evidence. */
+export function hideChatGPTSessionAsUnloaded(
+  age: ChatGPTActivityAge | undefined,
+  enabled: boolean,
+): boolean {
+  return enabled && age === "unloaded";
+}
+
+/** An unloaded tab retains its previous color for the same two-hour activity window. */
 export function unloadedChatGPTActivityAge(
   lastWorkingAt: number,
-  activeBeforeFailure: boolean,
+  activeWhenUnloaded: boolean,
   now: number,
 ): ChatGPTActivityAge {
-  const recent = Number.isFinite(lastWorkingAt) && lastWorkingAt > 0 &&
-    lastWorkingAt <= now && now - lastWorkingAt < CHATGPT_RECENT_ACTIVITY_MS;
-  return activeBeforeFailure && recent ? "unloaded-working" : recent ? "unloaded-recent" : "unloaded";
+  const recent =
+    Number.isFinite(lastWorkingAt) &&
+    lastWorkingAt > 0 &&
+    lastWorkingAt <= now &&
+    now - lastWorkingAt < CHATGPT_RECENT_ACTIVITY_MS;
+  return recent ? (activeWhenUnloaded ? "unloaded-working" : "unloaded-recent") : "unloaded";
 }
 
 export function chatGPTActivityAge(

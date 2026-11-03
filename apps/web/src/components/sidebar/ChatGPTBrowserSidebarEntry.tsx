@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { publicChatGPTParentId, publicChatGPTSessionId } from "../../chatGPTBootstrapIdentity";
 import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -12,8 +13,7 @@ import {
   ChevronUpIcon,
   CrownIcon,
   CornerDownRightIcon,
-  EyeOffIcon,
-  PencilIcon,
+  LoaderCircleIcon,
   PlusIcon,
   SearchIcon,
   SparklesIcon,
@@ -42,7 +42,6 @@ import {
   type ChatGPTSessionRemovalSource,
 } from "../../chatGPTBrowserSessions";
 import { isElectron } from "../../env";
-import { wakeChatGPTGuest } from "../../browser/chatGPTGuestHibernation";
 import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
 import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
 import { randomUUID } from "../../lib/utils";
@@ -61,9 +60,10 @@ import {
 import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { searchChatGPTSessionCatalog } from "../../chatGPTSessionSearch";
-import { chatGPTNativeActionMenu } from "../../chatGPTSessionActions";
-import { deriveChatGPTSession } from "../../chatGPTSessionModel";
-import { prioritizeFreshManualSession } from "../../chatGPTFreshManualSession";
+import {
+  freshManualSessionIds,
+  prioritizeFreshManualSession,
+} from "../../chatGPTFreshManualSession";
 import {
   chatGPTWorkerVisibilityStorageKey,
   chatGPTVerifiedWorkerEvidenceKey,
@@ -83,6 +83,32 @@ import {
 } from "../../hooks/useLocalStorage";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { runChatGPTSessionControl, hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
+import { readLocalApi } from "../../localApi";
+import {
+  buildChatGPTSessionContextMenu,
+  buildChatGPTProjectContextMenu,
+} from "../../chatGPTSessionContextMenu";
+import {
+  chatGPTNativeActionMenu,
+  runChatGPTSessionAction,
+  type ChatGPTSessionActionId,
+} from "../../chatGPTSessionActions";
+import { deriveChatGPTSession } from "../../chatGPTSessionModel";
+import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
+import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
+import {
+  hibernateChatGPTGuest,
+  isChatGPTGuestHibernated,
+  wakeChatGPTGuest,
+} from "../../browser/chatGPTGuestHibernation";
+import {
+  ChatGPTSessionMenuDialog,
+  type ChatGPTSessionMenuDialogState,
+} from "./ChatGPTSessionMenuDialog";
+import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
+import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
+import { nativeChatGPTResidency } from "../../browser/nativeChatGPTWarmSession";
+import { inspectPersistentChatGPTPage } from "../../browser/inspectPersistentChatGPTPage";
 import * as Schema from "effect/Schema";
 import { readThreadPreviewState } from "../../previewStateStore";
 import { useProjects } from "../../state/entities";
@@ -105,7 +131,8 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
-import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
+import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import {
   ChatGPTBrowserRecoveryCoordinator,
@@ -122,9 +149,20 @@ import { ChatGPTCompletedWorkerCleanup } from "./ChatGPTCompletedWorkerCleanup";
 import { ChatGPTAIInterfaceCleanup } from "./ChatGPTAIInterfaceCleanup";
 import { isAIInterfaceSession } from "../../chatGPTAIInterfaceSessions";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
-import { updateChatGPTRecoverySettings, useChatGPTRecoverySettings } from "../../chatGPTRecoverySettings";
-import { useChatGPTWarmSessions, warmLoadingKey } from "../../omniwork/chatGPTWarmSessionPolicy";
-import { readRecoveryQueue, recoveryPriorityOrder, recoveryTargetOrder } from "./chatGPTRecoveryQueue";
+import {
+  updateChatGPTRecoverySettings,
+  useChatGPTRecoverySettings,
+} from "../../chatGPTRecoverySettings";
+import {
+  useWarmChatGPTSessionIds,
+  useChatGPTWarmSessions,
+  warmLoadingKey,
+} from "../../omniwork/chatGPTWarmSessionPolicy";
+import {
+  readRecoveryQueue,
+  recoveryPriorityOrder,
+  recoveryTargetOrder,
+} from "./chatGPTRecoveryQueue";
 import { pendingSessionProgress } from "./chatGPTPendingSessionProgress";
 import { ChatGPTPendingProgressBar } from "./ChatGPTPendingProgressBar";
 import { ChatGPTUnusedManualSessionCleanup } from "./ChatGPTUnusedManualSessionCleanup";
@@ -145,9 +183,14 @@ import {
 } from "./chatGPTManagerRoleProjection";
 import { ChatGPTSessionIcon } from "./ChatGPTSessionIcon";
 import { ChatGPTAccountToggle, ChatGPTAccountBadge } from "./ChatGPTAccountToggle";
+import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import { SidebarHeaderIconButton } from "./SidebarThreadHeader";
-import { ChatGPTBrowserSessionActivityIcon, useChatGPTBrowserSessionActivity } from "./ChatGPTBrowserSessionActivity";
-import { chatGPTActivityColorClass, chatGPTVerificationTitleColorClass } from "./chatGPTActivity";
+import { useChatGPTBrowserSessionActivity } from "./ChatGPTBrowserSessionActivity";
+import {
+  chatGPTActivityColorClass,
+  chatGPTVerificationTitleColorClass,
+  hideChatGPTSessionAsUnloaded,
+} from "./chatGPTActivity";
 import { useChatGPTSession, type ChatGPTSessionModel } from "../../chatGPTSessionModel";
 import type { BrowserSession } from "../../chatGPTBrowserSessions";
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
@@ -322,13 +365,19 @@ export function ChatGPTBrowserSidebarEntry({
   const requiredForDelivery = useChatGPTDeliveryMountRequests((state) => state.required);
   const navigate = useNavigate();
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
+  const erroredSessionsAtBottom = useOmniworkPreferences(
+    (settings) => settings.erroredSessionsAtBottom,
+  );
   const showWorkersWithSelectedParent = useOmniworkPreferences(
     (settings) => settings.showWorkersWithSelectedParent,
   );
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const autoMaintenancePaused = useChatGPTRecoverySettings().paused;
   const environmentId = usePrimaryEnvironmentId();
-  const forecast = useChatGPTWarmSessions((state) => environmentId ? state.forecast[environmentId] : undefined);
+  const warmedIds = useWarmChatGPTSessionIds(environmentId);
+  const forecast = useChatGPTWarmSessions((state) =>
+    environmentId ? state.forecast[environmentId] : undefined,
+  );
   const warmLoadingAt = useChatGPTWarmSessions((state) => state.loadingAt);
   const projects = useProjects();
   const verifiedManagerSessionIds = useOpenRigManagerChatGPTSessions(environmentId);
@@ -343,6 +392,9 @@ export function ChatGPTBrowserSidebarEntry({
     setSessionParent,
     setSessionBinding,
     setSessionSnooze,
+    setSessionVerification,
+    quickSnoozeSession,
+    resetQuickSnooze,
     setSessionBorderColor,
     setSessionWorker,
     markDirectInteraction,
@@ -448,37 +500,17 @@ export function ChatGPTBrowserSidebarEntry({
     [] as ChatGPTPermanentProject[],
     Schema.Array(Schema.Struct({ key: Schema.String, title: Schema.String })),
   );
+  const [groupLabels, setGroupLabels] = useLocalStorage(
+    `t3code:chatgpt-browser:group-labels:${environmentId ?? "unconnected"}`,
+    [] as ChatGPTPermanentProject[],
+    Schema.Array(Schema.Struct({ key: Schema.String, title: Schema.String })),
+  );
   const permanentProjectKeys = useMemo(
     () => new Set(permanentProjects.map((project) => project.key)),
     [permanentProjects],
   );
   const previousSelected = useRef(activeSessionId);
   const sidebarMountedAt = useRef(Date.now());
-  const knownSessionIds = useRef(new Set(sessions.map((session) => session.id)));
-  const pendingNewManualIds = useRef(new Set<string>());
-  const [freshSelectedId, setFreshSelectedId] = useState<string | null>(null);
-  useEffect(() => {
-    const currentIds = new Set(sessions.map((session) => session.id));
-    for (const session of sessions) {
-      if (
-        !knownSessionIds.current.has(session.id) &&
-        typeof session.createdAt === "number" &&
-        session.createdAt >= sidebarMountedAt.current &&
-        chatGPTSessionCreationOrigin(session) === "manual"
-      ) {
-        pendingNewManualIds.current.add(session.id);
-      }
-    }
-    knownSessionIds.current = currentIds;
-    for (const id of pendingNewManualIds.current) {
-      if (!currentIds.has(id)) pendingNewManualIds.current.delete(id);
-    }
-    if (activeSessionId && pendingNewManualIds.current.delete(activeSessionId)) {
-      setFreshSelectedId(activeSessionId);
-    } else if (freshSelectedId && activeSessionId !== freshSelectedId) {
-      setFreshSelectedId(null);
-    }
-  }, [sessions, activeSessionId, freshSelectedId]);
   useEffect(() => {
     const before = previousSelected.current;
     if (before && before !== activeSessionId) markDirectInteraction(before);
@@ -487,91 +519,27 @@ export function ChatGPTBrowserSidebarEntry({
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [clockNow, setClockNow] = useState(() => Date.now());
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    sessionId?: string;
-    groupKey?: string;
-  } | null>(null);
-  // Tied to the menu instance so reopening the context menu starts collapsed.
-  const [borderSubmenuFor, setBorderSubmenuFor] = useState<typeof contextMenu>(null);
-  const [keepAwakeSubmenuFor, setKeepAwakeSubmenuFor] = useState<typeof contextMenu>(null);
+  const [menuFeedback, setMenuFeedback] = useState<string | null>(null);
+  const [menuDialog, setMenuDialog] = useState<ChatGPTSessionMenuDialogState | null>(null);
   const [keepAwakeFeedback, setKeepAwakeFeedback] = useState<string | null>(null);
   const editOmniworkBinding = (sessionId: string) => {
-    setContextMenu(null);
     const session = sessions.find((item) => item.id === sessionId);
     if (!session) return;
-    const requestedRole = window.prompt(
-      "Omniwork role (manager, worker, personal)",
-      session.binding?.role ?? "personal",
-    );
-    if (requestedRole === null) return;
-    const role = requestedRole.trim().toLowerCase();
-    if (role !== "manager" && role !== "worker" && role !== "personal") {
-      window.alert("Role must be manager, worker or personal.");
-      return;
-    }
-    const seat = window.prompt("OpenRig seat ID (empty if unbound)", session.binding?.seatId ?? "");
-    if (seat === null) return;
-    const previousTask = session.binding?.taskRef;
-    const task = window.prompt(
-      "TaskBoard reference (Board:ID, or empty)",
-      previousTask ? `${previousTask.board}:${previousTask.id}` : "",
-    );
-    if (task === null) return;
-    const separator = task.indexOf(":");
-    if (task.trim() && (separator <= 0 || !task.slice(separator + 1).trim())) {
-      window.alert("Task reference must be Board:ID.");
-      return;
-    }
-    setSessionBinding(sessionId, {
-      seatId: seat.trim() || null,
-      role,
-      parentSessionId: session.parentSessionId ?? null,
-      taskRef: task.trim()
-        ? { board: task.slice(0, separator).trim(), id: task.slice(separator + 1).trim() }
-        : null,
-      boundAt: new Date().toISOString(),
-      boundBy: "user",
+    const task = session.binding?.taskRef;
+    setMenuDialog({
+      kind: "binding",
+      sessionId,
+      role:
+        session.binding?.role ??
+        (chatGPTSessionDisplayRole(session, managerIds.has(sessionId)) === "worker"
+          ? "worker"
+          : "personal"),
+      seat: session.binding?.seatId ?? "",
+      task: task ? `${task.board}:${task.id}` : "",
     });
   };
-  const [reloadFeedback, setReloadFeedback] = useState<string | null>(null);
-  const [reloadPendingId, setReloadPendingId] = useState<string | null>(null);
-  const reloadSession = async (sessionId: string) => {
-    setContextMenu(null);
-    if (!environmentId || reloadPendingId) return;
-    const session = sessions.find((entry) => entry.id === sessionId);
-    if (!session) return;
-    const isWorking = activities[sessionId]?.age === "working";
-    if (
-      isWorking &&
-      !window.confirm(
-        `Reload ${session.title} while it is working? This refreshes the browser page, not the agent conversation.`,
-      )
-    )
-      return;
-    setReloadPendingId(sessionId);
-    try {
-      await runChatGPTSessionControl({
-        environmentId,
-        sessions,
-        action: "reload",
-        sessionId,
-        force: isWorking,
-      });
-      setReloadFeedback(`Reloaded ${session.title}.`);
-    } catch (error) {
-      setReloadFeedback(
-        `Reload not performed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      setReloadPendingId(null);
-    }
-  };
-  const borderSubmenuOpen = contextMenu !== null && borderSubmenuFor === contextMenu;
-  const keepAwakeSubmenuOpen = contextMenu !== null && keepAwakeSubmenuFor === contextMenu;
+
   const scheduleKeepAwake = async (sessionId: string, durationHours: 1 | 2 | 4 | 6) => {
-    setContextMenu(null);
     const start = window.desktopBridge?.startOmniHubKeepAwakeMonitor;
     if (!environmentId || !start) {
       setKeepAwakeFeedback("Keep Awake requires the local T3 desktop scheduler.");
@@ -594,7 +562,7 @@ export function ChatGPTBrowserSidebarEntry({
         sessionId,
         conversationId,
         durationHours,
-        clientRequestId: crypto.randomUUID(),
+        clientRequestId: randomUUID(),
       });
       setKeepAwakeFeedback(
         result.ok
@@ -612,29 +580,20 @@ export function ChatGPTBrowserSidebarEntry({
     const timer = setTimeout(() => setKeepAwakeFeedback(null), 12_000);
     return () => clearTimeout(timer);
   }, [keepAwakeFeedback]);
-  const snoozePresets = useMemo(
-    () => (contextMenu && environmentId ? resolveSnoozePresets(new Date(), timestampFormat, environmentId) : []),
-    [contextMenu, timestampFormat],
-  );
+
   useEffect(() => {
     const timer = setInterval(() => setClockNow(Date.now()), 5_000);
     return () => clearInterval(timer);
   }, []);
+
+  const [recoveryQueue, setRecoveryQueue] = useState<ReturnType<typeof readRecoveryQueue> | null>(
+    null,
+  );
   useEffect(() => {
-    if (!contextMenu) return;
-    const dismiss = () => setContextMenu(null);
-    window.addEventListener("click", dismiss);
-    window.addEventListener("keydown", dismiss);
-    window.addEventListener("scroll", dismiss, true);
-    return () => {
-      window.removeEventListener("click", dismiss);
-      window.removeEventListener("keydown", dismiss);
-      window.removeEventListener("scroll", dismiss, true);
-    };
-  }, [contextMenu]);
-  const [recoveryQueue, setRecoveryQueue] = useState<ReturnType<typeof readRecoveryQueue> | null>(null);
-  useEffect(() => {
-    if (!environmentId) { setRecoveryQueue(null); return; }
+    if (!environmentId) {
+      setRecoveryQueue(null);
+      return;
+    }
     const refresh = () => setRecoveryQueue(readRecoveryQueue(environmentId));
     refresh();
     window.addEventListener("chatgpt-recovery-queue-updated", refresh);
@@ -642,22 +601,40 @@ export function ChatGPTBrowserSidebarEntry({
   }, [environmentId]);
   const recoveryTargets = recoveryQueue ? recoveryTargetOrder(recoveryQueue) : [];
   const recoveryOrder = recoveryQueue
-    ? [...recoveryTargets, ...recoveryPriorityOrder(recoveryQueue).filter((id) => !recoveryTargets.includes(id))]
+    ? [
+        ...recoveryTargets,
+        ...recoveryPriorityOrder(recoveryQueue).filter((id) => !recoveryTargets.includes(id)),
+      ]
     : [];
   const [activities, setActivities] = useState<
     Record<string, ReturnType<typeof useChatGPTBrowserSessionActivity>>
   >({});
+  // An explicitly created blank chat keeps its priority until its first
+  // verified working timestamp, even if deselected or T3 restarts.
+  const freshPinnedIds = freshManualSessionIds(
+    sessions,
+    (id) =>
+      activities[id]?.lastWorkingAt ??
+      (environmentId
+        ? getLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, id), Schema.Number)
+        : null) ??
+      0,
+  );
+  const singleClickResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstSessionClick = useRef<{ id: string; wasWorking: boolean; at: number } | null>(null);
   const [questionRevision, setQuestionRevision] = useState(0);
   useEffect(() => {
     const changed = (event: Event) => {
-      if ((event as CustomEvent<string>).detail?.startsWith(
-        `t3code:chatgpt-browser:session-question:v1:${environmentId}:`,
-      )) setQuestionRevision(value => value + 1);
+      if (
+        (event as CustomEvent<string>).detail?.startsWith(
+          `t3code:chatgpt-browser:session-question:v1:${environmentId}:`,
+        )
+      )
+        setQuestionRevision((value) => value + 1);
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key?.startsWith(`t3code:chatgpt-browser:session-question:v1:${environmentId}:`))
-        setQuestionRevision(value => value + 1);
+        setQuestionRevision((value) => value + 1);
     };
     window.addEventListener("t3:chatgpt-session-question-changed", changed);
     window.addEventListener("storage", onStorage);
@@ -666,11 +643,22 @@ export function ChatGPTBrowserSidebarEntry({
       window.removeEventListener("storage", onStorage);
     };
   }, [environmentId]);
-  const pendingQuestionIds = useMemo(() =>
-    new Set(environmentId ? sessions.filter(session =>
-      readChatGPTSessionQuestion(environmentId, session.id)?.status === "pending",
-    ).map(session => session.id) : []), [environmentId, sessions, questionRevision]);
-  // Presentation-only; activity monitoring and automation still see the session.
+  const pendingQuestionIds = useMemo(
+    () =>
+      new Set(
+        environmentId
+          ? sessions
+              .filter(
+                (session) =>
+                  readChatGPTSessionQuestion(environmentId, session.id)?.status === "pending",
+              )
+              .map((session) => session.id)
+          : [],
+      ),
+    [environmentId, sessions, questionRevision],
+  );
+  // Presentation-only: unlike persistent Hidden, active-only hiding must not
+  // unload, stop monitoring or exclude the session from automation/keep-awake.
   const [workingHiddenIds, setWorkingHiddenIds] = useState<ReadonlySet<string>>(() => new Set());
   const recordActivity = useCallback(
     (id: string, activity: ReturnType<typeof useChatGPTBrowserSessionActivity> | null) => {
@@ -695,13 +683,21 @@ export function ChatGPTBrowserSidebarEntry({
     [],
   );
   useEffect(() => {
+    for (const session of sessions) {
+      if (session.quickSnoozeStep !== undefined && activities[session.id]?.age === "working")
+        resetQuickSnooze(session.id);
+    }
+    // Once a hidden working session stops being green, release the temporary
+    // flag. It must stay visible if it starts working again later.
     setWorkingHiddenIds((previous) => {
-      const retained = [...previous].filter((id) =>
-        sessions.some((session) => session.id === id && !session.hidden) &&
-        activities[id]?.age === "working");
+      const retained = [...previous].filter(
+        (id) =>
+          sessions.some((session) => session.id === id && !session.hidden) &&
+          activities[id]?.age === "working",
+      );
       return retained.length === previous.size ? previous : new Set(retained);
     });
-  }, [activities, sessions]);
+  }, [activities, sessions, resetQuickSnooze]);
   const registeredProjects = useMemo(
     () =>
       projects
@@ -767,15 +763,26 @@ export function ChatGPTBrowserSidebarEntry({
       const read = window.desktopBridge?.readTaskBoardWorkerClaims;
       if (!read) return;
       let claims;
-      try { claims = await read(); } catch { return; }
-      const liveClaims = new Set(claims.filter((claim) =>
-        claim.liveState === "ready" || claim.liveState === "in_session",
-      ).map((claim) => claim.claimedBy.toLowerCase()));
-      const protectedIds = new Set(readChatGPTBrowserSessions(environmentId)
-        .filter((session) => liveClaims.has(`t3-browser:${session.id.toLowerCase()}`) ||
-          liveClaims.has(`t3:${session.id.toLowerCase()}`) ||
-          liveClaims.has(session.id.toLowerCase()))
-        .map((session) => session.id));
+      try {
+        claims = await read();
+      } catch {
+        return;
+      }
+      const liveClaims = new Set(
+        claims
+          .filter((claim) => claim.liveState === "ready" || claim.liveState === "in_session")
+          .map((claim) => claim.claimedBy.toLowerCase()),
+      );
+      const protectedIds = new Set(
+        readChatGPTBrowserSessions(environmentId)
+          .filter(
+            (session) =>
+              liveClaims.has(`t3-browser:${session.id.toLowerCase()}`) ||
+              liveClaims.has(`t3:${session.id.toLowerCase()}`) ||
+              liveClaims.has(session.id.toLowerCase()),
+          )
+          .map((session) => session.id),
+      );
       for (const id of pruneExpiredHidden(Date.now(), protectedIds)) {
         const ref = chatGPTBrowserThreadRef(environmentId, id);
         for (const snapshot of Object.values(readThreadPreviewState(ref).sessions)) {
@@ -793,7 +800,12 @@ export function ChatGPTBrowserSidebarEntry({
       }
     };
     void removeExpired();
-    const timer = setInterval(() => { void removeExpired(); }, 60 * 60 * 1000);
+    const timer = setInterval(
+      () => {
+        void removeExpired();
+      },
+      60 * 60 * 1000,
+    );
     return () => clearInterval(timer);
   }, [environmentId, pruneExpiredHidden, close]);
   const isSnoozed = (session: { readonly snoozedUntil?: number | undefined }) =>
@@ -801,9 +813,10 @@ export function ChatGPTBrowserSidebarEntry({
   // Visibility only affects sidebar rows. Recovery, activity monitoring and
   // webview runtime all continue using the full non-hidden session list.
   const visibleSessions = sessions.filter((session) => !session.hidden);
-  const sidebarVisibleSessions = visibleSessions.filter((session) =>
-    !(workingHiddenIds.has(session.id) && activities[session.id]?.age === "working") &&
-    !(hideUnloaded && activities[session.id]?.age === "unloaded"),
+  const sidebarVisibleSessions = visibleSessions.filter(
+    (session) =>
+      !(workingHiddenIds.has(session.id) && activities[session.id]?.age === "working") &&
+      !hideChatGPTSessionAsUnloaded(activities[session.id]?.age, hideUnloaded),
   );
   const hiddenSessions = sessions.filter((session) => session.hidden);
   // The verified manager seat ledger, not a parent link or title, determines
@@ -837,12 +850,13 @@ export function ChatGPTBrowserSidebarEntry({
     [sessions, verifiedManagerSessionIds, managerIds, workerIds],
   );
   const previousNavigationId = useRef(activeSessionId);
-  // Only deliberate navigation may reveal a selected row. Automatic selection
-  // after a sidebar mutation must not move the user's scroll position.
+  // Layout mutations may change the route's selected row without a deliberate
+  // user navigation. Keep the sidebar viewport stable for those transitions.
   const automaticSelectionTarget = useRef<string | null>(null);
   const pendingScrollRestore = useRef<{ viewport: HTMLElement; top: number } | null>(null);
   const preserveSidebarScroll = () => {
-    const viewport = document.querySelector<HTMLElement>('[data-sidebar="content"]')
+    const viewport = document
+      .querySelector<HTMLElement>('[data-sidebar="content"]')
       ?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
     if (viewport) pendingScrollRestore.current = { viewport, top: viewport.scrollTop };
   };
@@ -860,10 +874,13 @@ export function ChatGPTBrowserSidebarEntry({
   };
   const isAutomaticallySelected = (id: string) =>
     automaticSelectionTarget.current === id ||
-    sessions.some((session) => session.id === id &&
-      typeof session.createdAt === "number" &&
-      session.createdAt >= sidebarMountedAt.current &&
-      Date.now() - session.createdAt < 10_000);
+    sessions.some(
+      (session) =>
+        session.id === id &&
+        typeof session.createdAt === "number" &&
+        session.createdAt >= sidebarMountedAt.current &&
+        Date.now() - session.createdAt < 10_000,
+    );
   useEffect(() => {
     if (previousNavigationId.current === activeSessionId) return;
     previousNavigationId.current = activeSessionId;
@@ -873,21 +890,33 @@ export function ChatGPTBrowserSidebarEntry({
     setShowHidden(false);
     setShowSnoozed(false);
     if (hideableWorkerIds.has(activeSessionId)) setShowWorkers(true);
-    if (sessions.some((session) => session.id === activeSessionId && isAIInterfaceSession(session))) {
+    if (
+      sessions.some((session) => session.id === activeSessionId && isAIInterfaceSession(session))
+    ) {
       setShowAIInterfaceSessions(true);
     }
     setSectionCollapsed(false);
     setSearchQuery("");
     // Activity and project grouping can both conceal an otherwise selected row.
     setCollapsedGroupKeys([]);
-  }, [activeSessionId, hideableWorkerIds, sessions, setShowWorkers, setShowAIInterfaceSessions, setCollapsedGroupKeys]);
+  }, [
+    activeSessionId,
+    hideableWorkerIds,
+    sessions,
+    setShowWorkers,
+    setShowAIInterfaceSessions,
+    setCollapsedGroupKeys,
+  ]);
   useEffect(() => {
     if (!activeSessionId || isAutomaticallySelected(activeSessionId)) {
-      if (automaticSelectionTarget.current === activeSessionId) automaticSelectionTarget.current = null;
+      if (automaticSelectionTarget.current === activeSessionId)
+        automaticSelectionTarget.current = null;
       return;
     }
     const timer = window.setTimeout(() => {
-      const selected = document.querySelector('[data-chatgpt-selected-session="true"] [aria-current="page"]');
+      const selected = document.querySelector(
+        '[data-chatgpt-selected-session="true"] [aria-current="page"]',
+      );
       selected?.scrollIntoView({ block: "nearest" });
     }, 100);
     return () => window.clearTimeout(timer);
@@ -921,8 +950,17 @@ export function ChatGPTBrowserSidebarEntry({
               ? (b.snoozedUntil ?? 0) - (a.snoozedUntil ?? 0)
               : 0),
       );
-      return prioritizePendingChatGPTQuestions([{ key: "status:parked", title: null,
-        rows: parked.map((session) => ({ session, depth: 0, childCount: 0 })) }], sessions, pendingQuestionIds);
+      return prioritizePendingChatGPTQuestions(
+        [
+          {
+            key: "status:parked",
+            title: null,
+            rows: parked.map((session) => ({ session, depth: 0, childCount: 0 })),
+          },
+        ],
+        sessions,
+        pendingQuestionIds,
+      );
     }
     const groups = layoutChatGPTSessions(
       displayedSessions.filter((session) => !isAIInterfaceSession(session)),
@@ -930,7 +968,8 @@ export function ChatGPTBrowserSidebarEntry({
       showingHidden ? "started" : sortMode,
       activities as Readonly<Record<string, ChatGPTSessionSortActivity>>,
       permanentProjects,
-      freshSelectedId === activeSessionId ? freshSelectedId : undefined,
+      freshPinnedIds[0],
+      erroredSessionsAtBottom,
     );
     const filtered = filterChatGPTWorkerGroups(
       groups,
@@ -940,21 +979,59 @@ export function ChatGPTBrowserSidebarEntry({
       !showingHidden && showWorkersWithSelectedParent ? activeSessionId : undefined,
     );
     // AI API guests are a separate, opt-in, bottommost section even when active.
-    const regular = filtered.some((group) => group.key === "other")
-      ? filtered
-      : [...filtered, { key: "other", title: "Other", rows: [] }];
-    if (!showAIInterfaceSessions || !aiInterfaceSessions.length) return prioritizePendingChatGPTQuestions(prioritizeFreshManualSession(
-      regular, freshSelectedId === activeSessionId ? freshSelectedId : null,
-    ), sessions, pendingQuestionIds);
+    // Activity mode already renders its own Other project within the status queue.
+    // Appending the Started-mode placeholder creates a second Other header.
+    const verificationRows =
+      sortMode === "activity" && !showingHidden
+        ? groups.flatMap((group) => group.rows.filter(({ session }) => session.verificationPending))
+        : [];
+    const normalGroups = verificationRows.length
+      ? filtered.map((group) => ({
+          ...group,
+          rows: group.rows.filter(({ session }) => !session.verificationPending),
+        }))
+      : filtered;
+    const regular =
+      sortMode === "activity" || normalGroups.some((group) => group.key === "other")
+        ? normalGroups
+        : [...normalGroups, { key: "other", title: "Other", rows: [] }];
+    const verificationGroup = verificationRows.length
+      ? [
+          {
+            key: "status:verification",
+            title: "Verification",
+            rows: verificationRows.map((row) => ({ ...row, depth: 0 })),
+          },
+        ]
+      : [];
+    if (!showAIInterfaceSessions || !aiInterfaceSessions.length)
+      return prioritizeFreshManualSession(
+        prioritizePendingChatGPTQuestions(
+          [...regular, ...verificationGroup],
+          sessions,
+          pendingQuestionIds,
+        ),
+        freshPinnedIds,
+      );
     const aiRows = layoutChatGPTSessions(
-      aiInterfaceSessions, registeredProjects, "started",
+      aiInterfaceSessions,
+      registeredProjects,
+      "started",
       activities as Readonly<Record<string, ChatGPTSessionSortActivity>>,
       permanentProjects,
     ).flatMap((group) => group.rows);
-    return prioritizePendingChatGPTQuestions(prioritizeFreshManualSession(
-      [...regular, { key: "ai-interface", title: "AI interface", rows: aiRows }],
-      freshSelectedId === activeSessionId ? freshSelectedId : null,
-    ), sessions, pendingQuestionIds);
+    return prioritizeFreshManualSession(
+      prioritizePendingChatGPTQuestions(
+        [
+          ...regular,
+          { key: "ai-interface", title: "AI interface", rows: aiRows },
+          ...verificationGroup,
+        ],
+        sessions,
+        pendingQuestionIds,
+      ),
+      freshPinnedIds,
+    );
   }, [
     displayedSessions,
     aiInterfaceSessions,
@@ -968,24 +1045,38 @@ export function ChatGPTBrowserSidebarEntry({
     activities,
     permanentProjects,
     activeSessionId,
-    freshSelectedId,
+    freshPinnedIds,
     hideableWorkerIds,
     showWorkers,
     showWorkersWithSelectedParent,
+    erroredSessionsAtBottom,
     permanentProjectKeys,
   ]);
   const searchResults = useMemo(
-    () => searchChatGPTSessionCatalog({
-      groups: groupedSessions,
+    () =>
+      searchChatGPTSessionCatalog({
+        groups: groupedSessions,
+        sessions,
+        query: searchQuery,
+        now: clockNow,
+        ...(!showWorkers ? { hiddenWorkerIds: hideableWorkerIds } : {}),
+        conversationUrl: (sessionId) =>
+          environmentId
+            ? (getLocalStorageItem(
+                chatGPTBrowserLastUrlKey(environmentId, sessionId),
+                Schema.String,
+              ) ?? null)
+            : null,
+      }),
+    [
+      groupedSessions,
       sessions,
-      query: searchQuery,
-      now: clockNow,
-      ...(!showWorkers ? { hiddenWorkerIds: hideableWorkerIds } : {}),
-      conversationUrl: (sessionId) => environmentId
-        ? getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String) ?? null
-        : null,
-    }),
-    [groupedSessions, sessions, searchQuery, clockNow, showWorkers, hideableWorkerIds, environmentId],
+      searchQuery,
+      clockNow,
+      showWorkers,
+      hideableWorkerIds,
+      environmentId,
+    ],
   );
   const searchedSessionIds = useMemo(
     () => new Set(searchResults.flatMap((group) => group.rows.map(({ session }) => session.id))),
@@ -1040,10 +1131,40 @@ export function ChatGPTBrowserSidebarEntry({
     void closeSession(activeSessionId, "desktop-menu-action");
   });
 
+  const renameSelectedSession = useEffectEvent(() => {
+    if (!activeSessionId) return;
+    const selected = sessions.find((entry) => entry.id === activeSessionId);
+    if (!selected) return;
+    setTitle(selected.title);
+    setRenamingId(selected.id);
+  });
+
   useEffect(() => {
-    return window.desktopBridge?.onMenuAction?.((action) => {
+    const detach = window.desktopBridge?.onMenuAction?.((action) => {
       if (action === "close-chatgpt-session") closeSelectedSession();
+      if (action === "rename-chatgpt-session") renameSelectedSession();
     });
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.key !== "F2" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        event.isComposing
+      )
+        return;
+      const target = event.target;
+      if (target instanceof Element && target.closest("input,textarea,[contenteditable='true']"))
+        return;
+      event.preventDefault();
+      renameSelectedSession();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      detach?.();
+      window.removeEventListener("keydown", onKey, true);
+    };
   }, []);
 
   const hideSession = async (sessionId: string) => {
@@ -1052,6 +1173,433 @@ export function ChatGPTBrowserSidebarEntry({
     if (activeSessionId !== sessionId) return;
     const next = visibleSessions.find((session) => session.id !== sessionId);
     await navigateAfterSidebarMutation(next?.id ?? null);
+  };
+
+  // Both ChatGPT sidebar rows and native T3 thread rows use the same OS menu.
+  const showSessionContextMenu = async (sessionId: string, position: { x: number; y: number }) => {
+    const api = readLocalApi();
+    const session = sessions.find((entry) => entry.id === sessionId);
+    if (!api || !session || !environmentId) return;
+    const presets = environmentId ? resolveSnoozePresets(new Date(), timestampFormat, environmentId) : [];
+    const projects = [
+      ...new Set([
+        ...registeredProjects.map((project) => project.title),
+        ...permanentProjects.map((project) => project.title),
+        ...sessions.map((entry) => entry.project).filter((project): project is string => !!project),
+      ]),
+    ].sort((a, b) => a.localeCompare(b));
+    const savedUrl =
+      getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String) ??
+      session.archive?.conversationUrl ??
+      "";
+    const age = activities[sessionId]?.age;
+    const registryContext = {
+      model: deriveChatGPTSession(
+        {
+          ...(age !== undefined ? { age } : {}),
+          ...(session.hidden !== undefined ? { hidden: session.hidden } : {}),
+          ...(session.snoozedUntil !== undefined ? { snoozedUntil: session.snoozedUntil } : {}),
+        },
+        Date.now(),
+      ),
+      canReload: true,
+      canReboot: true,
+      hasConversationUrl: !!savedUrl,
+    };
+    const action = await api.contextMenu.show(
+      [
+        ...chatGPTNativeActionMenu(registryContext),
+        ...buildChatGPTSessionContextMenu({
+          session,
+          sessions,
+          managerIds,
+          projects,
+          snoozePresets: presets,
+          now: Date.now(),
+          working: activities[sessionId]?.age === "working",
+          hasTask: !!session.binding?.taskRef,
+        }).filter((item) => item.id !== "reboot" && item.id !== "snooze:clear"),
+      ],
+      position,
+    );
+    if (!action) return;
+    try {
+      if (action.startsWith("registry:")) {
+        const actionId = action.slice("registry:".length) as ChatGPTSessionActionId;
+        const result = await runChatGPTSessionAction(
+          actionId,
+          sessionId,
+          registryContext,
+          async (id, targetId) => {
+            if (id === "open") {
+              if (session.hidden) setSessionHidden(targetId, false);
+              await navigate({
+                to: "/browser/$browserSessionId",
+                params: { browserSessionId: targetId },
+              });
+            } else if (id === "reload") {
+              await runChatGPTSessionControl({
+                environmentId,
+                sessions,
+                action: "reload",
+                sessionId: targetId,
+                force: false,
+              });
+            } else if (id === "unsnooze") {
+              preserveSidebarScroll();
+              setSessionSnooze([targetId], null);
+            } else if (id === "copy_url") {
+              await navigator.clipboard.writeText(savedUrl);
+            } else if (id === "agent_reboot") {
+              const receipt = await beginSidebarReboot({
+                environmentId,
+                sessionId: targetId,
+                prompt: `Resume your previous work in this same T3 browser session (${session.title}). Review the relevant TaskBoard task and project instructions and continue.`,
+              });
+              setMenuFeedback(
+                `Agent Reboot: ${receipt.status}; request ${receipt.operationId}. The same T3 session is retained.`,
+              );
+            } else {
+              return { ok: false, message: "This action is not available from the native menu." };
+            }
+            return { ok: true };
+          },
+        );
+        if (!result.ok) throw new Error(result.message ?? "Session action unavailable.");
+      } else if (action.startsWith("copy:")) {
+        const url =
+          getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String) ??
+          session.archive?.conversationUrl ??
+          "";
+        const values: Record<string, string> = {
+          "copy:t3-id": publicChatGPTSessionId(session),
+          "copy:conversation-id": chatGPTConversationIdFromUrl(url) ?? "",
+          "copy:url": url,
+          "copy:title": session.title,
+          "copy:parent-id": publicChatGPTParentId(sessions, session) ?? "",
+        };
+        if (!values[action]) throw new Error("This session has no saved value for that field.");
+        await navigator.clipboard.writeText(values[action]);
+      } else if (action === "role:toggle") {
+        if (chatGPTSessionDisplayRole(session, managerIds.has(sessionId)) !== "manager")
+          setSessionWorker(
+            sessionId,
+            chatGPTSessionDisplayRole(session, managerIds.has(sessionId)) !== "worker",
+          );
+      } else if (action === "role:edit") {
+        editOmniworkBinding(sessionId);
+      } else if (action === "role:clear") {
+        setSessionBinding(sessionId, null);
+      } else if (action.startsWith("project:")) {
+        const index = Number(action.slice(8));
+        if (action === "project:none") setSessionProject(sessionId, null);
+        else if (action === "project:add") setMenuDialog({ kind: "add-project", sessionId });
+        else if (Number.isInteger(index) && projects[index])
+          setSessionProject(sessionId, projects[index]);
+      } else if (action.startsWith("parent:")) {
+        if (action === "parent:detach") setSessionParent(sessionId, null);
+        else if (action !== "parent:set") setSessionParent(sessionId, action.slice(7));
+      } else if (action === "task:open" && session.binding?.taskRef) {
+        const { board, id } = session.binding.taskRef;
+        // Existing TaskBoard notes are in the user's Obsidian vault. This opens
+        // the note, not the review-only TaskBoard Human Inbox dialog.
+        const note = `${board}/Tasks/Active/${id}`;
+        const url = `obsidian://open?vault=jjj&file=${encodeURIComponent(note)}`;
+        await api.shell.openExternal(url);
+      } else if (action === "reboot") {
+        // Reboot any T3 browser slot by its exact session ID. An OpenRig seat is
+        // optional metadata, not a prerequisite or an alternate reboot route.
+        // Each explicit click begins the same guarded operation as reboot(id).
+        const receipt = await beginSidebarReboot({
+          environmentId,
+          sessionId,
+          prompt: `Resume your previous work in this same T3 browser session (${session.title}). Review the relevant TaskBoard task and project instructions and continue.`,
+        });
+        setMenuFeedback(
+          `Agent Reboot: ${receipt.status}; request ${receipt.operationId}. The same T3 session is retained.`,
+        );
+      } else if (action === "stop") {
+        if (isPersistentChatGPTSessionOptedIn(sessionId)) {
+          const expression = `(() => {
+            const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+            if (!(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return false;
+            stop.click();
+            return true;
+          })()`;
+          const stopped = await inspectPersistentChatGPTPage<boolean>(
+            environmentId,
+            sessionId,
+            expression,
+          );
+          if (stopped !== true) throw new Error("No active native ChatGPT generation control.");
+          return;
+        }
+        const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
+        const state = readThreadPreviewState(thread);
+        const tabId = state.activeTabId;
+        const runtimeId =
+          tabId && state.serverEpoch ? previewRuntimeTabId(thread, state.serverEpoch, tabId) : null;
+        if (!runtimeId || isChatGPTGuestHibernated(runtimeId))
+          throw new Error("Session is unloaded.");
+        const stopped = await chatGPTWebviewAutomation.evaluate(runtimeId, {
+          expression: `(() => {
+            const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+            if (!(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return false;
+            stop.click();
+            return true;
+          })()`,
+        });
+        if (stopped !== true) throw new Error("No active Stop generation control was found.");
+      } else if (action === "verification:toggle") {
+        preserveSidebarScroll();
+        setSessionVerification(sessionId, !session.verificationPending);
+        if (!session.verificationPending && activeSessionId === sessionId) {
+          const next = visibleSessions.find((entry) => entry.id !== sessionId && !isSnoozed(entry));
+          void navigateAfterSidebarMutation(next?.id ?? null);
+        }
+      } else if (action.startsWith("snooze:")) {
+        if (action === "snooze:clear") {
+          preserveSidebarScroll();
+          setSessionSnooze([sessionId], null);
+        } else {
+          const preset =
+            action === "snooze:custom"
+              ? await requestCustomSnooze()
+              : presets.find((entry) => action === `snooze:${entry.id}`);
+          if (preset) {
+            preserveSidebarScroll();
+            const step = ["hour", "three-hours", "evening", "tomorrow"].indexOf("id" in preset && typeof preset.id === "string" ? preset.id : "");
+            if (step >= 0) quickSnoozeSession(sessionId, Date.parse(preset.snoozedUntil), step);
+            else setSessionSnooze([sessionId], Date.parse(preset.snoozedUntil));
+          }
+        }
+      } else if (action.startsWith("awake:")) {
+        await scheduleKeepAwake(sessionId, Number(action.slice(6)) as 1 | 2 | 4 | 6);
+      } else if (action.startsWith("highlight:")) {
+        const color = action.slice(10);
+        setSessionBorderColor(sessionId, color === "none" ? null : color);
+      } else if (action === "hide") {
+        if (session.hidden) {
+          preserveSidebarScroll();
+          setSessionHidden(sessionId, false);
+          setShowHidden(false);
+        } else await hideSession(sessionId);
+      } else if (action === "unload") {
+        if (
+          activities[sessionId]?.age === "working" ||
+          hasUncertainChatGPTSend(environmentId, sessionId)
+        )
+          throw new Error("An active generation or unresolved send must finish first.");
+        if (isPersistentChatGPTSessionOptedIn(sessionId)) {
+          const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+          if (!bridge) throw new Error("Native Chromium bridge unavailable.");
+          const identity = {
+            environmentId,
+            sessionId,
+            profileId: chatGPTSessionProfileId(session),
+          };
+          const state = await nativeChatGPTResidency(bridge, environmentId, sessionId);
+          if (state === "unknown") throw new Error("Native Chromium state is uncertain.");
+          if (state === "resident") {
+            const snapshot = await runChatGPTSessionControl({
+              environmentId,
+              sessions,
+              action: "snapshot",
+              sessionId,
+            });
+            if (
+              !snapshot ||
+              typeof snapshot !== "object" ||
+              !("status" in snapshot) ||
+              snapshot.status !== "backed_up_empty"
+            )
+              throw new Error("Cannot unload native session without an empty-composer backup.");
+          }
+          if (activeSessionId === sessionId) {
+            const next = sessions.find((entry) => entry.id !== sessionId && !entry.hidden);
+            if (next)
+              await navigate({
+                to: "/browser/$browserSessionId",
+                params: { browserSessionId: next.id },
+              });
+            else await navigate({ to: "/" });
+          }
+          if (state === "resident") await bridge({ operation: "close", identity });
+          hibernateChatGPTGuest(sessionId, true);
+          return;
+        }
+        const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
+        const state = readThreadPreviewState(thread);
+        const tabId = state.activeTabId;
+        const runtimeId =
+          tabId && state.serverEpoch ? previewRuntimeTabId(thread, state.serverEpoch, tabId) : null;
+        if (!runtimeId) throw new Error("No browser slot for this session.");
+        if (!isChatGPTGuestHibernated(runtimeId)) {
+          const snapshot = await runChatGPTSessionControl({
+            environmentId,
+            sessions,
+            action: "snapshot",
+            sessionId,
+          });
+          if (
+            !snapshot ||
+            typeof snapshot !== "object" ||
+            !("status" in snapshot) ||
+            snapshot.status !== "backed_up_empty"
+          )
+            throw new Error("Could not confirm an empty composer and save the draft state.");
+        }
+        if (activeSessionId === sessionId) {
+          const next = sessions.find((entry) => entry.id !== sessionId && !entry.hidden);
+          if (next)
+            await navigate({
+              to: "/browser/$browserSessionId",
+              params: { browserSessionId: next.id },
+            });
+          else await navigate({ to: "/" });
+        }
+        hibernateChatGPTGuest(runtimeId, true);
+      }
+    } catch (error) {
+      setMenuFeedback(
+        `Session action failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+
+  const showProjectContextMenu = async (groupKey: string, position: { x: number; y: number }) => {
+    const api = readLocalApi();
+    const group =
+      recognizedGroups.find((entry) => entry.key === groupKey) ??
+      groupedSessions.find((entry) => entry.key === groupKey);
+    if (!api || !group || !group.title || groupKey === "other" || groupKey.startsWith("status:"))
+      return;
+    const ids = group.rows.map(({ session }) => session.id);
+    const snoozed =
+      ids.length > 0 &&
+      ids.every(
+        (id) => (sessions.find((entry) => entry.id === id)?.snoozedUntil ?? 0) > Date.now(),
+      );
+    const presets = environmentId ? resolveSnoozePresets(new Date(), timestampFormat, environmentId) : [];
+    const action = await api.contextMenu.show(
+      buildChatGPTProjectContextMenu({
+        permanent: permanentProjectKeys.has(groupKey),
+        snoozed,
+        snoozePresets: presets,
+      }),
+      position,
+    );
+    if (!action) return;
+    try {
+      if (action === "group:rename") {
+        setMenuDialog({
+          kind: "rename-group",
+          groupKey,
+          title: groupLabels.find((label) => label.key === groupKey)?.title ?? group.title,
+        });
+      } else if (action === "group:permanent") {
+        setPermanentProjects((current) =>
+          current.some((entry) => entry.key === groupKey)
+            ? current.filter((entry) => entry.key !== groupKey)
+            : [...current, { key: groupKey, title: group.title! }],
+        );
+      } else if (action.startsWith("snooze:")) {
+        if (action === "snooze:clear") {
+          preserveSidebarScroll();
+          setSessionSnooze(ids, null);
+        } else {
+          const preset =
+            action === "snooze:custom"
+              ? await requestCustomSnooze()
+              : presets.find((entry) => action === `snooze:${entry.id}`);
+          if (preset) {
+            preserveSidebarScroll();
+            setSessionSnooze(ids, Date.parse(preset.snoozedUntil));
+          }
+        }
+      }
+    } catch (error) {
+      setMenuFeedback(
+        `Project action failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+
+  const submitMenuDialog = async (
+    dialog: ChatGPTSessionMenuDialogState,
+    values: {
+      title: string;
+      role: "manager" | "worker" | "personal";
+      seat: string;
+      task: string;
+      prompt: string;
+    },
+  ) => {
+    if (!environmentId) return;
+    if (dialog.kind === "rename-group") {
+      if (!values.title) return;
+      setGroupLabels((current) => [
+        ...current.filter((entry) => entry.key !== dialog.groupKey),
+        { key: dialog.groupKey, title: values.title },
+      ]);
+      setMenuDialog(null);
+    } else if (dialog.kind === "add-project") {
+      if (!values.title || values.title.toLowerCase() === "other") {
+        setMenuFeedback("Choose a project name other than Other.");
+        return;
+      }
+      const existing = [
+        ...registeredProjects.map((project) => project.title),
+        ...permanentProjects.map((project) => project.title),
+        ...sessions
+          .map((session) => session.project)
+          .filter((project): project is string => !!project),
+      ].find((project) => project.toLowerCase() === values.title.toLowerCase());
+      const name = existing ?? values.title;
+      if (!existing) {
+        // A permanent sidebar group remains visible even with only one member.
+        setPermanentProjects((current) => [
+          ...current,
+          { key: `hint:${name.toLowerCase()}`, title: name },
+        ]);
+      }
+      setSessionProject(dialog.sessionId, name);
+      setMenuDialog(null);
+    } else if (dialog.kind === "binding") {
+      const separator = values.task.indexOf(":");
+      if (values.task && (separator <= 0 || !values.task.slice(separator + 1).trim())) {
+        setMenuFeedback("Task reference must be Board:ID.");
+        return;
+      }
+      const session = sessions.find((entry) => entry.id === dialog.sessionId);
+      if (!session) return;
+      setSessionBinding(dialog.sessionId, {
+        seatId: values.seat || null,
+        role: values.role,
+        parentSessionId: session.parentSessionId ?? null,
+        taskRef: values.task
+          ? { board: values.task.slice(0, separator), id: values.task.slice(separator + 1) }
+          : null,
+        boundAt: new Date().toISOString(),
+        boundBy: "user",
+      });
+      setMenuDialog(null);
+    } else {
+      if (!values.prompt) return;
+      setMenuDialog(null);
+      try {
+        const receipt = await beginSidebarReboot({
+          environmentId,
+          sessionId: dialog.sessionId,
+          prompt: values.prompt,
+        });
+        setMenuFeedback(`Agent Reboot: ${receipt.status}. The same T3 session is retained.`);
+      } catch (error) {
+        setMenuFeedback(
+          `Agent Reboot failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   };
 
   const launchLlmSearch = async () => {
@@ -1074,16 +1622,21 @@ export function ChatGPTBrowserSidebarEntry({
         createSession,
       );
       if (!result.ok) throw new Error(result.message);
-      if (!result.data.created) throw new Error(result.data.reason ?? "Could not confirm session creation.");
+      if (!result.data.created)
+        throw new Error(result.data.reason ?? "Could not confirm session creation.");
       if (result.data.promptDelivery !== "user_turn_observed") {
-        setLlmSearchFeedback("Search session created, but prompt delivery is unconfirmed. Check its composer before retrying.");
+        setLlmSearchFeedback(
+          "Search session created, but prompt delivery is unconfirmed. Check its composer before retrying.",
+        );
       }
       await navigate({
         to: "/browser/$browserSessionId",
         params: { browserSessionId: result.data.sessionId },
       });
     } catch (error) {
-      setLlmSearchFeedback(error instanceof Error ? error.message : "Could not start ChatGPT search.");
+      setLlmSearchFeedback(
+        error instanceof Error ? error.message : "Could not start ChatGPT search.",
+      );
     } finally {
       llmSearchInFlight.current = false;
       setLlmSearchPending(false);
@@ -1093,8 +1646,13 @@ export function ChatGPTBrowserSidebarEntry({
   // Dashboard shortcut works from any T3 screen while the ChatGPT sidebar is mounted.
   useEffect(() => {
     const openDashboard = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey ||
-          event.key.toLowerCase() !== "d") return;
+      if (
+        !(event.ctrlKey || event.metaKey) ||
+        !event.shiftKey ||
+        event.altKey ||
+        event.key.toLowerCase() !== "d"
+      )
+        return;
       event.preventDefault();
       void navigate({ to: "/browser" });
     };
@@ -1125,8 +1683,10 @@ export function ChatGPTBrowserSidebarEntry({
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <SidebarMenuButton onClick={() => void navigate({ to: "/browser" })}
-          title="ChatGPT sessions dashboard (Ctrl+Shift+D)">
+        <SidebarMenuButton
+          onClick={() => void navigate({ to: "/browser" })}
+          title="ChatGPT sessions dashboard (Ctrl+Shift+D)"
+        >
           <SlidersHorizontalIcon aria-hidden />
           <span>Sessions dashboard</span>
         </SidebarMenuButton>
@@ -1204,7 +1764,9 @@ export function ChatGPTBrowserSidebarEntry({
                   <MenuGroupLabel>View options</MenuGroupLabel>
                   <MenuCheckboxItem
                     checked={!autoMaintenancePaused}
-                    onCheckedChange={(checked) => updateChatGPTRecoverySettings({ paused: !checked })}
+                    onCheckedChange={(checked) =>
+                      updateChatGPTRecoverySettings({ paused: !checked })
+                    }
                     aria-label="Automatic recovery and warm loading"
                     title="Pause automatic recovery and warm loading together. Manually opening sessions remains available; already loaded sessions stay open."
                   >
@@ -1397,10 +1959,10 @@ export function ChatGPTBrowserSidebarEntry({
           </SidebarMenuButton>
         </SidebarMenuItem>
       ) : null}
-      {reloadFeedback && (
+      {menuFeedback && (
         <SidebarMenuItem>
           <p role="status" className="px-2 py-1 text-xs text-muted-foreground">
-            {reloadFeedback}
+            {menuFeedback}
           </p>
         </SidebarMenuItem>
       )}
@@ -1453,6 +2015,8 @@ export function ChatGPTBrowserSidebarEntry({
             <ChatGPTBrowserSessionRuntime
               environmentId={environmentId}
               sessionId={session.id}
+              selected={activeSessionId === session.id}
+              quiet={activeSessionId !== session.id && warmedIds.includes(session.id)}
               suspended={closingId === session.id || isSnoozed(session)}
             />
           )}
@@ -1474,7 +2038,7 @@ export function ChatGPTBrowserSidebarEntry({
           selected={activeSessionId === session.id}
           onChange={recordActivity}
         />
-      ))}
+      ))}{" "}
       {!sectionCollapsed && (
         <DndContext
           sensors={sensors}
@@ -1523,10 +2087,9 @@ export function ChatGPTBrowserSidebarEntry({
                       aria-expanded={isSearching || !collapsedGroups.has(group.key)}
                       onContextMenu={(event) => {
                         event.preventDefault();
-                        setContextMenu({
+                        void showProjectContextMenu(group.key!, {
                           x: event.clientX,
                           y: event.clientY,
-                          groupKey: group.key!,
                         });
                       }}
                       onClick={() => {
@@ -1543,7 +2106,11 @@ export function ChatGPTBrowserSidebarEntry({
                       ) : (
                         <ChevronDownIcon aria-hidden />
                       )}
-                      <span className="truncate font-medium">{group.title}</span>
+                      <span
+                        className={`truncate font-medium ${group.key === "status:verification" ? "text-amber-400" : ""}`}
+                      >
+                        {groupLabels.find((label) => label.key === group.key)?.title ?? group.title}
+                      </span>
                       {permanentProjectKeys.has(group.key) && (
                         <CrownIcon
                           aria-label="Permanent project"
@@ -1557,371 +2124,388 @@ export function ChatGPTBrowserSidebarEntry({
                   </DroppableProjectHeader>
                 )}
                 {(group.key === null || isSearching || !collapsedGroups.has(group.key)) &&
-                  group.rows.map(({ session, depth, childCount, inactiveParentHeader }) => (
-                    <Fragment key={session.id}>
-                    {sortMode === "activity" && inactiveParentHeader && !isSearching && (
-                      <div className="mx-1 mt-0.5 flex h-[14px] min-w-0 items-center rounded-sm bg-[rgba(157,111,195,0.13)] px-2 text-[9px] leading-none text-muted-foreground" title={`Inactive parent: ${inactiveParentHeader}`}>
-                        <span className="truncate">{inactiveParentHeader}</span>
-                      </div>
-                    )}
-                    <SortableBrowserSessionRow
-                      key={session.id}
-                      id={session.id}
-                      session={session}
-                      environmentId={environmentId}
-                      now={clockNow}
-                      recoveryPhase={autoMaintenancePaused ? null : recoveryPhases[session.id] ?? null}
-                      verifiedSpawnCreatedAt={
-                        spawnCreation.get(session.id)?.requestId === session.spawnRequestId
-                          ? spawnCreation.get(session.id)?.createdAt
-                          : undefined
-                      }
-                      activity={activities[session.id] ?? UNKNOWN_ACTIVITY}
-                      disabled={showingHidden || isSearching || renamingId === session.id}
-                    >
-                      {(sortable, activity, model) => {
-                        const recoveryEligible =
-                          model.residency !== "hidden" &&
-                          model.residency !== "snoozed" &&
-                          model.residency !== "unloaded";
-                        const recoveryBlocked = model.recovery.stoppedReason !== null;
-                        // Queue entries can outlive a transient load failure. A
-                        // currently healthy or hydrating resident must not display
-                        // a stale recovery phase or an orange reload progress bar.
-                        const observedFailure = ["invalid", "interrupted", "delivery-timeout"].includes(activity.age);
-                        const loadedWithoutFailure = !observedFailure && (
-                          activity.resident === true ||
-                          ["working", "recent", "inactive"].includes(activity.age)
-                        );
-                        const recoveryPhase =
-                          !autoMaintenancePaused && recoveryEligible && !loadedWithoutFailure &&
-                          !["working", "recent", "inactive"].includes(model.compatibilityAge)
-                            ? model.recovery.phase
-                            : null;
-                        // Missing composers are still periodically inspected and given
-                        // background render time. Keep the recovery spinner visible while
-                        // those checks are pending, not only during explicit reloads.
-                        const waitingForPage =
-                          activity.age === "invalid" &&
-                          activity.label ===
-                            "ChatGPT page unavailable: the ChatGPT composer is unavailable";
-                        const queued =
-                          !autoMaintenancePaused && recoveryEligible &&
-                          (activity.age === "invalid" || activity.recoveryProblem !== null);
-                        const recoveryLabel =
-                          queued && recoveryBlocked
-                            ? "Marked for recovery; waiting for safe retry or human review"
-                            : recoveryPhase === "refreshing"
-                              ? "Refreshing ChatGPT conversation to recover it"
-                              : recoveryPhase === "checking"
-                                ? "Confirming a recoverable ChatGPT error"
-                                : recoveryPhase === "queued"
-                                  ? "Confirmed ChatGPT error; queued for automatic recovery"
-                                  : queued
-                                    ? waitingForPage
-                                      ? "Checking unavailable ChatGPT page for automatic recovery"
-                                      : activity.recoveryProblem === "interrupted"
-                                        ? "Queued for automatic recovery if the connection stays interrupted"
-                                        : "Queued for automatic recovery; waiting for its turn or retry cooldown"
-                                    : null;
-                        const pendingLoad = loadedWithoutFailure ||
-                          model.recovery.stoppedReason !== null ||
-                          model.compatibilityAge === "working" ||
-                          model.residency === "snoozed" || model.residency === "hidden"
-                          ? null : pendingSessionProgress({
-                            now: clockNow, id: session.id, paused: autoMaintenancePaused,
-                            ...(forecast ? { warm: forecast } : {}), recovery: recoveryOrder,
-                            recoveryNextRetryAt: model.recovery.nextAttemptAt,
-                            recoveryLastAttemptAt: model.recovery.lastAttemptAt,
-                            ...(environmentId && warmLoadingAt[warmLoadingKey(environmentId, session.id)]
-                              ? { activeWarmStartedAt: warmLoadingAt[warmLoadingKey(environmentId, session.id)] } : {}),
-                            ...(recoveryQueue?.failures[session.id]
-                              ? { recoveryQueuedAt: recoveryQueue.failures[session.id]!.firstSeenAt } : {}),
-                          });
-                        const recoveryDetails =
-                          activity.age === "invalid" ||
-                          activity.age === "interrupted" ||
-                          activity.age === "delivery-timeout"
-                            ? chatGPTRecoveryHoverDetails({
-                                age: activity.age,
-                                label: activity.label,
-                                phase: recoveryPhase,
-                                state: {
-                                  lastAttemptAt: model.recovery.lastAttemptAt,
-                                  retryCount: model.recovery.attempts,
-                                  nextRetryAt: model.recovery.nextAttemptAt,
-                                  orangeStage: model.recovery.orangeStage,
-                                },
-                                events: model.recoveryEvents,
-                                now: clockNow,
-                              })
-                            : null;
-                        const recoveryTooltip = recoveryDetails ? (
-                          <div className="flex max-w-80 flex-col gap-1 text-left">
-                            <span className="font-semibold">ChatGPT recovery</span>
-                            {recoveryDetails.map((detail) => (
-                              <span key={detail}>{detail}</span>
-                            ))}
-                          </div>
-                        ) : null;
-                        const creationOrigin = chatGPTSessionCreationOrigin(session);
-                        const timeline = model.timeline ?? {
-                          createdAt: null,
-                          lastActiveAt: null,
-                          lastRefreshAt: null,
-                          lastRebootAt: null,
-                        };
-                        // One shared hover body for both the drag/status icon and the
-                        // session title: retain the richer recovery diagnostics.
-                        const withTimeline = (summary: ReactNode) => (
-                          <div className="flex max-w-80 flex-col gap-2 text-left">
-                            <div>{summary}</div>
-                            <div className="flex flex-col gap-1 border-t border-border pt-2 text-xs">
-                              <span>
-                                Origin:{" "}
-                                {creationOrigin === "manual"
-                                  ? "Manual"
-                                  : creationOrigin === "backend"
-                                    ? "AI/backend spawned"
-                                    : "Unknown (legacy)"}
-                              </span>
-                              <span>
-                                Created: {formatChatGPTSessionDateTime(timeline.createdAt)}
-                              </span>
-                              <span>
-                                Last active: {formatChatGPTSessionDateTime(timeline.lastActiveAt)}
-                              </span>
-                              <span>
-                                Last browser reload:{" "}
-                                {formatChatGPTSessionDateTime(timeline.lastRefreshAt)}
-                              </span>
-                              <span>
-                                Last Agent Reboot:{" "}
-                                {formatChatGPTSessionDateTime(timeline.lastRebootAt)}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                        const needsAnswer = pendingQuestionIds.has(session.id);
-                        const isVerifiedManager = managerIds.has(session.id);
-                        const displayRole = chatGPTSessionDisplayRole(session, isVerifiedManager);
-                        const projectTitle = projectTitles.get(session.id);
-                        // Identity backgrounds are separate from status text/icon colors.
-                        // Personal highlights frame the drag icon without outlining the whole row.
-                        const highlightAccent = chatGPTSessionHighlightAccentClass(
-                          session.borderColor,
-                        );
+                  group.rows.map(({ session, depth, childCount, inactiveParentHeader }, index) => {
+                    const sectionFor = (id: string): "error" | "idle" | null => {
+                      const age = activities[id]?.age;
+                      if (age === "invalid" || age === "interrupted" || age === "delivery-timeout")
+                        return "error";
+                      if (age !== "working") return "idle";
+                      return null;
+                    };
+                    const section = sectionFor(session.id);
+                    const previousSection =
+                      index > 0 ? sectionFor(group.rows[index - 1]!.session.id) : null;
+                    const divider =
+                      sortMode === "activity" &&
+                      !isSearching &&
+                      !showingHidden &&
+                      group.key === "status:activity" &&
+                      section !== null &&
+                      section !== previousSection;
+                    // Project headings belong to idle/unloaded root families only. Recent
+                    // sessions keep their global order, and children never split a family.
+                    const age = activities[session.id]?.age;
+                    const projectEligible =
+                      age !== "working" &&
+                      !["recent", "unloaded-recent", "unloaded-working"].includes(age ?? "") &&
+                      age !== "invalid" &&
+                      age !== "interrupted" &&
+                      age !== "delivery-timeout";
+                    const projectTitle = projectTitles.get(session.id) ?? "Other";
+                    const previousRoot = group.rows
+                      .slice(0, index)
+                      .reverse()
+                      .find((row) => {
+                        const previousAge = activities[row.session.id]?.age;
                         return (
+                          row.depth === 0 &&
+                          previousAge !== "working" &&
+                          !["recent", "unloaded-recent", "unloaded-working"].includes(
+                            previousAge ?? "",
+                          ) &&
+                          previousAge !== "invalid" &&
+                          previousAge !== "interrupted" &&
+                          previousAge !== "delivery-timeout"
+                        );
+                      });
+                    const projectHeading =
+                      sortMode === "activity" &&
+                      !isSearching &&
+                      !showingHidden &&
+                      group.key === "status:activity" &&
+                      projectEligible &&
+                      depth === 0 &&
+                      (!previousRoot ||
+                        (projectTitles.get(previousRoot.session.id) ?? "Other") !== projectTitle);
+                    const familyRoot =
+                      depth > 0
+                        ? group.rows
+                            .slice(0, index)
+                            .reverse()
+                            .find((row) => row.depth === 0)?.session
+                        : session;
+                    const familyProject =
+                      projectTitles.get(familyRoot?.id ?? session.id) ?? "Other";
+                    const familyProjectKey =
+                      recognizedGroups.find((entry) => entry.title === familyProject)?.key ??
+                      (familyProject === "Other" ? "other" : `activity-project:${familyProject}`);
+                    const familyCollapsed =
+                      sortMode === "activity" &&
+                      group.key === "status:activity" &&
+                      !isSearching &&
+                      projectEligible &&
+                      collapsedGroups.has(familyProjectKey);
+                    if (familyCollapsed && !projectHeading) return null;
+                    const projectCounts = {
+                      idle: 0,
+                      unloaded: 0,
+                      error: 0,
+                      recovering: 0,
+                      snoozed: 0,
+                      hidden: 0,
+                    };
+                    if (projectHeading && collapsedGroups.has(familyProjectKey)) {
+                      group.rows.forEach((row, rowIndex) => {
+                        const rowAge = activities[row.session.id]?.age;
+                        if (
+                          rowAge === "working" ||
+                          rowAge === "recent" ||
+                          rowAge === "unloaded-recent" ||
+                          rowAge === "unloaded-working"
+                        )
+                          return;
+                        const root =
+                          row.depth === 0
+                            ? row.session
+                            : group.rows
+                                .slice(0, rowIndex)
+                                .reverse()
+                                .find((entry) => entry.depth === 0)?.session;
+                        if (
+                          (projectTitles.get(root?.id ?? row.session.id) ?? "Other") !==
+                          projectTitle
+                        )
+                          return;
+                        if (
+                          rowAge === "invalid" ||
+                          rowAge === "interrupted" ||
+                          rowAge === "delivery-timeout"
+                        ) {
+                          const phase = autoMaintenancePaused
+                            ? null
+                            : recoveryPhases[row.session.id];
+                          if (phase === "checking" || phase === "refreshing" || phase === "queued")
+                            projectCounts.recovering++;
+                          else projectCounts.error++;
+                        } else if (rowAge === "unloaded") projectCounts.unloaded++;
+                        else projectCounts.idle++;
+                      });
+                      sessions.forEach((other) => {
+                        if ((projectTitles.get(other.id) ?? "Other") !== projectTitle) return;
+                        if (other.hidden) projectCounts.hidden++;
+                        else if (isSnoozed(other)) projectCounts.snoozed++;
+                      });
+                    }
+                    return (
+                      <Fragment key={session.id}>
+                        {divider && (
                           <div
-                            title={pendingLoad?.title}
-                            data-chatgpt-selected-session={activeSessionId === session.id}
-                            className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${activeSessionId === session.id ? "ring-1 ring-inset ring-primary/70 bg-sidebar-accent/30" : ""}`}
-                            onContextMenu={(event) => {
-                              event.preventDefault();
-                              setContextMenu({
-                                x: event.clientX,
-                                y: event.clientY,
-                                sessionId: session.id,
-                              });
-                            }}
-                            style={{ paddingLeft: `${Math.min(depth, 5) * 12}px` }}
+                            className="mx-1 my-1 flex items-center gap-2 text-[10px] leading-none text-muted-foreground"
+                            role="separator"
+                            aria-label={section === "error" ? "Error sessions" : "Idle sessions"}
                           >
-                            {pendingLoad && (
-                              <ChatGPTPendingProgressBar progress={pendingLoad.progress} kind={pendingLoad.kind} />
-                            )}
-                            <Tooltip>
-                              {showingHidden ? (
-                                <TooltipTrigger
-                                  render={
-                                    <span
-                                      role="status"
-                                      aria-label={`${projectTitle ? `${projectTitle} project. ` : ""}${isVerifiedManager ? "Verified OpenRig manager. " : ""}${recoveryLabel ?? model.statusLine}`}
-                                      className={`flex ${depth > 0 ? "size-2" : "size-6"} shrink-0 items-center justify-center rounded-md ${highlightAccent ? `ring-2 ring-inset ${highlightAccent}` : ""} ${chatGPTActivityColorClass(model.compatibilityAge)}`}
-                                    />
-                                  }
-                                >
-                                  {depth === 0 && (
-                                    <ChatGPTProjectStatusIcon
-                                      project={projectTitle}
-                                      age={model.compatibilityAge}
-                                      recovering={recoveryLabel !== null}
-                                    />
-                                  )}
-                                </TooltipTrigger>
+                            <span>{section === "error" ? "Error" : "Idle"}</span>
+                            <span className="h-px min-w-0 flex-1 bg-border/70" />
+                          </div>
+                        )}
+                        {projectHeading && (
+                          <DroppableProjectHeader id={familyProjectKey}>
+                            <SidebarMenuButton
+                              size="sm"
+                              aria-label={`${projectTitle} project sessions`}
+                              aria-expanded={!collapsedGroups.has(familyProjectKey)}
+                              onClick={() =>
+                                setCollapsedGroupKeys((current) =>
+                                  current.includes(familyProjectKey)
+                                    ? current.filter((key) => key !== familyProjectKey)
+                                    : [...current, familyProjectKey],
+                                )
+                              }
+                              onContextMenu={(event) => {
+                                event.preventDefault();
+                                void showProjectContextMenu(familyProjectKey, {
+                                  x: event.clientX,
+                                  y: event.clientY,
+                                });
+                              }}
+                            >
+                              {collapsedGroups.has(familyProjectKey) ? (
+                                <ChevronRightIcon aria-hidden />
                               ) : (
-                                <TooltipTrigger
-                                  render={
-                                    <button
-                                      type="button"
-                                      aria-label={`Drag ${session.title} to reorder, drop onto a project to assign, or Shift-drop onto a session to set its parent. ${projectTitle ? `${projectTitle} project. ` : ""}${isVerifiedManager ? "Verified OpenRig manager. " : ""}${recoveryLabel ?? model.statusLine}`}
-                                      className={`flex ${depth > 0 ? "size-2" : "size-6"} shrink-0 cursor-grab touch-none items-center justify-center rounded-md outline-hidden hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing ${highlightAccent ? `ring-2 ring-inset ${highlightAccent}` : ""} ${chatGPTActivityColorClass(model.compatibilityAge)}`}
-                                      {...sortable.attributes}
-                                      {...sortable.listeners}
-                                    />
-                                  }
-                                >
-                                  {depth === 0 && (
-                                    <ChatGPTProjectStatusIcon
-                                      project={projectTitle}
-                                      age={model.compatibilityAge}
-                                      recovering={recoveryLabel !== null}
-                                    />
-                                  )}
-                                </TooltipTrigger>
+                                <ChevronDownIcon aria-hidden />
                               )}
-                              <TooltipPopup>
-                                {withTimeline(
-                                  recoveryTooltip ??
-                                    `${projectTitle ? `${projectTitle} project · ` : ""}${isVerifiedManager ? "OpenRig manager · " : ""}${recoveryLabel ?? (showingHidden ? activity.label : `Drag to reorder or onto a project; Shift-drop on a session to nest. ${activity.label}`)}`,
-                                )}
-                              </TooltipPopup>
-                            </Tooltip>
-                            <div className="min-w-0 flex-1">
-                              {renamingId === session.id ? (
-                                <Input
-                                  autoFocus
-                                  aria-label="Browser session name"
-                                  onFocus={(event) => event.currentTarget.select()}
-                                  value={title}
-                                  onChange={(event) => setTitle(event.target.value)}
-                                  onBlur={() => {
-                                    renameSession(session.id, title);
-                                    setRenamingId(null);
-                                  }}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Enter") event.currentTarget.blur();
-                                    if (event.key === "Escape") setRenamingId(null);
-                                  }}
+                              <span className="truncate font-medium">
+                                {groupLabels.find((label) => label.key === familyProjectKey)
+                                  ?.title ?? projectTitle}
+                              </span>
+                              {permanentProjectKeys.has(familyProjectKey) && (
+                                <CrownIcon
+                                  aria-label="Permanent project"
+                                  className="size-3 text-muted-foreground"
                                 />
-                              ) : (
-                                <Tooltip>
-                                  <TooltipTrigger
-                                    render={
-                                      <SidebarMenuButton
-                                        size="sm"
-                                        // Keep the role tint visible through the selected-row surface.
-                                        className="data-[active=true]:bg-white/[0.06]"
-                                        isActive={activeSessionId === session.id}
-                                        aria-current={
-                                          activeSessionId === session.id ? "page" : undefined
-                                        }
-                                        onClick={(event) => {
-                                          if (event.detail === 1) {
-                                            firstSessionClick.current = {
-                                              id: session.id, wasWorking: activities[session.id]?.age === "working",
-                                              at: Date.now(),
-                                            };
+                              )}
+                              {collapsedGroups.has(familyProjectKey) && (
+                                <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[10px] tabular-nums">
+                                  {projectCounts.idle > 0 && (
+                                    <span className="text-zinc-300" title="Idle">
+                                      {projectCounts.idle}
+                                    </span>
+                                  )}
+                                  {projectCounts.unloaded > 0 && (
+                                    <span className="text-zinc-500" title="Unloaded">
+                                      {projectCounts.unloaded}
+                                    </span>
+                                  )}
+                                  {projectCounts.error > 0 && (
+                                    <span className="text-red-400" title="Error">
+                                      {projectCounts.error}
+                                    </span>
+                                  )}
+                                  {projectCounts.recovering > 0 && (
+                                    <span className="text-orange-400" title="Recovering">
+                                      {projectCounts.recovering}
+                                    </span>
+                                  )}
+                                  {projectCounts.snoozed > 0 && (
+                                    <span className="text-sky-400/70" title="Snoozed">
+                                      {projectCounts.snoozed}
+                                    </span>
+                                  )}
+                                  {projectCounts.hidden > 0 && (
+                                    <span className="text-zinc-500/70" title="Hidden">
+                                      {projectCounts.hidden}
+                                    </span>
+                                  )}
+                                </span>
+                              )}
+                            </SidebarMenuButton>
+                          </DroppableProjectHeader>
+                        )}
+                        {!familyCollapsed &&
+                          sortMode === "activity" &&
+                          inactiveParentHeader &&
+                          !isSearching && (
+                            <div
+                              className="mx-1 mt-0.5 flex h-[14px] min-w-0 items-center rounded-sm bg-[rgba(157,111,195,0.13)] px-2 text-[9px] leading-none text-muted-foreground"
+                              title={`Inactive parent: ${inactiveParentHeader}`}
+                            >
+                              <span className="truncate">{inactiveParentHeader}</span>
+                            </div>
+                          )}
+                        {!familyCollapsed && (
+                          <SortableBrowserSessionRow
+                            key={session.id}
+                            id={session.id}
+                            session={session}
+                            environmentId={environmentId}
+                            now={clockNow}
+                            recoveryPhase={
+                              autoMaintenancePaused ? null : (recoveryPhases[session.id] ?? null)
+                            }
+                            verifiedSpawnCreatedAt={
+                              spawnCreation.get(session.id)?.requestId === session.spawnRequestId
+                                ? spawnCreation.get(session.id)?.createdAt
+                                : undefined
+                            }
+                            activity={activities[session.id] ?? UNKNOWN_ACTIVITY}
+                            disabled={showingHidden || isSearching || renamingId === session.id}
+                          >
+                            {(sortable, activity, model) => {
+                              const recoveryEligible =
+                                model.residency !== "hidden" &&
+                                model.residency !== "snoozed" &&
+                                model.residency !== "unloaded";
+                              const recoveryBlocked = model.recovery.stoppedReason !== null;
+                              // Queue entries can outlive a transient load failure. A
+                              // currently healthy or hydrating resident must not display
+                              // a stale recovery phase or an orange reload progress bar.
+                              const observedFailure = [
+                                "invalid",
+                                "interrupted",
+                                "delivery-timeout",
+                              ].includes(activity.age);
+                              const loadedWithoutFailure =
+                                !observedFailure &&
+                                (activity.resident === true ||
+                                  ["working", "recent", "inactive"].includes(activity.age));
+                              const recoveryPhase =
+                                !autoMaintenancePaused &&
+                                recoveryEligible &&
+                                !loadedWithoutFailure &&
+                                !["working", "recent", "inactive"].includes(model.compatibilityAge)
+                                  ? model.recovery.phase
+                                  : null;
+                              // Missing composers are still periodically inspected and given
+                              // background render time. Keep the recovery spinner visible while
+                              // those checks are pending, not only during explicit reloads.
+                              const waitingForPage =
+                                activity.age === "invalid" &&
+                                activity.label ===
+                                  "ChatGPT page unavailable: the ChatGPT composer is unavailable";
+                              const queued =
+                                !autoMaintenancePaused &&
+                                recoveryEligible &&
+                                (activity.age === "invalid" || activity.recoveryProblem !== null);
+                              const recoveryLabel =
+                                queued && recoveryBlocked
+                                  ? "Marked for recovery; waiting for safe retry or human review"
+                                  : recoveryPhase === "refreshing"
+                                    ? "Refreshing ChatGPT conversation to recover it"
+                                    : recoveryPhase === "checking"
+                                      ? "Confirming a recoverable ChatGPT error"
+                                      : recoveryPhase === "queued"
+                                        ? "Confirmed ChatGPT error; queued for automatic recovery"
+                                        : queued
+                                          ? waitingForPage
+                                            ? "Checking unavailable ChatGPT page for automatic recovery"
+                                            : activity.recoveryProblem === "interrupted"
+                                              ? "Queued for automatic recovery if the connection stays interrupted"
+                                              : "Queued for automatic recovery; waiting for its turn or retry cooldown"
+                                          : null;
+                              const pendingLoad =
+                                loadedWithoutFailure ||
+                                model.recovery.stoppedReason !== null ||
+                                model.compatibilityAge === "working" ||
+                                model.residency === "snoozed" ||
+                                model.residency === "hidden"
+                                  ? null
+                                  : pendingSessionProgress({
+                                      now: clockNow,
+                                      id: session.id,
+                                      paused: autoMaintenancePaused,
+                                      ...(forecast ? { warm: forecast } : {}),
+                                      recovery: recoveryOrder,
+                                      recoveryNextRetryAt: model.recovery.nextAttemptAt,
+                                      recoveryLastAttemptAt: model.recovery.lastAttemptAt,
+                                      ...(environmentId &&
+                                      warmLoadingAt[warmLoadingKey(environmentId, session.id)]
+                                        ? {
+                                            activeWarmStartedAt:
+                                              warmLoadingAt[
+                                                warmLoadingKey(environmentId, session.id)
+                                              ],
                                           }
-                                          setSelectionRecoveryClick((value) => value + 1);
-                                          recordSessionClick(
-                                            environmentId,
-                                            session.id,
-                                            sessions.map((item) => item.id),
-                                          );
-                                          recordChatGPTSessionActiveAt(environmentId, session.id);
-                                          // Selection takes precedence over background guest loading.
-                                          wakeChatGPTGuest(JSON.stringify([environmentId,
-                                            chatGPTBrowserThreadRef(environmentId, session.id).threadId]));
-                                          markDirectInteraction(session.id);
-                                          if (isSnoozed(session)) {
-                                            preserveSidebarScroll();
-                                            setSessionSnooze([session.id], null);
-                                            setShowSnoozed(false);
+                                        : {}),
+                                      ...(recoveryQueue?.failures[session.id]
+                                        ? {
+                                            recoveryQueuedAt:
+                                              recoveryQueue.failures[session.id]!.firstSeenAt,
                                           }
-                                          if (session.hidden) {
-                                            setSessionHidden(session.id, false);
-                                            setShowHidden(false);
-                                          }
-                                          void navigate({
-                                            to: "/browser/$browserSessionId",
-                                            params: { browserSessionId: session.id },
-                                          });
-                                        }}
-                                        onDoubleClick={(event) => {
-                                          event.preventDefault();
-                                          const first = firstSessionClick.current;
-                                          firstSessionClick.current = null;
-                                          const wasWorking = first?.id === session.id && Date.now() - first.at < 1200
-                                            ? first.wasWorking : null;
-                                          const action = workingDoubleClickAction(
-                                            wasWorking, activities[session.id]?.age === "working",
-                                          );
-                                          if (action === "ignore") return;
-                                          if (action === "hide-working") {
-                                            preserveSidebarScroll();
-                                            event.currentTarget.blur();
-                                            setWorkingHiddenIds((previous) => new Set([...previous, session.id]));
-                                            const next = sidebarVisibleSessions.find((entry) =>
-                                              entry.id !== session.id && !isSnoozed(entry));
-                                            void navigateAfterSidebarMutation(next?.id ?? null);
-                                            return;
-                                          }
-                                          setTitle(session.title);
-                                          setRenamingId(session.id);
-                                        }}
-                                      >
-                                        {depth > 0 && (
-                                          <span className="relative inline-flex size-4 shrink-0 items-center justify-center">
-                                            <CornerDownRightIcon
-                                              aria-label="Child session"
-                                              className="size-3.5 text-muted-foreground/70"
-                                            />
-                                            <span
-                                              aria-label="Child session activity"
-                                              className={`pointer-events-none absolute -left-1 -top-1 flex size-2.5 scale-75 items-center justify-center rounded-full bg-sidebar ${chatGPTActivityColorClass(model.compatibilityAge)}`}
-                                            >
-                                              <ChatGPTBrowserSessionActivityIcon
-                                                age={model.compatibilityAge}
-                                                recovering={recoveryLabel !== null}
-                                              />
-                                            </span>
-                                          </span>
-                                        )}
-                                        {displayRole === "worker" && (
-                                          <BotIcon
-                                            aria-label="Worker session"
-                                            className={`size-3.5 shrink-0 ${session.binding?.seatId ? "text-cyan-400" : "text-violet-400"}`}
-                                          />
-                                        )}
-                                        {isVerifiedManager && (
-                                          <CrownIcon
-                                            aria-label="Verified OpenRig manager"
-                                            className="size-3.5 shrink-0 text-info"
-                                          />
-                                        )}
-                                        <span
-                                          className={`min-w-0 flex-1 truncate ${needsAnswer ? "font-semibold text-lime-300" : chatGPTVerificationTitleColorClass(model.compatibilityAge, "verificationPending" in session && session.verificationPending === true)}`}
-                                        >
-                                          {session.title}
+                                        : {}),
+                                    });
+                              const recoveryDetails =
+                                activity.age === "invalid" ||
+                                activity.age === "interrupted" ||
+                                activity.age === "delivery-timeout"
+                                  ? chatGPTRecoveryHoverDetails({
+                                      age: activity.age,
+                                      label: activity.label,
+                                      phase: recoveryPhase,
+                                      state: {
+                                        lastAttemptAt: model.recovery.lastAttemptAt,
+                                        retryCount: model.recovery.attempts,
+                                        nextRetryAt: model.recovery.nextAttemptAt,
+                                        orangeStage: model.recovery.orangeStage,
+                                      },
+                                      events: model.recoveryEvents,
+                                      now: clockNow,
+                                    })
+                                  : null;
+                              const creationOrigin = chatGPTSessionCreationOrigin(session);
+                              const timeline = model.timeline ?? {
+                                createdAt: null,
+                                lastActiveAt: null,
+                                lastRefreshAt: null,
+                                lastRebootAt: null,
+                              };
+                              const needsAnswer = pendingQuestionIds.has(session.id);
+                              const isVerifiedManager = managerIds.has(session.id);
+                              const displayRole = chatGPTSessionDisplayRole(
+                                session,
+                                isVerifiedManager,
+                              );
+                              // A child can be flattened by activity sorting or filtering; its
+                              // identity must not depend on the current visual indentation.
+                              const isChildSession = depth > 0 || !!session.parentSessionId;
+                              const projectTitle = projectTitles.get(session.id);
+                              // Reuse the native T3 thread hover card for both session triggers.
+                              const hoverCard = (
+                                <ThreadHoverCardPopup side="right" align="start" sideOffset={4}>
+                                  <ThreadHoverCard title={session.title}>
+                                    {projectTitle && (
+                                      <div className="flex items-center gap-2">
+                                        <span className="size-2 shrink-0 rounded-sm bg-violet-400/70" />
+                                        <span className="truncate font-medium text-foreground/85">
+                                          {projectTitle}
                                         </span>
-                                        <ChatGPTAccountBadge session={session} />
-                                        {needsAnswer && <span title="Waiting for your answer" aria-label="Needs your answer" className="shrink-0 rounded bg-lime-400/20 px-1.5 text-[10px] font-semibold text-lime-300">?</span>}
-                                        {Number.isFinite(session.snoozedUntil) &&
-                                          session.snoozedUntil! <= clockNow && (
-                                            <AlarmClockCheckIcon
-                                              aria-label="Woke from snooze"
-                                              className="size-3 shrink-0 text-muted-foreground"
-                                            >
-                                              <title>Woke from snooze</title>
-                                            </AlarmClockCheckIcon>
-                                          )}
-                                        {childCount > 0 && (
-                                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                                            {childCount}
-                                          </span>
-                                        )}
-                                      </SidebarMenuButton>
-                                    }
-                                  />
-                                  <TooltipPopup>
-                                    {withTimeline(
-                                      recoveryTooltip ??
-                                        (showingHidden
-                                          ? "Restore session"
-                                          : "Double-click to rename"),
+                                        <span className="text-[10px] text-muted-foreground">
+                                          Project
+                                        </span>
+                                      </div>
                                     )}
+                                    <div className="text-foreground/75">
+                                      {recoveryLabel ?? model.statusLine}
+                                    </div>
+                                    <div className="text-foreground/75">
+                                      {isVerifiedManager ? "Manager · " : ""}
+                                      {creationOrigin === "manual"
+                                        ? "Manual"
+                                        : creationOrigin === "backend"
+                                          ? "AI/backend spawned"
+                                          : "Legacy session"}
+                                    </div>
                                     {session.binding && (
-                                      <div className="mt-1 text-xs text-muted-foreground">
+                                      <div className="text-foreground/75">
                                         Omniwork: {session.binding.role}
                                         {session.binding.seatId
                                           ? ` · ${session.binding.seatId}`
@@ -1931,68 +2515,375 @@ export function ChatGPTBrowserSidebarEntry({
                                           : ""}
                                       </div>
                                     )}
+                                    <div className="grid gap-1 border-t border-border/50 pt-2 text-[11px]">
+                                      <div>
+                                        Created: {formatChatGPTSessionDateTime(timeline.createdAt)}
+                                      </div>
+                                      <div>
+                                        Last active:{" "}
+                                        {formatChatGPTSessionDateTime(timeline.lastActiveAt)}
+                                      </div>
+                                      <div>
+                                        Last browser reload:{" "}
+                                        {formatChatGPTSessionDateTime(timeline.lastRefreshAt)}
+                                      </div>
+                                      <div>
+                                        Last Agent Reboot:{" "}
+                                        {formatChatGPTSessionDateTime(timeline.lastRebootAt)}
+                                      </div>
+                                    </div>
+                                    {recoveryDetails && (
+                                      <div className="grid gap-1 border-t border-border/50 pt-2 text-[11px]">
+                                        {recoveryDetails.map((detail) => (
+                                          <span key={detail}>{detail}</span>
+                                        ))}
+                                      </div>
+                                    )}
                                     <ChatGPTSnapshotHover
                                       environmentId={environmentId}
                                       sessionId={session.id}
                                     />
-                                  </TooltipPopup>
-                                </Tooltip>
-                              )}
-                            </div>
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Rename ${session.title}`}
-                              title="Rename session"
-                              onClick={() => {
-                                setTitle(session.title);
-                                setRenamingId(session.id);
-                              }}
-                            >
-                              <PencilIcon aria-hidden />
-                            </Button>
-                            {!showingHidden && (
-                              <Button
-                                size="icon-xs"
-                                variant="ghost-muted"
-                                aria-label={`Hide ${session.title}`}
-                                title="Hide session"
-                                disabled={closingId !== null}
-                                onClick={() => void hideSession(session.id)}
-                              >
-                                <EyeOffIcon aria-hidden />
-                              </Button>
-                            )}
-                            {(session.snoozedUntil ?? 0) > clockNow && (
-                              <Button
-                                size="icon-xs"
-                                variant="ghost-muted"
-                                aria-label={`Unsnooze ${session.title}`}
-                                title="Unsnooze"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  preserveSidebarScroll();
-                                  setSessionSnooze([session.id], null);
-                                }}
-                              >
-                                <AlarmClockCheckIcon aria-hidden className="size-3.5" />
-                              </Button>
-                            )}
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Close ${session.title}`}
-                              disabled={closingId !== null}
-                              onClick={() => void closeSession(session.id, "sidebar-user-action")}
-                            >
-                              <XIcon aria-hidden />
-                            </Button>
-                          </div>
-                        );
-                      }}
-                    </SortableBrowserSessionRow>
-                    </Fragment>
-                  ))}
+                                  </ThreadHoverCard>
+                                </ThreadHoverCardPopup>
+                              );
+                              // Identity backgrounds are separate from status text/icon colors.
+                              // Personal highlights frame the drag icon without outlining the whole row.
+                              const highlightAccent = chatGPTSessionHighlightAccentClass(
+                                session.borderColor,
+                              );
+                              return (
+                                <div
+                                  title={pendingLoad?.title}
+                                  data-chatgpt-selected-session={activeSessionId === session.id}
+                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${activeSessionId === session.id ? "ring-1 ring-inset ring-primary/70" : ""}`}
+                                  onContextMenu={(event) => {
+                                    event.preventDefault();
+                                    void showSessionContextMenu(session.id, {
+                                      x: event.clientX,
+                                      y: event.clientY,
+                                    });
+                                  }}
+                                  style={{ paddingLeft: `${Math.min(depth, 5) * 12}px` }}
+                                >
+                                  {pendingLoad && (
+                                    <ChatGPTPendingProgressBar
+                                      progress={pendingLoad.progress}
+                                      kind={pendingLoad.kind}
+                                    />
+                                  )}
+                                  <Tooltip>
+                                    {showingHidden ? (
+                                      <TooltipTrigger
+                                        render={
+                                          <span
+                                            role="status"
+                                            aria-label={`${projectTitle ? `${projectTitle} project. ` : ""}${isVerifiedManager ? "Verified OpenRig manager. " : ""}${recoveryLabel ?? model.statusLine}`}
+                                            className={`flex ${isChildSession ? "size-2" : "size-6"} shrink-0 items-center justify-center rounded-md ${highlightAccent ? `ring-2 ring-inset ${highlightAccent}` : ""} ${chatGPTActivityColorClass(model.compatibilityAge)}`}
+                                          />
+                                        }
+                                      >
+                                        {!isChildSession && (
+                                          <ChatGPTProjectStatusIcon
+                                            project={projectTitle}
+                                            age={model.compatibilityAge}
+                                            recovering={recoveryLabel !== null}
+                                          />
+                                        )}
+                                      </TooltipTrigger>
+                                    ) : (
+                                      <TooltipTrigger
+                                        render={
+                                          <button
+                                            type="button"
+                                            aria-label={`Drag ${session.title} to reorder, drop onto a project to assign, or Shift-drop onto a session to set its parent. ${projectTitle ? `${projectTitle} project. ` : ""}${isVerifiedManager ? "Verified OpenRig manager. " : ""}${recoveryLabel ?? model.statusLine}`}
+                                            className={`flex ${isChildSession ? "size-2" : "size-6"} shrink-0 cursor-grab touch-none items-center justify-center rounded-md outline-hidden hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing ${highlightAccent ? `ring-2 ring-inset ${highlightAccent}` : ""} ${chatGPTActivityColorClass(model.compatibilityAge)}`}
+                                            {...sortable.attributes}
+                                            {...sortable.listeners}
+                                          />
+                                        }
+                                      >
+                                        {!isChildSession && (
+                                          <ChatGPTProjectStatusIcon
+                                            project={projectTitle}
+                                            age={model.compatibilityAge}
+                                            recovering={recoveryLabel !== null}
+                                          />
+                                        )}
+                                      </TooltipTrigger>
+                                    )}
+                                    {hoverCard}
+                                  </Tooltip>
+                                  <div className="min-w-0 flex-1">
+                                    {renamingId === session.id ? (
+                                      <Input
+                                        autoFocus
+                                        aria-label="Browser session name"
+                                        onFocus={(event) => event.currentTarget.select()}
+                                        value={title}
+                                        onChange={(event) => setTitle(event.target.value)}
+                                        onBlur={() => {
+                                          renameSession(session.id, title);
+                                          setRenamingId(null);
+                                        }}
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter") event.currentTarget.blur();
+                                          if (event.key === "Escape") setRenamingId(null);
+                                        }}
+                                      />
+                                    ) : (
+                                      <Tooltip>
+                                        <TooltipTrigger
+                                          render={
+                                            <SidebarMenuButton
+                                              size="sm"
+                                              // The selection ring is sufficient; preserve only the role tint underneath.
+                                              className="data-[active=true]:bg-transparent"
+                                              isActive={activeSessionId === session.id}
+                                              aria-current={
+                                                activeSessionId === session.id ? "page" : undefined
+                                              }
+                                              onClick={(event) => {
+                                                if (event.detail === 1) {
+                                                  firstSessionClick.current = {
+                                                    id: session.id,
+                                                    wasWorking:
+                                                      activities[session.id]?.age === "working",
+                                                    at: Date.now(),
+                                                  };
+                                                }
+                                                event.currentTarget.blur();
+                                                setSelectionRecoveryClick((value) => value + 1);
+                                                recordSessionClick(
+                                                  environmentId,
+                                                  session.id,
+                                                  sessions.map((item) => item.id),
+                                                );
+                                                recordChatGPTSessionActiveAt(
+                                                  environmentId,
+                                                  session.id,
+                                                );
+                                                // Selection is urgent regardless of Session/Browser view.
+                                                // Do not await navigation or the background warm queue.
+                                                wakeChatGPTGuest(
+                                                  JSON.stringify([
+                                                    environmentId,
+                                                    chatGPTBrowserThreadRef(
+                                                      environmentId,
+                                                      session.id,
+                                                    ).threadId,
+                                                  ]),
+                                                );
+                                                markDirectInteraction(session.id);
+                                                if (isSnoozed(session)) {
+                                                  preserveSidebarScroll();
+                                                  setSessionSnooze([session.id], null);
+                                                  setShowSnoozed(false);
+                                                }
+                                                if (singleClickResetRef.current)
+                                                  clearTimeout(singleClickResetRef.current);
+                                                singleClickResetRef.current = setTimeout(
+                                                  () => resetQuickSnooze(session.id),
+                                                  300,
+                                                );
+                                                if (session.hidden) {
+                                                  setSessionHidden(session.id, false);
+                                                  setShowHidden(false);
+                                                }
+                                                void navigate({
+                                                  to: "/browser/$browserSessionId",
+                                                  params: { browserSessionId: session.id },
+                                                }).then(() =>
+                                                  window.dispatchEvent(
+                                                    new CustomEvent("t3:focus-chatgpt-composer", {
+                                                      detail: session.id,
+                                                    }),
+                                                  ),
+                                                );
+                                              }}
+                                              onDoubleClick={(event) => {
+                                                event.preventDefault();
+                                                if (singleClickResetRef.current)
+                                                  clearTimeout(singleClickResetRef.current);
+                                                const first = firstSessionClick.current;
+                                                firstSessionClick.current = null;
+                                                const wasWorking =
+                                                  first?.id === session.id &&
+                                                  Date.now() - first.at < 1200
+                                                    ? first.wasWorking
+                                                    : null;
+                                                const action = workingDoubleClickAction(
+                                                  wasWorking,
+                                                  activities[session.id]?.age === "working",
+                                                );
+                                                if (action === "ignore") return;
+                                                if (action === "hide-working") {
+                                                  preserveSidebarScroll();
+                                                  event.currentTarget.blur();
+                                                  setWorkingHiddenIds(
+                                                    (previous) =>
+                                                      new Set([...previous, session.id]),
+                                                  );
+                                                  const next = sidebarVisibleSessions.find(
+                                                    (entry) =>
+                                                      entry.id !== session.id && !isSnoozed(entry),
+                                                  );
+                                                  void navigateAfterSidebarMutation(
+                                                    next?.id ?? null,
+                                                  );
+                                                  return;
+                                                }
+                                                const presets = resolveSnoozePresets(
+                                                  new Date(),
+                                                  timestampFormat,
+                                                  environmentId,
+                                                );
+                                                const ladder = presets.filter(
+                                                  (entry) => entry.id !== "next-week",
+                                                );
+                                                const previousId = [
+                                                  "hour",
+                                                  "three-hours",
+                                                  "evening",
+                                                  "tomorrow",
+                                                ][session.quickSnoozeStep ?? -1];
+                                                const previousIndex = ladder.findIndex(
+                                                  (entry) => entry.id === previousId,
+                                                );
+                                                const nextIndex = Math.min(
+                                                  previousIndex + 1,
+                                                  ladder.length - 1,
+                                                );
+                                                const preset = ladder[nextIndex];
+                                                if (preset) {
+                                                  preserveSidebarScroll();
+                                                  event.currentTarget.blur();
+                                                  quickSnoozeSession(
+                                                    session.id,
+                                                    Date.parse(preset.snoozedUntil),
+                                                    [
+                                                      "hour",
+                                                      "three-hours",
+                                                      "evening",
+                                                      "tomorrow",
+                                                    ].indexOf(preset.id),
+                                                  );
+                                                  const next = visibleSessions.find(
+                                                    (entry) =>
+                                                      entry.id !== session.id && !isSnoozed(entry),
+                                                  );
+                                                  void navigateAfterSidebarMutation(
+                                                    next?.id ?? null,
+                                                  );
+                                                }
+                                              }}
+                                            >
+                                              {isChildSession && (
+                                                <span className="relative inline-flex size-5 shrink-0 items-center justify-center">
+                                                  <CornerDownRightIcon
+                                                    aria-label="Child session"
+                                                    className="size-3 text-muted-foreground/70"
+                                                  />
+                                                  {recoveryLabel !== null && (
+                                                    <LoaderCircleIcon
+                                                      aria-hidden
+                                                      className={`pointer-events-none absolute inset-0 size-5 animate-spin motion-reduce:animate-none ${chatGPTActivityColorClass(model.compatibilityAge)}`}
+                                                      style={{ animationDuration: "3s" }}
+                                                    />
+                                                  )}
+                                                </span>
+                                              )}
+                                              {session.verificationPending && (
+                                                <AlarmClockCheckIcon
+                                                  aria-label="Awaiting verification"
+                                                  className="size-3.5 shrink-0 text-amber-400"
+                                                />
+                                              )}
+                                              {displayRole === "worker" &&
+                                                !session.verificationPending && (
+                                                  <BotIcon
+                                                    aria-label="Worker session"
+                                                    className={`size-3.5 shrink-0 ${session.binding?.seatId ? "text-cyan-400" : "text-violet-400"}`}
+                                                  />
+                                                )}
+                                              {isVerifiedManager &&
+                                                !session.verificationPending && (
+                                                  <CrownIcon
+                                                    aria-label="Verified OpenRig manager"
+                                                    className="size-3.5 shrink-0 text-info"
+                                                  />
+                                                )}
+
+                                              <span
+                                                className={`min-w-0 flex-1 truncate ${needsAnswer ? "font-semibold text-lime-300" : `${session.verificationPending ? "font-semibold " : ""}${chatGPTVerificationTitleColorClass(model.compatibilityAge, Boolean(session.verificationPending))}`}`}
+                                              >
+                                                {session.title}
+                                              </span>
+                                              <ChatGPTAccountBadge session={session} />
+                                              {needsAnswer && (
+                                                <span
+                                                  title="Waiting for your answer"
+                                                  aria-label="Needs your answer"
+                                                  className="shrink-0 rounded bg-lime-400/20 px-1.5 text-[10px] font-semibold text-lime-300"
+                                                >
+                                                  ?
+                                                </span>
+                                              )}
+                                              {Number.isFinite(session.snoozedUntil) &&
+                                                session.snoozedUntil! <= clockNow && (
+                                                  <AlarmClockCheckIcon
+                                                    aria-label="Woke from snooze"
+                                                    className="size-3 shrink-0 text-muted-foreground"
+                                                  >
+                                                    <title>Woke from snooze</title>
+                                                  </AlarmClockCheckIcon>
+                                                )}
+                                              {childCount > 0 && (
+                                                <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                                                  {childCount}
+                                                </span>
+                                              )}
+                                            </SidebarMenuButton>
+                                          }
+                                        />
+                                        {hoverCard}
+                                      </Tooltip>
+                                    )}
+                                  </div>
+
+                                  {(session.snoozedUntil ?? 0) > clockNow && (
+                                    <Button
+                                      size="icon-xs"
+                                      variant="ghost-muted"
+                                      aria-label={`Unsnooze ${session.title}`}
+                                      title="Unsnooze"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        preserveSidebarScroll();
+                                        setSessionSnooze([session.id], null);
+                                      }}
+                                    >
+                                      <AlarmClockCheckIcon aria-hidden className="size-3.5" />
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size="icon-xs"
+                                    variant="ghost-muted"
+                                    aria-label={`Close ${session.title}`}
+                                    disabled={closingId !== null}
+                                    onClick={() =>
+                                      void closeSession(session.id, "sidebar-user-action")
+                                    }
+                                  >
+                                    <XIcon aria-hidden />
+                                  </Button>
+                                </div>
+                              );
+                            }}
+                          </SortableBrowserSessionRow>
+                        )}
+                      </Fragment>
+                    );
+                  })}
               </Fragment>
             ))}
           </SortableContext>
@@ -2005,313 +2896,13 @@ export function ChatGPTBrowserSidebarEntry({
           )}
         </DndContext>
       )}
-      {contextMenu && (
-        <div
-          role="menu"
-          aria-label="ChatGPT session and project actions"
-          className="fixed z-[200] min-w-44 rounded-md border border-border bg-popover p-1 shadow-lg"
-          style={{
-            left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 200)),
-            top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 320)),
-          }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          {(() => {
-            const group =
-              recognizedGroups.find((entry) => entry.key === contextMenu.groupKey) ??
-              groupedSessions.find((entry) => entry.key === contextMenu.groupKey);
-            const ids = contextMenu.sessionId
-              ? [contextMenu.sessionId]
-              : (group?.rows.map(({ session }) => session.id) ?? []);
-              const members = sessions.filter((session) => ids.includes(session.id));
-              const snoozed = members.length > 0 && members.every(isSnoozed);
-              const menuSession = contextMenu.sessionId
-                ? sessions.find((session) => session.id === contextMenu.sessionId)
-                : undefined;
-              const uncertain = !!menuSession && hasUncertainChatGPTSend(environmentId, menuSession.id);
-              const savedUrl = menuSession
-                ? getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, menuSession.id), Schema.String) ??
-                  menuSession.archive?.conversationUrl ?? null
-                : null;
-              const age = menuSession ? activities[menuSession.id]?.age : undefined;
-              const primaryActions = menuSession ? chatGPTNativeActionMenu({
-                model: deriveChatGPTSession({
-                  ...(age !== undefined ? { age } : {}),
-                  ...(menuSession.hidden !== undefined ? { hidden: menuSession.hidden } : {}),
-                  ...(menuSession.snoozedUntil !== undefined ? { snoozedUntil: menuSession.snoozedUntil } : {}),
-                  uncertainSend: uncertain,
-                }, clockNow),
-                canReload: !showingHidden && reloadPendingId === null && !uncertain,
-                hasConversationUrl: !!savedUrl,
-              }) : [];
-            const setUntil = (until: number | null) => {
-              preserveSidebarScroll();
-              setSessionSnooze(ids, until);
-              setContextMenu(null);
-            };
-            return (
-                <>
-                  {menuSession && primaryActions.map((action) => (
-                    <button
-                      key={action.id}
-                      type="button"
-                      role="menuitem"
-                      className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => {
-                        if (action.id === "registry:open") {
-                          if (menuSession.hidden) setSessionHidden(menuSession.id, false);
-                          void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: menuSession.id } });
-                        } else if (action.id === "registry:unsnooze") {
-                          preserveSidebarScroll();
-                          setSessionSnooze([menuSession.id], null);
-                        } else if (action.id === "registry:reload") {
-                          void reloadSession(menuSession.id);
-                        } else if (action.id === "registry:copy_url" && savedUrl) {
-                          void navigator.clipboard.writeText(savedUrl);
-                        }
-                        setContextMenu(null);
-                      }}
-                    >
-                      {action.label}
-                    </button>
-                  ))}
-                  {contextMenu.groupKey &&
-                  group?.title &&
-                  contextMenu.groupKey !== "other" &&
-                  !contextMenu.groupKey.startsWith("status:") && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => {
-                        const key = contextMenu.groupKey!;
-                        const name = group.title!;
-                        setPermanentProjects((current) =>
-                          current.some((project) => project.key === key)
-                            ? current.filter((project) => project.key !== key)
-                            : [...current, { key, title: name }],
-                        );
-                        setContextMenu(null);
-                      }}
-                    >
-                      {permanentProjectKeys.has(contextMenu.groupKey)
-                        ? "Remove permanent"
-                        : "Make permanent"}
-                    </button>
-                  )}
-                  {snoozed && !menuSession ? (
-                    <button
-                    type="button"
-                    role="menuitem"
-                    className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                    onClick={() => setUntil(null)}
-                  >
-                    Unsnooze
-                  </button>
-                ) : (
-                  <>
-                    {snoozePresets.map((preset) => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        role="menuitem"
-                        className="flex w-full items-center justify-between gap-4 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                        onClick={() => setUntil(Date.parse(preset.snoozedUntil))}
-                      >
-                        <span>{preset.label}</span>
-                        <span className="text-xs text-muted-foreground">{preset.whenLabel}</span>
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => {
-                        setContextMenu(null);
-                        void requestCustomSnooze().then((choice) => {
-                          if (choice) {
-                            preserveSidebarScroll();
-                            setSessionSnooze(ids, Date.parse(choice.snoozedUntil));
-                          }
-                        });
-                      }}
-                    >
-                      Custom snooze…
-                    </button>
-                  </>
-                )}
-                {contextMenu.sessionId &&
-                  (() => {
-                    const session = sessions.find((entry) => entry.id === contextMenu.sessionId);
-                    if (
-                      !session ||
-                      managerIds.has(session.id) ||
-                      /\b(manager|coordinator)\b/i.test(session.title) ||
-                      sessions.some((entry) => entry.parentSessionId === session.id) ||
-                      (chatGPTSessionCreationOrigin(session) !== "manual" &&
-                        session.markedAsWorkerAt === undefined)
-                    )
-                      return null;
-                    return (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                        onClick={() => {
-                          setSessionWorker(session.id, session.markedAsWorkerAt === undefined);
-                          setContextMenu(null);
-                        }}
-                      >
-                        {session.markedAsWorkerAt === undefined
-                          ? "Mark as worker"
-                          : "Mark as personal"}
-                      </button>
-                    );
-                  })()}
-                {contextMenu.sessionId && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                    onClick={() => editOmniworkBinding(contextMenu.sessionId!)}
-                  >
-                    Edit Omniwork binding…
-                  </button>
-                )}
-                {contextMenu.sessionId &&
-                  sessions.some((entry) => entry.id === contextMenu.sessionId && entry.binding) && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => {
-                        setSessionBinding(contextMenu.sessionId!, null);
-                        setContextMenu(null);
-                      }}
-                    >
-                      Clear Omniwork binding
-                    </button>
-                  )}
-                {contextMenu.sessionId && !showingHidden && (
-                  <div
-                    className="relative"
-                    onMouseEnter={() => {
-                      setKeepAwakeSubmenuFor(contextMenu);
-                      setBorderSubmenuFor(null);
-                    }}
-                    onMouseLeave={() => setKeepAwakeSubmenuFor(null)}
-                  >
-                    <button
-                      type="button"
-                      role="menuitem"
-                      aria-haspopup="menu"
-                      aria-expanded={keepAwakeSubmenuOpen}
-                      className="flex w-full items-center justify-between gap-4 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() =>
-                        setKeepAwakeSubmenuFor(keepAwakeSubmenuOpen ? null : contextMenu)
-                      }
-                    >
-                      <span>Keep Awake</span>
-                      <ChevronRightIcon aria-hidden className="size-3.5 text-muted-foreground" />
-                    </button>
-                    {keepAwakeSubmenuOpen && (
-                      <div
-                        role="menu"
-                        aria-label="Keep Awake duration"
-                        className="absolute top-0 left-full z-[201] min-w-24 rounded-md border border-border bg-popover p-1 shadow-lg"
-                      >
-                        {([1, 2, 4, 6] as const).map((hours) => (
-                          <button
-                            key={hours}
-                            type="button"
-                            role="menuitem"
-                            className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                            onClick={() => void scheduleKeepAwake(contextMenu.sessionId!, hours)}
-                          >
-                            {hours} hour{hours === 1 ? "" : "s"}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {contextMenu.sessionId && (
-                  <div
-                    className="relative"
-                    onMouseEnter={() => {
-                      setBorderSubmenuFor(contextMenu);
-                      setKeepAwakeSubmenuFor(null);
-                    }}
-                    onMouseLeave={() => setBorderSubmenuFor(null)}
-                  >
-                    <button
-                      type="button"
-                      role="menuitem"
-                      aria-haspopup="menu"
-                      aria-expanded={borderSubmenuOpen}
-                      className="flex w-full items-center justify-between gap-4 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => setBorderSubmenuFor(borderSubmenuOpen ? null : contextMenu)}
-                    >
-                      <span>Highlight</span>
-                      <ChevronRightIcon aria-hidden className="size-3.5 text-muted-foreground" />
-                    </button>
-                    {borderSubmenuOpen && (
-                      <div
-                        role="menu"
-                        aria-label="Session highlight color"
-                        className="absolute top-0 left-full z-[201] min-w-32 rounded-md border border-border bg-popover p-1 shadow-lg"
-                      >
-                        {[
-                          ...CHATGPT_SESSION_BORDER_COLORS,
-                          { id: null, label: "None", swatch: null },
-                        ].map((option) => {
-                          const current =
-                            (sessions.find((entry) => entry.id === contextMenu.sessionId)
-                              ?.borderColor ?? null) === option.id;
-                          return (
-                            <button
-                              key={option.id ?? "none"}
-                              type="button"
-                              role="menuitemradio"
-                              aria-checked={current}
-                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                              onClick={() => {
-                                setSessionBorderColor(contextMenu.sessionId!, option.id);
-                                setContextMenu(null);
-                              }}
-                            >
-                              <span
-                                aria-hidden
-                                className={`size-3 shrink-0 rounded-full ${option.swatch ?? "border border-muted-foreground"}`}
-                              />
-                              <span className={current ? "font-medium" : undefined}>
-                                {option.label}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {contextMenu.sessionId &&
-                  sessions.find((entry) => entry.id === contextMenu.sessionId)?.parentSessionId && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => {
-                        setSessionParent(contextMenu.sessionId!, null);
-                        setContextMenu(null);
-                      }}
-                    >
-                      Detach from parent
-                    </button>
-                  )}
-              </>
-            );
-          })()}
-        </div>
+      {menuDialog && (
+        <ChatGPTSessionMenuDialog
+          key={JSON.stringify(menuDialog)}
+          dialog={menuDialog}
+          close={() => setMenuDialog(null)}
+          submit={(values) => void submitMenuDialog(menuDialog, values)}
+        />
       )}
     </SidebarMenu>
   );

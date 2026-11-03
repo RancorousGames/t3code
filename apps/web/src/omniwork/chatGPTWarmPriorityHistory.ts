@@ -10,12 +10,19 @@ interface WarmActivity {
 }
 function readActivity(environmentId: string, sessionId: string): WarmActivity {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(activityKey(environmentId, sessionId)) ?? "null");
+    const value: unknown = JSON.parse(
+      localStorage.getItem(activityKey(environmentId, sessionId)) ?? "null",
+    );
     if (value && typeof value === "object") {
       const entry = value as Partial<WarmActivity>;
-      return { wasWorking: entry.wasWorking === true, activeBeforeError: entry.activeBeforeError === true };
+      return {
+        wasWorking: entry.wasWorking === true,
+        activeBeforeError: entry.activeBeforeError === true,
+      };
     }
-  } catch { /* A damaged record is not evidence of activity. */ }
+  } catch {
+    /* A damaged record is not evidence of activity. */
+  }
   return { wasWorking: false, activeBeforeError: false };
 }
 
@@ -27,17 +34,31 @@ export function recordWarmActivityObservation(
 ): void {
   if (state === "unknown") return;
   const previous = readActivity(environmentId, sessionId);
-  const next: WarmActivity = state === "working"
-    ? { wasWorking: true, activeBeforeError: false }
-    : state === "idle"
-      ? { wasWorking: false, activeBeforeError: false }
-      : { wasWorking: false, activeBeforeError: previous.wasWorking || previous.activeBeforeError };
-  if (next.wasWorking === previous.wasWorking && next.activeBeforeError === previous.activeBeforeError) return;
-  try { localStorage.setItem(activityKey(environmentId, sessionId), JSON.stringify(next)); }
-  catch { /* Best-effort priority evidence; never interrupt activity monitoring. */ }
+  const next: WarmActivity =
+    state === "working"
+      ? { wasWorking: true, activeBeforeError: false }
+      : state === "idle"
+        ? { wasWorking: false, activeBeforeError: false }
+        : {
+            wasWorking: false,
+            activeBeforeError: previous.wasWorking || previous.activeBeforeError,
+          };
+  if (
+    next.wasWorking === previous.wasWorking &&
+    next.activeBeforeError === previous.activeBeforeError
+  )
+    return;
+  try {
+    localStorage.setItem(activityKey(environmentId, sessionId), JSON.stringify(next));
+  } catch {
+    /* Best-effort priority evidence; never interrupt activity monitoring. */
+  }
 }
 
-export function wasWarmSessionActiveBeforeFailure(environmentId: string, sessionId: string): boolean {
+export function wasWarmSessionActiveBeforeFailure(
+  environmentId: string,
+  sessionId: string,
+): boolean {
   const state = readActivity(environmentId, sessionId);
   return state.wasWorking || state.activeBeforeError;
 }
@@ -52,10 +73,15 @@ export function recordWarmSessionClick(
   try {
     const validIds = new Set(allSessionIds);
     const existing = readWarmSessionClicks(environmentId);
-    sessionStorage.setItem(clickKey(environmentId), JSON.stringify([
-      sessionId, ...existing.filter((id) => id !== sessionId && validIds.has(id)),
-    ].slice(0, 3)));
-  } catch { /* Optional ranking signal. */ }
+    sessionStorage.setItem(
+      clickKey(environmentId),
+      JSON.stringify(
+        [sessionId, ...existing.filter((id) => id !== sessionId && validIds.has(id))].slice(0, 3),
+      ),
+    );
+  } catch {
+    /* Optional ranking signal. */
+  }
 }
 export function readWarmSessionClicks(environmentId: string): readonly string[] {
   try {
@@ -63,7 +89,9 @@ export function readWarmSessionClicks(environmentId: string): readonly string[] 
     return Array.isArray(parsed)
       ? [...new Set(parsed.filter((id): id is string => typeof id === "string"))].slice(0, 3)
       : [];
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 /** Selected tab takes the first recent-click slot even if restored automatically. */
@@ -71,9 +99,8 @@ export function warmRecentClickRanks(
   environmentId: string,
   selectedId: string | null,
 ): ReadonlyMap<string, number> {
-  const ids = [...new Set([
-    ...(selectedId ? [selectedId] : []),
-    ...readWarmSessionClicks(environmentId),
-  ])].slice(0, 3);
+  const ids = [
+    ...new Set([...(selectedId ? [selectedId] : []), ...readWarmSessionClicks(environmentId)]),
+  ].slice(0, 3);
   return new Map(ids.map((id, index) => [id, index]));
 }

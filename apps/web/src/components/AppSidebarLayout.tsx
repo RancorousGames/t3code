@@ -461,7 +461,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         style={sidebarProviderStyle}
       >
         <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
-        <ChatGPTGuestRetention />
+        <ChatGPTGuestRetention sidebarRuntimesAvailable={!pathname.startsWith("/settings")} />
         <Sidebar
           side="left"
           collapsible="offcanvas"

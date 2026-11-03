@@ -2,7 +2,10 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "../lib/storage";
-import { activeOmniworkUnloadPolicy, useOmniworkPreferences } from "../omniwork/chatGPTUnloadPolicy";
+import {
+  activeOmniworkUnloadPolicy,
+  useOmniworkPreferences,
+} from "../omniwork/chatGPTUnloadPolicy";
 
 // Each ChatGPT guest costs its own renderer (roughly 0.4-1 GB). Sessions that
 // are not shown and have not worked recently are unmounted; their preview
@@ -15,7 +18,7 @@ export const CHATGPT_GUEST_HIBERNATE_AFTER_MS = 15 * 60 * 1_000;
 
 interface ChatGPTGuestHibernationState {
   readonly hibernated: Record<string, true>;
-  /** Explicit user unloads must not be undone by the automatic warm scheduler. */
+  /** Manual unloading overrides warm-retention until the user opens the session again. */
   readonly manuallyUnloaded: Record<string, true>;
   /** Explicitly woken guests attach immediately instead of queueing behind restores. */
   readonly woken: Record<string, true>;
@@ -24,13 +27,20 @@ interface ChatGPTGuestHibernationState {
 }
 
 export const useChatGPTGuestHibernation = create<ChatGPTGuestHibernationState>()(
-  persist(() => ({ hibernated: {}, manuallyUnloaded: {}, woken: {}, touchedAt: {}, retained: {} }), {
-    name: "t3code:chatgpt-guest-hibernation:v1",
-    storage: createJSONStorage(() =>
-      resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
-    ),
-    partialize: (state) => ({ hibernated: state.hibernated, manuallyUnloaded: state.manuallyUnloaded, touchedAt: state.touchedAt }),
-  }),
+  persist(
+    () => ({ hibernated: {}, manuallyUnloaded: {}, woken: {}, touchedAt: {}, retained: {} }),
+    {
+      name: "t3code:chatgpt-guest-hibernation:v1",
+      storage: createJSONStorage(() =>
+        resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
+      ),
+      partialize: (state) => ({
+        hibernated: state.hibernated,
+        manuallyUnloaded: state.manuallyUnloaded,
+        touchedAt: state.touchedAt,
+      }),
+    },
+  ),
 );
 
 /** Stable across server restarts: `previewRuntimeTabId` without epoch and tab. */
@@ -44,21 +54,14 @@ export function chatGPTGuestKey(runtimeTabId: string): string {
   return runtimeTabId;
 }
 
-export function isChatGPTGuestManuallyUnloaded(runtimeTabId: string): boolean {
-  return useChatGPTGuestHibernation.getState().manuallyUnloaded?.[chatGPTGuestKey(runtimeTabId)] === true;
-}
-
-/** Explicit user-initiated unload; automatic idle hibernation does not set this. */
-export function manuallyUnloadChatGPTGuest(runtimeTabId: string): void {
-  const key = chatGPTGuestKey(runtimeTabId);
-  useChatGPTGuestHibernation.setState((state) => ({
-    hibernated: { ...state.hibernated, [key]: true },
-    manuallyUnloaded: { ...state.manuallyUnloaded, [key]: true },
-  }));
-}
-
 export function isChatGPTGuestHibernated(runtimeTabId: string): boolean {
   return selectChatGPTGuestHibernated(useChatGPTGuestHibernation.getState(), runtimeTabId);
+}
+
+export function isChatGPTGuestManuallyUnloaded(runtimeTabId: string): boolean {
+  return (
+    useChatGPTGuestHibernation.getState().manuallyUnloaded?.[chatGPTGuestKey(runtimeTabId)] === true
+  );
 }
 
 export function isChatGPTGuestWoken(state: ChatGPTGuestHibernationState, runtimeTabId: string) {
@@ -70,7 +73,10 @@ export function selectChatGPTGuestHibernated(
   runtimeTabId: string,
 ) {
   const key = chatGPTGuestKey(runtimeTabId);
-  return state.hibernated[key] === true && state.retained[key] !== true;
+  return (
+    state.manuallyUnloaded?.[key] === true ||
+    (state.hibernated[key] === true && state.retained[key] !== true)
+  );
 }
 
 export const CHATGPT_MIN_RETAINED_GUESTS = 5;
@@ -81,9 +87,10 @@ export function recentChatGPTGuestKeys(
 ): string[] {
   const keys = new Set(candidates.map(({ key }) => key));
   const policy = activeOmniworkUnloadPolicy();
-  const ordinaryLimit = policy.idleMs === null
-    ? Number.POSITIVE_INFINITY
-    : (useOmniworkPreferences.getState().recentGuests ?? policy.minRecentGuests);
+  const ordinaryLimit =
+    policy.idleMs === null
+      ? Number.POSITIVE_INFINITY
+      : (useOmniworkPreferences.getState().recentGuests ?? policy.minRecentGuests);
   // Important sessions do not compete against the five ordinary recent slots.
   const protectedCandidates = [...protectedKeys].filter((key) => keys.has(key));
   const ordinary = [...candidates]
@@ -126,12 +133,13 @@ export function touchChatGPTGuest(runtimeTabId: string, now = Date.now()): void 
   }));
 }
 
-export function hibernateChatGPTGuest(runtimeTabId: string): void {
-  if (useChatGPTGuestHibernation.getState().retained[chatGPTGuestKey(runtimeTabId)]) return;
-  if (isChatGPTGuestHibernated(runtimeTabId)) return;
+export function hibernateChatGPTGuest(runtimeTabId: string, manual = false): void {
   const key = chatGPTGuestKey(runtimeTabId);
+  if (!manual && useChatGPTGuestHibernation.getState().retained[key]) return;
+  if (!manual && isChatGPTGuestHibernated(runtimeTabId)) return;
   useChatGPTGuestHibernation.setState((state) => ({
     hibernated: { ...state.hibernated, [key]: true },
+    ...(manual ? { manuallyUnloaded: { ...state.manuallyUnloaded, [key]: true } } : {}),
   }));
 }
 

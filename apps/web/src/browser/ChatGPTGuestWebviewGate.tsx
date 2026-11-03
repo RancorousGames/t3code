@@ -55,8 +55,12 @@ export function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrow
   const [guestMayAttach, setGuestMayAttach] = useState(!stagger);
 
   useEffect(() => {
-    if (hibernated && selected && !snoozed) wakeChatGPTGuest(props.runtimeTabId);
-  }, [hibernated, selected, snoozed, props.runtimeTabId]);
+    // A delivery-requested guest is actually mounted even when it was previously
+    // hibernated. Clear that stale residency flag or its sidebar stays "unloaded"
+    // and the activity monitor refuses to inspect a healthy live conversation.
+    if (hibernated && !snoozed && (selected || deliveryRequired))
+      wakeChatGPTGuest(props.runtimeTabId);
+  }, [hibernated, selected, deliveryRequired, snoozed, props.runtimeTabId]);
 
   useEffect(() => {
     if (!stagger || !canOperatePreview || hibernated || snoozed) return;

@@ -60,6 +60,16 @@ describe("native Chromium and T3 tooltip stacking", () => {
     dom.window.close();
   });
 
+  it("keeps the page visible under a toast, which is also role=dialog", () => {
+    const dom = new JSDOM(
+      '<div data-slot="toast-viewport"><div role="dialog" aria-modal="false">Update</div></div>',
+    );
+    const toast = dom.window.document.querySelector<HTMLElement>('[role="dialog"]')!;
+    toast.getBoundingClientRect = () => rect(100, 10, 360, 96);
+    expect(nativeChatGPTOverlayOverlaps(dom.window.document, rect(58, 0, 1000, 800))).toBe(false);
+    dom.window.close();
+  });
+
   it("recognizes tooltip portal insertions and visibility attribute changes", () => {
     const dom = new JSDOM('<body><div id="root"></div></body>');
     const doc = dom.window.document;

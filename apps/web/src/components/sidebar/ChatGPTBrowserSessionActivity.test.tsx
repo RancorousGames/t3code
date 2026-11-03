@@ -15,12 +15,12 @@ import {
 } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import { registerHostedBrowserGuestPresence } from "../../browser/hostedBrowserGuestPresence";
+import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { chatGPTSessionDisplayRole } from "./chatGPTSidebarVisuals";
 import { layoutChatGPTSessions } from "../../chatGPTSessionGrouping";
 import { filterChatGPTWorkerGroups } from "../../chatGPTWorkerVisibility";
 import {
   chatGPTBrowserLastWorkingKey,
-  chatGPTBrowserSessionsKey,
   chatGPTBrowserThreadRef,
   readChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
@@ -29,9 +29,15 @@ const mocks = vi.hoisted(() => ({
   execute: vi.fn<(expression: string) => Promise<string | boolean>>(),
   nav: { _tag: "Success" as string, url: "https://chatgpt.com/c/1" },
   overlay: { loading: false },
+  activeTabId: "tab-1" as string | null,
 }));
 vi.mock("../../previewStateStore", () => ({
-  useThreadPreviewState: () => ({ activeTabId: "tab-1", serverEpoch: "epoch-1" }),
+  useThreadPreviewState: () => ({
+    activeTabId: mocks.activeTabId,
+    serverEpoch: "epoch-1",
+    sessions: { "tab-1": { navStatus: mocks.nav } },
+    desktopByTabId: { "tab-1": mocks.overlay },
+  }),
   readThreadPreviewState: () => ({
     sessions: { "tab-1": { navStatus: mocks.nav } },
     desktopByTabId: { "tab-1": mocks.overlay },
@@ -86,9 +92,11 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(new Date("2026-10-10T12:00:00.000Z"));
   window.localStorage.clear();
+  getChatGPTSessionPersistedStore(environmentId).setState({ sessions: [] });
   mocks.execute.mockReset();
   mocks.nav._tag = "Success";
   mocks.overlay.loading = false;
+  mocks.activeTabId = "tab-1";
 
   webview = document.createElement("webview");
   webview.dataset.previewTab = runtimeId;
@@ -100,7 +108,10 @@ beforeEach(() => {
   });
   Object.assign(webview, { getURL: () => mocks.nav.url });
   document.body.appendChild(webview);
-  detachPresence = registerHostedBrowserGuestPresence(chatGPTBrowserThreadRef(environmentId, sessionId), runtimeId);
+  detachPresence = registerHostedBrowserGuestPresence(
+    chatGPTBrowserThreadRef(environmentId, sessionId),
+    runtimeId,
+  );
   // A shown guest: polled at the foreground rate and never hibernated.
   const surface = useBrowserSurfaceStore.getState();
   surface.claim(runtimeId, surfaceOwner, false);
@@ -173,6 +184,7 @@ describe("ChatGPT guest hibernation", () => {
       wakeChatGPTGuest(runtimeId);
     });
     expect(isChatGPTGuestHibernated(runtimeId)).toBe(false);
+    // This test keeps the simulated guest attached after wake.
     expect(row.props.children).toBe("inactive");
     expect(row.props["aria-label"]).toContain("inactive");
   });
@@ -201,6 +213,39 @@ describe("ChatGPT guest hibernation", () => {
     },
   );
 
+  it("keeps a just-recovered red session loaded through a fresh idle window", async () => {
+    useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
+    let pageState = "invalid: Could not load this ChatGPT conversation";
+    mocks.execute.mockImplementation(async (expression) =>
+      expression.includes("inspectChatGPTComposer")
+        ? ({ status: "empty", url: mocks.nav.url, text: "" } as unknown as string)
+        : pageState,
+    );
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("invalid");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CHATGPT_GUEST_HIBERNATE_AFTER_MS + 6_000);
+    });
+    expect(isChatGPTGuestHibernated(runtimeId)).toBe(false);
+    pageState = "idle";
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId: runtimeId },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("inactive");
+    expect(isChatGPTGuestHibernated(runtimeId)).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CHATGPT_GUEST_HIBERNATE_AFTER_MS - 6_000);
+    });
+    expect(isChatGPTGuestHibernated(runtimeId)).toBe(false);
+  });
+
   it("rechecks activity after composer probes rather than unloading a newly working guest", async () => {
     useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
     let activityChanged = false;
@@ -223,14 +268,75 @@ describe("ChatGPT guest hibernation", () => {
 });
 
 describe("ChatGPT browser session activity persistence", () => {
-  it("shows a recently used but detached browser as unloaded", async () => {
+  it("labels sessions with no active preview tab unloaded, not idle", async () => {
+    mocks.activeTabId = null;
+    mocks.execute.mockResolvedValue("idle");
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("unloaded");
+  });
+  it("shows unloaded, not recent/idle, when the guest is gone but it worked recently", async () => {
     localStorage.setItem(storageKey, JSON.stringify(Date.now() - 10_000));
     detachPresence();
     mocks.execute.mockResolvedValue("idle");
-    await act(async () => { renderer = create(<ActivityObserver />); });
-    const row = renderer!.root.findByType("span");
-    expect(row.props.children).toBe("unloaded");
-    expect(row.props["aria-label"]).toContain("unloaded");
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    const status = renderer!.root.findByType("span");
+    expect(status.props.children).toBe("unloaded");
+    expect(status.props["aria-label"]).toContain("unloaded");
+  });
+
+  it("detects a background guest attaching after the initial probe without a click or heartbeat", async () => {
+    useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
+    webview.remove();
+    detachPresence();
+    mocks.execute.mockResolvedValue("working");
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("unloaded");
+    await act(async () => {
+      document.body.appendChild(webview);
+      detachPresence = registerHostedBrowserGuestPresence(
+        chatGPTBrowserThreadRef(environmentId, sessionId),
+        runtimeId,
+      );
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("working");
+    await act(async () => detachPresence());
+    expect(renderer!.root.findByType("span").props.children).toBe("unloaded");
+  });
+
+  it("detects recovery when background navigation finishes without a page push", async () => {
+    useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
+    mocks.nav._tag = "Loading";
+    mocks.overlay.loading = true;
+    mocks.execute.mockResolvedValue("invalid: Could not load this ChatGPT conversation");
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("invalid");
+    mocks.nav._tag = "Success";
+    mocks.overlay.loading = false;
+    mocks.execute.mockResolvedValue("idle");
+    await act(async () => {
+      renderer!.update(<ActivityObserver />);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("inactive");
+  });
+
+  it("confirms an unavailable composer within a second without another DOM mutation", async () => {
+    mocks.execute.mockResolvedValue("invalid: the ChatGPT composer is unavailable");
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("unknown");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("invalid");
   });
 
   it("promotes a verified human-touched backend worker without changing lineage or spawn provenance, durably", async () => {
@@ -242,10 +348,7 @@ describe("ChatGPT browser session activity persistence", () => {
       creationOrigin: "backend" as const,
       spawnRequestId: "spawn-verification",
     };
-    window.localStorage.setItem(
-      chatGPTBrowserSessionsKey(environmentId),
-      JSON.stringify([parent, worker]),
-    );
+    getChatGPTSessionPersistedStore(environmentId).setState({ sessions: [parent, worker] });
     // Even during stale cached navigation the preload has witnessed an actual
     // trusted submit and a *new* user turn in the guest DOM.
     mocks.nav._tag = "Loading";
@@ -286,9 +389,8 @@ describe("ChatGPT browser session activity persistence", () => {
   });
 
   it("does not adopt a worker following a programmatic send without preload human verification", async () => {
-    window.localStorage.setItem(
-      chatGPTBrowserSessionsKey(environmentId),
-      JSON.stringify([
+    getChatGPTSessionPersistedStore(environmentId).setState({
+      sessions: [
         {
           id: sessionId,
           title: "Injected worker",
@@ -296,8 +398,8 @@ describe("ChatGPT browser session activity persistence", () => {
           parentSessionId: "manager",
           spawnRequestId: "spawn-robot",
         },
-      ]),
-    );
+      ],
+    });
     mocks.execute.mockImplementation(async (expression) =>
       expression.includes("data-t3code-human-chat-verified-at") ? false : "working",
     );
@@ -336,27 +438,33 @@ describe("ChatGPT browser session activity persistence", () => {
 
     mocks.execute.mockResolvedValue("delivery-timeout");
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
-        detail: { runtimeTabId: runtimeId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId: runtimeId },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(status.props["data-recovery-problem"]).toBe("delivery-timeout");
 
     mocks.execute.mockResolvedValue("invalid: Could not load this ChatGPT conversation");
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
-        detail: { runtimeTabId: runtimeId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId: runtimeId },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(status.props["data-recovery-problem"]).toBe("load-failure");
 
     mocks.execute.mockResolvedValue("idle");
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
-        detail: { runtimeTabId: runtimeId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId: runtimeId },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(status.props["data-recovery-problem"]).toBe("");
@@ -372,9 +480,11 @@ describe("ChatGPT browser session activity persistence", () => {
     expect(renderer!.root.findByType("span").props.children).toBe("inactive");
     mocks.nav._tag = "Loading";
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
-        detail: { runtimeTabId: runtimeId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId: runtimeId },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(renderer!.root.findByType("span").props.children).toBe("invalid");
@@ -401,9 +511,11 @@ describe("ChatGPT browser session activity persistence", () => {
     });
     expect(renderer!.root.findByType("span").props.children).toBe("unknown");
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
-        detail: { runtimeTabId: runtimeId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId: runtimeId },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(renderer!.root.findByType("span").props.children).toBe("invalid");
@@ -423,9 +535,11 @@ describe("ChatGPT browser session activity persistence", () => {
     expect(JSON.parse(window.localStorage.getItem(storageKey)!)).toBe(now - 60_000);
     mocks.execute.mockResolvedValue("idle");
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
-        detail: { runtimeTabId: runtimeId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId: runtimeId },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(renderer!.root.findByType("span").props.children).toBe("recent");
@@ -442,9 +556,11 @@ describe("ChatGPT browser session activity persistence", () => {
 
     await act(async () => {
       vi.setSystemTime(startedAt + 2_000);
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
-        detail: { runtimeTabId: runtimeId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId: runtimeId },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(renderer!.root.findByType("span").props.children).toBe("recent");

@@ -95,7 +95,7 @@ export const recordIdle = DesktopIpc.makeIpcMethod({
     eventId: Schema.String,
     observedAt: Schema.Number,
     turnCount: Schema.Number,
-    kind: Schema.optional(Schema.Literals(["completed", "stopped"])),
+    kind: Schema.optional(Schema.Literals(["completed", "stopped", "quiescent"])),
   }),
   result: Schema.Boolean,
   handler: Effect.fn("desktop.ipc.appActivation.recordIdle")(function* (event) {

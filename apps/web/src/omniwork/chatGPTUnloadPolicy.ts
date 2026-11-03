@@ -70,6 +70,8 @@ interface OmniworkPreferences {
   readonly chatGPTWarmSessionCount: number;
   readonly liveTaskStartKind: LiveTaskStartKind;
   readonly showWorkersWithSelectedParent: boolean;
+  readonly erroredSessionsAtBottom: boolean;
+  setErroredSessionsAtBottom: (enabled: boolean) => void;
   setShowWorkersWithSelectedParent: (enabled: boolean) => void;
   setLiveTaskStartKind: (kind: LiveTaskStartKind) => void;
   setLoadAllChatGPTSessionsOnStartup: (enabled: boolean) => void;
@@ -87,6 +89,8 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
       chatGPTWarmSessionCount: DEFAULT_CHATGPT_WARM_SESSION_COUNT,
       liveTaskStartKind: "chatgpt",
       showWorkersWithSelectedParent: false,
+      erroredSessionsAtBottom: true,
+      setErroredSessionsAtBottom: (erroredSessionsAtBottom) => set({ erroredSessionsAtBottom }),
       setShowWorkersWithSelectedParent: (showWorkersWithSelectedParent) =>
         set({ showWorkersWithSelectedParent }),
       setLiveTaskStartKind: (liveTaskStartKind) => set({ liveTaskStartKind }),
@@ -94,7 +98,8 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
         set({ loadAllChatGPTSessionsOnStartup }),
       setChatGPTWarmSessionCount: (count) =>
         set({ chatGPTWarmSessionCount: normalizeChatGPTWarmSessionCount(count) }),
-      setRecentGuests: (recentGuests) => set({ recentGuests: normalizeOmniworkRecentGuests(recentGuests) }),
+      setRecentGuests: (recentGuests) =>
+        set({ recentGuests: normalizeOmniworkRecentGuests(recentGuests) }),
       setUnloadProfile: (unloadProfile) => set({ unloadProfile }),
     }),
     {
@@ -109,6 +114,7 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
         chatGPTWarmSessionCount: state.chatGPTWarmSessionCount,
         liveTaskStartKind: state.liveTaskStartKind,
         showWorkersWithSelectedParent: state.showWorkersWithSelectedParent,
+        erroredSessionsAtBottom: state.erroredSessionsAtBottom,
       }),
       merge: (saved, current) => ({
         ...current,
@@ -128,6 +134,8 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
         ),
         showWorkersWithSelectedParent:
           (saved as Partial<OmniworkPreferences> | null)?.showWorkersWithSelectedParent === true,
+        erroredSessionsAtBottom:
+          (saved as Partial<OmniworkPreferences> | null)?.erroredSessionsAtBottom !== false,
       }),
     },
   ),

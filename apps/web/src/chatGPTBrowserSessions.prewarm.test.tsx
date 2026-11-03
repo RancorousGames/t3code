@@ -46,7 +46,8 @@ import {
   useChatGPTBrowserSessions,
 } from "./chatGPTBrowserSessions";
 
-const env = EnvironmentId.make("prewarm-integration");
+let caseNumber = 0;
+let env = EnvironmentId.make("prewarm-integration");
 let harness: ReturnType<typeof useChatGPTBrowserSessions>;
 let renderer: ReactTestRenderer | undefined;
 
@@ -56,6 +57,9 @@ function Harness() {
 }
 
 beforeEach(async () => {
+  // Session stores are cached by environment; each fixture owns its store as
+  // well as its localStorage, rather than inheriting earlier test sessions.
+  env = EnvironmentId.make(`prewarm-integration-${++caseNumber}`);
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "https://app.t3.codes/",
   });
@@ -107,6 +111,8 @@ describe("ChatGPT browser session creation with one warm spare", () => {
     expect(inferred?.manualEmptyCandidateCreatedAt).toBeUndefined();
     expect(chatGPTSessionCreationOrigin(manual!)).toBe("manual");
     expect(chatGPTSessionCreationOrigin(backend!)).toBe("backend");
+    expect(backend?.bootstrapIdentity?.state).toBe("awaiting_marker");
+    expect(manual?.bootstrapIdentity?.state).toBe("awaiting_marker");
     expect(chatGPTSessionCreationOrigin(inferred!)).toBe("unknown");
     await act(async () => harness.disqualifyManualEmptyCandidate(manuallyCreated));
     expect(
@@ -141,9 +147,9 @@ describe("ChatGPT browser session creation with one warm spare", () => {
       "unknown",
     );
     // A legacy backend reservation is still explicit evidence even without the new marker.
-    expect(chatGPTSessionCreationOrigin({ id: "old-worker", title: "Worker", spawnRequestId: "old-id" })).toBe(
-      "backend",
-    );
+    expect(
+      chatGPTSessionCreationOrigin({ id: "old-worker", title: "Worker", spawnRequestId: "old-id" }),
+    ).toBe("backend");
   });
 
   it("never lends a manual warm spare to an unspecified or backend caller", async () => {

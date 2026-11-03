@@ -1,7 +1,8 @@
 "use strict";
-// Native-only independent Chromium owner. Durable WebContentsView survives
-// T3 restarts; its disposable Win32 carrier is recreated without navigation.
-const { app, BaseWindow, WebContentsView } = require("electron");
+// Independent Chromium owner. Each page lives in a real top-level window that
+// T3 adopts as a Win32 *owned* window, so the page outlives T3 and Windows
+// delivers mouse, keyboard, IME and drag-and-drop to it directly.
+const { app, BaseWindow, Menu, WebContentsView } = require("electron");
 const Crypto = require("node:crypto");
 const Http = require("node:http");
 const Fs = require("node:fs");
@@ -27,6 +28,12 @@ const socketPath =
 if (process.platform !== "win32" || !directory.endsWith("-v3"))
   throw new Error("Persistent native Chromium requires the v3 Windows owner");
 app.setPath("userData", Path.join(directory, "electron-profile"));
+// Bump with any change T3 and this host must make together. T3 replaces a host
+// that reports a different value, so a host can never outlive its protocol.
+const HOST_PROTOCOL = 5;
+// Pages now receive real keystrokes. Without this, Electron's default menu
+// would turn Ctrl+R and Ctrl+W into reloads and window closes inside the page.
+Menu.setApplicationMenu(null);
 // Repeated launches must not contend for the same Chromium profile/cache.
 // A surviving host already owns the pipe and its live ChatGPT pages.
 if (!app.requestSingleInstanceLock()) app.exit(0);
@@ -41,7 +48,17 @@ const sessions = new Map();
 const attaching = new Map();
 const inputPipelines = new Map();
 const instanceId = Crypto.randomUUID();
+// Open /events responses, one per live T3 desktop process.
+const subscribers = new Set();
 let server;
+let quitting = false;
+app.on("before-quit", () => {
+  quitting = true;
+});
+const emit = (event) => {
+  const line = JSON.stringify(event) + "\n";
+  for (const res of subscribers) res.write(line);
+};
 
 const send = (res, code, body) => {
   res.writeHead(code, {
@@ -81,9 +98,56 @@ const page = (id) => {
   return entry.window;
 };
 const pageUrl = (window) => window.webContents.getURL();
-// The persistent host owns its own HWND and WebContentsView. DWM in T3 only
-// references the HWND for GPU composition; it NEVER reparents or destroys it.
-function createDurableNativePage(partition) {
+// Tell T3 about input it can no longer see now that Windows sends it straight
+// to the page: its shortcuts, plus a throttled "the user is here" signal.
+function relayPageInput(sessionId, contents) {
+  let lastInteraction = 0;
+  const interacted = () => {
+    const now = Date.now();
+    if (now - lastInteraction < 2_000) return;
+    lastInteraction = now;
+    emit({ type: "interaction", sessionId });
+  };
+  contents.on("before-mouse-event", interacted);
+  contents.on("before-input-event", (event, input) => {
+    interacted();
+    if (input.type !== "keyDown" || input.isComposing) return;
+    if (["Control", "Shift", "Alt", "Meta"].includes(input.key)) return;
+    const modifier = input.control || input.meta;
+    const functionKey = /^F\d+$/.test(input.key);
+    if (!modifier && !input.alt && !functionKey) return;
+    // AltGr reports as Ctrl+Alt plus the typed character: that is text.
+    if (input.control && input.alt && /^(?:[^a-zA-Z0-9]|Dead)$/u.test(input.key)) return;
+    const key = input.key.toLowerCase();
+    const plain = !input.shift && !input.alt;
+    // T3 owns these three outright. Every other chord also reaches the page,
+    // so ChatGPT's own shortcuts and editing keys keep working.
+    if (
+      (modifier && plain && (key === "w" || key === "f")) ||
+      (input.key === "F2" && plain && !modifier)
+    )
+      event.preventDefault();
+    emit({
+      type: "key",
+      sessionId,
+      input: {
+        type: "keyDown",
+        key: input.key,
+        code: input.code,
+        control: input.control,
+        meta: input.meta,
+        shift: input.shift,
+        alt: input.alt,
+        isAutoRepeat: input.isAutoRepeat,
+      },
+    });
+  });
+}
+
+// One page: a WebContentsView in a chrome-less carrier window. T3 sets the
+// carrier's owner and position over its pane; size stays here because Chromium
+// pins a non-resizable window's size against changes from outside.
+function createDurableNativePage(sessionId, partition) {
   const view = new WebContentsView({
     webPreferences: {
       sandbox: true,
@@ -93,72 +157,57 @@ function createDurableNativePage(partition) {
       partition,
     },
   });
+  relayPageInput(sessionId, view.webContents);
   let disposed = false;
-  let carrier;
-  let recreationPending = false;
-  const width = 1280, height = 800;
-  let parkTimer;
-  const createCarrier = () => {
-    const next = new BaseWindow({
-      x: -width + 2, y: 0, width, height, frame: false, show: false,
-      skipTaskbar: true, focusable: false, backgroundColor: "#ffffff",
-    });
-    next.contentView.addChildView(view);
-    view.setBounds({ x: 0, y: 0, width, height });
-    carrier = next;
-    next.once("closed", () => {
-      if (disposed || view.webContents.isDestroyed() || recreationPending) return;
-      recreationPending = true;
-      // The host's carrier can be recreated independently without navigating
-      // or discarding its WebContentsView. T3 itself never owns this HWND.
-      setImmediate(() => {
-        recreationPending = false;
-        if (disposed || view.webContents.isDestroyed() || (carrier && !carrier.isDestroyed())) return;
-        try { createCarrier(); } catch (error) {
-          // Failed recovery can be retried by the next attach/probe.
-          console.error("Native carrier recreation failed:", String(error));
-        }
-      });
-    });
-  };
-  createCarrier();
+  const width = 1280,
+    height = 800;
+  // Locked down because it now takes real mouse input: a resizable frameless
+  // window would grow resize handles along the edges of the ChatGPT page.
+  const carrier = new BaseWindow({
+    width,
+    height,
+    frame: false,
+    show: false,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    thickFrame: false,
+    roundedCorners: false,
+    hasShadow: false,
+    backgroundColor: "#ffffff",
+  });
+  carrier.contentView.addChildView(view);
+  view.setBounds({ x: 0, y: 0, width, height });
+  // Alt+F4 lands here while the page has focus. It means "close T3".
+  carrier.on("close", (event) => {
+    if (disposed || quitting) return;
+    event.preventDefault();
+    emit({ type: "close-requested", sessionId });
+  });
   return {
     webContents: view.webContents,
     isDestroyed: () => disposed || view.webContents.isDestroyed(),
-    getNativeWindowHandle: () => {
-      if (carrier?.isDestroyed()) createCarrier();
-      return carrier.getNativeWindowHandle();
-    },
+    getNativeWindowHandle: () => carrier.getNativeWindowHandle(),
     getBounds: () => carrier.getBounds(),
+    // Takes desktop DIP. Twice, because Chromium converts using the monitor the
+    // window is on before the move, so a move across scales lands wrong the first time.
     setBounds: (bounds) => {
+      carrier.setBounds(bounds);
       carrier.setBounds(bounds);
       view.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height });
     },
+    // Showing must go through Electron: a window shown from outside stays
+    // "hidden" to Chromium, so the page would not paint. T3 positions the
+    // carrier first. Hidden pages keep their DOM and network but return to
+    // Chromium's normal background throttling to save CPU.
     setCarrierVisible: (visible) => {
-      // Background pages keep their live DOM, network activity and automation
-      // access, but Chromium may throttle timers and rendering to save CPU.
-      // The selected, native-visible page must remain smooth.
       view.webContents.setBackgroundThrottling(!visible);
-      if (parkTimer) { clearTimeout(parkTimer); parkTimer = undefined; }
-      if (!visible) {
-        if (carrier.isVisible()) carrier.hide();
-        return;
-      }
-      if (!carrier.isVisible()) {
-        // Chromium must produce an initial GPU frame intersecting a real
-        // monitor. A window born fully offscreen stays white in DWM. Two
-        // pixels of the left display edge suffice; after first paint, DWM
-        // continues updating while the host HWND is completely offscreen.
-        const bounds = carrier.getBounds();
-        carrier.setBounds({ ...bounds, x: -bounds.width + 2, y: 0 });
-        carrier.showInactive();
-        const shownCarrier = carrier;
-        parkTimer = setTimeout(() => {
-          parkTimer = undefined;
-          if (disposed || shownCarrier.isDestroyed() || !shownCarrier.isVisible()) return;
-          shownCarrier.setBounds({ ...shownCarrier.getBounds(), x: -16000, y: -16000 });
-        }, 1600);
-      }
+      if (visible === carrier.isVisible()) return;
+      if (visible) carrier.showInactive();
+      else carrier.hide();
     },
     loadURL: (url) => view.webContents.loadURL(url),
     on: (event, listener) => {
@@ -167,9 +216,8 @@ function createDurableNativePage(partition) {
     destroy: () => {
       if (disposed) return;
       disposed = true;
-      if (parkTimer) clearTimeout(parkTimer);
       if (!view.webContents.isDestroyed()) view.webContents.close();
-      if (carrier && !carrier.isDestroyed()) carrier.destroy();
+      if (!carrier.isDestroyed()) carrier.destroy();
     },
   };
 }
@@ -307,11 +355,17 @@ async function attach(id, initialUrl, environmentId, profileId, authCookies) {
   if (existing && !existing.window.isDestroyed()) {
     if (existing.profileKey !== scope.key)
       throw new Error("Persistent session belongs to a different browser profile");
-    return { sessionId: id, url: pageUrl(existing.window), closed: false, reused: true, ...presentationInfo(existing.window) };
+    return {
+      sessionId: id,
+      url: pageUrl(existing.window),
+      closed: false,
+      reused: true,
+      ...presentationInfo(existing.window),
+    };
   }
   if (attaching.has(id)) return { ...(await attaching.get(id)), reused: true };
   const created = (async () => {
-    const window = createDurableNativePage(scope.partition);
+    const window = createDurableNativePage(id, scope.partition);
     window.webContents.setWindowOpenHandler(({ url }) => {
       // Popups must never escape into a visible Windows window.
       // OAuth popups require a separate guarded inline flow before rollout.
@@ -324,10 +378,15 @@ async function attach(id, initialUrl, environmentId, profileId, authCookies) {
     });
     try {
       await importSignInCookies(window, authCookies);
-      // Native windows are shown only by T3 attaching their HWND as a child;
-      // the host can rebuild a carrier after T3 exits without losing the page.
+      // Pages stay hidden until T3 adopts and positions their carrier.
       await window.loadURL(initialUrl);
-      return { sessionId: id, url: pageUrl(window), closed: false, reused: false, ...presentationInfo(window) };
+      return {
+        sessionId: id,
+        url: pageUrl(window),
+        closed: false,
+        reused: false,
+        ...presentationInfo(window),
+      };
     } catch (error) {
       sessions.delete(id);
       window.destroy();
@@ -509,9 +568,24 @@ async function handle(req, res) {
         instanceId,
         pid: process.pid,
         liveSessions: sessions.size,
-        browser: "electron-native-child-chromium",
+        protocol: HOST_PROTOCOL,
         closing: false,
       });
+    // A long-lived stream per T3 process. It is also how we learn T3 died: the
+    // pipe closes even on a forced kill, and Windows would otherwise leave the
+    // on-screen page floating on the desktop once its owner is gone.
+    if (req.method === "GET" && pathname === "/events") {
+      res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
+      res.flushHeaders();
+      subscribers.add(res);
+      res.once("close", () => {
+        subscribers.delete(res);
+        if (subscribers.size > 0) return;
+        for (const { window } of sessions.values())
+          if (!window.isDestroyed()) window.setCarrierVisible(false);
+      });
+      return;
+    }
     if (req.method === "GET" && pathname === "/sessions")
       return send(res, 200, {
         instanceId,
@@ -546,15 +620,19 @@ async function handle(req, res) {
       return send(res, 200, { visible, ...presentationInfo(window) });
     }
     if (req.method === "POST" && pathname === "/sessions/resize") {
-      const { sessionId, width, height } = await readJson(req);
+      const { sessionId, x, y, width, height } = await readJson(req);
       if (
-        !Number.isSafeInteger(width) || width < 1 || width > 8192 ||
-        !Number.isSafeInteger(height) || height < 1 || height > 4320
-      ) throw new Error("Invalid native Chromium viewport dimensions");
-      const window = page(sessionId);
-      const bounds = window.getBounds();
-      if (bounds.width !== width || bounds.height !== height)
-        window.setBounds({ ...bounds, width, height });
+        !Number.isSafeInteger(x) ||
+        !Number.isSafeInteger(y) ||
+        !Number.isSafeInteger(width) ||
+        width < 1 ||
+        width > 8192 ||
+        !Number.isSafeInteger(height) ||
+        height < 1 ||
+        height > 4320
+      )
+        throw new Error("Invalid native Chromium viewport dimensions");
+      page(sessionId).setBounds({ x, y, width, height });
       return send(res, 200, { resized: true, width, height });
     }
     if (req.method === "POST" && pathname === "/sessions/input")

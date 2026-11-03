@@ -22,7 +22,11 @@ import {
 import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPTBrowserPrewarm";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { randomUUID } from "./lib/utils";
-import { PRIMARY_CHATGPT_PROFILE_ID, readNewChatGPTProfileId, resetNewChatGPTProfileId } from "./chatGPTAccountProfiles";
+import {
+  PRIMARY_CHATGPT_PROFILE_ID,
+  readNewChatGPTProfileId,
+  resetNewChatGPTProfileId,
+} from "./chatGPTAccountProfiles";
 import {
   finalizeChatGPTRolloverHierarchy,
   type ChatGPTRolloverPlan,
@@ -85,6 +89,8 @@ export const BrowserSession = Schema.Struct({
   ),
   snoozedUntil: Schema.optional(Schema.Number),
   snoozedAt: Schema.optional(Schema.Number),
+  verificationPending: Schema.optional(Schema.Boolean),
+  quickSnoozeStep: Schema.optional(Schema.Number),
   // Sticky exemptions: unsnooze or clearing a colored border never reenables auto-close.
   autoCloseExempt: Schema.optional(Schema.Boolean),
   lastDirectInteractionAt: Schema.optional(Schema.Number),
@@ -147,10 +153,13 @@ export function wakeChatGPTBrowserSession(environmentId: string, sessionId: stri
   const store = getChatGPTSessionPersistedStore(environmentId);
   const current = store.getState().sessions;
   const now = Date.now();
-  if (!current.some((session) => session.id === sessionId && (session.snoozedUntil ?? 0) > now)) return;
-  const next = current.map((session) => session.id === sessionId
-    ? { ...session, snoozedUntil: undefined, snoozedAt: undefined, quickSnoozeStep: undefined }
-    : session);
+  if (!current.some((session) => session.id === sessionId && (session.snoozedUntil ?? 0) > now))
+    return;
+  const next = current.map((session) =>
+    session.id === sessionId
+      ? { ...session, snoozedUntil: undefined, snoozedAt: undefined, quickSnoozeStep: undefined }
+      : session,
+  );
   setLocalStorageItem(`t3code:chatgpt-browser:sessions:${environmentId}`, next, BrowserSessions);
   store.setState({ sessions: next });
 }
@@ -162,10 +171,12 @@ export function cleanChatGPTSessionTitle(title: string): string {
 }
 
 export function chatGPTSessionTitleFromPage(pageTitle: string | null): string | null {
-  const title = cleanChatGPTSessionTitle((pageTitle ?? "")
-    .trim()
-    .replace(/\s+[-–—|]\s+(?:ChatGPT|OpenAI)$/i, "")
-    .replace(/^ChatGPT\s+[-–—|]\s+/i, ""));
+  const title = cleanChatGPTSessionTitle(
+    (pageTitle ?? "")
+      .trim()
+      .replace(/\s+[-–—|]\s+(?:ChatGPT|OpenAI)$/i, "")
+      .replace(/^ChatGPT\s+[-–—|]\s+/i, ""),
+  );
   if (!title || /^(?:ChatGPT(?: \d+)?|New chat|Temporary chat|OpenAI)$/i.test(title)) {
     return null;
   }
@@ -174,14 +185,22 @@ export function chatGPTSessionTitleFromPage(pageTitle: string | null): string | 
 
 /** Clean previously saved automatic titles as well as new ChatGPT page titles.
  * Explicit manual and Bootstrap titles remain authoritative. */
-export function updateChatGPTAutoTitle(session: BrowserSession, pageTitle: string | null): BrowserSession {
+export function updateChatGPTAutoTitle(
+  session: BrowserSession,
+  pageTitle: string | null,
+): BrowserSession {
   if (session.titleSource === "user" || session.titleSource === "bootstrap") return session;
   const cleaned = cleanChatGPTSessionTitle(session.title);
   if (cleaned !== session.title) {
-    return { ...session, title: cleaned || chatGPTSessionTitleFromPage(pageTitle) || "ChatGPT session" };
+    return {
+      ...session,
+      title: cleaned || chatGPTSessionTitleFromPage(pageTitle) || "ChatGPT session",
+    };
   }
   const proposed = chatGPTSessionTitleFromPage(pageTitle);
-  return proposed && DEFAULT_SESSION_TITLE.test(session.title) ? { ...session, title: proposed } : session;
+  return proposed && DEFAULT_SESSION_TITLE.test(session.title)
+    ? { ...session, title: proposed }
+    : session;
 }
 
 export const CHATGPT_DEFAULT_URL = "https://chatgpt.com";
@@ -361,6 +380,22 @@ export function applyChatGPTBootstrapTitle(
   return { ...session, title, titleSource: "bootstrap" };
 }
 
+/** OMCPT may propose a title directly for a preassigned backend seat;
+ * it cannot create or rename arbitrary sessions using a claimed UUID. */
+export function applyPreassignedChatGPTBootstrapTitle(
+  session: BrowserSession,
+  claimedId: string,
+  proposedTitle: string,
+): BrowserSession {
+  if (
+    !session.spawnRequestId ||
+    session.id !== claimedId ||
+    session.bootstrapIdentity?.publicId !== claimedId
+  )
+    return session;
+  return applyChatGPTBootstrapTitle(session, proposedTitle);
+}
+
 /** A streamed ID may be visible before the next paragraph contains its title.
  * Register the ID immediately, then accept only the adjacent title from the
  * same conversation/ID while the brief pending window is open. */
@@ -373,17 +408,21 @@ export function applyChatGPTBootstrapObservation(
   const entry = updated ?? sessions.find((session) => session.id === id);
   if (!entry) return sessions;
   const identity = entry.bootstrapIdentity;
-  const samePendingReply = !updated && identity?.state === "registered" &&
+  const samePendingReply =
+    !updated &&
+    identity?.state === "registered" &&
     (identity.titlePendingUntil ?? 0) > Date.now() &&
     identity.publicId?.toLowerCase() === observation.markerId.toLowerCase() &&
     identity.conversationId === observation.conversationId;
   if (!updated && !samePendingReply) return sessions;
-  const titled = identity?.state === "registered" && (updated || samePendingReply)
-    ? applyChatGPTBootstrapTitle(entry, observation.proposedTitle)
-    : entry;
-  const next = titled !== entry && identity?.titlePendingUntil
-    ? { ...titled, bootstrapIdentity: { ...identity, titlePendingUntil: undefined } }
-    : titled;
+  const titled =
+    identity?.state === "registered" && (updated || samePendingReply)
+      ? applyChatGPTBootstrapTitle(entry, observation.proposedTitle)
+      : entry;
+  const next =
+    titled !== entry && identity?.titlePendingUntil
+      ? { ...titled, bootstrapIdentity: { ...identity, titlePendingUntil: undefined } }
+      : titled;
   if (next === sessions.find((session) => session.id === id)) return sessions;
   return sessions.map((session) => (session.id === id ? next : session));
 }
@@ -399,11 +438,14 @@ export function applyChatGPTBootstrapRegistryTitle(
 ): readonly BrowserSession[] {
   if (!title) return sessions;
   const session = sessions.find((entry) => entry.id === id);
-  if (session?.bootstrapIdentity?.state !== "registered" ||
-      session.bootstrapIdentity.publicId?.toLowerCase() !== markerId.toLowerCase() ||
-      session.bootstrapIdentity.conversationId !== conversationId) return sessions;
+  if (
+    session?.bootstrapIdentity?.state !== "registered" ||
+    session.bootstrapIdentity.publicId?.toLowerCase() !== markerId.toLowerCase() ||
+    session.bootstrapIdentity.conversationId !== conversationId
+  )
+    return sessions;
   const next = applyChatGPTBootstrapTitle(session, title);
-  return next === session ? sessions : sessions.map((entry) => entry.id === id ? next : entry);
+  return next === session ? sessions : sessions.map((entry) => (entry.id === id ? next : entry));
 }
 
 /** Move a session within its visible or hidden section without changing the other section. */
@@ -614,8 +656,10 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       }
       const profileId = metadata?.spawnRequestId
         ? PRIMARY_CHATGPT_PROFILE_ID
-        : metadata?.profileId ?? (metadata?.explicitlyUserCreated && !metadata?.initialConversationUrl
-          ? readNewChatGPTProfileId(environmentId) : PRIMARY_CHATGPT_PROFILE_ID);
+        : (metadata?.profileId ??
+          (metadata?.explicitlyUserCreated && !metadata?.initialConversationUrl
+            ? readNewChatGPTProfileId(environmentId)
+            : PRIMARY_CHATGPT_PROFILE_ID));
       let id = randomUUID();
       // Read the current slot synchronously: multiple buttons, the palette and
       // desktop automation can request sessions without waiting for a render.
@@ -658,8 +702,8 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             takeChatGPTSpare(environmentId, spareId)
           ) {
             id = spareId;
-            // Preserve the adopted Chromium renderer (or legacy webview).
-            // Replenishment uses a new UUID, never navigation of this page.
+            // The consumed webview remains mounted under its original preview
+            // owner; replenishment gets a different owner and a fresh page.
             setPrewarmedSessionId(randomUUID());
           }
         }
@@ -727,6 +771,28 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [environmentId, sessions, setPrewarmedSessionId, setSessions],
   );
 
+  /** OMCPT title proposals target only an existing preassigned backend seat.
+   * Never create a session, infer by tab focus, or touch a user-renamed title. */
+  const suggestBootstrapTitle = useCallback(
+    (id: string, title: string) => {
+      let accepted = false;
+      setSessions((current) =>
+        current.map((session) => {
+          const next = applyPreassignedChatGPTBootstrapTitle(session, id, title);
+          if (
+            next !== session ||
+            (session.titleSource === "bootstrap" && session.title === title)
+          ) {
+            accepted = true;
+          }
+          return next;
+        }),
+      );
+      return accepted;
+    },
+    [setSessions],
+  );
+
   const registerBootstrapMarker = useCallback(
     (id: string, observation: ChatGPTBootstrapObservation) =>
       setSessions((current) => applyChatGPTBootstrapObservation(current, id, observation)),
@@ -735,7 +801,9 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
 
   const resolveBootstrapTitle = useCallback(
     (id: string, markerId: string, conversationId: string, title: string | null) =>
-      setSessions((current) => applyChatGPTBootstrapRegistryTitle(current, id, markerId, conversationId, title)),
+      setSessions((current) =>
+        applyChatGPTBootstrapRegistryTitle(current, id, markerId, conversationId, title),
+      ),
     [setSessions],
   );
 
@@ -870,6 +938,52 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
 
+  const setSessionVerification = useCallback(
+    (id: string, pending: boolean) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id
+            ? {
+                ...session,
+                verificationPending: pending || undefined,
+                snoozedUntil: pending ? Date.now() + 60 * 60_000 : session.snoozedUntil,
+                snoozedAt: pending ? Date.now() : session.snoozedAt,
+                quickSnoozeStep: pending ? 0 : session.quickSnoozeStep,
+                autoCloseExempt: true,
+              }
+            : session,
+        ),
+      ),
+    [setSessions],
+  );
+  const quickSnoozeSession = useCallback(
+    (id: string, until: number, step: number) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id
+            ? {
+                ...session,
+                snoozedUntil: until,
+                snoozedAt: Date.now(),
+                quickSnoozeStep: step,
+                autoCloseExempt: true,
+              }
+            : session,
+        ),
+      ),
+    [setSessions],
+  );
+  const resetQuickSnooze = useCallback(
+    (id: string) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === id && session.quickSnoozeStep !== undefined
+            ? { ...session, quickSnoozeStep: undefined }
+            : session,
+        ),
+      ),
+    [setSessions],
+  );
   const setSessionBorderColor = useCallback(
     (id: string, color: string | null) =>
       setSessions((current) =>
@@ -984,22 +1098,13 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
 
-  const suggestBootstrapTitle = useCallback(
-    (id: string, title: string) => {
-      setSessions((current) =>
-        current.map((session) =>
-          session.id === id ? applyChatGPTBootstrapTitle(session, title) : session,
-        ),
-      );
-    },
-    [setSessions],
-  );
-
   const renameSessionFromPageTitle = useCallback(
     (id: string, pageTitle: string | null) => {
       if (!chatGPTSessionTitleFromPage(pageTitle)) return;
       setSessions((current) =>
-        current.map((session) => session.id === id ? updateChatGPTAutoTitle(session, pageTitle) : session),
+        current.map((session) =>
+          session.id === id ? updateChatGPTAutoTitle(session, pageTitle) : session,
+        ),
       );
     },
     [setSessions],
@@ -1070,10 +1175,10 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     createSession,
     registerBootstrapMarker,
     resolveBootstrapTitle,
+    suggestBootstrapTitle,
     disqualifyManualEmptyCandidate,
     reorderSessions,
     renameSession,
-    suggestBootstrapTitle,
     renameSessionFromPageTitle,
     removeSession,
     setSessionHidden,
@@ -1084,6 +1189,9 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     setSessionBinding,
     finalizeRollover,
     setSessionSnooze,
+    setSessionVerification,
+    quickSnoozeSession,
+    resetQuickSnooze,
     setSessionBorderColor,
     markHumanControlled,
     markDirectInteraction,

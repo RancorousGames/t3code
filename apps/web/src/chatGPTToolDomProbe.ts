@@ -19,8 +19,15 @@ export function probeChatGPTToolDom(exactMarker?: string) {
   // tool result belongs to this guest. The assistant-echo fallback validates
   // assistant messages separately; React proof is reserved for hidden data.
   if (exactMarker && document.body?.textContent?.includes(exactMarker))
-    return { supported: true, markerFound: false, reason: "rendered_marker",
-      reactRoots: 0, objectsInspected: 0, stringsInspected: 0, searchTruncated: false };
+    return {
+      supported: true,
+      markerFound: false,
+      reason: "rendered_marker",
+      reactRoots: 0,
+      objectsInspected: 0,
+      stringsInspected: 0,
+      searchTruncated: false,
+    };
 
   const containsMarker = (s: string): boolean =>
     exactMarker !== undefined ? s.includes(exactMarker) : prefix.test(s);
@@ -36,9 +43,11 @@ export function probeChatGPTToolDom(exactMarker?: string) {
 
   // Prioritize the newest conversation units and their ancestors. The generic
   // React root graph can otherwise exhaust its budget on unrelated sidebars.
-  const recent = [...document.querySelectorAll(
-    '[data-turn-key],[data-content-search-unit-key],[data-testid^="conversation-turn-"]',
-  )].slice(-12);
+  const recent = [
+    ...document.querySelectorAll(
+      '[data-turn-key],[data-content-search-unit-key],[data-testid^="conversation-turn-"]',
+    ),
+  ].slice(-12);
   for (const node of recent) {
     let ancestor: Element | null = node;
     for (let depth = 0; ancestor && depth < 8; depth++, ancestor = ancestor.parentElement) {
@@ -78,8 +87,14 @@ export function probeChatGPTToolDom(exactMarker?: string) {
       }
       continue;
     }
-    if (!value || typeof value !== "object" || seen.has(value) ||
-        current.depth > 12 || value instanceof Node) continue;
+    if (
+      !value ||
+      typeof value !== "object" ||
+      seen.has(value) ||
+      current.depth > 12 ||
+      value instanceof Node
+    )
+      continue;
 
     seen.add(value);
     objectsInspected++;

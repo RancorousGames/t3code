@@ -1,5 +1,6 @@
 import type { BrowserSession } from "./chatGPTBrowserSessions";
 import type { ChatGPTPageSnapshot } from "./chatGPTPageSnapshotInspection";
+import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { validChatGPTCompletion } from "./chatGPTSessionCompletion";
 import {
   deriveChatGPTSession,
@@ -17,12 +18,24 @@ export type ChatGPTDashboardSession = {
 export function isChatGPTDashboardSnapshot(value: unknown): value is ChatGPTPageSnapshot {
   if (!value || typeof value !== "object") return false;
   const snapshot = value as Partial<ChatGPTPageSnapshot>;
-  return typeof snapshot.url === "string" &&
+  const signals = snapshot.signals;
+  return (
+    typeof snapshot.url === "string" &&
     typeof snapshot.conversationId === "string" &&
+    snapshot.conversationId === chatGPTConversationIdFromUrl(snapshot.url) &&
     typeof snapshot.observedAt === "number" &&
     Number.isFinite(snapshot.observedAt) &&
-    typeof snapshot.turnCount === "number" &&
-    ["working", "idle", "interrupted", "failed", "unknown"].includes(snapshot.activity ?? "");
+    Number.isSafeInteger(snapshot.turnCount) &&
+    (snapshot.turnCount ?? 0) > 0 &&
+    !!signals &&
+    typeof signals === "object" &&
+    typeof signals.stopButton === "boolean" &&
+    typeof signals.composerPresent === "boolean" &&
+    typeof signals.draftPresent === "boolean" &&
+    typeof signals.signInOrCaptcha === "boolean" &&
+    typeof signals.conversationFull === "boolean" &&
+    ["working", "idle", "interrupted", "failed", "unknown"].includes(snapshot.activity ?? "")
+  );
 }
 
 /**
@@ -41,11 +54,16 @@ export function projectChatGPTDashboardSession(input: {
   const snapshot = isChatGPTDashboardSnapshot(input.snapshot) ? input.snapshot : null;
   // Persisted pages are historical evidence, never proof a guest is still working.
   const fresh = !!snapshot && now >= snapshot.observedAt && now - snapshot.observedAt <= 2 * 60_000;
-  const age = fresh && snapshot?.activity === "working" ? "working" as const
-    : fresh && snapshot?.activity === "idle" ? "inactive" as const
-    : fresh && snapshot?.activity === "interrupted" ? "interrupted" as const
-    : fresh && snapshot?.activity === "failed" ? "invalid" as const
-    : "unknown" as const;
+  const age =
+    fresh && snapshot?.activity === "working"
+      ? ("working" as const)
+      : fresh && snapshot?.activity === "idle"
+        ? ("inactive" as const)
+        : fresh && snapshot?.activity === "interrupted"
+          ? ("interrupted" as const)
+          : fresh && snapshot?.activity === "failed"
+            ? ("invalid" as const)
+            : ("unknown" as const);
   const signals: RawChatGPTSessionSignals = {
     age,
     ...(session.hidden !== undefined ? { hidden: session.hidden } : {}),
@@ -58,12 +76,12 @@ export function projectChatGPTDashboardSession(input: {
       snapshot?.turnCount ?? 0,
       snapshot?.activity === "idle",
     ),
-    lastWorkingAt: input.lastWorkingAt ?? (
-      fresh && snapshot?.activity === "idle" ? snapshot.observedAt : 0
-    ),
+    lastWorkingAt:
+      input.lastWorkingAt ?? (fresh && snapshot?.activity === "idle" ? snapshot.observedAt : 0),
     ...(snapshot?.signals.signInOrCaptcha ? { browserUnavailable: true } : {}),
     ...(fresh && snapshot?.activity === "idle" && snapshot.lastAssistant?.endsWithQuestion
-      ? { status: "waiting_for_input" } : {}),
+      ? { status: "waiting_for_input" }
+      : {}),
   };
   const model = deriveChatGPTSession(signals, now);
   return {
@@ -88,7 +106,12 @@ export function groupChatGPTDashboardSessions(
   now: number,
 ): Record<(typeof CHATGPT_DASHBOARD_BUCKETS)[number][0], ChatGPTDashboardSession[]> {
   const groups: Record<(typeof CHATGPT_DASHBOARD_BUCKETS)[number][0], ChatGPTDashboardSession[]> = {
-    needs_you: [], working: [], recently_stopped: [], idle: [], snoozed: [], completed: [],
+    needs_you: [],
+    working: [],
+    recently_stopped: [],
+    idle: [],
+    snoozed: [],
+    completed: [],
   };
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
@@ -102,7 +125,9 @@ export function groupChatGPTDashboardSessions(
     }
     groups[bucket].push(row);
   }
-  for (const rows of Object.values(groups)) rows.sort((a, b) =>
-    b.updatedAt - a.updatedAt || a.session.title.localeCompare(b.session.title));
+  for (const rows of Object.values(groups))
+    rows.sort(
+      (a, b) => b.updatedAt - a.updatedAt || a.session.title.localeCompare(b.session.title),
+    );
   return groups;
 }

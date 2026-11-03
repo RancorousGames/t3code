@@ -9,13 +9,16 @@ const NOW = 100 * 60_000;
 const derive = (signals: RawChatGPTSessionSignals) => deriveChatGPTSession(signals, NOW);
 
 describe("ChatGPT session model", () => {
-  it("shows an unattached browser unloaded even with a stale requested loading status", () => {
-    const model = derive({ attached: false, age: "unknown", loading: true, status: "loading" });
-    expect(model.compatibilityAge).toBe("unloaded");
+  it("shows an unattached browser dark-grey unloaded even if a stale load is requested", () => {
+    const model = derive({ attached: false, age: "unknown", loading: true });
     expect(model.residency).toBe("unloaded");
+    expect(model.compatibilityAge).toBe("unloaded");
     expect(model.statusLine).toBe("ChatGPT browser unloaded");
+    const stale = derive({ attached: false, age: "inactive", status: "loading" });
+    expect(stale.compatibilityAge).toBe("unloaded");
+    expect(stale.residency).toBe("unloaded");
+    expect(derive({ attached: true, age: "unknown", loading: true }).residency).toBe("loaded");
   });
-
   it.each([
     ["working", "working", "none", "working"],
     ["recent", "idle", "none", "recently_stopped"],
@@ -36,43 +39,61 @@ describe("ChatGPT session model", () => {
     expect(derive({ age: "working", attached: false }).compatibilityAge).toBe("working");
     expect(derive({ age: "invalid", attached: false }).attention).toBe("error");
     expect(derive({ age: "unknown", status: "working", attached: false }).activity).toBe("working");
-    expect(derive({ age: "unknown", status: "unavailable", attached: false }).attention).toBe("error");
+    expect(derive({ age: "unknown", status: "unavailable", attached: false }).attention).toBe(
+      "error",
+    );
   });
 
   it("treats an attached guest as loaded despite stale lifecycle signals", () => {
     for (const signals of [
-      { hibernated: true }, { status: "hibernated" }, { unloaded: true },
-      { status: "unloaded" }, { loading: true }, { warm: true },
+      { hibernated: true },
+      { status: "hibernated" },
+      { unloaded: true },
+      { status: "unloaded" },
+      { loading: true },
+      { warm: true },
     ]) {
       expect(derive({ ...signals, attached: true }).residency).toBe("loaded");
     }
     const stale = derive({ attached: true, age: "unloaded", label: "ChatGPT browser unloaded" });
-    expect([stale.residency, stale.compatibilityAge, stale.statusLine]).toEqual(
-      ["loaded", "unknown", "ChatGPT status unknown"],
-    );
+    expect([stale.residency, stale.compatibilityAge, stale.statusLine]).toEqual([
+      "loaded",
+      "unknown",
+      "ChatGPT status unknown",
+    ]);
     expect(derive({ attached: false, age: "inactive" }).residency).toBe("unloaded");
     expect(derive({ attached: true, hidden: true }).residency).toBe("hidden");
     expect(derive({ attached: true, snoozedUntil: NOW + 1 }).residency).toBe("snoozed");
     expect(derive({ attached: true, hibernated: true, age: "working" }).activity).toBe("working");
     expect(derive({ attached: true, unloaded: true, age: "invalid" }).attention).toBe("error");
-    expect(derive({ attached: true, age: "unloaded", status: "unavailable" }).attention).toBe("error");
+    expect(derive({ attached: true, age: "unloaded", status: "unavailable" }).attention).toBe(
+      "error",
+    );
   });
 
   it("maps transcript status, uncertain send and browser needs without losing priority", () => {
     expect(derive({ status: "waiting_for_input" }).attention).toBe("question");
     expect(derive({ status: "conversation_full" }).attention).toBe("conversation_full");
     expect(derive({ browserUnavailable: true }).attention).toBe("needs_browser");
-    expect(derive({
-      status: "unavailable", uncertainSend: true, age: "delivery-timeout",
-    }).attention).toBe("unconfirmed_send");
-    expect(derive({
-      recovery: { stoppedReason: "exhausted" },
-    }).attention).toBe("recovery_stopped");
+    expect(
+      derive({
+        status: "unavailable",
+        uncertainSend: true,
+        age: "delivery-timeout",
+      }).attention,
+    ).toBe("unconfirmed_send");
+    expect(
+      derive({
+        recovery: { stoppedReason: "exhausted" },
+      }).attention,
+    ).toBe("recovery_stopped");
   });
 
   it("preserves the saved interruption stage for sidebar recovery diagnostics", () => {
-    expect(derive({ age: "interrupted", recovery: { orangeStage: "observe_only" } })
-      .recovery.orangeStage).toBe("observe_only");
+    expect(
+      derive({ age: "interrupted", recovery: { orangeStage: "observe_only" } }).recovery
+        .orangeStage,
+    ).toBe("observe_only");
     expect(derive({ age: "interrupted" }).recovery.orangeStage).toBeNull();
   });
 
@@ -87,10 +108,16 @@ describe("ChatGPT session model", () => {
   });
 
   it("retains the original MCP which-filter membership, including hidden exclusion", () => {
-    const ages = ["working", "recent", "inactive", "invalid", "interrupted", "delivery-timeout"] as const;
-    const matches = (which: "recent" | "working" | "blocked") => ages.filter(
-      (age) => matchesChatGPTSessionWhich(which, derive({ age })),
-    );
+    const ages = [
+      "working",
+      "recent",
+      "inactive",
+      "invalid",
+      "interrupted",
+      "delivery-timeout",
+    ] as const;
+    const matches = (which: "recent" | "working" | "blocked") =>
+      ages.filter((age) => matchesChatGPTSessionWhich(which, derive({ age })));
     expect(matches("recent")).toEqual(["recent"]);
     expect(matches("working")).toEqual(["working"]);
     expect(matches("blocked")).toEqual(["invalid", "interrupted"]);

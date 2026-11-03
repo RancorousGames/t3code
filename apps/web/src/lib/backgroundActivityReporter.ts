@@ -226,6 +226,8 @@ export const layer = Layer.effectDiscard(
         window.addEventListener("keydown", recordInteraction);
         window.addEventListener("wheel", recordInteraction, passiveListenerOptions);
         window.addEventListener("touchstart", recordInteraction, passiveListenerOptions);
+        // Input in a native ChatGPT window never reaches this window's listeners.
+        window.addEventListener("t3:chatgpt-page-interaction", recordInteraction);
       }),
       () =>
         Effect.sync(() => {
@@ -238,6 +240,7 @@ export const layer = Layer.effectDiscard(
           window.removeEventListener("keydown", recordInteraction);
           window.removeEventListener("wheel", recordInteraction);
           window.removeEventListener("touchstart", recordInteraction);
+          window.removeEventListener("t3:chatgpt-page-interaction", recordInteraction);
         }),
     );
 

@@ -144,6 +144,7 @@ export const DesktopAppActivationRequest = Schema.Union([
       "recovery_metrics",
       "marker_probe",
       "experimental_evaluate",
+      "bootstrap_title",
       "ask_user",
       "send",
       "reconcile_send",
@@ -172,7 +173,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     sessionId: Schema.optional(Schema.String),
     proposedTitle: Schema.optional(Schema.String),
     marker: Schema.optional(Schema.String),
-    // Explicit local experiment; not used by the durable delivery queue.
+    // Explicit local experiment in one exact ChatGPT guest; never used by delivery queue.
     expression: Schema.optional(Schema.String),
     questionId: Schema.optional(NativeOperationId),
     question: Schema.optional(Schema.String),

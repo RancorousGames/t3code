@@ -1,4 +1,5 @@
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
+import { readChatGPTActivityTrace } from "../../chatGPTActivityTrace";
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import { useChatGPTRecoverySettings } from "../../chatGPTRecoverySettings";
@@ -58,6 +59,7 @@ export function ChatGPTRecoveryDashboard({
   const [diagnostics, setDiagnostics] = useState<ChatGPTRecoveryEvent[]>(() =>
     readAllChatGPTRecoveryEvents(environmentId),
   );
+  const [activityTrace, setActivityTrace] = useState(() => readChatGPTActivityTrace(environmentId));
   const [lastGlobalAttempt, setLastGlobalAttempt] = useState(
     () => readRecoveryHistory(environmentId).lastAttemptAt,
   );
@@ -68,6 +70,7 @@ export function ChatGPTRecoveryDashboard({
     const refresh = () => {
       setState(readRecoveryQueue(environmentId));
       setDiagnostics(readAllChatGPTRecoveryEvents(environmentId));
+      setActivityTrace(readChatGPTActivityTrace(environmentId));
       setLastGlobalAttempt(readRecoveryHistory(environmentId).lastAttemptAt);
       setNow(Date.now());
     };
@@ -75,12 +78,14 @@ export function ChatGPTRecoveryDashboard({
     window.addEventListener("chatgpt-recovery-queue-updated", refresh);
     const unsubscribe = getChatGPTSessionPersistedStore(environmentId).subscribe(refresh);
     window.addEventListener("chatgpt-recovery-diagnostics-updated", refresh);
+    window.addEventListener("chatgpt-activity-trace-updated", refresh);
     // Data changes are subscription-driven; only relative time labels need a clock.
     const interval = setInterval(() => setNow(Date.now()), 30_000);
     return () => {
       unsubscribe();
       window.removeEventListener("chatgpt-recovery-queue-updated", refresh);
       window.removeEventListener("chatgpt-recovery-diagnostics-updated", refresh);
+      window.removeEventListener("chatgpt-activity-trace-updated", refresh);
       clearInterval(interval);
     };
   }, [environmentId, open]);
@@ -97,21 +102,22 @@ export function ChatGPTRecoveryDashboard({
   const name = (id: string) => titles[id] || id;
   const nextWatchdog = state.lastScanAt ? state.lastScanAt + settings.watchdogSeconds * 1000 : null;
   const coolingDown = state.backoffUntil > now;
-  const nextGlobal = Math.max(
-    lastGlobalAttempt ? lastGlobalAttempt + settings.globalSeconds * 1000 : 0,
-    state.backoffUntil,
-  ) || null;
+  const nextGlobal =
+    Math.max(
+      lastGlobalAttempt ? lastGlobalAttempt + settings.globalSeconds * 1000 : 0,
+      state.backoffUntil,
+    ) || null;
   const when = (at: number | null) =>
     at === null ? "awaiting first scan" : at <= now ? "due now" : new Date(at).toLocaleTimeString();
   const nextAction = settings.paused
     ? "Paused; resume automatic recovery to continue."
     : coolingDown
       ? `20 consecutive failed recoveries: automatic retries resume at ${new Date(state.backoffUntil).toLocaleTimeString()}. Health checks continue.`
-    : active.length
-      ? "Next: verify the active targets, then attempt the next eligible target when global spacing permits."
-      : queued.length
-        ? "Next: refill vacant recovery targets on the next scan."
-        : "No pending recovery actions. Monitoring continues.";
+      : active.length
+        ? "Next: verify the active targets, then attempt the next eligible target when global spacing permits."
+        : queued.length
+          ? "Next: refill vacant recovery targets on the next scan."
+          : "No pending recovery actions. Monitoring continues.";
 
   const row = (entry: RecoveryQueueEntry) => (
     <div
@@ -161,7 +167,8 @@ export function ChatGPTRecoveryDashboard({
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 p-3">
               <div>
                 <div className="font-semibold">
-                  Auto recovery: {settings.paused ? "Paused" : coolingDown ? "10-minute cooldown" : "Running"}
+                  Auto recovery:{" "}
+                  {settings.paused ? "Paused" : coolingDown ? "10-minute cooldown" : "Running"}
                 </div>
                 <div className="text-xs text-muted-foreground">{nextAction}</div>
               </div>
@@ -177,7 +184,9 @@ export function ChatGPTRecoveryDashboard({
               <span className="rounded border px-2 py-1">
                 Failed streak {coolingDown ? 20 : state.failureStreak}/20
               </span>
-              <span className="rounded border px-2 py-1">Fallback watchdog {settings.watchdogSeconds}s</span>
+              <span className="rounded border px-2 py-1">
+                Fallback watchdog {settings.watchdogSeconds}s
+              </span>
               <span className="rounded border px-2 py-1">
                 Global retry every {settings.globalSeconds}s
               </span>
@@ -195,10 +204,10 @@ export function ChatGPTRecoveryDashboard({
                 Next global retry eligible: {settings.paused ? "paused" : when(nextGlobal)}
               </div>
               <div className="text-xs text-muted-foreground">
-                Red sessions keep one pinned retry target until verified healthy; orange
-                sessions rotate independently. After 20 confirmed failures the affected lane
-                pauses for 10 minutes, then resumes. Health transitions wake the coordinator
-                immediately; only the watchdog discovers silent failures.
+                Red sessions keep one pinned retry target until verified healthy; orange sessions
+                rotate independently. After 20 confirmed failures the affected lane pauses for 10
+                minutes, then resumes. Health transitions wake the coordinator immediately; only the
+                watchdog discovers silent failures.
               </div>
             </section>
             <details className="rounded-md border border-border/60 p-3">
@@ -272,6 +281,47 @@ export function ChatGPTRecoveryDashboard({
                 ))}
                 {!diagnostics.length && (
                   <p className="text-muted-foreground">No diagnostic events yet.</p>
+                )}
+              </div>
+            </section>
+            <section>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="font-semibold">
+                  ChatGPT status timing trace ({activityTrace.length} events)
+                </h3>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => {
+                    void navigator.clipboard
+                      .writeText(JSON.stringify(activityTrace, null, 2))
+                      .catch(() => {});
+                  }}
+                >
+                  Copy trace
+                </Button>
+              </div>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Records state changes, delayed browser probes and missing push intervals. No
+                conversation text, drafts or URLs. Retains the last 350 events.
+              </p>
+              <div className="max-h-64 space-y-1 overflow-y-auto font-mono text-xs">
+                {[...activityTrace]
+                  .slice(-60)
+                  .reverse()
+                  .map((event, index) => (
+                    <div
+                      key={event.at + ":" + index}
+                      className="rounded border border-border/50 px-2 py-1"
+                    >
+                      <span className="text-muted-foreground">
+                        {new Date(event.at).toLocaleTimeString()}{" "}
+                      </span>
+                      <strong>{event.event}</strong> · {name(event.sessionId)} · {event.detail}
+                    </div>
+                  ))}
+                {!activityTrace.length && (
+                  <p className="text-muted-foreground">No activity timing events recorded yet.</p>
                 )}
               </div>
             </section>

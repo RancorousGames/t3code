@@ -83,13 +83,15 @@ export function chatGPTSessionDisplayRole(
   session: BrowserSession,
   verifiedManager: boolean,
 ): "manager" | "worker" | "human" {
-  // Local labels are user hints, not canonical OpenRig role evidence.
+  // A verified manager always stays a manager. Otherwise the user's explicit
+  // right-click designation overrides a stored Omniwork binding or spawn origin.
   if (verifiedManager) return "manager";
   if (session.markedAsWorkerAt !== undefined) return "worker";
   if (session.humanControlled) return "human";
   if (session.binding) return session.binding.role === "worker" ? "worker" : "human";
   return chatGPTSessionCreationOrigin(session) === "backend" ? "worker" : "human";
 }
+
 /** User-selected personal highlight colors, independent of AI activity color. */
 export const CHATGPT_SESSION_BORDER_COLORS = [
   { id: "red", label: "Red", accent: "ring-red-400", swatch: "bg-red-500" },

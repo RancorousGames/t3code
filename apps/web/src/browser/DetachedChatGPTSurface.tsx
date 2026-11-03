@@ -7,7 +7,6 @@ import { useShallow } from "zustand/react/shallow";
 
 import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { resolveHostedBrowserWebviewWrapperStyle } from "./hostedBrowserWebviewStyle";
-import { INSTALL_PERSISTENT_CHATGPT_CARET } from "./persistentChatGPTVirtualCaret";
 import { nativeTooltipMirror } from "./nativeChatGPTTooltipMirror";
 import {
   mutationTouchesNativeChatGPTOverlay,
@@ -25,9 +24,10 @@ type BrowserReply = {
 };
 
 /**
- * T3 presents a real GPU-composited Chromium HWND from an independent Electron
- * owner. There is no image capture, frame polling, or alternative image path.
- * The owner's WebContentsView survives T3 rebuilds/restarts.
+ * Reserves the pane for a real Chromium window from the persistent host, which
+ * survives T3 rebuilds/restarts. That window sits on top of this element and
+ * receives input directly from Windows, so this component only reports where
+ * the pane is. There is no image capture or input relay.
  */
 export function DetachedChatGPTSurface({
   sessionId,
@@ -67,10 +67,6 @@ export function DetachedChatGPTSurface({
   const [presented, setPresented] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
-  const inputQueue = useRef<Promise<unknown>>(Promise.resolve());
-  const latestMove = useRef<Record<string, unknown> | null>(null);
-  const moveQueued = useRef(false);
-  const moveFrame = useRef<number | null>(null);
   const presentation = useBrowserSurfaceStore(
     useShallow((state) => {
       const value = state.byTabId[runtimeTabId];
@@ -125,7 +121,7 @@ export function DetachedChatGPTSurface({
       });
     return () => {
       disposed = true;
-      // Unmount only the HWND; never close the host's live WebContentsView.
+      // Only stop presenting; never close the host's live WebContentsView.
     };
   }, [bridge, sessionId, threadRef.environmentId, profileId]);
 
@@ -149,8 +145,7 @@ export function DetachedChatGPTSurface({
       // window coordinator handles OS z-order and minimization separately.
       const rect = visible ? node.current?.getBoundingClientRect() : null;
       const bounds: Bounds | null =
-        rect && !nativeChatGPTOverlayOverlaps(document, rect) &&
-        rect.width > 1 && rect.height > 1
+        rect && !nativeChatGPTOverlayOverlaps(document, rect) && rect.width > 1 && rect.height > 1
           ? {
               x: Math.round(rect.x),
               y: Math.round(rect.y),
@@ -193,7 +188,7 @@ export function DetachedChatGPTSurface({
     const observer = new ResizeObserver(schedule);
     if (node.current) observer.observe(node.current);
     // Menus/dialogs live in the T3 renderer and cannot overpaint a native
-    // surface. Temporarily hide DWM only while an overlapping modal is open;
+    // window. Temporarily hide it only while an overlapping modal is open;
     // hovercards use the native tooltip mirror below without hiding ChatGPT.
     const overlayObserver = new MutationObserver((mutations) => {
       if (mutations.some(mutationTouchesNativeChatGPTOverlay)) schedule();
@@ -203,9 +198,16 @@ export function DetachedChatGPTSurface({
       childList: true,
       attributes: true,
       attributeFilter: [
-        "data-state", "data-open", "data-closed",
-        "data-starting-style", "data-ending-style",
-        "aria-hidden", "hidden", "inert", "role", "style",
+        "data-state",
+        "data-open",
+        "data-closed",
+        "data-starting-style",
+        "data-ending-style",
+        "aria-hidden",
+        "hidden",
+        "inert",
+        "role",
+        "style",
       ],
     });
     window.addEventListener("resize", schedule);
@@ -244,26 +246,27 @@ export function DetachedChatGPTSurface({
       if (disposed) return;
       const panel = node.current;
       const rect = panel?.getBoundingClientRect();
-      const tooltip = rect && document.visibilityState !== "hidden"
-        ? nativeTooltipMirror(document, rect)
-        : null;
+      const tooltip =
+        rect && document.visibilityState !== "hidden" ? nativeTooltipMirror(document, rect) : null;
       const signature = tooltip ? JSON.stringify(tooltip) : "";
       if (signature === lastTooltip) return;
       lastTooltip = signature;
-      chain = chain.catch(() => undefined).then(() =>
-        bridge({
-          operation: "tooltip",
-          identity,
-          bounds: tooltip?.bounds ?? null,
-          html: tooltip?.html ?? null,
-        }),
-      ).catch(() => undefined);
+      chain = chain
+        .catch(() => undefined)
+        .then(() =>
+          bridge({
+            operation: "tooltip",
+            identity,
+            bounds: tooltip?.bounds ?? null,
+            html: tooltip?.html ?? null,
+          }),
+        )
+        .catch(() => undefined);
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(measure);
     };
-    // Restore the native hovercard mirroring introduced in 81015cbf24 and
-    // corrected for fade-in in 5543bd4a63. The DWM migration disconnected it.
+    // T3 hovercards overlapping the page are mirrored into a native window.
     const observer = new MutationObserver((mutations) => {
       if (mutations.some(mutationTouchesNativeChatGPTOverlay)) schedule();
     });
@@ -273,9 +276,16 @@ export function DetachedChatGPTSurface({
       characterData: true,
       attributes: true,
       attributeFilter: [
-        "data-state", "data-open", "data-closed",
-        "data-starting-style", "data-ending-style",
-        "aria-hidden", "hidden", "inert", "style", "role",
+        "data-state",
+        "data-open",
+        "data-closed",
+        "data-starting-style",
+        "data-ending-style",
+        "aria-hidden",
+        "hidden",
+        "inert",
+        "style",
+        "role",
       ],
     });
     const resize = new ResizeObserver(schedule);
@@ -296,9 +306,10 @@ export function DetachedChatGPTSurface({
       document.removeEventListener("visibilitychange", schedule);
       // A closing session must dismiss its own hovercard, never another
       // session's newer popup. The main-process overlay enforces ownership.
-      void chain.catch(() => undefined).then(() =>
-        bridge({ operation: "tooltip", identity, bounds: null, html: null }),
-      ).catch(() => undefined);
+      void chain
+        .catch(() => undefined)
+        .then(() => bridge({ operation: "tooltip", identity, bounds: null, html: null }))
+        .catch(() => undefined);
     };
   }, [bridge, ready, visible, sessionId, threadRef.environmentId, profileId]);
 
@@ -336,130 +347,6 @@ export function DetachedChatGPTSurface({
     });
   }, [bridge, inputBridge, ready, sessionId, threadRef.environmentId, profileId]);
 
-  const sendInput = (input: Record<string, unknown>) => {
-    if (!inputBridge || !ready || !visible) return;
-    if (input.type === "move") {
-      // Never flood the authenticated host with stale cursor positions. Under
-      // IPC backpressure, deliver the newest pending move before the next click.
-      latestMove.current = input;
-      if (moveQueued.current) return;
-      moveQueued.current = true;
-      inputQueue.current = inputQueue.current.catch(() => undefined).then(async () => {
-        const latest = latestMove.current;
-        latestMove.current = null;
-        moveQueued.current = false;
-        if (latest) await inputBridge({ operation: "input", sessionId, input: latest });
-      }).catch((failure) => {
-        setError(failure instanceof Error ? failure.message : String(failure));
-      });
-      return;
-    }
-    inputQueue.current = inputQueue.current.catch(() => undefined).then(() =>
-      inputBridge({ operation: "input", sessionId, input }),
-    ).catch((failure) => {
-      setError(failure instanceof Error ? failure.message : String(failure));
-    });
-  };
-  const pointer = (event: React.PointerEvent<HTMLDivElement>, type: "move" | "down" | "up") => {
-    if (!ready || !visible) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const input = {
-      type,
-      x: Math.max(0, Math.round(event.clientX - rect.left)),
-      y: Math.max(0, Math.round(event.clientY - rect.top)),
-      button: event.button === 2 ? "right" : event.button === 1 ? "middle" : "left",
-    };
-    if (type === "move") {
-      // Coalesce cursor movements to one native event per renderer frame.
-      if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
-      moveFrame.current = requestAnimationFrame(() => {
-        moveFrame.current = null;
-        sendInput(input);
-      });
-      return;
-    }
-    if (moveFrame.current !== null) {
-      cancelAnimationFrame(moveFrame.current);
-      moveFrame.current = null;
-    }
-    if (type === "down") {
-      event.currentTarget.focus({ preventScroll: true });
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } else if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    sendInput(input);
-  };
-  const key = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!ready || !visible || event.nativeEvent.isComposing || event.key === "Process") return;
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") return;
-    event.preventDefault();
-    if (event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      sendInput({ type: "text", text: event.key });
-      return;
-    }
-    const modifiers = [
-      event.ctrlKey ? "Control" : "",
-      event.altKey ? "Alt" : "",
-      event.metaKey ? "Meta" : "",
-      event.shiftKey ? "Shift" : "",
-    ].filter(Boolean).join("+");
-    sendInput({
-      type: "key",
-      key: (modifiers ? modifiers + "+" : "") + event.key,
-      action: "press",
-    });
-  };
-  useEffect(() => {
-    const element = node.current;
-    if (!element || !ready) return;
-    const wheel = (event: WheelEvent) => {
-      if (!visible) return;
-      event.preventDefault();
-      const rect = element.getBoundingClientRect();
-      sendInput({
-        type: "wheel",
-        x: Math.round(event.clientX - rect.left),
-        y: Math.round(event.clientY - rect.top),
-        // DOM WheelEvent deltas are positive toward the bottom/right.
-        // Electron's sendInputEvent mouseWheel uses the opposite convention.
-        deltaX: -event.deltaX,
-        deltaY: -event.deltaY,
-      });
-    };
-    element.addEventListener("wheel", wheel, { passive: false });
-    return () => element.removeEventListener("wheel", wheel);
-  }, [ready, visible, inputBridge, sessionId]);
-
-  useEffect(() => {
-    if (!bridge || !ready || !visible) return;
-    let disposed = false;
-    const install = () => {
-      if (disposed) return;
-      void bridge({
-        operation: "evaluate",
-        identity: {
-          sessionId,
-          environmentId: threadRef.environmentId,
-          profileId: profileId ?? "default",
-        },
-        expression: INSTALL_PERSISTENT_CHATGPT_CARET,
-      }).catch(() => {
-        // Caret decoration must never interfere with the actual page or input.
-      });
-    };
-    install();
-    // SPA navigation may replace the document without remounting this panel.
-    // A very infrequent idempotent check restores only the missing decoration.
-    const interval = setInterval(install, 20_000);
-    window.addEventListener("focus", install);
-    return () => {
-      disposed = true;
-      clearInterval(interval);
-      window.removeEventListener("focus", install);
-    };
-  }, [bridge, ready, visible, sessionId, threadRef.environmentId, profileId]);
-
   useEffect(() => {
     if (!ready) return;
     const publish = () => {
@@ -488,23 +375,13 @@ export function DetachedChatGPTSurface({
           : "fixed overflow-hidden bg-background [-webkit-app-region:no-drag]"
       }
       style={standalone ? undefined : displayStyle}
-      tabIndex={0}
-      onPointerMove={(event) => pointer(event, "move")}
-      onPointerDown={(event) => pointer(event, "down")}
-      onPointerUp={(event) => pointer(event, "up")}
-      onKeyDown={key}
-      onCompositionEnd={(event) => {
-        if (event.data) sendInput({ type: "text", text: event.data });
-      }}
-      onPaste={(event) => {
-        event.preventDefault();
-        sendInput({ type: "text", text: event.clipboardData.getData("text/plain") });
-      }}
-      onContextMenu={(event) => event.preventDefault()}
       aria-label="Persistent native Chromium browser"
     >
       {error && (
-        <div role="alert" className="absolute inset-x-0 top-0 z-10 bg-destructive px-3 py-2 text-xs text-white">
+        <div
+          role="alert"
+          className="absolute inset-x-0 top-0 z-10 bg-destructive px-3 py-2 text-xs text-white"
+        >
           {error}
         </div>
       )}

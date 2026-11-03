@@ -235,10 +235,10 @@ describe("ChatGPT last-active/status sorting", () => {
       ["workingWartribes", 0],
       ["workingAltraea", 0],
       ["recentAltraea", 0],
-      ["idleWartribes2", 0],
+      ["idleAltraea", 0],
       ["idleAltraea2", 0],
       ["idleWartribes", 0],
-      ["idleAltraea", 0],
+      ["idleWartribes2", 0],
       ["interrupted", 0],
       ["invalid", 0],
     ]);
@@ -292,11 +292,11 @@ describe("ChatGPT last-active/status sorting", () => {
     const global = layoutChatGPTSessions(assigned, projects, "activity", activity, pinned);
     expect(global).toHaveLength(1);
     expect(global[0]?.rows.map(({ session }) => session.id)).toEqual([
-      "wt-new",
       "alt-new",
       "wt-old",
+      "wt-new",
     ]);
-    expect(global[0]?.rows[1]?.session.project).toBe("Settling Altraea");
+    expect(global[0]?.rows[0]?.session.project).toBe("Settling Altraea");
 
     const started = layoutChatGPTSessions(assigned, projects, "started", activity, pinned);
     expect(started[0]?.key).toBe("pin:wartribes");
@@ -342,6 +342,10 @@ describe("ChatGPT last-active/status sorting", () => {
       "working-child": { age: "working", lastWorkingAt: 50 },
       "working-other": { age: "working", lastWorkingAt: 100 },
     })[0]?.rows;
+    expect(activeParentRows?.slice(0, 2).map(({ session, depth }) => [session.id, depth])).toEqual([
+      ["parent", 0],
+      ["working-child", 1],
+    ]);
     expect(
       activeParentRows?.find(({ session }) => session.id === "working-child")?.inactiveParentHeader,
     ).toBeUndefined();
@@ -352,6 +356,80 @@ describe("ChatGPT last-active/status sorting", () => {
         .flatMap((group) => group.rows)
         .find(({ session }) => session.id === "working-child")?.depth,
     ).toBe(1);
+  });
+
+  it("keeps idle and unloaded children beneath their parent but leaves recent activity global", () => {
+    const sessions = [
+      { id: "unloaded", title: "Unloaded", parentSessionId: "parent" },
+      { id: "other", title: "Other" },
+      { id: "parent", title: "Manager" },
+      { id: "recent", title: "Recent", parentSessionId: "parent" },
+      { id: "idle", title: "Idle", parentSessionId: "parent" },
+      { id: "errored", title: "Error", parentSessionId: "parent" },
+    ];
+    const rows = layoutChatGPTSessions(sessions, [], "activity", {
+      unloaded: { age: "unloaded", lastWorkingAt: 0 },
+      other: { age: "recent", lastWorkingAt: 80 },
+      parent: { age: "inactive", lastWorkingAt: 1 },
+      recent: { age: "recent", lastWorkingAt: 30 },
+      idle: { age: "inactive", lastWorkingAt: 4 },
+      errored: { age: "invalid", lastWorkingAt: 0 },
+    })[0]!.rows;
+    const parent = rows.findIndex((row) => row.session.id === "parent");
+    expect(rows.slice(parent, parent + 4).map(({ session, depth }) => [session.id, depth])).toEqual(
+      [
+        ["parent", 0],
+        ["idle", 1],
+        ["unloaded", 1],
+        ["errored", 0],
+      ],
+    );
+    expect(rows.find((row) => row.session.id === "errored")?.depth).toBe(0);
+  });
+
+  it("groups idle trees by the parent's project, not the child's project", () => {
+    const sessions = [
+      { id: "b-parent", title: "B manager", project: "Zulu" },
+      { id: "a-child", title: "A child", project: "Zulu", parentSessionId: "a-parent" },
+      { id: "b-child", title: "B child", project: "Alpha", parentSessionId: "b-parent" },
+      { id: "a-parent", title: "A manager", project: "Alpha" },
+    ];
+    const rows = layoutChatGPTSessions(sessions, [], "activity", {})[0]!.rows;
+    expect(rows.map(({ session, depth }) => [session.id, depth])).toEqual([
+      ["a-parent", 0],
+      ["a-child", 1],
+      ["b-parent", 0],
+      ["b-child", 1],
+    ]);
+  });
+
+  it("can place errors with project trees or float them to the bottom", () => {
+    const sessions = [
+      { id: "error-alpha", title: "Error", project: "Alpha" },
+      { id: "idle-zulu", title: "Idle", project: "Zulu" },
+      { id: "idle-alpha", title: "Manager", project: "Alpha" },
+      { id: "error-child", title: "Error child", parentSessionId: "idle-alpha", project: "Zulu" },
+    ];
+    const activities = {
+      "error-alpha": { age: "invalid" as const, lastWorkingAt: 0 },
+      "idle-zulu": { age: "inactive" as const, lastWorkingAt: 0 },
+      "idle-alpha": { age: "inactive" as const, lastWorkingAt: 0 },
+      "error-child": { age: "interrupted" as const, lastWorkingAt: 0 },
+    };
+    const rows = (bottom: boolean) =>
+      layoutChatGPTSessions(sessions, [], "activity", activities, [], undefined, bottom)[0]!.rows;
+    expect(rows(true).map(({ session }) => session.id)).toEqual([
+      "idle-alpha",
+      "idle-zulu",
+      "error-alpha",
+      "error-child",
+    ]);
+    expect(rows(false).map(({ session, depth }) => [session.id, depth])).toEqual([
+      ["error-alpha", 0],
+      ["idle-alpha", 0],
+      ["error-child", 1],
+      ["idle-zulu", 0],
+    ]);
   });
 
   it("always prioritizes working sessions, including over a selected idle manual chat", () => {

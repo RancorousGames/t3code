@@ -60,12 +60,12 @@ export function projectHideableWorkerIds(
 ): ReadonlySet<string> {
   if (authoritativeIds === null)
     return new Set(
-      [
-        ...verifiedWorkerIds,
-        ...sessions
-          .filter((session) => session.markedAsWorkerAt !== undefined)
-          .map((session) => session.id),
-      ].filter((id) => !managerIds.has(id)),
+      sessions.flatMap((session) =>
+        (verifiedWorkerIds.has(session.id) || session.markedAsWorkerAt !== undefined) &&
+        chatGPTSessionDisplayRole(session, managerIds.has(session.id)) === "worker"
+          ? [session.id]
+          : [],
+      ),
     );
   return new Set(
     sessions.flatMap((session) =>

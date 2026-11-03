@@ -24,8 +24,9 @@ export function nativeChatGPTOverlayOverlaps(
 ): boolean {
   if (nativeBounds.width <= 1 || nativeBounds.height <= 1) return false;
   return [...doc.querySelectorAll<HTMLElement>(NATIVE_CHATGPT_OVERLAY_SELECTOR)].some((element) => {
+    // Toasts are role="dialog" too, but a notification must never blank the page.
     if (
-      element.closest('[hidden],[aria-hidden="true"],[inert]') ||
+      element.closest('[hidden],[aria-hidden="true"],[inert],[data-slot="toast-viewport"]') ||
       element.hasAttribute("data-closed")
     )
       return false;

@@ -26,6 +26,15 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("../../chatGPTBrowserSessions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../chatGPTBrowserSessions")>()),
+  useChatGPTBrowserSessions: () => ({
+    sessions: [],
+    registerBootstrapMarker: vi.fn(),
+    renameSessionFromPageTitle: vi.fn(),
+    disqualifyManualEmptyCandidate: vi.fn(),
+  }),
+}));
 vi.mock("../../previewStateStore", () => ({
   useThreadPreviewState: () => mocks.state,
   readThreadPreviewState: () => mocks.state,
@@ -55,6 +64,10 @@ vi.mock("../preview/openPreviewSession", () => ({ openPreviewSession: mocks.open
 vi.mock("../preview/previewBridge", () => ({ previewBridge: { refresh: mocks.refresh } }));
 
 import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
+import {
+  getChatGPTStartupLoadPlan,
+  isChatGPTStartupSessionDeferred,
+} from "../../omniwork/chatGPTStartupLoadPolicy";
 
 let renderer: ReactTestRenderer | undefined;
 let sessionNumber = 0;
@@ -108,6 +121,44 @@ describe("ChatGPT session startup", () => {
     expect(mocks.open).toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://chatgpt.com/c/saved" }),
     );
+  });
+
+  it("opens a deferred restored session as soon as it is selected", async () => {
+    const restoredEnvironment = EnvironmentId.make("restored-selection-test");
+    const sessionId = `session-${++sessionNumber}`;
+    // The startup activation Set does not notify React; selecting has to
+    // override the deferral rather than waiting for the warm scheduler.
+    getChatGPTStartupLoadPlan(restoredEnvironment, [sessionId], false);
+    expect(isChatGPTStartupSessionDeferred(restoredEnvironment, sessionId)).toBe(true);
+
+    await act(async () => {
+      renderer = create(
+        <ChatGPTBrowserSessionRuntime
+          environmentId={restoredEnvironment}
+          sessionId={sessionId}
+          suspended={false}
+          selected={false}
+        />,
+      );
+    });
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer!.update(
+        <ChatGPTBrowserSessionRuntime
+          environmentId={restoredEnvironment}
+          sessionId={sessionId}
+          suspended={false}
+          selected
+        />,
+      );
+    });
+    expect(mocks.list).toHaveBeenCalledOnce();
+    expect(mocks.open).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://chatgpt.com/c/saved" }),
+    );
+    expect(isChatGPTStartupSessionDeferred(restoredEnvironment, sessionId)).toBe(true);
   });
 
   it("automatically retries a transient startup React update-depth failure once", async () => {

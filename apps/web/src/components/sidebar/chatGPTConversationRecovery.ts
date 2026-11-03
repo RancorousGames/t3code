@@ -1,4 +1,6 @@
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
+import { logChatGPTRecoveryTimeline } from "../../chatGPTRecoveryTimeline";
+import { recordWarmSessionClick } from "../../omniwork/chatGPTWarmPriorityHistory";
 /**
  * Executed inside a ChatGPT webview. Only recognize the dedicated error panel:
  * a visible exact error string alongside the provider's Retry/Try again button.
@@ -41,7 +43,8 @@ export function hasChatGPTLoadFailure(): boolean {
     let container: Element | null = element;
     for (let depth = 0; container && depth < 5 && container !== body; depth++) {
       for (const button of container.querySelectorAll('button, [role="button"]')) {
-        if (/^(?:retry|try again)$/i.test(button.textContent?.trim() ?? "") && visible(button)) return true;
+        if (/^(?:retry|try again)$/i.test(button.textContent?.trim() ?? "") && visible(button))
+          return true;
       }
       container = container.parentElement;
     }
@@ -64,7 +67,8 @@ export function chatGPTRecoveryProblem(activity: string): ChatGPTRecoveryProblem
   if (
     activity === "invalid: Could not load this ChatGPT conversation" ||
     activity === "invalid: the ChatGPT composer is unavailable"
-  ) return "load-failure";
+  )
+    return "load-failure";
   if (activity === "interrupted" || activity === "delivery-timeout") return activity;
   return null;
 }
@@ -137,6 +141,7 @@ export function recordSessionClick(
   allSessionIds: readonly string[],
 ): void {
   if (!allSessionIds.includes(sessionId)) return;
+  recordWarmSessionClick(environmentId, sessionId, allSessionIds);
   const retained = new Set(allSessionIds);
   const next = [
     sessionId,
@@ -146,6 +151,13 @@ export function recordSessionClick(
   window.localStorage.setItem(
     lastClickedSessionKey(environmentId),
     JSON.stringify({ id: sessionId, at: Date.now() }),
+  );
+  logChatGPTRecoveryTimeline(
+    environmentId,
+    "all",
+    "click",
+    "User selected this session. Recomputing priority (selected session ranks first among eligible guests).",
+    { sessionId },
   );
 }
 
@@ -179,9 +191,15 @@ export const orderedCandidates = (
 
 export function readRecoveryHistory(environmentId: string): RecoveryHistory {
   try {
-    const parsed: unknown = getChatGPTSessionPersistedStore(environmentId).getState().recovery.history;
+    const parsed: unknown =
+      getChatGPTSessionPersistedStore(environmentId).getState().recovery.history;
     if (!parsed || typeof parsed !== "object") throw new Error("Invalid history");
-    const data = parsed as { lastAttemptAt?: unknown; redLastAttemptAt?: unknown; orangeLastAttemptAt?: unknown; bySession?: unknown };
+    const data = parsed as {
+      lastAttemptAt?: unknown;
+      redLastAttemptAt?: unknown;
+      orangeLastAttemptAt?: unknown;
+      bySession?: unknown;
+    };
     const bySession: Record<string, number> = {};
     if (data.bySession && typeof data.bySession === "object") {
       for (const [id, value] of Object.entries(data.bySession)) {
@@ -190,10 +208,18 @@ export function readRecoveryHistory(environmentId: string): RecoveryHistory {
     }
     return {
       lastAttemptAt: typeof data.lastAttemptAt === "number" ? data.lastAttemptAt : 0,
-      redLastAttemptAt: typeof data.redLastAttemptAt === "number" ? data.redLastAttemptAt :
-        (typeof data.lastAttemptAt === "number" ? data.lastAttemptAt : 0),
-      orangeLastAttemptAt: typeof data.orangeLastAttemptAt === "number" ? data.orangeLastAttemptAt :
-        (typeof data.lastAttemptAt === "number" ? data.lastAttemptAt : 0),
+      redLastAttemptAt:
+        typeof data.redLastAttemptAt === "number"
+          ? data.redLastAttemptAt
+          : typeof data.lastAttemptAt === "number"
+            ? data.lastAttemptAt
+            : 0,
+      orangeLastAttemptAt:
+        typeof data.orangeLastAttemptAt === "number"
+          ? data.orangeLastAttemptAt
+          : typeof data.lastAttemptAt === "number"
+            ? data.lastAttemptAt
+            : 0,
       bySession,
     };
   } catch {
@@ -213,9 +239,12 @@ export function recordRecoveryAttempt(
     ids.filter((id) => id in previous.bySession).map((id) => [id, previous.bySession[id]]),
   );
   bySession[sessionId] = now;
-  const history = { lastAttemptAt: now, bySession,
+  const history = {
+    lastAttemptAt: now,
+    bySession,
     redLastAttemptAt: lane === "red" ? now : previous.redLastAttemptAt,
-    orangeLastAttemptAt: lane === "orange" ? now : previous.orangeLastAttemptAt };
+    orangeLastAttemptAt: lane === "orange" ? now : previous.orangeLastAttemptAt,
+  };
   window.localStorage.setItem(recoveryKey(environmentId), JSON.stringify(history));
   const store = getChatGPTSessionPersistedStore(environmentId);
   store.setState((previous) => ({ recovery: { ...previous.recovery, history } }));

@@ -132,6 +132,47 @@ describe("T3-0150 verified manager seat projection", () => {
     ).toBe(false);
   });
 
+  it("right-click worker/personal designation overrides bindings and spawn origin, but not managers", () => {
+    const bound = {
+      id: "user-session",
+      title: "Session",
+      creationOrigin: "manual" as const,
+      binding: {
+        seatId: null,
+        role: "personal" as const,
+        parentSessionId: null,
+        taskRef: null,
+        boundAt: "2026-10-28T20:00:00Z",
+        boundBy: "user" as const,
+      },
+    };
+    expect(chatGPTSessionDisplayRole(bound, false)).toBe("human");
+    const markedWorker = { ...bound, markedAsWorkerAt: Date.now(), humanControlled: false };
+    expect(chatGPTSessionDisplayRole(markedWorker, false)).toBe("worker");
+    expect(projectHideableWorkerIds([markedWorker], new Set(), new Set(), new Set())).toEqual(
+      new Set([bound.id]),
+    );
+    expect(chatGPTSessionDisplayRole(markedWorker, true)).toBe("manager");
+
+    const boundWorker = {
+      ...bound,
+      creationOrigin: "backend" as const,
+      binding: { ...bound.binding, role: "worker" as const },
+    };
+    expect(chatGPTSessionDisplayRole(boundWorker, false)).toBe("worker");
+    const markedPersonal = { ...boundWorker, humanControlled: true };
+    expect(chatGPTSessionDisplayRole(markedPersonal, false)).toBe("human");
+    expect(
+      projectHideableWorkerIds([markedPersonal], null, new Set(), new Set([bound.id])),
+    ).toEqual(new Set());
+    expect(
+      chatGPTSessionDisplayRole(
+        { ...bound, binding: { ...bound.binding, role: "manager" } },
+        false,
+      ),
+    ).toBe("human");
+  });
+
   it("revocation/seat transfer or same-slot Agent Reboot cannot reuse a stale conversation marker", () => {
     const afterTransfer = projectOpenRigManagerTabIds(
       records,

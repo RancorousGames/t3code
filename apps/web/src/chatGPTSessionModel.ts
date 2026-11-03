@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { hasHostedBrowserGuestTab, subscribeHostedBrowserGuestPresence } from "./browser/hostedBrowserGuestPresence";
+import {
+  hasHostedBrowserGuestTab,
+  subscribeHostedBrowserGuestPresence,
+} from "./browser/hostedBrowserGuestPresence";
 import { chatGPTBrowserThreadRef } from "./chatGPTBrowserSessions";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { BrowserSession } from "./chatGPTBrowserSessions";
@@ -10,18 +13,34 @@ import {
   type ChatGPTRecoveryEvent,
 } from "./chatGPTRecoveryDiagnostics";
 import { readChatGPTSessionTimeline } from "./chatGPTSessionTimestamps";
-import type { ChatGPTActivityAge } from "./components/sidebar/chatGPTActivity";
 import { useThreadPreviewState } from "./previewStateStore";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
+import type { ChatGPTActivityAge } from "./components/sidebar/chatGPTActivity";
 
 export type ChatGPTSessionActivity = "working" | "idle" | "interrupted" | "failed" | "unknown";
 export type ChatGPTSessionAttention =
-  | "none" | "question" | "error" | "recovery_stopped" | "unconfirmed_send"
-  | "conversation_full" | "needs_browser";
+  | "none"
+  | "question"
+  | "error"
+  | "recovery_stopped"
+  | "unconfirmed_send"
+  | "conversation_full"
+  | "needs_browser";
 export type ChatGPTSessionResidency =
-  | "loaded" | "warm" | "loading" | "hibernated" | "unloaded" | "snoozed" | "hidden";
+  | "loaded"
+  | "warm"
+  | "loading"
+  | "hibernated"
+  | "unloaded"
+  | "snoozed"
+  | "hidden";
 export type ChatGPTSessionBucket =
-  | "needs_you" | "working" | "recently_stopped" | "idle" | "snoozed" | "completed";
+  | "needs_you"
+  | "working"
+  | "recently_stopped"
+  | "idle"
+  | "snoozed"
+  | "completed";
 
 export interface ChatGPTSessionRecovery {
   phase: "checking" | "refreshing" | "queued" | null;
@@ -66,8 +85,15 @@ export interface ChatGPTSessionModel {
   residency: ChatGPTSessionResidency;
   bucket: ChatGPTSessionBucket | null;
   statusLine: string;
-  primaryAction: "open" | "answer" | "retry_recovery" | "check_delivery" | "open_browser"
-    | "unsnooze" | "archive" | null;
+  primaryAction:
+    | "open"
+    | "answer"
+    | "retry_recovery"
+    | "check_delivery"
+    | "open_browser"
+    | "unsnooze"
+    | "archive"
+    | null;
   lastWorkingAt: number;
   recovery: ChatGPTSessionRecovery;
   timeline: ChatGPTSessionTimeline | null;
@@ -77,8 +103,13 @@ export interface ChatGPTSessionModel {
 }
 
 const EMPTY_RECOVERY: ChatGPTSessionRecovery = {
-  phase: null, attempts: 0, nextAttemptAt: null,
-  lastAttemptAt: null, lastOutcome: null, orangeStage: null, stoppedReason: null,
+  phase: null,
+  attempts: 0,
+  nextAttemptAt: null,
+  lastAttemptAt: null,
+  lastOutcome: null,
+  orangeStage: null,
+  stoppedReason: null,
 };
 
 /** One authoritative, side-effect-free mapping. Never validates a completion marker itself. */
@@ -87,83 +118,160 @@ export function deriveChatGPTSession(
   now: number,
 ): ChatGPTSessionModel {
   const originalAge = raw.age ?? "unknown";
-  // Real guest absence outranks any cached idle/load status, including a stale
-  // Loading overlay from a previous preview tab.
-  const absent = raw.attached === false && ["unloaded", "recent", "inactive", "unknown"].includes(originalAge) &&
+  const loading = raw.loading || raw.status === "loading";
+  const absent =
+    raw.attached === false &&
+    ["recent", "inactive", "unknown"].includes(originalAge) &&
     !["working", "stuck", "unavailable", "stuck_connecting"].includes(raw.status ?? "");
-  const staleUnloaded = raw.attached === true && originalAge === "unloaded";
+  // Only actual guest attachment can invalidate an unloaded observation.
+  // A cached Loading overlay can outlive the browser tab it belonged to.
+  const staleUnloaded =
+    raw.attached === true &&
+    ["unloaded", "unloaded-recent", "unloaded-working"].includes(originalAge);
   const status = raw.status;
-  const age = status === "settings" ? "unknown"
-    : absent ? "unloaded" : staleUnloaded ? "unknown" : originalAge;
+  const age =
+    status === "settings"
+      ? "unknown"
+      : absent
+        ? "unloaded"
+        : staleUnloaded
+          ? "unknown"
+          : originalAge;
   let activity: ChatGPTSessionActivity =
-    status === "settings" ? "unknown"
-    : age === "working" || status === "working" ? "working"
-    : age === "interrupted" || status === "stuck_connecting" ? "interrupted"
-    : age === "invalid" || status === "stuck" || status === "unavailable" ? "failed"
-    : age === "recent" || age === "inactive" || status === "done_or_idle"
-      || status === "waiting_for_input" || status === "conversation_full" ? "idle"
-    : "unknown";
+    status === "settings"
+      ? "unknown"
+      : age === "working" || status === "working"
+        ? "working"
+        : age === "interrupted" || status === "stuck_connecting"
+          ? "interrupted"
+          : age === "invalid" || status === "stuck" || status === "unavailable"
+            ? "failed"
+            : age === "recent" ||
+                age === "unloaded-recent" ||
+                age === "unloaded-working" ||
+                age === "inactive" ||
+                status === "done_or_idle" ||
+                status === "waiting_for_input" ||
+                status === "conversation_full"
+              ? "idle"
+              : "unknown";
 
   const recovery = { ...EMPTY_RECOVERY, ...raw.recovery };
   let attention: ChatGPTSessionAttention =
-    raw.uncertainSend || age === "delivery-timeout" ? "unconfirmed_send"
-    : recovery.stoppedReason ? "recovery_stopped"
-    : status === "conversation_full" ? "conversation_full"
-    : raw.browserUnavailable ? "needs_browser"
-    : status === "waiting_for_input" ? "question"
-    : activity === "failed" ? "error"
-    : "none";
+    raw.uncertainSend || age === "delivery-timeout"
+      ? "unconfirmed_send"
+      : recovery.stoppedReason
+        ? "recovery_stopped"
+        : status === "conversation_full"
+          ? "conversation_full"
+          : raw.browserUnavailable
+            ? "needs_browser"
+            : status === "waiting_for_input"
+              ? "question"
+              : activity === "failed"
+                ? "error"
+                : "none";
 
   // The browser can have a recoverable transport error and a simultaneous
   // uncertain send. Never let a lower-priority DOM observation hide the send.
   if (raw.uncertainSend) attention = "unconfirmed_send";
   if (status === "conversation_full" && activity !== "working") activity = "idle";
 
-  const residency: ChatGPTSessionResidency =
-    raw.hidden ? "hidden"
-    : (raw.snoozedUntil ?? 0) > now || age === "snoozed" ? "snoozed"
-    : raw.attached === true ? "loaded"
-    : raw.hibernated || status === "hibernated" ? "hibernated"
-    : raw.unloaded || age === "unloaded" || status === "unloaded" ? "unloaded"
-    : raw.loading || status === "loading" ? "loading"
-    : raw.warm ? "warm" : "loaded";
+  const residency: ChatGPTSessionResidency = raw.hidden
+    ? "hidden"
+    : (raw.snoozedUntil ?? 0) > now || age === "snoozed"
+      ? "snoozed"
+      : raw.attached === true
+        ? "loaded"
+        : raw.hibernated || status === "hibernated"
+          ? "hibernated"
+          : raw.unloaded ||
+              ["unloaded", "unloaded-recent", "unloaded-working"].includes(age) ||
+              status === "unloaded"
+            ? "unloaded"
+            : loading
+              ? "loading"
+              : raw.warm
+                ? "warm"
+                : "loaded";
 
-  const lastWorkingAt = Number.isFinite(raw.lastWorkingAt) && (raw.lastWorkingAt ?? 0) > 0
-    ? raw.lastWorkingAt! : 0;
-  const bucket: ChatGPTSessionBucket | null = residency === "hidden" ? null
-    : raw.completionValid ? "completed"
-    : attention !== "none" || activity === "interrupted" || activity === "failed"
-      ? "needs_you"
-    : residency === "snoozed" ? "snoozed"
-    : activity === "working" ? "working"
-    : activity === "idle" && lastWorkingAt <= now && now - lastWorkingAt < 15 * 60_000
-      ? "recently_stopped"
-    : "idle";
+  const lastWorkingAt =
+    Number.isFinite(raw.lastWorkingAt) && (raw.lastWorkingAt ?? 0) > 0 ? raw.lastWorkingAt! : 0;
+  const bucket: ChatGPTSessionBucket | null =
+    residency === "hidden"
+      ? null
+      : raw.completionValid
+        ? "completed"
+        : attention !== "none" || activity === "interrupted" || activity === "failed"
+          ? "needs_you"
+          : residency === "snoozed"
+            ? "snoozed"
+            : activity === "working"
+              ? "working"
+              : activity === "idle" && lastWorkingAt <= now && now - lastWorkingAt < 15 * 60_000
+                ? "recently_stopped"
+                : "idle";
   const primaryAction: ChatGPTSessionModel["primaryAction"] =
-    bucket === null ? null
-    : bucket === "completed" ? "archive"
-    : attention === "unconfirmed_send" ? "check_delivery"
-    : attention === "question" ? "answer"
-    : attention === "needs_browser" ? "open_browser"
-    : attention === "error" || attention === "recovery_stopped" || activity === "interrupted"
-      ? "retry_recovery"
-    : bucket === "snoozed" ? "unsnooze"
-    : "open";
+    bucket === null
+      ? null
+      : bucket === "completed"
+        ? "archive"
+        : attention === "unconfirmed_send"
+          ? "check_delivery"
+          : attention === "question"
+            ? "answer"
+            : attention === "needs_browser"
+              ? "open_browser"
+              : attention === "error" ||
+                  attention === "recovery_stopped" ||
+                  activity === "interrupted"
+                ? "retry_recovery"
+                : bucket === "snoozed"
+                  ? "unsnooze"
+                  : "open";
   const statusLine =
-    (status === "settings" ? "ChatGPT settings open"
-      : absent ? "ChatGPT browser unloaded" : staleUnloaded ? undefined : raw.label) || (attention === "unconfirmed_send" ? "Delivery needs confirmation"
-      : attention === "question" ? "Waiting for your answer"
-      : attention === "conversation_full" ? "Conversation full"
-      : attention === "needs_browser" ? "ChatGPT browser needs attention"
-      : activity === "working" ? "ChatGPT is working"
-      : activity === "interrupted" ? "ChatGPT connection interrupted"
-      : activity === "failed" ? "ChatGPT is unavailable"
-      : residency === "snoozed" ? "Snoozed"
-      : activity === "idle" ? "ChatGPT is idle" : "ChatGPT status unknown");
+    (status === "settings"
+      ? "ChatGPT settings open"
+      : absent
+        ? "ChatGPT browser unloaded"
+        : residency === "loading" && activity === "unknown"
+          ? "ChatGPT is loading"
+          : staleUnloaded
+            ? undefined
+            : raw.label) ||
+    (attention === "unconfirmed_send"
+      ? "Delivery needs confirmation"
+      : attention === "question"
+        ? "Waiting for your answer"
+        : attention === "conversation_full"
+          ? "Conversation full"
+          : attention === "needs_browser"
+            ? "ChatGPT browser needs attention"
+            : residency === "loading"
+              ? "ChatGPT is loading"
+              : activity === "working"
+                ? "ChatGPT is working"
+                : activity === "interrupted"
+                  ? "ChatGPT connection interrupted"
+                  : activity === "failed"
+                    ? "ChatGPT is unavailable"
+                    : residency === "snoozed"
+                      ? "Snoozed"
+                      : activity === "idle"
+                        ? "ChatGPT is idle"
+                        : "ChatGPT status unknown");
   return {
-    activity, attention, residency, bucket, statusLine, primaryAction,
-    lastWorkingAt, recovery, timeline: raw.timeline ?? null,
-    recoveryEvents: raw.events ?? [], compatibilityAge: age,
+    activity,
+    attention,
+    residency,
+    bucket,
+    statusLine,
+    primaryAction,
+    lastWorkingAt,
+    recovery,
+    timeline: raw.timeline ?? null,
+    recoveryEvents: raw.events ?? [],
+    compatibilityAge: age,
   };
 }
 
@@ -175,11 +283,14 @@ export function matchesChatGPTSessionWhich(
   if (model.residency === "hidden") return false;
   switch (which) {
     case "visible":
-    case "all": return true;
-    case "recent": return model.compatibilityAge === "recent";
-    case "working": return model.compatibilityAge === "working";
-    case "blocked": return model.compatibilityAge === "invalid"
-      || model.compatibilityAge === "interrupted";
+    case "all":
+      return true;
+    case "recent":
+      return ["recent", "unloaded-recent", "unloaded-working"].includes(model.compatibilityAge);
+    case "working":
+      return model.compatibilityAge === "working";
+    case "blocked":
+      return model.compatibilityAge === "invalid" || model.compatibilityAge === "interrupted";
   }
 }
 
@@ -233,17 +344,28 @@ export function useChatGPTSession(
 ): ChatGPTSessionModel {
   const [saved, setSaved] = useState<ReturnType<typeof readSavedSignals> | null>(null);
   const createdAt = options.verifiedSpawnCreatedAt;
-  const threadRef = useMemo(() => chatGPTBrowserThreadRef(environmentId, session.id), [environmentId, session.id]);
+  const threadRef = useMemo(
+    () => chatGPTBrowserThreadRef(environmentId, session.id),
+    [environmentId, session.id],
+  );
   const preview = useThreadPreviewState(threadRef);
   const runtimeTabId = preview.activeTabId
-    ? previewRuntimeTabId(threadRef, preview.serverEpoch, preview.activeTabId) : null;
-  const attached = useSyncExternalStore(subscribeHostedBrowserGuestPresence,
-    () => runtimeTabId !== null && hasHostedBrowserGuestTab(threadRef, runtimeTabId), () => false);
-  // Chromium stays resident without a mounted Electron guest. A null probe
-  // means unknown, not unloaded; only an explicit negative proves absence.
+    ? previewRuntimeTabId(threadRef, preview.serverEpoch, preview.activeTabId)
+    : null;
+  const attached = useSyncExternalStore(
+    subscribeHostedBrowserGuestPresence,
+    () => runtimeTabId !== null && hasHostedBrowserGuestTab(threadRef, runtimeTabId),
+    () => false,
+  );
+  // A persistent Chromium page can remain loaded without any T3 webview.
+  // Tri-state null must remain unknown, not turn into a false unloaded claim.
   const actualResidency = observation.resident === undefined ? attached : observation.resident;
+  const loading =
+    options.loading ??
+    (preview.snapshot?.navStatus._tag === "Loading" || preview.desktopOverlay?.loading === true);
   useEffect(() => {
-    const refresh = () => setSaved(readSavedSignals(environmentId, session, observation.lastWorkingAt, createdAt));
+    const refresh = () =>
+      setSaved(readSavedSignals(environmentId, session, observation.lastWorkingAt, createdAt));
     refresh();
     window.addEventListener("chatgpt-recovery-queue-updated", refresh);
     window.addEventListener("storage", refresh);
@@ -252,22 +374,46 @@ export function useChatGPTSession(
       window.removeEventListener("storage", refresh);
     };
   }, [environmentId, session, observation.lastWorkingAt, createdAt, options.phase]);
-  return useMemo(() => deriveChatGPTSession({
-    age: observation.age, ...(actualResidency !== null ? { attached: actualResidency } : {}),
-    label: observation.label, lastWorkingAt: observation.lastWorkingAt,
-    hidden: session.hidden, snoozedUntil: session.snoozedUntil,
-    status: options.status, hibernated: options.hibernated, loading: options.loading,
-    warm: options.warm, uncertainSend: options.uncertainSend,
-    completionValid: options.completionValid,
-    recovery: { ...saved?.recovery, phase: options.phase ?? null },
-    timeline: saved?.timeline,
-    events: saved?.events,
-  }, options.now ?? Date.now()), [
-    observation.age, observation.label, observation.lastWorkingAt, actualResidency,
-    session.hidden, session.snoozedUntil, options.status, options.hibernated,
-    options.loading, options.warm, options.uncertainSend, options.completionValid,
-    options.phase, options.now, saved,
-  ]);
+  return useMemo(
+    () =>
+      deriveChatGPTSession(
+        {
+          age: observation.age,
+          ...(actualResidency !== null ? { attached: actualResidency } : {}),
+          label: observation.label,
+          lastWorkingAt: observation.lastWorkingAt,
+          hidden: session.hidden,
+          snoozedUntil: session.snoozedUntil,
+          status: options.status,
+          hibernated: options.hibernated,
+          loading,
+          warm: options.warm,
+          uncertainSend: options.uncertainSend,
+          completionValid: options.completionValid,
+          recovery: { ...saved?.recovery, phase: options.phase ?? null },
+          timeline: saved?.timeline,
+          events: saved?.events,
+        },
+        options.now ?? Date.now(),
+      ),
+    [
+      observation.age,
+      observation.label,
+      observation.lastWorkingAt,
+      actualResidency,
+      session.hidden,
+      session.snoozedUntil,
+      options.status,
+      options.hibernated,
+      loading,
+      options.warm,
+      options.uncertainSend,
+      options.completionValid,
+      options.phase,
+      options.now,
+      saved,
+    ],
+  );
 }
 
 const EMPTY_OBSERVATIONS: Readonly<Record<string, ActivityObservation>> = {};
@@ -279,14 +425,21 @@ export function useChatGPTSessions(
   now = Date.now(),
 ): readonly (ChatGPTSessionModel & { session: BrowserSession })[] {
   const { sessions } = useChatGPTBrowserSessions(environmentId);
-  return useMemo(() => sessions.map((session) => ({
-    session,
-    ...deriveChatGPTSession({
-      age: observations[session.id]?.age,
-      label: observations[session.id]?.label,
-      lastWorkingAt: observations[session.id]?.lastWorkingAt,
-      hidden: session.hidden,
-      snoozedUntil: session.snoozedUntil,
-    }, now),
-  })), [sessions, observations, now]);
+  return useMemo(
+    () =>
+      sessions.map((session) => ({
+        session,
+        ...deriveChatGPTSession(
+          {
+            age: observations[session.id]?.age,
+            label: observations[session.id]?.label,
+            lastWorkingAt: observations[session.id]?.lastWorkingAt,
+            hidden: session.hidden,
+            snoozedUntil: session.snoozedUntil,
+          },
+          now,
+        ),
+      })),
+    [sessions, observations, now],
+  );
 }

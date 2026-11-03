@@ -1,17 +1,18 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import {
-  FILL_PREVIEW_VIEWPORT,
-  type EnvironmentId,
-} from "@t3tools/contracts";
+import { FILL_PREVIEW_VIEWPORT, type EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isChatGPTHomeUrl } from "../../chatGPTBrowserPrewarm";
 import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
-import { useChatGPTSessionQueueDriver, hasAdmittedCapacityMessage } from "../../chatGPTSessionMessageQueue";
+import {
+  useChatGPTSessionQueueDriver,
+  hasAdmittedCapacityMessage,
+} from "../../chatGPTSessionMessageQueue";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
 import { isChatGPTStartupSessionDeferred } from "../../omniwork/chatGPTStartupLoadPolicy";
 import { useWarmChatGPTSessionIds } from "../../omniwork/chatGPTWarmSessionPolicy";
+import { resolveWarmChatGPTConversationUrl } from "../../omniwork/chatGPTWarmConversationUrl";
 import {
   CHATGPT_DEFAULT_URL,
   chatGPTBrowserLastUrlKey,
@@ -39,11 +40,14 @@ export function ChatGPTBrowserSessionRuntime({
   environmentId,
   sessionId,
   suspended,
+  selected = false,
   quiet = false,
 }: {
   readonly environmentId: EnvironmentId;
   readonly sessionId: string;
   readonly suspended: boolean;
+  /** The selected conversation always bypasses startup deferral. */
+  readonly selected?: boolean;
   readonly quiet?: boolean;
 }) {
   const threadRef = useMemo(
@@ -53,10 +57,11 @@ export function ChatGPTBrowserSessionRuntime({
   const previewState = useThreadPreviewState(threadRef);
   const warmedIds = useWarmChatGPTSessionIds(environmentId);
   const [capacityAdmitted, setCapacityAdmitted] = useState(() =>
-    hasAdmittedCapacityMessage(environmentId, sessionId));
+    hasAdmittedCapacityMessage(environmentId, sessionId),
+  );
   useEffect(() => {
     const changed = (event: Event) => {
-      const data = (event as CustomEvent<{environmentId:string;sessionId:string}>).detail;
+      const data = (event as CustomEvent<{ environmentId: string; sessionId: string }>).detail;
       if (data?.environmentId === environmentId && data.sessionId === sessionId)
         setCapacityAdmitted(hasAdmittedCapacityMessage(environmentId, sessionId));
     };
@@ -72,7 +77,12 @@ export function ChatGPTBrowserSessionRuntime({
       window.removeEventListener("t3:chatgpt-session-queue-change", changedQueue);
     };
   }, [environmentId, sessionId]);
-  const startupDeferred = !capacityAdmitted && !warmedIds.includes(sessionId) &&
+  // The startup plan uses a plain Set, which cannot trigger a React update.
+  // Selection must bypass deferral directly, even when the warm scheduler is full.
+  const startupDeferred =
+    !capacityAdmitted &&
+    !selected &&
+    !warmedIds.includes(sessionId) &&
     isChatGPTStartupSessionDeferred(environmentId, sessionId);
   const { sessions, renameSessionFromPageTitle, disqualifyManualEmptyCandidate } =
     useChatGPTBrowserSessions(environmentId);
@@ -89,7 +99,21 @@ export function ChatGPTBrowserSessionRuntime({
     CHATGPT_DEFAULT_URL,
     Schema.String,
   );
-  const openUrl = /^https?:\/\//i.test(lastUrl.trim()) ? lastUrl.trim() : CHATGPT_DEFAULT_URL;
+  const previewUrl =
+    previewState.snapshot?.navStatus._tag === "Success"
+      ? previewState.snapshot.navStatus.url
+      : null;
+  const recoveredUrl = resolveWarmChatGPTConversationUrl(
+    sessions.find((session) => session.id === sessionId) ?? { id: sessionId, title: "" },
+    lastUrl,
+    previewUrl,
+  );
+  const openUrl =
+    recoveredUrl ?? (/^https?:\/\//i.test(lastUrl.trim()) ? lastUrl.trim() : CHATGPT_DEFAULT_URL);
+
+  useEffect(() => {
+    if (recoveredUrl && !isChatGPTConversationUrl(lastUrl)) setLastUrl(recoveredUrl);
+  }, [lastUrl, recoveredUrl, setLastUrl]);
 
   const persistentChromium = isPersistentChatGPTSessionOptedIn(sessionId);
   usePreviewSession(threadRef);
@@ -98,12 +122,20 @@ export function ChatGPTBrowserSessionRuntime({
   // The recovery coordinator refreshes only confirmed failures, one at a time.
 
   useEffect(() => {
-    // Native Chrome pages are independent of old preview-tab lifecycle.
-    // A stale preview snapshot is never a reason to open another page.
-    if (persistentChromium || (suspended && !capacityAdmitted) || startupDeferred || openError !== null || openingRef.current) return;
-
+    // Native Chrome owns its pages outside the preview-tab lifecycle. Never
+    // open/close a preview tab for one: its transient Idle/missing snapshot is
+    // NOT evidence that the already-live Chrome page needs to load again.
+    if (
+      persistentChromium ||
+      (suspended && !capacityAdmitted) ||
+      startupDeferred ||
+      openError !== null ||
+      openingRef.current
+    )
+      return;
     const currentSnapshot = previewState.snapshot;
-    if (currentSnapshot && (persistentChromium || currentSnapshot.navStatus._tag !== "Idle")) return;
+    if (currentSnapshot && (persistentChromium || currentSnapshot.navStatus._tag !== "Idle"))
+      return;
 
     // Reconciliation can briefly know about tabs before choosing an active one.
     if (!currentSnapshot && Object.keys(previewState.sessions).length > 0) return;
@@ -119,7 +151,8 @@ export function ChatGPTBrowserSessionRuntime({
       }
       reconcilePreviewServerSessions(threadRef, listed.value);
       const existingSnapshot = readThreadPreviewState(threadRef).snapshot;
-      if (existingSnapshot && (persistentChromium || existingSnapshot.navStatus._tag !== "Idle")) return;
+      if (existingSnapshot && (persistentChromium || existingSnapshot.navStatus._tag !== "Idle"))
+        return;
 
       // An Idle preview renders T3's generic local-server page. Replace it
       // instead of trying to navigate that already-mounted blank webview.

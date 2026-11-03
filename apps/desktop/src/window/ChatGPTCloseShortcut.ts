@@ -1,6 +1,21 @@
 import type * as Electron from "electron";
 
 export const CLOSE_CHATGPT_SESSION_MENU_ACTION = "close-chatgpt-session";
+export const RENAME_CHATGPT_SESSION_MENU_ACTION = "rename-chatgpt-session";
+
+/** One F2 definition shared by host and embedded ChatGPT webviews. */
+export function isChatGPTRenameShortcut(
+  input: Pick<Electron.Input, "type" | "key" | "meta" | "control" | "alt" | "shift">,
+): boolean {
+  return (
+    input.type === "keyDown" &&
+    input.key === "F2" &&
+    !input.alt &&
+    !input.shift &&
+    !input.meta &&
+    !input.control
+  );
+}
 
 /** Desktop uses hash routing; guest URL paths are unrelated to the T3 route. */
 export function activeChatGPTBrowserSessionId(url: string): string | null {

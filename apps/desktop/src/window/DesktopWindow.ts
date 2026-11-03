@@ -40,6 +40,8 @@ import { copyContextMenuImage } from "./ContextMenuImage.ts";
 import {
   activeChatGPTBrowserSessionId,
   CLOSE_CHATGPT_SESSION_MENU_ACTION,
+  RENAME_CHATGPT_SESSION_MENU_ACTION,
+  isChatGPTRenameShortcut,
   isChatGPTCloseShortcut,
 } from "./ChatGPTCloseShortcut.ts";
 
@@ -679,6 +681,15 @@ export const make = Effect.gen(function* () {
       ) {
         event.preventDefault();
         if (!input.isAutoRepeat) window.webContents.send(MENU_ACTION_CHANNEL, "chatgpt.find");
+        return;
+      }
+      if (
+        isChatGPTRenameShortcut(input) &&
+        activeChatGPTBrowserSessionId(window.webContents.getURL()) !== null
+      ) {
+        event.preventDefault();
+        if (!input.isAutoRepeat)
+          window.webContents.send(MENU_ACTION_CHANNEL, RENAME_CHATGPT_SESSION_MENU_ACTION);
         return;
       }
       // Ctrl/Cmd+W closes the selected ChatGPT session, not the Electron app.

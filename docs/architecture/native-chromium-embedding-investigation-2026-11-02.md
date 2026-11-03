@@ -2,7 +2,7 @@
 
 ## Scope
 
-Investigated the earlier T3 native-child `SetParent` path after repeated regressions from the replacement DWM-thumbnail and floating always-on-top approaches. **No production browser presenter was switched in this investigation.** The current running T3 and persistent ChatGPT host remain unchanged.
+Investigated the earlier T3 native-child `SetParent` path after repeated regressions from the replacement DWM-thumbnail and floating always-on-top approaches. No production code changed during this investigation.
 
 ## Controlled tests
 
@@ -28,13 +28,9 @@ Two independent Electron 44 processes (not launched as managed, temporary test s
 - A second target process PID 56820 adopted the **same source HWND**, and both remain running. The source was restored and positioned at (340,295), 440×265 inside the 530×350 target window at (300,250). Both are per-monitor DPI aware.
 - This relationship is a **top-level owned window**, not genuine clipped native child embedding. It may substantially improve stacking and Alt-Tab compared with free-floating `HWND_TOPMOST`, but clipping, tooltip layering, focus, moving the owner and multi-monitor DPI still need acceptance.
 
-## Implications and next steps
+## Outcome
 
-- **Do not redeploy `SetParent` directly on the Electron-owned Chromium carrier** until the native crash has a demonstrable resolution under forced parent termination.
-- Test the owned-popup proof visually: bring Firefox forward over the two titled windows, switch back, move the test target, and check that the Chromium source follows/behaves sensibly. User verification is necessary because the remote screenshot tool was unable to capture the active display.
-- If the owned-popup approach behaves correctly, integrate behind a feature flag for T3, preserve the current detached host and existing session UUIDs, avoid `HWND_TOPMOST`, and use foreground/geometry event handling instead of polling the browser frames. Controlled parent-termination survival and user signoff are required before making it the default.
-- The owned-popup method still requires explicit clip handling for areas outside the browser pane; do not claim it is equivalent to `WS_CHILD` or fully solves overlays.
-- A genuinely independent and fully clipped child surface would require a separate native presentation process or shared GPU composition bridge, with Chromium pages isolated from unexpected HWND teardown. This is a larger architecture project.
+The owned-window approach shipped. Do not redeploy `SetParent` on the Electron-owned carrier. See [the current design](detached-chromium-host-handover.md).
 
 ## Repro scripts (scratch, not deployed)
 

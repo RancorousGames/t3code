@@ -9,7 +9,10 @@
 import { createHash } from "node:crypto";
 import { WebContentsView, type BrowserWindow, type Rectangle } from "electron";
 import { MENU_ACTION_CHANNEL, STABLE_CHATGPT_VIEW_STATE_CHANNEL } from "../ipc/channels.ts";
-import { nativeChatGPTGuestShortcut } from "./NativeChatGPTGuestShortcut.ts";
+import {
+  dispatchChatGPTGuestKeyToOwner,
+  nativeChatGPTGuestShortcut,
+} from "./NativeChatGPTGuestShortcut.ts";
 
 const UUID = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const MAX_ID_LENGTH = 128;
@@ -178,23 +181,9 @@ export function createStableChatGPTViewRegistry(owner: BrowserWindow) {
         (input.control || input.meta) && !input.shift && !input.alt && (key === "w" || key === "f");
       if (!appChord && !appWindowChord) return;
       event.preventDefault();
-      const options = JSON.stringify({
-        key: input.key,
-        code: input.code,
-        ctrlKey: input.control,
-        metaKey: input.meta,
-        shiftKey: input.shift,
-        altKey: input.alt,
-        repeat: input.isAutoRepeat,
-      });
       // Dispatch to the existing shortcut handling, not a competing native map.
       // T3 receives the key while Chromium retains input focus and draft state.
-      void owner.webContents
-        .executeJavaScript(
-          `window.dispatchEvent(new KeyboardEvent("keydown", { ...${options}, bubbles: true, cancelable: true }))`,
-          false,
-        )
-        .catch(() => undefined);
+      dispatchChatGPTGuestKeyToOwner(owner, input);
     });
     // The owner has a draggable custom titlebar. Electron can otherwise treat
     // the top strip of a child WebContentsView as part of that hit-test region.

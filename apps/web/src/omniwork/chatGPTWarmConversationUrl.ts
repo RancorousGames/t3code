@@ -12,9 +12,10 @@ export function resolveWarmChatGPTConversationUrl(
 ): string | null {
   if (isChatGPTConversationUrl(savedUrl)) return savedUrl;
   if (isChatGPTConversationUrl(previewUrl)) return previewUrl;
-  const registeredId = session.bootstrapIdentity?.state === "registered"
-    ? session.bootstrapIdentity.conversationId
-    : null;
+  const registeredId =
+    session.bootstrapIdentity?.state === "registered"
+      ? session.bootstrapIdentity.conversationId
+      : null;
   if (registeredId && CANONICAL_CHATGPT_CONVERSATION_ID.test(registeredId))
     return `https://chatgpt.com/c/${registeredId}`;
   if (session.bootstrapIdentity && session.bootstrapIdentity.state !== "registered") return null;

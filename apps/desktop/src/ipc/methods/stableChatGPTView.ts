@@ -19,9 +19,9 @@ import { createStableChatGPTTooltipOverlay } from "../../preview/StableChatGPTTo
 import {
   showDirectChatGPTOverlay,
   hideDirectChatGPTOverlay,
+  updateDirectChatGPTOverlay,
 } from "../../preview/DirectChatGPTOverlay.ts";
 import {
-  persistentChatGPTRequest,
   persistentChatGPTViewRequest,
   type PersistentChatGPTViewRequest,
 } from "../../preview/PersistentChatGPTBrowser.ts";
@@ -131,9 +131,8 @@ export const stableChatGPTViewRequestIpc = DesktopIpc.makeIpcMethod({
     // ChatGPT session must use the persistent native HWND owner, even if an
     // old in-process page happened to exist before the migration.
     const useNative = isNativeBrowserSlice(identity);
-    // The existing native hovercard window must also cover the detached DWM
-    // browser: HTML tooltips cannot overpaint native-composited pixels. This
-    // capability was previously wired only to the old in-process view.
+    // HTML tooltips cannot overpaint a native page window, so hovercards use
+    // the native tooltip window here as well.
     if (!useNative && input.operation === "tooltip") {
       return yield* Effect.tryPromise({
         try: async () => {
@@ -163,12 +162,10 @@ export const stableChatGPTViewRequestIpc = DesktopIpc.makeIpcMethod({
         try: async () => {
           if (input.bounds === null) {
             hideDirectChatGPTOverlay(identity.sessionId);
-            await persistentChatGPTRequest({
-              operation: "visibility",
-              sessionId: identity.sessionId,
-              visible: false,
-            });
             return { visible: false, display: "native" };
+          }
+          if (updateDirectChatGPTOverlay(identity.sessionId, owner, input.bounds)) {
+            return { display: "native", visible: true };
           }
           const state = (await persistentChatGPTViewRequest({
             operation: "snapshot",
@@ -176,41 +173,13 @@ export const stableChatGPTViewRequestIpc = DesktopIpc.makeIpcMethod({
           })) as { display?: string; nativeHwnd?: string; hostPid?: number };
           if (state.display !== "native" || !state.nativeHwnd || !state.hostPid)
             throw new Error("Persistent ChatGPT page does not have a native HWND.");
-          try {
-            // Size the independent Chromium WebContentsView at the exact
-            // target dimensions. Its own top-level HWND will display pixels
-            // directly, without SetParent, DWM thumbnails, or JPEG copying.
-            await persistentChatGPTRequest({
-              operation: "resize",
-              sessionId: identity.sessionId,
-              width: Math.min(8192, Math.round(input.bounds.width)),
-              height: Math.min(4320, Math.round(input.bounds.height)),
-            });
-            // The host's older visibility implementation schedules an
-            // offscreen parking timeout. A second visible message cancels
-            // it while leaving the host window alive and GPU-composited.
-            await persistentChatGPTRequest({
-              operation: "visibility",
-              sessionId: identity.sessionId,
-              visible: true,
-            });
-            await persistentChatGPTRequest({
-              operation: "visibility",
-              sessionId: identity.sessionId,
-              visible: true,
-            });
-            return showDirectChatGPTOverlay({
-              sessionId: identity.sessionId,
-              owner,
-              sourceHwnd: state.nativeHwnd,
-              hostPid: state.hostPid,
-              bounds: input.bounds,
-            });
-          } catch (error) {
-            // Native-only: report the failure and leave the persistent page
-            // untouched. No screenshot fallback or destructive reparenting.
-            throw error;
-          }
+          return showDirectChatGPTOverlay({
+            sessionId: identity.sessionId,
+            owner,
+            sourceHwnd: state.nativeHwnd,
+            hostPid: state.hostPid,
+            bounds: input.bounds,
+          });
         },
         catch: (error) => (error instanceof Error ? error : new Error(String(error))),
       });

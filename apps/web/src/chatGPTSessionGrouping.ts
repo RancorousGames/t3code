@@ -330,6 +330,8 @@ export type ChatGPTSessionSortActivity = {
     | "invalid"
     | "unknown"
     | "unloaded"
+    | "unloaded-recent"
+    | "unloaded-working"
     | "inactive";
   readonly lastWorkingAt: number;
 };
@@ -340,12 +342,15 @@ export function layoutChatGPTSessions(
   activityById: Readonly<Record<string, ChatGPTSessionSortActivity>>,
   permanentProjects: readonly ChatGPTPermanentProject[] = [],
   selectedSessionId?: string,
+  erroredSessionsAtBottom = true,
 ): ChatGPTSidebarGroup[] {
   if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects);
   void selectedSessionId;
   const rank: Record<ChatGPTSessionSortActivity["age"], number> = {
     working: 0,
+    "unloaded-working": 0,
     recent: 1,
+    "unloaded-recent": 1,
     inactive: 2,
     unloaded: 2,
     unknown: 2,
@@ -374,6 +379,16 @@ export function layoutChatGPTSessions(
       );
     });
   const activeRows: ChatGPTSidebarSession[] = [];
+  // Working descendants stay immediately below their working parent, even if
+  // unrelated sessions were started between them. Preserve root ordering.
+  const workingChildren = new Map<string, BrowserSession[]>();
+  for (const session of active) {
+    const parentId = parents.get(session.id);
+    if (!parentId || activityById[parentId]?.age !== "working") continue;
+    const children = workingChildren.get(parentId) ?? [];
+    children.push(session);
+    workingChildren.set(parentId, children);
+  }
   // Keep active children with the same inactive immediate parent together.
   // Only one thin label precedes the contiguous group.
   const emitted = new Set<string>();
@@ -385,37 +400,53 @@ export function layoutChatGPTSessions(
     group.push(session);
     parentGroups.set(parentId, group);
   }
-  const pushActive = (session: BrowserSession, label?: string) => {
+  const pushActive = (session: BrowserSession, depth = 0, label?: string) => {
+    if (emitted.has(session.id)) return;
     emitted.add(session.id);
+    const children = workingChildren.get(session.id) ?? [];
     activeRows.push({
       session,
-      depth: 0,
-      childCount: 0,
+      depth,
+      childCount: children.length,
       ...(label ? { inactiveParentHeader: label } : {}),
     });
+    children.forEach((child) => pushActive(child, depth + 1));
   };
   for (const session of active) {
     if (emitted.has(session.id)) continue;
     const parentId = parents.get(session.id);
-    if (!parentId || activityById[parentId]?.age === "working") {
+    if (parentId && activityById[parentId]?.age === "working") continue;
+    if (!parentId) {
       pushActive(session);
       continue;
     }
     const group = parentGroups.get(parentId) ?? [session];
     group.forEach((child, index) =>
-      pushActive(child, index === 0 ? byId.get(parentId)?.title : undefined),
+      pushActive(child, 0, index === 0 ? byId.get(parentId)?.title : undefined),
     );
   }
-  // Keep the non-working part hierarchical when parent and child share the
-  // same status tier. Never indent a row beneath an unrelated preceding session.
+  // Working/recent sessions keep global activity order. Other sessions form
+  // parent trees first; independent trees are ordered by project second.
   const inactiveById = new Map(inactive.map((session) => [session.id, session]));
   const inactiveChildren = new Map<string, BrowserSession[]>();
-  const activityRank = (session: BrowserSession) =>
-    rank[activityById[session.id]?.age ?? "unknown"];
+  const isError = (session: BrowserSession) =>
+    ["interrupted", "delivery-timeout", "invalid"].includes(
+      activityById[session.id]?.age ?? "unknown",
+    );
+  const isRecent = (session: BrowserSession) =>
+    ["recent", "unloaded-recent", "unloaded-working"].includes(
+      activityById[session.id]?.age ?? "unknown",
+    );
   for (const session of inactive) {
     const parentId = parents.get(session.id);
     const parent = parentId ? inactiveById.get(parentId) : undefined;
-    if (!parent || activityRank(parent) !== activityRank(session)) continue;
+    if (
+      !parent ||
+      isRecent(parent) ||
+      isRecent(session) ||
+      (erroredSessionsAtBottom && isError(parent) !== isError(session))
+    )
+      continue;
     const siblings = inactiveChildren.get(parent.id) ?? [];
     siblings.push(session);
     inactiveChildren.set(parent.id, siblings);
@@ -429,12 +460,26 @@ export function layoutChatGPTSessions(
     remainingRows.push({ session, depth, childCount: children.length });
     children.forEach((child) => emitInactive(child, depth + 1));
   };
-  for (const session of inactive) {
+  const roots = inactive.filter((session) => {
     const parentId = parents.get(session.id);
-    if (parentId && inactiveChildren.get(parentId)?.some((child) => child.id === session.id))
-      continue;
-    emitInactive(session, 0);
+    return !parentId || !inactiveChildren.get(parentId)?.some((child) => child.id === session.id);
+  });
+  const regularRoots = roots.filter((session) => isRecent(session));
+  const projectRoots = roots.filter((session) => !isRecent(session));
+  // Sort standalone trees by project without disturbing intra-tree ancestry.
+  const assignedProject = new Map<string, string>();
+  for (const group of groupChatGPTSessions(enriched, projects, permanentProjects)) {
+    for (const { session } of group.rows) assignedProject.set(session.id, group.title ?? "");
   }
+  const projectName = (session: BrowserSession) =>
+    (session.project ?? assignedProject.get(session.id) ?? "").toLocaleLowerCase();
+  projectRoots.sort(
+    (a, b) =>
+      (erroredSessionsAtBottom ? Number(isError(a)) - Number(isError(b)) : 0) ||
+      projectName(a).localeCompare(projectName(b)) ||
+      (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
+  );
+  for (const session of [...regularRoots, ...projectRoots]) emitInactive(session, 0);
   inactive.forEach((session) => emitInactive(session, 0));
   const rows = [...activeRows, ...remainingRows];
   return rows.length ? [{ key: "status:activity", title: null, rows }] : [];

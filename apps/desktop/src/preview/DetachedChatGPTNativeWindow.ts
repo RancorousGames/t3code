@@ -17,12 +17,26 @@ function begin(): void {
   open({ library: win32Library, path: "C:\\Windows\\System32\\user32.dll" });
   initialized = true;
 }
-function call(library: string, name: string, types: DataType[], args: unknown[], ret: DataType = DataType.I32): number {
-  return Number(load({ library, funcName: name, paramsType: types, paramsValue: args, retType: ret }));
+function call(
+  library: string,
+  name: string,
+  types: DataType[],
+  args: unknown[],
+  ret: DataType = DataType.I32,
+): number {
+  return Number(
+    load({ library, funcName: name, paramsType: types, paramsValue: args, retType: ret }),
+  );
 }
 function sourceProcessId(hwnd: number): number {
   const pid = Buffer.alloc(4);
-  call(win32Library, "GetWindowThreadProcessId", [DataType.U64, DataType.U8Array], [hwnd, pid], DataType.U32);
+  call(
+    win32Library,
+    "GetWindowThreadProcessId",
+    [DataType.U64, DataType.U8Array],
+    [hwnd, pid],
+    DataType.U32,
+  );
   return pid.readUInt32LE(0);
 }
 export function unmountPersistentChatGPTWindow(sessionId: string): void {
@@ -48,8 +62,14 @@ export function mountPersistentChatGPTWindow(input: {
     !/^[0-9]{1,16}$/.test(sourceHwnd) ||
     !Number.isSafeInteger(hostPid) ||
     ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) ||
-    bounds.width < 1 || bounds.height < 1 || bounds.width > 2560 || bounds.height > 1600
-  ) throw new Error("Invalid native Chromium presentation geometry");
+    bounds.width < 1 ||
+    bounds.height < 1 ||
+    bounds.width > 8192 ||
+    bounds.height > 4320
+  )
+    throw new Error(
+      `Invalid native Chromium presentation geometry: ${Math.round(bounds.width)}x${Math.round(bounds.height)} at (${Math.round(bounds.x)}, ${Math.round(bounds.y)})`,
+    );
   begin();
   const hwnd = Number(sourceHwnd);
   if (!Number.isSafeInteger(hwnd) || sourceProcessId(hwnd) !== hostPid)
@@ -63,7 +83,8 @@ export function mountPersistentChatGPTWindow(input: {
   if (!surface) {
     const handleOut = Buffer.alloc(8);
     const result = call(
-      dwmLibrary, "DwmRegisterThumbnail",
+      dwmLibrary,
+      "DwmRegisterThumbnail",
       [DataType.U64, DataType.U64, DataType.U8Array],
       [destination, hwnd, handleOut],
     );
@@ -84,7 +105,8 @@ export function mountPersistentChatGPTWindow(input: {
   properties.writeInt32LE(1, 40);
   properties.writeInt32LE(1, 44);
   const result = call(
-    dwmLibrary, "DwmUpdateThumbnailProperties",
+    dwmLibrary,
+    "DwmUpdateThumbnailProperties",
     [DataType.U64, DataType.U8Array],
     [surface.thumbnail, properties],
   );
