@@ -158,6 +158,16 @@ function createDurableNativePage(sessionId, partition) {
     },
   });
   relayPageInput(sessionId, view.webContents);
+  // A frameless, owned Chromium carrier otherwise reports HTCAPTION across its
+  // top strip and consumes ChatGPT header clicks as window dragging.
+  view.webContents.on("dom-ready", () => {
+    if (view.webContents.isDestroyed()) return;
+    void view.webContents
+      .insertCSS("html, body { -webkit-app-region: no-drag !important; }", {
+        cssOrigin: "user",
+      })
+      .catch(() => undefined);
+  });
   let disposed = false;
   const width = 1280,
     height = 800;

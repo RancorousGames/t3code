@@ -278,6 +278,19 @@ export function showDirectChatGPTOverlay(input: {
     onRendererGone,
   };
   sources.set(sessionId, entry);
+  // Existing persistent hosts survive T3 upgrades. Fix their native caption
+  // hit-test strip without restarting the host (and losing live ChatGPT pages).
+  void persistentChatGPTRequest({
+    operation: "evaluate",
+    sessionId,
+    expression: `(() => {
+      if (document.getElementById("t3-native-no-drag")) return;
+      const style = document.createElement("style");
+      style.id = "t3-native-no-drag";
+      style.textContent = "html, body { -webkit-app-region: no-drag !important; }";
+      (document.head ?? document.documentElement).appendChild(style);
+    })()`,
+  }).catch(() => undefined);
   // A foreign window over T3 can make Chromium classify T3's renderer as fully
   // occluded and stop painting it. Keep T3 painting while a page is mounted.
   owner.webContents.setBackgroundThrottling(false);
