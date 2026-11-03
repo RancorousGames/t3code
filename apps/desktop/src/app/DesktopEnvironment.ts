@@ -211,7 +211,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appRoot,
     serverRoot,
     backendEntryPath: path.join(serverRoot, "apps/server/dist/bin.mjs"),
-    clientAssetsDir: path.join(serverRoot, "apps/server/dist/client"),
+    // A source checkout builds the renderer into apps/web/dist; only packaged
+    // distributions stage it under apps/server/dist/client.
+    clientAssetsDir: input.isPackaged
+      ? path.join(serverRoot, "apps/server/dist/client")
+      : path.join(rootDir, "apps/web/dist"),
     backendCwd: input.isPackaged ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
     compileCachePath: path.join(input.dirname, "compileCache.cjs"),
