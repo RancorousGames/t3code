@@ -52,6 +52,7 @@ export class CaffyScheduler {
   private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private pumping = false;
+  private pumpRequested = false;
   private blockerId: number | null = null;
   private readonly deliveries: ChatGPTDeliveryQueue;
   private readonly request: Request;
@@ -78,6 +79,21 @@ export class CaffyScheduler {
       }
     } catch { /* Corrupt/missing local state is not evidence for a wake. */ }
     this.deliveries.subscribeTransitions(record => this.onDelivery(record));
+    this.deliveries.setDispatchPermission(record => {
+      const row = this.lookup(record.sessionId);
+      if (!row || row.pendingMessageId !== record.messageId) return true;
+      return !row.paused && (row.mode !== "queued" || this.keepT3Busy);
+    });
+    this.deliveries.setDispatchAdmission(async record => {
+      const row = this.lookup(record.sessionId);
+      if (!row || row.pendingMessageId !== record.messageId || row.mode !== "queued")
+        return true;
+      if (!this.keepT3Busy || row.paused) return false;
+      const snapshot = await this.capacity().catch(() => null);
+      // The outstanding queued wake already reserves one slot in 'used'.
+      // A later manual spawn may exceed the capacity: defer without cancelling.
+      return snapshot?.unknown === 0 && snapshot.used <= snapshot.limit;
+    });
   }
 
   private save() {
@@ -178,6 +194,7 @@ export class CaffyScheduler {
       this.maxWorking = input.maxWorking;
     }
     this.save();
+    this.deliveries.resumeAllowed();
     void this.pump();
     return { keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking };
   }
@@ -241,11 +258,13 @@ export class CaffyScheduler {
       pendingWake: prior?.conversationId === input.conversationId ? prior.pendingWake : input.mode !== "periodic",
       pendingReason: prior?.conversationId === input.conversationId ? prior.pendingReason : input.mode !== "periodic" ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
-      lastIdleSequence: 0,
+      lastIdleSequence: Math.max(prior?.lastIdleSequence ?? 0, identity?.idleSequence ?? 0),
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
     };
+    if (prior && prior.sessionId !== row.sessionId) this.entries.delete(prior.sessionId);
     this.entries.set(row.sessionId, row);
     this.save();
+    void this.pump();
     return row;
   }
 
@@ -269,7 +288,7 @@ export class CaffyScheduler {
       throw new Error("Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.");
     row.paused = paused;
     this.save();
-    if (!paused) void this.pump();
+    if (!paused) { this.deliveries.resumeAllowed(); void this.pump(); }
     return row;
   }
 
@@ -321,7 +340,7 @@ export class CaffyScheduler {
     this.save();
   }
 
-  private async registered(sessionId: string, conversationId: string): Promise<{ id: string; browserSessionId: string; working: boolean } | null> {
+  private async registered(sessionId: string, conversationId: string): Promise<{ id: string; browserSessionId: string; working: boolean; idleSequence: number } | null> {
     const reply = await this.request({
       version: 1, requestId: NodeCrypto.randomUUID(),
       type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
@@ -332,6 +351,7 @@ export class CaffyScheduler {
       id?: string; publicSessionId?: string; browserSessionId?: string;
       conversationId?: string; bootstrapIdentity?: {conversationId?:string; publicId?:string};
       activity?: string; status?: string; statusObservedAt?: string;
+      lastIdleTransition?: {conversationId?: string; sequence?: number};
       closedAt?: unknown;
     }> }).sessions;
     if (!Array.isArray(entries)) return null;
@@ -344,6 +364,9 @@ export class CaffyScheduler {
         entry.bootstrapIdentity?.conversationId === conversationId)
       ? {
           id: entry.bootstrapIdentity?.publicId ?? entry.id, browserSessionId: entry.browserSessionId ?? entry.id,
+          idleSequence: entry.lastIdleTransition?.conversationId === conversationId &&
+            Number.isSafeInteger(entry.lastIdleTransition.sequence)
+            ? Math.max(0, entry.lastIdleTransition.sequence ?? 0) : 0,
           working: (() => {
             const observedAt = Date.parse(entry.statusObservedAt ?? "");
             return Number.isFinite(observedAt) && observedAt <= Date.now() + 1000 &&
@@ -419,7 +442,8 @@ export class CaffyScheduler {
   get policyEnabled(): boolean { return this.keepT3Busy; }
 
   private async pump() {
-    if (!this.started || this.pumping) return;
+    if (!this.started) return;
+    if (this.pumping) { this.pumpRequested = true; return; }
     this.pumping = true;
     try {
       const now = Date.now();
@@ -505,6 +529,10 @@ export class CaffyScheduler {
     } finally {
       this.pumping = false;
       this.syncPower();
+      if (this.pumpRequested) {
+        this.pumpRequested = false;
+        queueMicrotask(() => { void this.pump(); });
+      }
     }
   }
 }

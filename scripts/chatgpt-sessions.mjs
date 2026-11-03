@@ -27,8 +27,8 @@ export async function controlSessions(
       "keepT3Busy", "maxWorking"];
     if (Object.keys(input).some(field => !fields.includes(field)))
       throw new Error("Unexpected Caffy fields.");
-    if (input.op === "set" && (!input.sessionId || !input.conversationId || !input.mode))
-      throw new Error("Caffy set requires sessionId, conversationId and mode.");
+    if (input.op === "set" && (!input.sessionId || !input.mode))
+      throw new Error("Caffy set requires sessionId and mode; T3 resolves the exact conversation.");
     if (!["list", "policy", "status", "capacity", "tasks"].includes(input.op) && typeof input.sessionId !== "string")
       throw new Error("Caffy action requires sessionId.");
     const { action: _action, op, ...args } = input;

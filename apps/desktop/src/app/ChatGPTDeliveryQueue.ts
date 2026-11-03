@@ -92,6 +92,9 @@ export class ChatGPTDeliveryQueue {
   private readonly send: Sender;
   private readonly records = new Map<string, DeliveryRecord>();
   private readonly transitionListeners = new Set<(record: Omit<DeliveryRecord, "body">) => void>();
+  private dispatchAllowed: (record: {messageId: string; sessionId: string}) => boolean = () => true;
+  private dispatchAdmission: (record: {messageId: string; sessionId: string}) => Promise<boolean> = async () => true;
+  private pulseActive = false;
   private readonly activeConversations = new Set<string>();
   private closed = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -160,6 +163,18 @@ export class ChatGPTDeliveryQueue {
     void this.pulse().catch(() => {});
   }
 
+  /** Queued Caffy delivery is suspended with Keep T3 Busy / pause. All
+   * ordinary T3 outbox traffic remains unaffected. */
+  setDispatchPermission(check: (record: {messageId: string; sessionId: string}) => boolean) {
+    this.dispatchAllowed = check;
+  }
+  setDispatchAdmission(check: (record: {messageId: string; sessionId: string}) => Promise<boolean>) {
+    this.dispatchAdmission = check;
+  }
+  resumeAllowed() {
+    void this.pulse().catch(() => {});
+  }
+
   /** Retry deadlines are one-shot; new work and verified idle events trigger
    * immediate drains. No 3-second full-queue polling loop is needed. */
   private scheduleNext() {
@@ -178,7 +193,7 @@ export class ChatGPTDeliveryQueue {
       )
         continue;
       seen.add(record.conversationId);
-      if (record.awaitingGuest) continue;
+      if (record.awaitingGuest || !this.dispatchAllowed(record)) continue;
       if (this.activeConversations.has(record.conversationId)) continue;
       next = Math.min(next, this.nextTry.get(record.messageId) ?? 0);
     }
@@ -461,7 +476,7 @@ export class ChatGPTDeliveryQueue {
       sessionId: record.sessionId,
       expectedConversationId: record.conversationId,
       ...(previous ? { previousDeliveredMessage: deliveryText(previous) } : {}),
-      message: isWakeBody(record.body)
+      message: isWakeBody(record.body) || isCaffyWakeBody(record.body)
         ? record.body
         : `${MARKER(record.messageId)}\n${retry ? "[Potential duplicate: acknowledgement was lost. If you already handled this message ID, do not repeat its actions.]\n" : ""}${record.body}`,
       ...(retry ? { allowPossibleDuplicate: true } : {}),
@@ -664,7 +679,9 @@ export class ChatGPTDeliveryQueue {
   /** Independent conversations progress concurrently. Each lane preserves FIFO;
    * unresolved messages hold their own lane without blocking other recipients. */
   async pulse() {
-    if (this.closed) return;
+    if (this.closed || this.pulseActive) return;
+    this.pulseActive = true;
+    try {
     const conversations = new Map<string, DeliveryRecord[]>();
     for (const record of this.records.values()) {
       if (record.status === "delivered" || record.status === "cancelled" || record.attempts >= MAX_DELIVERY_ATTEMPTS) continue;
@@ -682,7 +699,15 @@ export class ChatGPTDeliveryQueue {
       if (this.activeConversations.size >= MAX_ACTIVE_CONVERSATIONS) break;
       if (this.activeConversations.has(conversationId)) continue;
       const head = records[0];
-      if (!head || head.awaitingGuest || !due(head)) continue;
+      if (!head || head.awaitingGuest || !this.dispatchAllowed(head) || !due(head)) continue;
+      // Revalidate queued-worker capacity immediately before the actual send.
+      // This matters when manual sessions start after a wake was reserved.
+      let admitted = false;
+      try { admitted = await this.dispatchAdmission(head); } catch { admitted = false; }
+      if (!admitted || !this.dispatchAllowed(head)) {
+        this.nextTry.set(head.messageId, Date.now() + 10_000);
+        continue;
+      }
       this.activeConversations.add(conversationId);
       this.lastScheduledConversation = conversationId;
       work.push(
@@ -696,6 +721,9 @@ export class ChatGPTDeliveryQueue {
       );
     }
     await Promise.allSettled(work);
-    this.scheduleNext();
+    } finally {
+      this.pulseActive = false;
+      this.scheduleNext();
+    }
   }
 }

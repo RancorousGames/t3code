@@ -22,8 +22,10 @@ interface Reservation {
   sessionId: string | null; outcome: string;
 }
 interface Stored { version: 1; reservations: Reservation[]; lastError: string | null }
-const ROOT = "D:/SSDProjects/Tools/t3code";
-const TASKBOARD_CLI = "D:/SSDProjects/Tools/TaskBoard/packages/task-cli/target/release/taskboard.exe";
+const ROOT = process.env.T3CODE_HOME
+  ? NodePath.resolve(process.env.T3CODE_HOME, "..")
+  : NodePath.resolve(process.cwd(), "..", "..");
+const TASKBOARD_CLI = NodePath.resolve(ROOT, "..", "TaskBoard", "packages", "task-cli", "target", "release", "taskboard.exe");
 const TASKBOARD_CATALOG = () => NodePath.join(
   process.env.APPDATA ?? NodePath.join(process.env.USERPROFILE ?? "", "AppData", "Roaming"),
   "TaskBoard", "projects.json",
