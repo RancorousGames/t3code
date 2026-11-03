@@ -77,7 +77,7 @@ export function Sidebar() {
         </span>
         <Icon name="chevron-down" size="sm" />
         <span className="proj-prog">
-          <span className="bar-l"><span>{percent}% translated</span><span className="tabnum">{translated} / {rows.length}</span></span>
+          <span className="bar-l"><span>{percent}% {tr("Translated")}</span><span className="tabnum">{translated} / {rows.length}</span></span>
           <span className="bar">
             <span style={{ width: `${rows.length ? 100 * translated / rows.length : 0}%`, background: "var(--moss)" }} />
             <span style={{ width: `${rows.length ? 100 * drafts / rows.length : 0}%`, background: "var(--mist)", opacity: 0.45 }} />
