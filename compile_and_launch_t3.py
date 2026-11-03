@@ -25,6 +25,8 @@ from compile_t3 import staged_build_is_current, resolve_node
 EXE_NAME = "T3 Code (Custom).exe"
 GRACE_SECONDS = 20
 WM_CLOSE = 0x0010
+QUIT_FOR_REBUILD_MESSAGE = 0x8237
+QUIT_FOR_REBUILD_MAGIC = 0x54335154
 
 
 def load_private_openrig_human_answer_token() -> None:
@@ -68,7 +70,7 @@ def running_custom_processes(root: Path) -> list[dict]:
 
 
 def close_app_windows(pids: set[int]) -> int:
-    """Ask every top-level window owned by the custom app to close normally."""
+    """Request a graceful quit from the main window, even when it is hidden."""
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     enum_windows = user32.EnumWindows
     enum_windows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM),
@@ -83,6 +85,8 @@ def close_app_windows(pids: set[int]) -> int:
     visible = user32.IsWindowVisible
     visible.argtypes = [wintypes.HWND]
     visible.restype = wintypes.BOOL
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
 
     count = 0
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -92,7 +96,16 @@ def close_app_windows(pids: set[int]) -> int:
         nonlocal count
         owner = wintypes.DWORD()
         get_pid(hwnd, ctypes.byref(owner))
-        if owner.value in pids and visible(hwnd) and post_message(hwnd, WM_CLOSE, 0, 0):
+        if owner.value not in pids:
+            return True
+        title = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, title, len(title))
+        if title.value == "T3 Code (Custom)":
+            if post_message(hwnd, QUIT_FOR_REBUILD_MESSAGE, QUIT_FOR_REBUILD_MAGIC, 0):
+                count += 1
+        elif visible(hwnd) and post_message(hwnd, WM_CLOSE, 0, 0):
+            # Older runtimes without the native quit handler still get the
+            # existing graceful-close attempt and bounded force-kill fallback.
             count += 1
         return True
 
@@ -309,6 +322,8 @@ def reload_owner_ui(root: Path, owner_pid: int) -> None:
     user32.PostMessageW.argtypes = [
         wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     found = []
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
 
     @callback_type
     def visit(hwnd, _):
@@ -316,14 +331,18 @@ def reload_owner_ui(root: Path, owner_pid: int) -> None:
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value != owner_pid:
             return True
-        found.append(hwnd)
-        # Only the guarded T3 message; never a keyboard shortcut or WM_CLOSE.
-        return False
+        title = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, title, len(title))
+        if title.value == "T3 Code (Custom)":
+            found.append(hwnd)
+        return True
 
-    if not user32.EnumWindows(visit, 0) and not found:
+    if not user32.EnumWindows(visit, 0):
         raise RuntimeError("Unable to enumerate the T3 main window.")
+    # Electron owns helper/popup HWNDs too, often before the real (hidden)
+    # main window. Never send a reload to the first arbitrary HWND.
     if len(found) != 1:
-        raise RuntimeError("Expected one native T3 window; refusing ambiguous reload.")
+        raise RuntimeError(f"Expected one T3 Code (Custom) main window, found {len(found)}.")
     if not user32.PostMessageW(found[0], 0x8236, 0x5433524c, nonce):
         raise ctypes.WinError(ctypes.get_last_error())
     # After a full Vite rebuild the Electron UI can need longer to load its
@@ -410,7 +429,9 @@ def build_and_reload_ui(root: Path, *, rebuild: bool = True) -> bool:
     # The running Electron main has a dedicated window-message handler which
     # reloads its OWN webContents and writes an authenticated-by-PID ack.
     reload_owner_ui(root, roots[0])
-    print("T3 UI reloaded in its existing Electron owner; Chromium pages preserved.", flush=True)
+    # A closed UI is only hidden. Reopening it is part of this launch command.
+    subprocess.run([sys.executable, str(root / "launch_t3.py")], cwd=root, check=True)
+    print("T3 UI reloaded and reopened in its existing Electron owner; Chromium pages preserved.", flush=True)
     print("Electron main/backend changes are NOT activated by this reload.", flush=True)
     return True
 

@@ -9,7 +9,7 @@
  * App.quit(), updater-controlled quit, and explicit process shutdown still
  * destroy the owner. Closing/hiding is intentionally distinct from Quit.
  */
-import type { App, BrowserWindow } from "electron";
+import { BrowserWindow, type App } from "electron";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Synchronous main-process acknowledgement for Win32 native reload.
 import * as Fs from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - This path is owned by the stable Electron process.
@@ -20,6 +20,8 @@ const DESKTOP_SCHEMES = new Set(["t3code:", "t3code-dev:"]);
 // Python's build helper requires a matching nonce acknowledgement.
 const UI_RELOAD_MESSAGE = 0x8000 + 0x236;
 const UI_RELOAD_MAGIC = 0x5433524c;
+const QUIT_FOR_REBUILD_MESSAGE = 0x8000 + 0x237;
+const QUIT_FOR_REBUILD_MAGIC = 0x54335154;
 
 function isT3RendererURL(value: string): boolean {
   if (!value) return false;
@@ -45,10 +47,19 @@ export function installPersistentMainWindowLifecycle(app: App): void {
   // is still alive but has no visible taskbar window; showing it must not
   // depend on a backend handshake or an Effect service remembering the HWND.
   app.on("second-instance", () => {
-    if (quitting || !primaryWindow || primaryWindow.isDestroyed()) return;
-    if (primaryWindow.isMinimized()) primaryWindow.restore();
-    if (!primaryWindow.isVisible()) primaryWindow.show();
-    primaryWindow.focus();
+    if (quitting) return;
+    // Initial window tracking can miss navigation or renderer recovery; an
+    // existing hidden window must still be reopenable from the taskbar.
+    const window = primaryWindow && !primaryWindow.isDestroyed()
+      ? primaryWindow
+      : BrowserWindow.getAllWindows().find(
+          (candidate) => !candidate.isDestroyed() && isT3RendererURL(candidate.webContents.getURL()),
+        );
+    if (!window) return;
+    primaryWindow = window;
+    if (window.isMinimized()) window.restore();
+    if (!window.isVisible()) window.show();
+    window.focus();
   });
 
   app.on("browser-window-created", (_event, window: BrowserWindow) => {
@@ -61,6 +72,14 @@ export function installPersistentMainWindowLifecycle(app: App): void {
     };
     window.webContents.on("did-finish-load", markT3Window);
     window.webContents.on("did-navigate", markT3Window);
+
+    // Full rebuilds must be able to quit a hidden owner gracefully. WM_CLOSE
+    // would simply hide it again, leaving the executable locked.
+    window.hookWindowMessage(QUIT_FOR_REBUILD_MESSAGE, (wParam) => {
+      if (quitting || !primaryT3Window || window.isDestroyed()) return;
+      if (wParam.readUInt32LE(0) !== QUIT_FOR_REBUILD_MAGIC) return;
+      app.quit();
+    });
 
     window.hookWindowMessage(UI_RELOAD_MESSAGE, (wParam, lParam) => {
       if (quitting || !primaryT3Window || window.isDestroyed()) return;
