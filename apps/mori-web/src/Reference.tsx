@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useApp } from "./app-context.ts";
-import { tr, useUiLanguage } from "./ui-localization.ts";
+import { reloadUiTranslations, tr, useUiLanguage } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { findUsages, statusOf } from "./insights.ts";
 import { JA_FONTS, DEFAULT_COLUMN_PREFS } from "./prefs.ts";
@@ -338,17 +338,37 @@ export function ProjectScreen() {
 }
 
 export function SettingsScreen() {
-  const { prefs, setPrefs, setColumn, openModal } = useApp();
+  const { prefs, setPrefs, setColumn, openModal, toast } = useApp();
   const { language, setLanguage, translated } = useUiLanguage();
+  const [reloadingUi, setReloadingUi] = useState(false);
+  const reloadTranslations = async () => {
+    if (reloadingUi) return;
+    setReloadingUi(true);
+    try {
+      const count = await reloadUiTranslations();
+      toast(`Reloaded ${count} Japanese interface translations.`);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not reload interface translations.");
+    } finally {
+      setReloadingUi(false);
+    }
+  };
   return (
     <div className="screen">
       <ScreenHeader title={tr("Settings")} description={tr("How the workspace looks. Translation data is never stored here.")} />
       <div className="panel" style={{ maxWidth: 720 }}>
         <div className="set-row">
           <div><b>{tr("Language")}</b><span>Choose the application interface language. Japanese uses translations from the “Monku no Mori · Interface” project ({translated} available); untranslated labels remain English.</span></div>
-          <div className="seg wide" role="group" aria-label="Interface language">
-            <button type="button" className={language === "en" ? "on" : ""} onClick={() => setLanguage("en")}>English</button>
-            <button type="button" className={language === "ja" ? "on" : ""} onClick={() => setLanguage("ja")}>日本語</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <div className="seg wide" role="group" aria-label="Interface language">
+              <button type="button" className={language === "en" ? "on" : ""} onClick={() => setLanguage("en")}>English</button>
+              <button type="button" className={language === "ja" ? "on" : ""} onClick={() => setLanguage("ja")}>日本語</button>
+            </div>
+            <button type="button" className="btn outline sm" aria-label="Reload interface translations"
+              title="Re-read curated Japanese translations from the Monku no Mori interface project"
+              disabled={reloadingUi} onClick={() => { void reloadTranslations(); }}>
+              <Icon name="reset" size="sm" />{reloadingUi ? "Reloading…" : "Reload"}
+            </button>
           </div>
         </div>
         <div className="set-row">

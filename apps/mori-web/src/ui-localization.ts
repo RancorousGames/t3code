@@ -27,8 +27,24 @@ export function tr(source: string): string {
 }
 export function translatedUiCount(): number { return translations.size; }
 
+/** Explicitly re-read the authoritative project library. The current language
+ * stays selected; listeners are notified only if curated strings changed. */
+export async function reloadUiTranslations(): Promise<number> {
+  const stored = await loadProject(MORI_UI_PROJECT_ID);
+  if (!stored) throw new Error("Monku no Mori interface translation project was not found.");
+  applyProject(stored);
+  return translations.size;
+}
+
 function applyProject(project: MoriProject) {
-  const next = new Map(project.rows.filter(row => row.final.trim()).map(row => [row.source, row.final] as const));
+  // The Japanese UI is a live preview of this translation project: approved
+  // text always wins, with AI drafts shown only where no curated text exists.
+  // Previewing suggestions never changes their draft/approval status.
+  const next = new Map<string, string>();
+  for (const row of project.rows) {
+    const japanese = row.final.trim() ? row.final : row.ai;
+    if (japanese?.trim()) next.set(row.source, japanese);
+  }
   if (next.size === translations.size &&
       [...next].every(([key, value]) => translations.get(key) === value)) return;
   translations = next;
