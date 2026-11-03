@@ -317,11 +317,7 @@ def main(*, artifacts_only: bool = False, stage_only: bool = False) -> None:
 
     root = Path(__file__).resolve().parent
     if custom_app_running(root) and not (artifacts_only or stage_only):
-        # Closing the UI hides its persistent Electron owner; it does not exit.
-        # Stage instead of refusing the build or replacing a live executable.
-        print("T3 is still running (possibly hidden); staging the new build safely. "
-              "Use compile_and_launch_t3.py --replace-electron to activate it.", flush=True)
-        stage_only = True
+        raise RuntimeError("Close T3 Code (Custom) before updating its executable.")
     if stage_only:
         # An old manifest must never validate if compilation fails halfway.
         (root / STAGE_MARKER).unlink(missing_ok=True)
