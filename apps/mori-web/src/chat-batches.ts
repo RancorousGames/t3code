@@ -1,5 +1,5 @@
 import instructions from "../prompts/AI_TRANSLATOR.md?raw";
-import { AI_BATCH_LIMIT, canDraft, parseBatchReply } from "./ai-batch.ts";
+import { AI_BATCH_LIMIT, canDraft, parseBatchReply, withAIDraft } from "./ai-batch.ts";
 import { glossaryHits } from "./insights.ts";
 import type { MoriProject, MoriRow } from "./model.ts";
 import { projectForTranslation, type MoriPrefs } from "./prefs.ts";
@@ -50,7 +50,9 @@ function glossaryFile(project: MoriProject, rows: MoriRow[]): string | null {
 }
 
 export function chooseChatBatch(project: MoriProject, count = CHAT_BATCH_SIZE): MoriRow[] {
-  return project.rows.filter(canDraft).slice(0, Math.min(AI_BATCH_LIMIT, count));
+  // Only new drafts: do not silently replace existing AI work.
+  return project.rows.filter(row => canDraft(row) && !row.ai?.trim())
+    .slice(0, Math.min(AI_BATCH_LIMIT, count));
 }
 
 /** Immutable batch payload. Terms/characters are included only if enabled.
@@ -112,8 +114,44 @@ export function makeChatBatch(
 }
 
 export function parseChatBatchAnswer(reply: string, request: ChatBatchRequest) {
-  const proposals = parseBatchReply(reply, request.ids);
-  // Existing project source may have changed while ChatGPT was working; caller
-  // also compares each row's current source and lock status before acceptance.
-  return proposals;
+  return parseBatchReply(reply, request.ids);
+}
+
+/** Validate the full batch before applying any proposal. This returns one atomic
+ * project update; already-saved identical results are safe to replay after a crash. */
+export function mergeChatBatchDrafts(
+  project: MoriProject,
+  request: ChatBatchRequest,
+  proposals: readonly { id: string; japanese: string }[],
+): { project: MoriProject; added: number } {
+  if (project.id !== request.projectId || proposals.length !== request.ids.length ||
+      new Set(proposals.map(p => p.id)).size !== proposals.length ||
+      proposals.some(p => !request.ids.includes(p.id) || !p.japanese.trim())) {
+    throw Error("Batch does not match this project. No drafts changed.");
+  }
+  const translations = new Map(proposals.map(p => [p.id, p.japanese]));
+  let added = 0;
+  for (const id of request.ids) {
+    const row = project.rows.find(item => item.id === id);
+    if (!row || !canDraft(row) || row.source !== request.sources[id]) {
+      throw Error("A source line changed or became protected. No drafts changed.");
+    }
+    const next = translations.get(id);
+    if (!next) throw Error("A proposal is missing. No drafts changed.");
+    if (row.ai?.trim() && row.ai !== next) {
+      throw Error("A line already has a different AI draft. No drafts changed.");
+    }
+    if (row.ai !== next) added++;
+  }
+  if (!added) return { project, added: 0 };
+  return {
+    project: {
+      ...project,
+      rows: project.rows.map(row => {
+        const text = translations.get(row.id);
+        return text && row.ai !== text ? withAIDraft(row, text) : row;
+      }),
+    },
+    added,
+  };
 }

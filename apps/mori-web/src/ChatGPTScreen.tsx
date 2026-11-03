@@ -11,7 +11,6 @@ import { chatGPTConversationIdFromUrl } from "../../web/src/chatGPTConversationI
 import { inspectChatGPTPage, type PageInspection } from "../../web/src/chatGPTSessionDom.ts";
 import { buildChatGPTSessionContextMenu, buildChatGPTProjectContextMenu } from "../../web/src/chatGPTSessionContextMenu.ts";
 import { useChatBatchWorker } from "./useChatBatchWorker.ts";
-import { checkRow } from "./insights.ts";
 
 type Guest = HTMLElement & {
   getURL: () => string;
@@ -488,9 +487,8 @@ export function ChatGPTScreen() {
         onAssignGroup={(id, group) => patchOne(id, s => ({ ...s, project: group === "Other" ? undefined : group }))}
         onDoubleClick={quickSnooze} onUnsnooze={unsnooze}
         onRunBatch={() => { void worker.run(); }}
-        onReviewBatch={() => worker.setReviewOpen(true)}
         batchStatus={worker.status} batchPending={!!worker.job}
-        batchReady={worker.job?.stage === "ready"} batchCount={worker.draftable.length}
+        batchCount={worker.draftable.length}
         batchBusy={worker.sending} />
       {worker.job && worker.job.stage !== "ready" && <div className="mori-ai-batch-floating" role="status">
         <span title={worker.job.folder ?? ""}>{worker.status}</span>
@@ -499,22 +497,6 @@ export function ChatGPTScreen() {
           : <button type="button" disabled={worker.checking} onClick={() => { void worker.check(); }}>Check reply</button>}
         <button type="button" onClick={worker.discard}>Discard tracking</button>
       </div>}
-      {worker.job?.stage === "ready" && worker.reviewOpen && <section className="mori-ai-batch-review" aria-label="AI batch proposals">
-        <header><b>ChatGPT · {worker.job.proposals?.length} AI drafts</b>
-          <button type="button" aria-label="Close review" onClick={() => worker.setReviewOpen(false)}><Icon name="x" size="xs" /></button>
-        </header>
-        <small>From {worker.job.request.files.map(file => file.name).join(", ")} · source snapshots saved on PC.</small>
-        <div className="mori-ai-batch-lines">{worker.job.proposals?.map(({id,japanese}) => {
-          const row = project.rows.find(row => row.id === id);
-          const warnings = row ? checkRow({ ...row, final: japanese }, prefs.glossaryEnabled ? project.glossary : []) : [];
-          return <article key={id}><b>{id}</b><p>{row?.source ?? "Source missing"}</p>
-            <div lang="ja">{japanese}</div>
-            {warnings.map((warning,index) => <small className="mori-ai-batch-warning" key={index}>{warning.message}</small>)}
-          </article>;
-        })}</div>
-        <footer><button type="button" onClick={worker.discard}>Discard</button>
-          <button className="mori-ai-approve" type="button" onClick={worker.apply}>Save to AI drafts</button></footer>
-      </section>}
       {fallbackMenu && <FallbackMenu state={fallbackMenu} close={() => setFallbackMenu(null)} />}
     </div>
   );

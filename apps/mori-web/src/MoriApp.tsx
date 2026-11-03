@@ -9,7 +9,8 @@ import { ImportWizard } from "./ImportWizard.tsx";
 import { IconSprite } from "./Icons.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { MatrixScreen } from "./Matrix.tsx";
-import { Modal, PopoverFrame, Toast } from "./Overlays.tsx";
+import { Modal, PopoverFrame } from "./Overlays.tsx";
+import { NotificationViewport, notify } from "./Notifications.tsx";
 import { PopoverContent } from "./Popovers.tsx";
 import { ContextScreen, CharactersScreen, GlossaryScreen, ProjectScreen, SettingsScreen } from "./Reference.tsx";
 import { Sidebar } from "./Sidebar.tsx";
@@ -22,7 +23,6 @@ import { keyString, loadBindings, matchAction, saveBindings, type ActionId, type
 import { useProjectStore, type SaveState } from "./store.ts";
 
 const DEFAULT_VIEW: ViewFilters = { filter: "all", query: "", speaker: "any", file: null };
-const TOAST_MS = 2600;
 
 const NO_ROWS: MoriProject["rows"] = [];
 const NO_GLOSSARY: MoriProject["glossary"] = [];
@@ -40,7 +40,6 @@ export function MoriApp() {
   const [folded, setFolded] = useState<Set<string>>(() => new Set());
   const [pop, setPop] = useState<PopState | null>(null);
   const [modal, setModal] = useState<ModalState | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
   const [library, setLibrary] = useState<LibraryEntry[]>(readIndex);
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -48,7 +47,6 @@ export function MoriApp() {
   const focusOnRender = useRef(false);
   const clickSelectionOnRender = useRef<EditorClickSelection | null>(null);
   const caretOnRender = useRef<number | null>(null);
-  const toastTimer = useRef<number | undefined>(undefined);
   const bootStarted = useRef(false);
 
   const rows = project?.rows ?? NO_ROWS;
@@ -61,11 +59,7 @@ export function MoriApp() {
   );
   const activeRow = rows.find(row => row.id === activeId) ?? null;
 
-  const toast = useCallback((text: string) => {
-    setMessage(text);
-    window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setMessage(null), TOAST_MS);
-  }, []);
+  const toast = useCallback((text: string) => { notify(text); }, []);
 
   const setView = useCallback((patch: Partial<ViewFilters>) => setViewState(current => ({ ...current, ...patch })), []);
   const go = useCallback((next: Screen) => {
@@ -452,7 +446,7 @@ export function MoriApp() {
       {modal && modal.kind === "palette" && <Modal onClose={closeModal} className="pal"><PaletteModal /></Modal>}
       {modal && modal.kind === "templates" && <Modal onClose={closeModal} className="narrow"><TemplatesModal /></Modal>}
       {modal && modal.kind === "import" && <ImportModal step={modal.step} onClose={closeModal} onCreate={createProject} />}
-      <Toast message={message} />
+      <NotificationViewport />
     </AppContext.Provider>
   );
 }

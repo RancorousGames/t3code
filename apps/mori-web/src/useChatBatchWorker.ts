@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { chatGPTConversationIdFromUrl } from "../../web/src/chatGPTConversationIdentity.ts";
 import { inspectChatGPTPage, type PageInspection } from "../../web/src/chatGPTSessionDom.ts";
 import { chatGPTWebviewAutomation } from "../../web/src/chatGPTWebviewAutomation.ts";
-import { canDraft, withAIDraft } from "./ai-batch.ts";
-import { CHAT_BATCH_SIZE, chooseChatBatch, makeChatBatch, parseChatBatchAnswer, type ChatBatchRequest } from "./chat-batches.ts";
+import { CHAT_BATCH_SIZE, chooseChatBatch, makeChatBatch, mergeChatBatchDrafts, parseChatBatchAnswer, type ChatBatchRequest } from "./chat-batches.ts";
+import { notify } from "./Notifications.tsx";
 import { nativeMori } from "./backend.ts";
 import type { MoriProject } from "./model.ts";
 import type { MoriPrefs } from "./prefs.ts";
@@ -63,8 +63,10 @@ export function useChatBatchWorker(input: {
   const [job, setJob] = useState<PendingJob | null>(() => restore(project.id));
   const [sending, setSending] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
   const jobRef = useRef(job);
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const applying = useRef(false);
   const inFlight = useRef(false);
   const draftable = chooseChatBatch(project, CHAT_BATCH_SIZE);
 
@@ -79,7 +81,6 @@ export function useChatBatchWorker(input: {
     const next = restore(project.id);
     jobRef.current = next;
     setJob(next);
-    setReviewOpen(false);
   }, [project.id]);
 
   const run = async () => {
@@ -139,13 +140,43 @@ export function useChatBatchWorker(input: {
       });
       prepared = { ...prepared, stage: "sent" };
       updateJob(prepared);
-      toast(`Sent ${request.ids.length} lines to ChatGPT. Waiting for strict JSON proposals.`);
+      toast(`Sent ${request.ids.length} ${request.ids.length === 1 ? "line" : "lines"} to ChatGPT. Waiting for JSON proposals.`);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "ChatGPT batch submission failed.";
       if (prepared) updateJob({ ...prepared, stage: prepared.stage === "unknown" ? "unknown" : "failed", error: message });
       toast(message);
     } finally { setSending(false); }
   };
+
+  // Valid JSON is accepted as AI drafts automatically. The source snapshot
+  // is verified before all proposals are merged in one project update.
+  const commitReady = useCallback((pending: PendingJob) => {
+    if (applying.current || jobRef.current?.request.requestId !== pending.request.requestId ||
+        pending.request.projectId !== projectRef.current.id ||
+        !pending.proposals?.length || pending.stage !== "ready") return;
+    applying.current = true;
+    try {
+      const merged = mergeChatBatchDrafts(projectRef.current, pending.request, pending.proposals);
+      if (merged.added) {
+        const request = pending.request;
+        const proposals = pending.proposals;
+        actions.updateProject(current => mergeChatBatchDrafts(current, request, proposals).project);
+      }
+      updateJob(null);
+      if (merged.added) notify(`${merged.added} more AI ${merged.added === 1 ? "translation" : "translations"} just added`, "success");
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Could not save ChatGPT drafts.";
+      updateJob({ ...pending, stage: "failed", error: message });
+      notify(message, "warning");
+    } finally {
+      applying.current = false;
+    }
+  }, [actions, updateJob]);
+
+  // Complete interrupted jobs that already received valid JSON before reload.
+  useEffect(() => {
+    if (job?.stage === "ready" && job.proposals?.length) commitReady(job);
+  }, [job?.request.requestId, job?.stage, commitReady]);
 
   const check = useCallback(async () => {
     const pending = jobRef.current;
@@ -167,23 +198,22 @@ export function useChatBatchWorker(input: {
       if (!response?.text.trim()) return;
       try {
         const proposals = parseChatBatchAnswer(response.text, pending.request);
-        updateJob({ ...pending, stage: "ready", proposals, error: undefined });
-        setReviewOpen(true);
-        toast(`${proposals.length} ChatGPT translation suggestions ready for review.`);
+        const ready: PendingJob = { ...pending, stage: "ready", proposals, error: undefined };
+        updateJob(ready);
+        commitReady(ready);
       } catch (cause) {
         // A non-JSON partial answer is not accepted. It can still be streaming
         // even if the page briefly appears idle: keep polling unless the page
         // is definitely completed, in which case show a recoverable parse error.
         if (page.activity === "idle") {
-          updateJob({
-            ...pending, stage: "failed",
-            error: cause instanceof Error ? cause.message : "Invalid ChatGPT JSON response.",
-          });
+          const message = cause instanceof Error ? cause.message : "Invalid ChatGPT JSON response.";
+          updateJob({ ...pending, stage: "failed", error: message });
+          notify(message, "warning");
         }
       }
     } catch { /* Navigation or guest teardown; don't resend. */ }
     finally { inFlight.current = false; setChecking(false); }
-  }, [activeId, guestRef, readyIdRef, updateJob, toast]);
+  }, [activeId, guestRef, readyIdRef, updateJob, commitReady]);
 
   useEffect(() => {
     if (!job || (job.stage !== "sent" && job.stage !== "unknown") || activeId !== job.request.sessionId) return;
@@ -192,35 +222,12 @@ export function useChatBatchWorker(input: {
     return () => { window.clearTimeout(immediate); window.clearInterval(poll); };
   }, [job?.request.requestId, job?.stage, job?.request.sessionId, activeId, check]);
 
-  const apply = () => {
-    const pending = jobRef.current;
-    if (!pending?.proposals?.length || pending.stage !== "ready") return;
-    const invalid = pending.proposals.filter(({ id }) => {
-      const row = project.rows.find(row => row.id === id);
-      return !row || !canDraft(row) || row.source !== pending.request.sources[id];
-    });
-    if (invalid.length) {
-      toast(`Source or protected status changed for ${invalid.map(x => x.id).join(", ")}. Nothing was applied.`);
-      return;
-    }
-    if (!window.confirm(`Save ${pending.proposals.length} ChatGPT suggestions as AI drafts? Human Japanese remains unchanged.`)) return;
-    for (const { id, japanese } of pending.proposals) {
-      actions.updateRow(id, row =>
-        row.source === pending.request.sources[id] ? withAIDraft(row, japanese) : row,
-      );
-    }
-    updateJob(null);
-    setReviewOpen(false);
-    toast("ChatGPT batch saved to AI drafts. Curated Japanese was not overwritten.");
-  };
-
   const discard = () => {
     if (!jobRef.current) return;
     if (jobRef.current.stage === "sent" || jobRef.current.stage === "unknown") {
       if (!window.confirm("Discard tracking for this batch? The ChatGPT conversation and any response will remain in the browser.")) return;
     }
     updateJob(null);
-    setReviewOpen(false);
   };
 
   const status = !job ? "" :
@@ -231,8 +238,8 @@ export function useChatBatchWorker(input: {
     job.error ?? "Batch failed";
 
   return {
-    job, status, sending, checking, reviewOpen, setReviewOpen, draftable,
-    run, check, apply, discard,
+    job, status, sending, checking, draftable,
+    run, check, discard,
     resume: () => job?.request.sessionId && openSession(job.request.sessionId),
   };
 }

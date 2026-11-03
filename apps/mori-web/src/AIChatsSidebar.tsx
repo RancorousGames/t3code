@@ -48,10 +48,8 @@ export interface AIChatsSidebarProps {
   onDoubleClick: (session: MoriChatSession) => void;
   onUnsnooze: (id: string) => void;
   onRunBatch: () => void;
-  onReviewBatch: () => void;
   batchStatus: string;
   batchPending: boolean;
-  batchReady: boolean;
   batchCount: number;
   batchBusy: boolean;
   now: number;
@@ -77,7 +75,7 @@ function orderedSessions(items: MoriChatSession[], activeId: string | null, now:
 export function AIChatsSidebar({
   sessions, activeId, collapsed, onCollapse, onCreate, onSelect, onClose,
   onRename, onMenu, onGroupMenu, permanentGroups, onMove, onAssignGroup, onDoubleClick, onUnsnooze,
-  onRunBatch, onReviewBatch, batchStatus, batchPending, batchReady, batchCount, batchBusy, now,
+  onRunBatch, batchStatus, batchPending, batchCount, batchBusy, now,
 }: AIChatsSidebarProps) {
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
@@ -260,11 +258,11 @@ export function AIChatsSidebar({
       </div>
       <div className="mori-ai-batch-actions">
         {batchStatus && <span className="mori-ai-batch-status" role="status" title={batchStatus}>{batchStatus}</span>}
-        <button type="button" className="mori-ai-batch-button" disabled={batchBusy || (batchPending && !batchReady) || (!batchPending && !batchCount)}
-          onClick={batchReady ? onReviewBatch : onRunBatch}
-          title={batchReady ? "Review ChatGPT JSON proposals" : "Send up to three eligible lines to the current ChatGPT session with inline instruction and context files"}>
+        <button type="button" className="mori-ai-batch-button" disabled={batchBusy || batchPending || !batchCount}
+          onClick={onRunBatch}
+          title="Translate up to three untouched lines, automatically saving valid JSON results as AI drafts">
           <Icon name="sparkle" size="xs" />
-          {batchBusy ? "Sending…" : batchReady ? "Review AI drafts" : batchPending ? "Batch in progress" : `Translate ${batchCount} lines`}
+          {batchBusy ? "Sending…" : batchPending ? "Batch in progress" : `Translate ${batchCount} ${batchCount === 1 ? "line" : "lines"}`}
         </button>
       </div>
       <footer className="mori-ai-side-foot">
