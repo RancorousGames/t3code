@@ -1217,8 +1217,8 @@ export function ChatGPTBrowserSidebarEntry({
       : null;
     const activeCaffy = caffyState && typeof caffyState === "object" &&
       "mode" in caffyState && "startup" in caffyState &&
-      ["idle", "periodic", "queued"].includes(String(caffyState.mode))
-        ? caffyState as { mode: "idle" | "periodic" | "queued"; startup: boolean;
+      ["idle", "periodic", "queued", "startup"].includes(String(caffyState.mode))
+        ? caffyState as { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
             onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null }
         : null;
     const keepT3Busy = caffyPolicy && typeof caffyPolicy === "object" &&
@@ -1411,9 +1411,14 @@ export function ChatGPTBrowserSidebarEntry({
               ? "Keep T3 Busy enabled." : "Keep T3 Busy disabled.",
           );
         } else if (action === "caffy:startup") {
-          if (!activeCaffy) throw new Error("Configure a Caffy wake first.");
-          await control({ action: "startup", sessionId, startup: !activeCaffy.startup });
-          setKeepAwakeFeedback(`Caffy startup resume ${activeCaffy.startup ? "disabled" : "enabled"}.`);
+          if (activeCaffy) {
+            await control({ action: "startup", sessionId, startup: !activeCaffy.startup });
+            setKeepAwakeFeedback(`Caffy startup resume ${activeCaffy.startup ? "disabled" : "enabled"}.`);
+          } else {
+            await control({ action: "set", sessionId, mode: "startup",
+              startup: true, keepAwake: true });
+            setKeepAwakeFeedback("Caffy will resume this session automatically when T3 starts.");
+          }
         } else {
           const parts = action.split(":");
           const mode = parts[1];

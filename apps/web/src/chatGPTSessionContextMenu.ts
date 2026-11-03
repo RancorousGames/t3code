@@ -39,7 +39,7 @@ export function buildChatGPTSessionContextMenu(input: {
   now: number;
   working: boolean;
   hasTask: boolean;
-  caffy?: { mode: "idle" | "periodic" | "queued"; startup: boolean;
+  caffy?: { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
     onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null } | null;
   keepT3Busy?: boolean;
 }): MenuItem[] {
@@ -50,7 +50,8 @@ export function buildChatGPTSessionContextMenu(input: {
     ? Math.round((activeCaffy.expiresAt - activeCaffy.createdAt) / 60_000) : null;
   const wakeMode = activeCaffy?.mode === "idle" ? "Idle" :
     activeCaffy?.mode === "periodic" ? "Periodic" :
-    activeCaffy?.mode === "queued" ? "Queued idle" : null;
+    activeCaffy?.mode === "queued" ? "Queued idle" :
+    activeCaffy?.mode === "startup" ? "Startup only" : null;
   const snoozed = (session.snoozedUntil ?? 0) > now;
   const ancestors = new Set([session.id]);
   const walk = (id: string) => {
@@ -158,7 +159,6 @@ export function buildChatGPTSessionContextMenu(input: {
         item("caffy:pause", activeCaffy?.paused ? "Resume Caffy" : "Pause Caffy", { disabled: !activeCaffy, separatorBefore: true }),
         item("caffy:startup", "Resume on Startup", {
           checked: input.caffy?.startup ?? false,
-          disabled: !input.caffy,
           separatorBefore: true,
         }),
         item("caffy:busy", "Keep T3 Busy (queued work)", { checked: input.keepT3Busy ?? false }),

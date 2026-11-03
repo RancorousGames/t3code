@@ -22,10 +22,10 @@ export const setReady = DesktopIpc.makeIpcMethod({
 export const caffyControl = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.DESKTOP_CAFFY_CONTROL_CHANNEL,
   payload: Schema.Struct({
-    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup"]),
+    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks"]),
     sessionId: Schema.optional(Schema.String),
     conversationId: Schema.optional(Schema.String),
-    mode: Schema.optional(Schema.Literals(["idle", "periodic", "queued"])),
+    mode: Schema.optional(Schema.Literals(["idle", "periodic", "queued", "startup"])),
     durationMinutes: Schema.optional(Schema.Number),
     intervalMinutes: Schema.optional(Schema.Number),
     onceOnly: Schema.optional(Schema.Boolean),

@@ -4,7 +4,7 @@ import { SettingsSection } from "./settingsLayout";
 
 interface Monitor {
   sessionId: string;
-  mode: "idle" | "periodic" | "queued";
+  mode: "idle" | "periodic" | "queued" | "startup";
   paused: boolean;
   startup: boolean;
   onceOnly: boolean;

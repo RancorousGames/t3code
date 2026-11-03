@@ -1904,10 +1904,10 @@ export interface DesktopBridge {
   readChatGPTDeliveryDiagnostics?: () => Promise<DesktopChatGPTDeliveryDiagnostics>;
   /** Durable T3-owned Caffy API; no OpenRig dependency. */
   caffyControl?: (input: {
-    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup";
+    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks";
     sessionId?: string;
     conversationId?: string;
-    mode?: "idle" | "periodic" | "queued";
+    mode?: "idle" | "periodic" | "queued" | "startup";
     durationMinutes?: number;
     intervalMinutes?: number;
     onceOnly?: boolean;

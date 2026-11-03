@@ -7,7 +7,7 @@ import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "
 import type { ChatGPTDeliveryQueue, DeliveryRecord } from "./ChatGPTDeliveryQueue.ts";
 import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 
-type Mode = "idle" | "periodic" | "queued";
+type Mode = "idle" | "periodic" | "queued" | "startup";
 type Trigger = "idle" | "periodic" | "queued" | "startup" | "manual";
 type Request = (request: DesktopAppActivationRequest) => Promise<DesktopAppActivationResponse>;
 export interface CaffyConfig {
@@ -36,7 +36,7 @@ const WAKE_TEXT = "Continue working on your current assignment. If everything is
 const CLOCK = 10_000;
 const valid = (row: CaffyConfig): boolean =>
   !!row && UUID.test(row.sessionId) && UUID.test(row.conversationId) &&
-  ["idle", "periodic", "queued"].includes(row.mode) &&
+  ["idle", "periodic", "queued", "startup"].includes(row.mode) &&
   Number.isFinite(row.createdAt) && Number.isInteger(row.intervalMinutes) &&
   row.intervalMinutes >= 1 && row.intervalMinutes <= 60 &&
   (row.expiresAt === null || Number.isFinite(row.expiresAt)) &&
@@ -206,13 +206,15 @@ export class CaffyScheduler {
   }) {
     if (!UUID.test(input.sessionId) || !UUID.test(input.conversationId))
       throw new Error("Exact sessionId and conversationId UUIDs required.");
-    if (!["idle", "periodic", "queued"].includes(input.mode))
-      throw new Error("Caffy mode must be idle, periodic or queued.");
+    if (!["idle", "periodic", "queued", "startup"].includes(input.mode))
+      throw new Error("Caffy mode must be idle, periodic, queued or startup.");
     if (input.durationMinutes !== undefined &&
         (!Number.isInteger(input.durationMinutes) || input.durationMinutes < 1 || input.durationMinutes > 10_080))
       throw new Error("Duration must be 1..10080 minutes or omitted for infinite.");
-    if (input.mode === "queued" && input.durationMinutes !== undefined)
-      throw new Error("Queued idle waking is infinite; omit duration.");
+    if (input.mode === "startup" && input.startup === false)
+      throw new Error("Startup-only Caffy requires startup=true.");
+    if (["queued", "startup"].includes(input.mode) && input.durationMinutes !== undefined)
+      throw new Error("Queued idle waking and startup-only are infinite; omit duration.");
     const intervalMinutes = input.intervalMinutes ?? 20;
     if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 60)
       throw new Error("Interval must be 1..60 minutes.");
@@ -241,7 +243,7 @@ export class CaffyScheduler {
       prior.mode === input.mode && prior.expiresAt ===
         (input.durationMinutes === undefined ? null : prior.createdAt + input.durationMinutes * 60_000) &&
       prior.onceOnly === (input.onceOnly ?? false) &&
-      prior.startup === (input.startup ?? false) &&
+      prior.startup === (input.startup ?? (input.mode === "startup")) &&
       prior.keepAwake === (input.keepAwake ?? true) &&
       prior.intervalMinutes === intervalMinutes;
     if (same) {
@@ -251,12 +253,12 @@ export class CaffyScheduler {
     const row: CaffyConfig = {
       sessionId: canonicalId, browserSessionId, conversationId: input.conversationId,
       mode: input.mode, intervalMinutes,
-      startup: input.startup ?? false, onceOnly: input.onceOnly ?? false,
+      startup: input.mode === "startup" ? true : input.startup ?? false, onceOnly: input.onceOnly ?? false,
       keepAwake: input.keepAwake ?? true, paused: false, createdAt: now,
       expiresAt: input.durationMinutes === undefined ? null : now + input.durationMinutes * 60_000,
       nextDueAt: input.mode === "periodic" ? now + intervalMinutes * 60_000 : null,
-      pendingWake: prior?.conversationId === input.conversationId ? prior.pendingWake : input.mode !== "periodic",
-      pendingReason: prior?.conversationId === input.conversationId ? prior.pendingReason : input.mode !== "periodic" ? "manual" : null,
+      pendingWake: prior?.conversationId === input.conversationId ? prior.pendingWake : input.mode === "idle" || input.mode === "queued",
+      pendingReason: prior?.conversationId === input.conversationId ? prior.pendingReason : input.mode === "idle" || input.mode === "queued" ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
       lastIdleSequence: Math.max(prior?.lastIdleSequence ?? 0, identity?.idleSequence ?? 0),
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
@@ -295,6 +297,7 @@ export class CaffyScheduler {
   startup(sessionId: string, enabled: boolean) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
+    if (!enabled && row.mode === "startup") return this.stop(sessionId);
     row.startup = enabled;
     this.save();
     return row;
@@ -317,7 +320,7 @@ export class CaffyScheduler {
     if (!row || row.paused || row.conversationId !== event.conversationId ||
         event.sequence <= row.lastIdleSequence) return;
     row.lastIdleSequence = event.sequence;
-    if (row.mode !== "periodic" && !row.pendingMessageId) {
+    if ((row.mode === "idle" || row.mode === "queued") && !row.pendingMessageId) {
       row.pendingWake = true;
       row.pendingReason = "idle";
     }
