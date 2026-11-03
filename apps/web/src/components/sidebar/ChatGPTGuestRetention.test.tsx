@@ -121,6 +121,7 @@ beforeEach(() => {
   mocks.sessions = Array.from({ length: 8 }, (_, i) => ({ id: `${i}` }));
   useOmniworkPreferences.getState().setUnloadProfile("balanced");
   useOmniworkPreferences.getState().setChatGPTWarmSessionCount(8);
+  useOmniworkPreferences.getState().setChatGPTMaxAutoSessionCount(8);
   useChatGPTGuestHibernation.setState({
     hibernated: Object.fromEntries(mocks.sessions.map(({ id }) => [key(id), true])),
     touchedAt: Object.fromEntries(mocks.sessions.map(({ id }, i) => [key(id), i * 1_000])),
@@ -214,6 +215,7 @@ describe("ChatGPT recent guest retention", () => {
       ...(i >= 6 ? { snoozedUntil: Date.now() + 30_000 } : {}),
     }));
     useOmniworkPreferences.getState().setChatGPTWarmSessionCount(6);
+    useOmniworkPreferences.getState().setChatGPTMaxAutoSessionCount(6);
     useChatGPTGuestHibernation.setState({
       hibernated: Object.fromEntries(mocks.sessions.map(({ id }) => [key(id), true])),
       touchedAt: Object.fromEntries(mocks.sessions.map(({ id }, i) => [key(id), i * 1_000])),

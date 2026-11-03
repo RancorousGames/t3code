@@ -24,11 +24,13 @@ interface ChatGPTGuestHibernationState {
   readonly woken: Record<string, true>;
   readonly touchedAt: Record<string, number>;
   readonly retained: Record<string, true>;
+  /** User-opened guests do not compete for automatic retention slots. */
+  readonly userOpened: Record<string, true>;
 }
 
 export const useChatGPTGuestHibernation = create<ChatGPTGuestHibernationState>()(
   persist(
-    () => ({ hibernated: {}, manuallyUnloaded: {}, woken: {}, touchedAt: {}, retained: {} }),
+    () => ({ hibernated: {}, manuallyUnloaded: {}, woken: {}, touchedAt: {}, retained: {}, userOpened: {} }),
     {
       name: "t3code:chatgpt-guest-hibernation:v1",
       storage: createJSONStorage(() =>
@@ -86,7 +88,6 @@ export function recentChatGPTGuestKeys(
   protectedKeys: ReadonlySet<string> = new Set(),
   totalLimit = Number.POSITIVE_INFINITY,
 ): string[] {
-  const keys = new Set(candidates.map(({ key }) => key));
   const policy = activeOmniworkUnloadPolicy();
   const ordinaryLimit =
     policy.idleMs === null
@@ -112,7 +113,9 @@ export function retainChatGPTGuests(keys: readonly string[]): void {
     const keep = new Set(keys);
     // Demote previously auto-retained guests that lost a slot. Otherwise
     // a snooze expiry can leave every old renderer resident indefinitely.
-    const released = Object.keys(state.retained).filter((key) => !keep.has(key));
+    const released = Object.keys(state.retained).filter(
+      (key) => !keep.has(key) && !state.userOpened?.[key],
+    );
     return {
       retained: Object.fromEntries(keys.map((key) => [key, true])),
       hibernated: {
@@ -152,7 +155,12 @@ export function hibernateChatGPTGuest(runtimeTabId: string, manual = false): voi
   if (!manual && isChatGPTGuestHibernated(runtimeTabId)) return;
   useChatGPTGuestHibernation.setState((state) => ({
     hibernated: { ...state.hibernated, [key]: true },
-    ...(manual ? { manuallyUnloaded: { ...state.manuallyUnloaded, [key]: true } } : {}),
+    ...(manual ? {
+      manuallyUnloaded: { ...state.manuallyUnloaded, [key]: true },
+      userOpened: Object.fromEntries(
+        Object.entries(state.userOpened ?? {}).filter(([entry]) => entry !== key),
+      ),
+    } : {}),
   }));
 }
 
@@ -191,4 +199,23 @@ export function shouldHibernateChatGPTGuest(input: {
   const baseIdleMs = activeOmniworkUnloadPolicy().idleMs;
   const idleMs = input.longIdle && baseIdleMs !== null ? 4 * 60 * 60_000 : baseIdleMs;
   return idleMs !== null && input.now - lastUsedAt >= idleMs;
+}
+
+/** Explicit user navigation may exceed automatic residency limits without evicting other guests. */
+export function openChatGPTGuestByUser(runtimeTabId: string): void {
+  const key = chatGPTGuestKey(runtimeTabId);
+  wakeChatGPTGuest(runtimeTabId);
+  useChatGPTGuestHibernation.setState((state) => ({
+    userOpened: { ...state.userOpened, [key]: true },
+  }));
+}
+
+/** Snoozing is an explicit release of the user-opened residency exemption. */
+export function clearChatGPTGuestUserOpened(runtimeTabId: string): void {
+  const key = chatGPTGuestKey(runtimeTabId);
+  useChatGPTGuestHibernation.setState((state) => {
+    if (!state.userOpened?.[key]) return state;
+    const { [key]: _removed, ...userOpened } = state.userOpened;
+    return { userOpened };
+  });
 }

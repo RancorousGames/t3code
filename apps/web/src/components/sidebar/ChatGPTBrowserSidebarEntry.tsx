@@ -100,6 +100,7 @@ import {
   hibernateChatGPTGuest,
   isChatGPTGuestHibernated,
   wakeChatGPTGuest,
+  openChatGPTGuestByUser,
 } from "../../browser/chatGPTGuestHibernation";
 import {
   ChatGPTSessionMenuDialog,
@@ -2679,7 +2680,7 @@ export function ChatGPTBrowserSidebarEntry({
                                                 );
                                                 // Selection is urgent regardless of Session/Browser view.
                                                 // Do not await navigation or the background warm queue.
-                                                wakeChatGPTGuest(
+                                                openChatGPTGuestByUser(
                                                   JSON.stringify([
                                                     environmentId,
                                                     chatGPTBrowserThreadRef(

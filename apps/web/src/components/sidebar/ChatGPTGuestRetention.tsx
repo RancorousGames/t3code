@@ -146,10 +146,12 @@ export function ChatGPTGuestRetention({
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
   const touchedAt = useChatGPTGuestHibernation((state) => state.touchedAt);
   const manuallyUnloaded = useChatGPTGuestHibernation((state) => state.manuallyUnloaded);
+  const userOpened = useChatGPTGuestHibernation((state) => state.userOpened);
   const warmedIds = useWarmChatGPTSessionIds(environmentId);
   const unloadProfile = useOmniworkPreferences((state) => state.unloadProfile);
   const recentGuests = useOmniworkPreferences((state) => state.recentGuests);
   const warmCount = useOmniworkPreferences((state) => state.chatGPTWarmSessionCount);
+  const maxAutoCount = useOmniworkPreferences((state) => state.chatGPTMaxAutoSessionCount);
   const loadAllStartup = useOmniworkPreferences((state) => state.loadAllChatGPTSessionsOnStartup);
   // UNKNOWN send receipts are not delivered prompts. Restore only their exact
   // persisted conversation owners for inspection; never retry the composer.
@@ -261,6 +263,8 @@ export function ChatGPTGuestRetention({
           !session.hidden &&
           !(session.snoozedUntil && session.snoozedUntil > now)) ||
         activeSessionId === session.id ||
+        (userOpened?.[key] === true &&
+          !session.hidden && !(session.snoozedUntil && session.snoozedUntil > now)) ||
         (!!session.borderColor && (!longIdle || withinLongIdle)) ||
         (longIdle && withinLongIdle) ||
         hasUncertainChatGPTSend(environmentId, session.id) ||
@@ -289,9 +293,8 @@ export function ChatGPTGuestRetention({
         },
       ];
     });
-    // The warm setting is a global ceiling for automatic legacy guest retention,
-    // not an extra allowance on top of managers/recovery/recent sessions.
-    // Explicit foreground navigation and targeted delivery mount independently.
+    // The maximum bounds automatic retention only. User-opened sessions
+    // remain resident even when they exceed it; snooze/unload releases them.
     const ranked = candidates.toSorted((a, b) => {
       const priority = (key: string) => {
         const id = sessions.find((session) =>
@@ -302,7 +305,21 @@ export function ChatGPTGuestRetention({
       };
       return priority(a.key) - priority(b.key) || b.lastUsedAt - a.lastUsedAt;
     });
-    return recentChatGPTGuestKeys(ranked, protectedKeys, warmCount);
+    const selectedKey = activeSessionId
+      ? JSON.stringify([environmentId, chatGPTBrowserThreadRef(environmentId, activeSessionId).threadId])
+      : null;
+    const userKeys = ranked
+      .filter(({ key }) => userOpened?.[key] === true || key === selectedKey)
+      .map(({ key }) => key);
+    const manual = new Set(userKeys);
+    const automatic = ranked.filter(({ key }) => !manual.has(key));
+    return [...new Set([
+      ...userKeys,
+      ...recentChatGPTGuestKeys(
+        automatic, protectedKeys,
+        unloadProfile === "never" ? Number.POSITIVE_INFINITY : maxAutoCount,
+      ),
+    ])];
   }, [
     activeSessionId,
     environmentId,
@@ -312,7 +329,8 @@ export function ChatGPTGuestRetention({
     now,
     unloadProfile,
     recentGuests,
-    warmCount,
+    maxAutoCount,
+    userOpened,
     deliveryRequests,
     warmedIds,
     manuallyUnloaded,

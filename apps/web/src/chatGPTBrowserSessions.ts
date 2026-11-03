@@ -9,6 +9,7 @@ import {
 } from "./chatGPTSessionPersistedStore";
 
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
+import { clearChatGPTGuestUserOpened } from "./browser/chatGPTGuestHibernation";
 import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import {
   nextChatGPTBootstrapGeneration,
@@ -922,6 +923,14 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   const setSessionSnooze = useCallback(
     (ids: readonly string[], until: number | null) => {
       const targets = new Set(ids);
+      if (until !== null) {
+        for (const id of ids) {
+          if (environmentId) clearChatGPTGuestUserOpened(JSON.stringify([
+            environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId,
+          ]));
+          clearChatGPTGuestUserOpened(id);
+        }
+      }
       setSessions((current) =>
         current.map((session) =>
           targets.has(session.id)
@@ -935,7 +944,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         ),
       );
     },
-    [setSessions],
+    [environmentId, setSessions],
   );
 
   const setSessionVerification = useCallback(
@@ -957,8 +966,12 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
   const quickSnoozeSession = useCallback(
-    (id: string, until: number, step: number) =>
-      setSessions((current) =>
+    (id: string, until: number, step: number) => {
+      if (environmentId) clearChatGPTGuestUserOpened(JSON.stringify([
+        environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId,
+      ]));
+      clearChatGPTGuestUserOpened(id);
+      return setSessions((current) =>
         current.map((session) =>
           session.id === id
             ? {
@@ -970,8 +983,9 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
               }
             : session,
         ),
-      ),
-    [setSessions],
+      );
+    },
+    [environmentId, setSessions],
   );
   const resetQuickSnooze = useCallback(
     (id: string) =>

@@ -4,6 +4,8 @@ import {
   CHATGPT_GUEST_HIBERNATE_AFTER_MS,
   chatGPTGuestKey,
   hibernateChatGPTGuest,
+  openChatGPTGuestByUser,
+  clearChatGPTGuestUserOpened,
   isChatGPTGuestHibernated,
   recentChatGPTGuestKeys,
   retainChatGPTGuests,
@@ -59,8 +61,22 @@ describe("shouldHibernateChatGPTGuest", () => {
 
 describe("chatGPT guest hibernation store", () => {
   beforeEach(() =>
-    useChatGPTGuestHibernation.setState({ hibernated: {}, woken: {}, touchedAt: {}, retained: {} }),
+    useChatGPTGuestHibernation.setState({ hibernated: {}, woken: {}, touchedAt: {}, retained: {}, userOpened: {} }),
   );
+
+  it("retains manually opened guests when automatic slots are reassigned", () => {
+    retainChatGPTGuests(["auto-1", "auto-2"]);
+    hibernateChatGPTGuest("clicked");
+    openChatGPTGuestByUser("clicked");
+    retainChatGPTGuests(["auto-1", "auto-2"]);
+    expect(isChatGPTGuestHibernated("clicked")).toBe(false);
+    expect(isChatGPTGuestHibernated("auto-1")).toBe(false);
+    expect(isChatGPTGuestHibernated("auto-2")).toBe(false);
+    expect(useChatGPTGuestHibernation.getState().userOpened.clicked).toBe(true);
+    clearChatGPTGuestUserOpened("clicked");
+    hibernateChatGPTGuest("clicked", true);
+    expect(isChatGPTGuestHibernated("clicked")).toBe(true);
+  });
 
   it("waking reverses hibernation and restarts the idle window", () => {
     hibernateChatGPTGuest("tab");

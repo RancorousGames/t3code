@@ -17,7 +17,7 @@ import { useLocalStorage } from "../hooks/useLocalStorage";
 import { resolveWarmChatGPTConversationUrl } from "../omniwork/chatGPTWarmConversationUrl";
 import { DetachedChatGPTSurface } from "./DetachedChatGPTSurface";
 import { chatGPTSessionProfileId } from "../chatGPTAccountProfiles";
-import { wakeChatGPTGuest } from "./chatGPTGuestHibernation";
+import { openChatGPTGuestByUser, wakeChatGPTGuest } from "./chatGPTGuestHibernation";
 import { runChatGPTSessionControl } from "../chatGPTSessionControl";
 
 /**
@@ -74,8 +74,9 @@ export function DedicatedChatGPTBrowser({
   useEffect(() => {
     // User explicitly opened this native session; clear a prior manual unload.
     // This does not alter any legacy preview or navigate the existing page.
+    openChatGPTGuestByUser(JSON.stringify([environmentId, threadRef.threadId]));
     wakeChatGPTGuest(sessionId);
-  }, [sessionId]);
+  }, [environmentId, sessionId, threadRef]);
 
   useEffect(() => {
     if (recovered && !isChatGPTConversationUrl(savedUrl)) setSavedUrl(recovered);

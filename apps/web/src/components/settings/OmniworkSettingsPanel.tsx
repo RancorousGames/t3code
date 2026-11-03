@@ -86,6 +86,8 @@ export function OmniworkSettingsPanel() {
     setLoadAllChatGPTSessionsOnStartup,
     chatGPTWarmSessionCount,
     setChatGPTWarmSessionCount,
+    chatGPTMaxAutoSessionCount,
+    setChatGPTMaxAutoSessionCount,
     liveTaskStartKind,
     setLiveTaskStartKind,
     showWorkersWithSelectedParent,
@@ -368,8 +370,8 @@ export function OmniworkSettingsPanel() {
         />
         <SettingsRow
           id="omniwork-chatgpt-warm-count"
-          title="Gradually warm important ChatGPT sessions"
-          description="Target number of loaded sessions (default 8). Working and protected guests are never evicted to meet the target. Zero disables automatic warming."
+          title="Minimum warm ChatGPT sessions"
+          description="Automatically warm up to this baseline (default 8). Zero disables background warming; manually opened sessions remain available."
           control={
             <Select
               value={String(chatGPTWarmSessionCount)}
@@ -378,7 +380,7 @@ export function OmniworkSettingsPanel() {
               }}
               disabled={!desktop}
             >
-              <SelectTrigger size="sm" aria-label="ChatGPT warm session target">
+              <SelectTrigger size="sm" aria-label="Minimum warm ChatGPT sessions">
                 <SelectValue>
                   {chatGPTWarmSessionCount === 0 ? "Off" : String(chatGPTWarmSessionCount)}
                 </SelectValue>
@@ -387,6 +389,31 @@ export function OmniworkSettingsPanel() {
                 {CHATGPT_WARM_SESSION_COUNTS.map((count) => (
                   <SelectItem key={count} value={String(count)}>
                     {count === 0 ? "Off" : count === 8 ? "8 (default)" : String(count)}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
+          id="omniwork-chatgpt-max-auto-count"
+          title="Maximum automatically retained sessions"
+          description="Limit background retention (default 12). Does not unload sessions you explicitly opened; manual sessions may exceed this limit."
+          control={
+            <Select
+              value={String(chatGPTMaxAutoSessionCount)}
+              onValueChange={(value) => {
+                if (value !== null) setChatGPTMaxAutoSessionCount(Number(value));
+              }}
+              disabled={!desktop}
+            >
+              <SelectTrigger size="sm" aria-label="Maximum automatically retained ChatGPT sessions">
+                <SelectValue>{String(chatGPTMaxAutoSessionCount)}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                {CHATGPT_WARM_SESSION_COUNTS.filter((count) => count >= chatGPTWarmSessionCount).map((count) => (
+                  <SelectItem key={count} value={String(count)}>
+                    {count === 12 ? "12 (default)" : String(count)}
                   </SelectItem>
                 ))}
               </SelectPopup>

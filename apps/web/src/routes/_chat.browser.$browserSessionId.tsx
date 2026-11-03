@@ -1,7 +1,7 @@
 import { type EnvironmentId } from "@t3tools/contracts";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo } from "react";
-import { wakeChatGPTGuest } from "../browser/chatGPTGuestHibernation";
+import { openChatGPTGuestByUser } from "../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
 
 import { PreviewView } from "../components/preview/PreviewView";
@@ -89,9 +89,9 @@ function ChatGPTBrowserView({
   useEffect(() => {
     const key = JSON.stringify([environmentId, threadRef.threadId]);
     const wakeOnClick = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === sessionId) wakeChatGPTGuest(key);
+      if ((event as CustomEvent<string>).detail === sessionId) openChatGPTGuestByUser(key);
     };
-    if (view === "browser") wakeChatGPTGuest(key);
+    if (view === "browser") openChatGPTGuestByUser(key);
     window.addEventListener("t3:focus-chatgpt-composer", wakeOnClick);
     return () => window.removeEventListener("t3:focus-chatgpt-composer", wakeOnClick);
   }, [environmentId, threadRef, sessionId, view]);

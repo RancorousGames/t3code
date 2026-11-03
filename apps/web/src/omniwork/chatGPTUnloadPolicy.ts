@@ -10,6 +10,7 @@ export type OmniworkUnloadProfile = "never" | "conservative" | "balanced" | "agg
 export const DEFAULT_OMNIWORK_UNLOAD_PROFILE: OmniworkUnloadProfile = "balanced";
 export const DEFAULT_OMNIWORK_RECENT_GUESTS: number | null = null;
 export const DEFAULT_CHATGPT_WARM_SESSION_COUNT = 8;
+export const DEFAULT_CHATGPT_MAX_AUTO_SESSION_COUNT = 12;
 export type LiveTaskStartKind = "chatgpt" | "claude" | "codex";
 export function normalizeLiveTaskStartKind(value: unknown): LiveTaskStartKind {
   return value === "claude" || value === "codex" ? value : "chatgpt";
@@ -68,6 +69,7 @@ interface OmniworkPreferences {
   readonly recentGuests: number | null;
   readonly loadAllChatGPTSessionsOnStartup: boolean;
   readonly chatGPTWarmSessionCount: number;
+  readonly chatGPTMaxAutoSessionCount: number;
   readonly liveTaskStartKind: LiveTaskStartKind;
   readonly showWorkersWithSelectedParent: boolean;
   readonly erroredSessionsAtBottom: boolean;
@@ -76,6 +78,7 @@ interface OmniworkPreferences {
   setLiveTaskStartKind: (kind: LiveTaskStartKind) => void;
   setLoadAllChatGPTSessionsOnStartup: (enabled: boolean) => void;
   setChatGPTWarmSessionCount: (count: number) => void;
+  setChatGPTMaxAutoSessionCount: (count: number) => void;
   setRecentGuests: (count: number | null) => void;
   setUnloadProfile: (profile: OmniworkUnloadProfile) => void;
 }
@@ -87,6 +90,7 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
       recentGuests: DEFAULT_OMNIWORK_RECENT_GUESTS,
       loadAllChatGPTSessionsOnStartup: false,
       chatGPTWarmSessionCount: DEFAULT_CHATGPT_WARM_SESSION_COUNT,
+      chatGPTMaxAutoSessionCount: DEFAULT_CHATGPT_MAX_AUTO_SESSION_COUNT,
       liveTaskStartKind: "chatgpt",
       showWorkersWithSelectedParent: false,
       erroredSessionsAtBottom: true,
@@ -97,7 +101,19 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
       setLoadAllChatGPTSessionsOnStartup: (loadAllChatGPTSessionsOnStartup) =>
         set({ loadAllChatGPTSessionsOnStartup }),
       setChatGPTWarmSessionCount: (count) =>
-        set({ chatGPTWarmSessionCount: normalizeChatGPTWarmSessionCount(count) }),
+        set((state) => {
+          const min = normalizeChatGPTWarmSessionCount(count);
+          return {
+            chatGPTWarmSessionCount: min,
+            chatGPTMaxAutoSessionCount: Math.max(min, state.chatGPTMaxAutoSessionCount),
+          };
+        }),
+      setChatGPTMaxAutoSessionCount: (count) =>
+        set((state) => ({
+          chatGPTMaxAutoSessionCount: Math.max(
+            state.chatGPTWarmSessionCount, normalizeChatGPTWarmSessionCount(count),
+          ),
+        })),
       setRecentGuests: (recentGuests) =>
         set({ recentGuests: normalizeOmniworkRecentGuests(recentGuests) }),
       setUnloadProfile: (unloadProfile) => set({ unloadProfile }),
@@ -112,6 +128,7 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
         recentGuests: state.recentGuests,
         loadAllChatGPTSessionsOnStartup: state.loadAllChatGPTSessionsOnStartup,
         chatGPTWarmSessionCount: state.chatGPTWarmSessionCount,
+        chatGPTMaxAutoSessionCount: state.chatGPTMaxAutoSessionCount,
         liveTaskStartKind: state.liveTaskStartKind,
         showWorkersWithSelectedParent: state.showWorkersWithSelectedParent,
         erroredSessionsAtBottom: state.erroredSessionsAtBottom,
@@ -128,6 +145,15 @@ export const useOmniworkPreferences = create<OmniworkPreferences>()(
           (saved as Partial<OmniworkPreferences> | null)?.loadAllChatGPTSessionsOnStartup === true,
         chatGPTWarmSessionCount: normalizeChatGPTWarmSessionCount(
           (saved as Partial<OmniworkPreferences> | null)?.chatGPTWarmSessionCount,
+        ),
+        chatGPTMaxAutoSessionCount: Math.max(
+          normalizeChatGPTWarmSessionCount(
+            (saved as Partial<OmniworkPreferences> | null)?.chatGPTWarmSessionCount,
+          ),
+          normalizeChatGPTWarmSessionCount(
+            (saved as Partial<OmniworkPreferences> | null)?.chatGPTMaxAutoSessionCount ??
+              DEFAULT_CHATGPT_MAX_AUTO_SESSION_COUNT,
+          ),
         ),
         liveTaskStartKind: normalizeLiveTaskStartKind(
           (saved as Partial<OmniworkPreferences> | null)?.liveTaskStartKind,
