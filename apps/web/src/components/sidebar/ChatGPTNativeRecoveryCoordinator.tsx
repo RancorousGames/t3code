@@ -513,18 +513,30 @@ export function ChatGPTNativeRecoveryCoordinator({
           const lane = entry.red ? "red" : "orange";
           const laneLast = lane === "red" ? history.redLastAttemptAt : history.orangeLastAttemptAt;
           const minimum = lane === "red" ? settings.globalSeconds : settings.orangeGlobalSeconds;
-          if (
-            now < (lane === "red" ? queue.redBackoffUntil : queue.orangeBackoffUntil) ||
-            !cooldownElapsed(laneLast, now, minimum * 1_000) ||
-            (!entry.red &&
-              (now - entry.firstSeenAt < settings.orangeGraceMinutes * 60_000 ||
-                !cooldownElapsed(
-                  history.bySession[id] ?? 0,
-                  now,
-                  settings.perSessionSeconds * 1_000,
-                )))
-          ) {
-            decision(id, "cooldown", `Recovery grace, global lane cooldown or per-session cooldown is active. Last attempt ${entry.lastAttemptAt || "never"}.`);
+          // Report the precise gate and deadline; never show a fictional
+          // "retrying" state when the scheduler has not dispatched anything.
+          const gate = [
+            {
+              code: "lane-backoff",
+              until: lane === "red" ? queue.redBackoffUntil : queue.orangeBackoffUntil,
+            },
+            {
+              code: "global-cooldown",
+              until: laneLast > 0 && laneLast <= now ? laneLast + minimum * 1_000 : 0,
+            },
+            {
+              code: "orange-grace",
+              until: entry.red ? 0 : entry.firstSeenAt + settings.orangeGraceMinutes * 60_000,
+            },
+            {
+              code: "session-cooldown",
+              until: entry.red || !(history.bySession[id] > 0) ? 0 :
+                history.bySession[id]! + settings.perSessionSeconds * 1_000,
+            },
+          ].find((block) => block.until > now);
+          if (gate) {
+            decision(id, gate.code,
+              `No action yet. Next eligible after ${new Date(gate.until).toISOString()} (attempts: ${entry.attempts}; last outcome: ${entry.lastOutcome}).`);
             continue;
           }
 
