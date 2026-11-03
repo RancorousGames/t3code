@@ -12,9 +12,11 @@ const { createCodexTranslator } = require("./codex-translation.cjs");
 // Entirely separate profile, project library and OS application identity from T3.
 // Non-packaged QA may run in an isolated disposable profile without touching
 // the real Monku library or interfering with an already open preview window.
-const smokeProfile = !app.isPackaged && process.env.MORI_TEST_USER_DATA;
+const useBundledResources = app.isPackaged && process.env.MORI_SOURCE_CHECKOUT !== "1";
+const smokeProfile = !useBundledResources && process.env.MORI_TEST_USER_DATA;
 app.setPath("userData", smokeProfile ? path.resolve(smokeProfile) : path.join(app.getPath("appData"), "MonkuNoMori"));
 app.setAppUserModelId("games.rancorous.monkunomori");
+app.setName("Monku no Mori");
 const projectStore = createProjectStore(app.getPath("userData"));
 const codexTranslator = createCodexTranslator({ userDataDir: app.getPath("userData") });
 const googleWorkspace = createGoogleWorkspace({ userDataDir: app.getPath("userData"), safeStorage, openExternal: url => shell.openExternal(url) });
@@ -28,7 +30,7 @@ if (!acquiredLock) {
     // resource. Only its client registration is copied; never an account token.
     const status = await googleWorkspace.clientStatus();
     if (!status.configured) {
-      const bundled = app.isPackaged
+      const bundled = useBundledResources
         ? path.join(process.resourcesPath, "google-oauth-client.json")
         : path.join(__dirname, "private", "google-oauth-client.json");
       try { await googleWorkspace.configure(bundled); }
@@ -44,6 +46,7 @@ if (!acquiredLock) {
       minWidth: 850,
       minHeight: 550,
       title: "Monku no Mori",
+      icon: path.join(__dirname, "assets", "monku.ico"),
       webPreferences: {
         preload: path.join(__dirname, "preload.cjs"),
         nodeIntegration: false,
@@ -189,7 +192,7 @@ if (!acquiredLock) {
       }
       await mainWindow.loadURL(url.href);
     } else {
-      const renderer = app.isPackaged
+      const renderer = useBundledResources
         ? path.join(process.resourcesPath, "renderer", "index.html")
         : path.join(__dirname, "..", "mori-web", "dist", "index.html");
       await mainWindow.loadFile(renderer);

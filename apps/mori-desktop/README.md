@@ -21,6 +21,13 @@ Alternatively, build the UI and launch this separate desktop shell:
 
 `pnpm --filter @t3tools/mori-desktop start`
 
+On Windows, use `python launch_mori.py` from the monorepo root (or add
+`--build` to rebuild the renderer). This prepares the independent, pinnable
+`.electron-runtime/mori-windows/Monku no Mori.exe`, with the same branded icon
+as the app's top-left titlebar instead of a generic `electron.exe` taskbar icon.
+The executable can be launched or pinned directly and opens this source
+checkout, using the existing `%APPDATA%/MonkuNoMori` profile.
+
 ## Independent Windows installer
 
 Once dependencies are installed and the web UI has been built:
