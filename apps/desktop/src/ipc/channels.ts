@@ -26,6 +26,7 @@ export const WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:window-fullscreen-state"
 export const DESKTOP_APP_ACTIVATION_READY_CHANNEL = "desktop:app-activation-ready";
 export const DESKTOP_APP_ACTIVATION_COMPLETE_CHANNEL = "desktop:app-activation-complete";
 export const DESKTOP_CHATGPT_DELIVERY_ENQUEUE_CHANNEL = "desktop:chatgpt-delivery-enqueue";
+export const DESKTOP_CAFFY_CONTROL_CHANNEL = "desktop:caffy-control-v2";
 export const DESKTOP_CHATGPT_IDLE_TRANSITION_CHANNEL = "desktop:chatgpt-idle-transition";
 export const DESKTOP_CHATGPT_RECIPIENT_MOUNTED_CHANNEL = "desktop:chatgpt-recipient-mounted";
 export const DESKTOP_CHATGPT_DELIVERY_DIAGNOSTICS_CHANNEL = "desktop:chatgpt-delivery-diagnostics";

@@ -102,6 +102,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.CHATGPT_BOOTSTRAP_TITLE_LOOKUP_CHANNEL, id),
   readChatGPTDeliveryDiagnostics: () =>
     ipcRenderer.invoke(IpcChannels.DESKTOP_CHATGPT_DELIVERY_DIAGNOSTICS_CHANNEL),
+  caffyControl: (input) => ipcRenderer.invoke(IpcChannels.DESKTOP_CAFFY_CONTROL_CHANNEL, input),
   chatGPTCapacityMessage: (input) =>
     ipcRenderer.invoke(IpcChannels.CHATGPT_CAPACITY_MESSAGE_CHANNEL, input),
   readCaffyManagedIdleSubscriptions: () =>

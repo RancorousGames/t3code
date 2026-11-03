@@ -1,4 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Caffy IPC request identity uses Node crypto in Electron main.
 import { DesktopAppActivationResponse } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -13,6 +15,32 @@ export const setReady = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.appActivation.setReady")(function* (ready) {
     const activation = yield* DesktopAppActivation.DesktopAppActivation;
     yield* activation.setRendererReady(ready);
+  }),
+});
+
+/** Caffy UI uses exactly the same main-process scheduler as OMCPT/CLI. */
+export const caffyControl = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.DESKTOP_CAFFY_CONTROL_CHANNEL,
+  payload: Schema.Struct({
+    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup"]),
+    sessionId: Schema.optional(Schema.String),
+    conversationId: Schema.optional(Schema.String),
+    mode: Schema.optional(Schema.Literals(["idle", "periodic", "queued"])),
+    durationMinutes: Schema.optional(Schema.Number),
+    intervalMinutes: Schema.optional(Schema.Number),
+    onceOnly: Schema.optional(Schema.Boolean),
+    startup: Schema.optional(Schema.Boolean),
+    keepAwake: Schema.optional(Schema.Boolean),
+    keepT3Busy: Schema.optional(Schema.Boolean),
+    maxWorking: Schema.optional(Schema.Number),
+  }),
+  result: Schema.Unknown,
+  handler: Effect.fn("desktop.ipc.appActivation.caffy")(function* (input) {
+    const activation = yield* DesktopAppActivation.DesktopAppActivation;
+    return yield* activation.caffyControl({
+      version: 1, requestId: NodeCrypto.randomUUID(),
+      type: "caffy", ...input,
+    });
   }),
 });
 

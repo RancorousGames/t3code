@@ -1902,6 +1902,20 @@ export interface DesktopBridge {
   readChatGPTBootstrapTitle?: (id: string) => Promise<string | null>;
   /** Read-only diagnostics from this desktop's persisted ChatGPT delivery journal. */
   readChatGPTDeliveryDiagnostics?: () => Promise<DesktopChatGPTDeliveryDiagnostics>;
+  /** Durable T3-owned Caffy API; no OpenRig dependency. */
+  caffyControl?: (input: {
+    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup";
+    sessionId?: string;
+    conversationId?: string;
+    mode?: "idle" | "periodic" | "queued";
+    durationMinutes?: number;
+    intervalMinutes?: number;
+    onceOnly?: boolean;
+    startup?: boolean;
+    keepAwake?: boolean;
+    keepT3Busy?: boolean;
+    maxWorking?: number;
+  }) => Promise<unknown>;
   /** Read-only OpenRig Caffy managed idle subscriptions (not T3 queued messages). */
   /** Shared OpenRig capacity admission for T3 Wait for slot messages. */
   chatGPTCapacityMessage?: (

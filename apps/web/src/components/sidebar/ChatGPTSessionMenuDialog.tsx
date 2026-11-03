@@ -13,7 +13,8 @@ export type ChatGPTSessionMenuDialogState =
       seat: string;
       task: string;
     }
-  | { kind: "reboot"; sessionId: string; prompt: string };
+  | { kind: "reboot"; sessionId: string; prompt: string }
+  | { kind: "caffy-custom"; sessionId: string; mode: "idle" | "periodic" };
 
 export function ChatGPTSessionMenuDialog({
   dialog,
@@ -28,6 +29,7 @@ export function ChatGPTSessionMenuDialog({
     seat: string;
     task: string;
     prompt: string;
+    durationHours: number;
   }) => void;
 }) {
   const [title, setTitle] = useState(dialog.kind === "rename-group" ? dialog.title : "");
@@ -37,6 +39,7 @@ export function ChatGPTSessionMenuDialog({
   const [seat, setSeat] = useState(dialog.kind === "binding" ? dialog.seat : "");
   const [task, setTask] = useState(dialog.kind === "binding" ? dialog.task : "");
   const [prompt, setPrompt] = useState(dialog.kind === "reboot" ? dialog.prompt : "");
+  const [duration, setDuration] = useState("3");
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     submit({
@@ -45,6 +48,7 @@ export function ChatGPTSessionMenuDialog({
       seat: seat.trim(),
       task: task.trim(),
       prompt: prompt.trim(),
+      durationHours: Number(duration),
     });
   };
   return (
@@ -63,7 +67,9 @@ export function ChatGPTSessionMenuDialog({
                 ? "Add project"
                 : dialog.kind === "reboot"
                   ? "Reboot agent"
-                  : "Edit Omniwork binding"}
+                  : dialog.kind === "caffy-custom"
+                    ? "Custom Caffy duration"
+                    : "Edit Omniwork binding"}
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={onSubmit}>
@@ -118,6 +124,27 @@ export function ChatGPTSessionMenuDialog({
                 </label>
               </>
             )}
+            {dialog.kind === "caffy-custom" && (
+              <label className="block text-sm">
+                Duration (hours)
+                <Input
+                  autoFocus
+                  type="number"
+                  min="0.0167"
+                  max="168"
+                  step="any"
+                  aria-label="Caffy duration in hours"
+                  value={duration}
+                  onChange={(event) => setDuration(event.target.value)}
+                  required
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {dialog.mode === "periodic"
+                    ? "Wake every 20 minutes for this duration."
+                    : "Wake after verified idle transitions for this duration."}
+                </p>
+              </label>
+            )}
             {dialog.kind === "reboot" && (
               <>
                 <p className="text-sm text-muted-foreground">
@@ -148,11 +175,15 @@ export function ChatGPTSessionMenuDialog({
                     (dialog.kind === "add-project" && title.trim().toLowerCase() === "other")
                   : dialog.kind === "reboot"
                     ? !prompt.trim()
-                    : false
+                    : dialog.kind === "caffy-custom"
+                      ? !Number.isFinite(Number(duration)) || Number(duration) <= 0 || Number(duration) > 168
+                      : false
               }
             >
-              {dialog.kind === "reboot"
-                ? "Reboot agent"
+              {dialog.kind === "caffy-custom"
+                ? "Schedule Caffy"
+                : dialog.kind === "reboot"
+                  ? "Reboot agent"
                 : dialog.kind === "add-project"
                   ? "Create and move"
                   : "Save"}

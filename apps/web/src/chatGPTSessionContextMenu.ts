@@ -39,6 +39,8 @@ export function buildChatGPTSessionContextMenu(input: {
   now: number;
   working: boolean;
   hasTask: boolean;
+  caffy?: { mode: "idle" | "periodic" | "queued"; startup: boolean } | null;
+  keepT3Busy?: boolean;
 }): MenuItem[] {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
@@ -123,10 +125,40 @@ export function buildChatGPTSessionContextMenu(input: {
             ],
           }),
         ]),
-    item("awake", "Keep Awake", {
-      children: ([1, 2, 4, 6] as const).map((hours) =>
-        item(`awake:${hours}`, `${hours} hour${hours === 1 ? "" : "s"}`),
-      ),
+    item("caffy", "Caffy", {
+      children: [
+        item("caffy:idle", "Wake on Idle", {
+          children: [
+            ...([1, 2, 4, 6, 10] as const).map(hours =>
+              item(`caffy:idle:${hours}`, `${hours}h`)),
+            item("caffy:idle:infinite", "Infinite"),
+            item("caffy:idle:custom", "Custom…"),
+            item("caffy:idle:once", "Once only", { separatorBefore: true }),
+          ],
+        }),
+        item("caffy:queued", "Wake on Idle (Queued) · Infinite", {
+          checked: input.caffy?.mode === "queued",
+        }),
+        item("caffy:periodic", "Periodic Wake · every 20 minutes", {
+          children: [
+            ...([1, 2, 4, 6, 10] as const).map(hours =>
+              item(`caffy:periodic:${hours}`, `Every 20m for ${hours}h`)),
+            item("caffy:periodic:infinite", "Every 20m · Infinite"),
+            item("caffy:periodic:custom", "Every 20m · Custom…"),
+            item("caffy:periodic:once", "One wake after 20m", { separatorBefore: true }),
+          ],
+        }),
+        item("caffy:startup", "Resume on Startup", {
+          checked: input.caffy?.startup ?? false,
+          disabled: !input.caffy,
+          separatorBefore: true,
+        }),
+        item("caffy:busy", "Keep T3 Busy (queued work)", { checked: input.keepT3Busy ?? false }),
+        item("caffy:stop", "Stop Caffy", {
+          disabled: !input.caffy,
+          separatorBefore: true,
+        }),
+      ],
     }),
     item("highlight", "Highlight", {
       children: [

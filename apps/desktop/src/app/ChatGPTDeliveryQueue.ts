@@ -50,6 +50,7 @@ const isWakeBody = (body: string) =>
   /^\[WAKE [1-9]\d*\] - To stop wakes, call keep_awake\.complete\([a-f0-9]{12}\)\. Total time elapsed: (?:\d+h)?\d+m$/.test(
     body,
   );
+const isCaffyWakeBody = (body: string) => body.startsWith("Continue working on your current assignment. If you have genuinely finished, call caffy.stop()");
 const deliveryText = (record: DeliveryRecord) =>
   isWakeBody(record.body) ? record.body : `${MARKER(record.messageId)}\n${record.body}`;
 // Existing marked messages use bounded retry; wake messages remain reconciliation-only.
@@ -623,7 +624,7 @@ export class ChatGPTDeliveryQueue {
         return;
       }
       record.uncertainSince ??= record.lastSubmissionAt ?? record.createdAt;
-      if (isWakeBody(record.body)) {
+      if (isWakeBody(record.body) || isCaffyWakeBody(record.body)) {
         // The wake uses composer-free direct submission. Unknown means reconcile,
         // never submit another wake without proof the first was not sent.
         this.update(record, "uncertain", detail);

@@ -23,13 +23,14 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import type * as Electron from "electron";
-import { Notification } from "electron";
+import { Notification, powerSaveBlocker } from "electron";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { DesktopAppActivationBroker } from "./DesktopAppActivationBroker.ts";
 import { ChatGPTDeliveryQueue } from "./ChatGPTDeliveryQueue.ts";
+import { CaffyScheduler } from "./CaffyScheduler.ts";
 import { ChatGPTExecutionReceiptProducer } from "./ChatGPTExecutionReceiptProducer.ts";
 import { ChatGPTIdleTransitionJournal, type VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -308,6 +309,9 @@ export class DesktopAppActivation extends Context.Service<
     readonly chatGPTDeliveryDiagnostics: () => Effect.Effect<
       ReturnType<ChatGPTDeliveryQueue["diagnostics"]>
     >;
+    readonly caffyControl: (
+      request: Extract<DesktopAppActivationRequest, { type: "caffy" }>,
+    ) => Effect.Effect<unknown>;
   }
 >()("@t3tools/desktop/app/DesktopAppActivation") {}
 
@@ -364,9 +368,70 @@ export const make = Effect.gen(function* () {
   deliveries.subscribeTransitions(record => executionReceipts.observe(record));
   executionReceipts.resumePending();
   for (const record of deliveries.list()) executionReceipts.observe(record);
+  const caffy = new CaffyScheduler(
+    path.resolve(desktopEnvironment.stateDir), deliveries,
+    (request) => broker.request(request),
+    {
+      start: () => powerSaveBlocker.start("prevent-app-suspension"),
+      stop: (id) => { if (powerSaveBlocker.isStarted(id)) powerSaveBlocker.stop(id); },
+    },
+  );
   const handleRequest = (
     request: DesktopAppActivationRequest,
   ): Promise<DesktopAppActivationResponse> => {
+    if (request.type === "caffy") {
+      const action = request.action;
+      return (async () => {
+        try {
+          let conversationId = request.conversationId;
+          if (action === "set" && !conversationId && request.sessionId) {
+            const inventory = await broker.request({
+              version: 1, requestId: NodeCrypto.randomUUID(), type: "chatgpt.sessions",
+              action: "list", which: "all", includeHidden: true,
+            });
+            if (inventory.ok && "data" in inventory && inventory.data &&
+                typeof inventory.data === "object") {
+              const entries = (inventory.data as {sessions?: Array<{
+                id: string; browserSessionId?: string; publicSessionId?: string;
+                conversationId?: string | null;
+                bootstrapIdentity?: {conversationId?: string};
+              }>}).sessions ?? [];
+              const match = entries.filter(item => item.id === request.sessionId ||
+                item.browserSessionId === request.sessionId || item.publicSessionId === request.sessionId);
+              if (match.length === 1)
+                conversationId = match[0]?.conversationId ?? match[0]?.bootstrapIdentity?.conversationId;
+            }
+          }
+          const data = action === "set"
+            ? await caffy.set({
+                sessionId: request.sessionId ?? "",
+                conversationId: conversationId ?? "",
+                mode: request.mode ?? "idle",
+                durationMinutes: request.durationMinutes,
+                intervalMinutes: request.intervalMinutes,
+                onceOnly: request.onceOnly,
+                startup: request.startup,
+                keepAwake: request.keepAwake,
+              })
+            : action === "list" || action === "status"
+              ? caffy.status(action === "status" ? request.sessionId : undefined)
+            : action === "policy"
+              ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking })
+            : action === "stop"
+              ? caffy.stop(request.sessionId ?? "")
+            : action === "pause" || action === "resume"
+              ? caffy.pause(request.sessionId ?? "", action === "pause")
+            : action === "startup"
+              ? caffy.startup(request.sessionId ?? "", request.startup === true)
+            : caffy.wake(request.sessionId ?? "");
+          return { version: 1 as const, requestId: request.requestId, ok: true as const, data };
+        } catch (error) {
+          return { version: 1 as const, requestId: request.requestId, ok: false as const,
+            code: "invalid-request" as const,
+            message: error instanceof Error ? error.message : String(error) };
+        }
+      })();
+    }
     if (request.type !== "chatgpt.sessions") return broker.request(request);
     if (request.action === "idle_status" || request.action === "idle_wait") {
       const environmentId = request.environmentId;
@@ -427,12 +492,20 @@ export const make = Effect.gen(function* () {
     recipientMounted: (event) => Effect.sync(() => deliveries.onRecipientMounted(event)),
     recordChatGPTIdleTransition: (event) => Effect.sync(() => {
       const accepted = idleJournal.record(event);
-      if (accepted) deliveries.onIdleTransition(event);
+      if (accepted) {
+        deliveries.onIdleTransition(event);
+        caffy.onIdle(event);
+      }
       return accepted;
     }),
     chatGPTDeliveryStatus: (messageId) =>
       Effect.sync(() => deliveries.list().find((entry) => entry.messageId === messageId) ?? null),
     chatGPTDeliveryDiagnostics: () => Effect.sync(() => deliveries.diagnostics()),
+    caffyControl: (request) => Effect.promise(async () => {
+      const response = await handleRequest(request);
+      if (!response.ok) throw new Error(response.message);
+      return "data" in response ? response.data : null;
+    }),
     start: Effect.acquireRelease(
       Effect.tryPromise({
         try: () =>
@@ -455,13 +528,14 @@ export const make = Effect.gen(function* () {
           ),
           Effect.ensuring(
             Effect.sync(() => {
+              caffy.close();
               deliveries.close();
               broker.close();
             }),
           ),
         ),
     ).pipe(
-      Effect.tap(() => Effect.sync(() => deliveries.start())),
+      Effect.tap(() => Effect.sync(() => { deliveries.start(); caffy.start(); })), 
       Effect.asVoid,
     ),
     setRendererReady: Effect.fn("DesktopAppActivation.setRendererReady")(function* (ready) {

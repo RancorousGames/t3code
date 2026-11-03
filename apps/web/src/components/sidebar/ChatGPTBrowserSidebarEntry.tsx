@@ -540,41 +540,27 @@ export function ChatGPTBrowserSidebarEntry({
     });
   };
 
-  const scheduleKeepAwake = async (sessionId: string, durationHours: 1 | 2 | 4 | 6) => {
-    const start = window.desktopBridge?.startOmniHubKeepAwakeMonitor;
-    if (!environmentId || !start) {
-      setKeepAwakeFeedback("Keep Awake requires the local T3 desktop scheduler.");
-      return;
-    }
-    const session = sessions.find((entry) => entry.id === sessionId);
-    const url =
-      getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String) ??
-      session?.archive?.conversationUrl ??
-      null;
+  const configureCaffy = async (
+    sessionId: string, mode: "idle" | "periodic" | "queued",
+    durationMinutes?: number, onceOnly = false,
+  ) => {
+    const control = window.desktopBridge?.caffyControl;
+    if (!control) throw new Error("T3 Caffy v2 is not available in this desktop build.");
+    const session = sessions.find(entry => entry.id === sessionId);
+    const url = environmentId
+      ? getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String) ??
+        session?.archive?.conversationUrl ?? null
+      : null;
     const conversationId = chatGPTConversationIdFromUrl(url);
-    if (!conversationId) {
-      setKeepAwakeFeedback(
-        "Open this session's exact ChatGPT conversation before scheduling a wake.",
-      );
-      return;
-    }
-    try {
-      const result = await start({
-        sessionId,
-        conversationId,
-        durationHours,
-        clientRequestId: randomUUID(),
-      });
-      setKeepAwakeFeedback(
-        result.ok
-          ? `Keep Awake scheduled for ${durationHours} hour(s) on this exact session.`
-          : `Keep Awake failed: ${result.detail}`,
-      );
-    } catch {
-      setKeepAwakeFeedback(
-        "Keep Awake registration outcome unknown. Check Settings before retrying.",
-      );
-    }
+    await control({
+      action: "set", sessionId, mode,
+      ...(conversationId ? { conversationId } : {}),
+      ...(durationMinutes !== undefined ? { durationMinutes } : {}),
+      intervalMinutes: 20, startup: !onceOnly, onceOnly, keepAwake: true,
+    });
+    setKeepAwakeFeedback(
+      `Caffy scheduled: ${mode === "queued" ? "Queued idle" : mode === "periodic" ? "Every 20 minutes" : "Idle"} · ${onceOnly ? "once" : durationMinutes === undefined ? "infinite" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
+    );
   };
   useEffect(() => {
     if (!keepAwakeFeedback) return;
@@ -1222,6 +1208,20 @@ export function ChatGPTBrowserSidebarEntry({
       canReboot: true,
       hasConversationUrl: !!savedUrl,
     };
+    const caffyControl = window.desktopBridge?.caffyControl;
+    const caffyState = caffyControl
+      ? await caffyControl({ action: "status", sessionId }).catch(() => null)
+      : null;
+    const caffyPolicy = caffyControl
+      ? await caffyControl({ action: "list" }).catch(() => null)
+      : null;
+    const activeCaffy = caffyState && typeof caffyState === "object" &&
+      "mode" in caffyState && "startup" in caffyState &&
+      ["idle", "periodic", "queued"].includes(String(caffyState.mode))
+        ? caffyState as { mode: "idle" | "periodic" | "queued"; startup: boolean }
+        : null;
+    const keepT3Busy = caffyPolicy && typeof caffyPolicy === "object" &&
+      "keepT3Busy" in caffyPolicy && caffyPolicy.keepT3Busy === true;
     const action = await api.contextMenu.show(
       [
         ...chatGPTNativeActionMenu(registryContext),
@@ -1234,6 +1234,8 @@ export function ChatGPTBrowserSidebarEntry({
           now: Date.now(),
           working: activities[sessionId]?.age === "working",
           hasTask: !!session.binding?.taskRef,
+          caffy: activeCaffy,
+          keepT3Busy: Boolean(keepT3Busy),
         }).filter((item) => item.id !== "reboot" && item.id !== "snooze:clear"),
       ],
       position,
@@ -1389,8 +1391,43 @@ export function ChatGPTBrowserSidebarEntry({
             else setSessionSnooze([sessionId], Date.parse(preset.snoozedUntil));
           }
         }
-      } else if (action.startsWith("awake:")) {
-        await scheduleKeepAwake(sessionId, Number(action.slice(6)) as 1 | 2 | 4 | 6);
+      } else if (action.startsWith("caffy:")) {
+        const control = window.desktopBridge?.caffyControl;
+        if (!control) throw new Error("T3 Caffy v2 is unavailable; rebuild and restart T3.");
+        if (action === "caffy:stop") {
+          await control({ action: "stop", sessionId });
+          setKeepAwakeFeedback("Caffy stopped for this session.");
+        } else if (action === "caffy:queued") {
+          await configureCaffy(sessionId, "queued");
+        } else if (action === "caffy:busy") {
+          const result = await control({ action: "policy", keepT3Busy: !keepT3Busy });
+          setKeepAwakeFeedback(
+            result && typeof result === "object" && "keepT3Busy" in result && result.keepT3Busy
+              ? "Keep T3 Busy enabled." : "Keep T3 Busy disabled.",
+          );
+        } else if (action === "caffy:startup") {
+          if (!activeCaffy) throw new Error("Configure a Caffy wake first.");
+          await control({ action: "startup", sessionId, startup: !activeCaffy.startup });
+          setKeepAwakeFeedback(`Caffy startup resume ${activeCaffy.startup ? "disabled" : "enabled"}.`);
+        } else {
+          const parts = action.split(":");
+          const mode = parts[1];
+          const preset = parts[2];
+          if ((mode !== "idle" && mode !== "periodic") || !preset)
+            throw new Error("Select a Caffy duration from the submenu.");
+          if (preset === "custom") {
+            setMenuDialog({ kind: "caffy-custom", sessionId, mode });
+          } else if (preset === "once") {
+            await configureCaffy(sessionId, mode, undefined, true);
+          } else if (preset === "infinite") {
+            await configureCaffy(sessionId, mode);
+          } else {
+            const hours = Number(preset);
+            if (![1, 2, 4, 6, 10].includes(hours))
+              throw new Error("Unknown Caffy preset.");
+            await configureCaffy(sessionId, mode, hours * 60);
+          }
+        }
       } else if (action.startsWith("highlight:")) {
         const color = action.slice(10);
         setSessionBorderColor(sessionId, color === "none" ? null : color);
@@ -1549,6 +1586,7 @@ export function ChatGPTBrowserSidebarEntry({
       seat: string;
       task: string;
       prompt: string;
+      durationHours: number;
     },
   ) => {
     if (!environmentId) return;
@@ -1600,6 +1638,18 @@ export function ChatGPTBrowserSidebarEntry({
         boundBy: "user",
       });
       setMenuDialog(null);
+    } else if (dialog.kind === "caffy-custom") {
+      const minutes = Math.round(values.durationHours * 60);
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) {
+        setMenuFeedback("Custom Caffy duration must be between 1 minute and 168 hours.");
+        return;
+      }
+      try {
+        await configureCaffy(dialog.sessionId, dialog.mode, minutes);
+        setMenuDialog(null);
+      } catch (error) {
+        setMenuFeedback(`Caffy failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     } else {
       if (!values.prompt) return;
       setMenuDialog(null);
