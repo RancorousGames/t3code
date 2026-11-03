@@ -49,7 +49,8 @@ export function CaffyV2Settings() {
         throw new Error("T3 Caffy returned an incomplete configuration.");
       const updated = result as Config;
       setConfig(updated);
-      setLimit(String(updated.maxWorking));
+      if (document.activeElement?.id !== "t3-caffy-limit")
+        setLimit(String(updated.maxWorking));
       const occupancy = await api({ action: "capacity" });
       if (occupancy && typeof occupancy === "object" &&
           "working" in occupancy && typeof occupancy.working === "number" &&

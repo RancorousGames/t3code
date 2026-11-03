@@ -210,6 +210,9 @@ export class CaffyScheduler {
     }
     const canonicalId = identity?.id ?? input.sessionId;
     const browserSessionId = identity?.browserSessionId ?? input.sessionId;
+    if ([...this.entries.values()].some(row => row.conversationId === input.conversationId &&
+        row.sessionId !== canonicalId && row.browserSessionId !== input.sessionId))
+      throw new Error("Another T3 Caffy monitor already owns this ChatGPT conversation.");
     if (this.legacyConflict(canonicalId, input.conversationId) ||
         this.legacyConflict(input.sessionId, input.conversationId))
       throw new Error("Legacy OmniHub Caffy monitor still owns this session; cancel it before scheduling T3 Caffy.");
@@ -473,8 +476,14 @@ export class CaffyScheduler {
         // send still refuses a working composer, draft or wrong conversation.
         const bound = await this.registered(row.sessionId, row.conversationId).catch(() => null);
         if (this.entries.get(row.sessionId) !== row || row.paused ||
-            (row.mode === "queued" && !this.keepT3Busy) ||
-            !bound || bound.working) continue;
+            (row.mode === "queued" && !this.keepT3Busy)) continue;
+        if (!bound) {
+          const reason = "T3 cannot verify this exact session and conversation; pending wake retained.";
+          if (row.lastError !== reason) { row.lastError = reason; this.save(); }
+          continue;
+        }
+        if (bound.working) continue;
+        if (row.lastError) { row.lastError = null; this.save(); }
         // Persist the exact stable message ID before enqueue; an ambiguous
         // result is reconciled by this ID rather than generating another wake.
         const messageId = NodeCrypto.randomUUID();
