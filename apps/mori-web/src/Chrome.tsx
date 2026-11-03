@@ -19,7 +19,7 @@ const VIEW_TITLES: Record<Screen, string> = {
   context: "Context",
   project: "Project & files",
   settings: "Settings",
-  chatgpt: "ChatGPT",
+  chatgpt: "AI Chats",
 };
 
 export function Titlebar() {

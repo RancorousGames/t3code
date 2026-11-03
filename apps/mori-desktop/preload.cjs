@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("moriBackend", Object.freeze({
     ipcRenderer.on("mori:window:maximized", handler);
     return () => ipcRenderer.removeListener("mori:window:maximized", handler);
   },
+  chatSessionMenu: (items, position) => call("ai:chat-session-menu", items, position),
   codexTranslationConfig: () => call("ai:codex-configuration"),
   codexTranslate: request => call("ai:codex-translate", request),
   listProjects: () => call("projects:list"),

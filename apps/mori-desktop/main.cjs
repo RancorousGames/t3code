@@ -94,6 +94,45 @@ if (!acquiredLock) {
     mainWindow.on("maximize", () => mainWindow.webContents.send("mori:window:maximized", true));
     mainWindow.on("unmaximize", () => mainWindow.webContents.send("mori:window:maximized", false));
 
+    // Same data-only context-menu model T3 uses, rendered by Electron's native Menu.
+    // A menu returns only an action ID. No guest JavaScript, shell command or path
+    // is accepted from the renderer.
+    secure("ai:chat-session-menu", (items, position) => new Promise(resolve => {
+      if (!Array.isArray(items) || items.length > 70) throw Error("Invalid chat session menu.");
+      const create = (entries, depth = 0) => {
+        if (depth > 4) throw Error("Chat session menu nesting is too deep.");
+        const template = [];
+        for (const entry of entries) {
+          if (!entry || typeof entry.id !== "string" || entry.id.length > 120 ||
+              typeof entry.label !== "string" || entry.label.length > 150) {
+            throw Error("Invalid chat session menu entry.");
+          }
+          if (entry.separatorBefore) template.push({ type: "separator" });
+          const model = {
+            label: entry.label,
+            enabled: entry.disabled !== true,
+            ...(typeof entry.checked === "boolean" ? { type: "checkbox", checked: entry.checked } : {}),
+          };
+          if (Array.isArray(entry.children)) {
+            if (entry.children.length > 70) throw Error("Menu submenu too large.");
+            model.submenu = create(entry.children, depth + 1);
+          } else {
+            model.click = () => finish(entry.id);
+          }
+          template.push(model);
+        }
+        return template;
+      };
+      let done = false;
+      const finish = action => { if (!done) { done = true; resolve(action); } };
+      try {
+        const x = Number.isFinite(position?.x) ? Math.max(0, Math.floor(position.x)) : undefined;
+        const y = Number.isFinite(position?.y) ? Math.max(0, Math.floor(position.y)) : undefined;
+        const menu = Menu.buildFromTemplate(create(items));
+        menu.popup({ window: mainWindow, x, y, callback: () => finish(null) });
+      } catch (error) { finish(null); throw error; }
+    }));
+
     secure("ai:codex-configuration", () => codexTranslator.getConfig());
     secure("ai:codex-translate", request => codexTranslator.translate(request));
     secure("projects:list", () => projectStore.list());

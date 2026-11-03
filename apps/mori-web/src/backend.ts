@@ -16,6 +16,14 @@ export interface GoogleDriveFile {
   webViewLink?: string;
   modifiedTime?: string;
 }
+export interface MoriMenuItem {
+  id: string;
+  label: string;
+  disabled?: boolean;
+  checked?: boolean;
+  separatorBefore?: boolean;
+  children?: MoriMenuItem[];
+}
 export interface MoriBackend {
   readonly version: number;
   windowMinimize(): Promise<void>;
@@ -23,6 +31,7 @@ export interface MoriBackend {
   windowClose(): Promise<void>;
   windowIsMaximized(): Promise<boolean>;
   onWindowMaximized(listener: (maximized: boolean) => void): () => void;
+  chatSessionMenu(items: MoriMenuItem[], position: { x: number; y: number }): Promise<string | null>;
   codexTranslationConfig(): Promise<{provider: string; model: string; reasoningEffort: string; available: boolean}>;
   codexTranslate(request: {mode: "single" | "batch"; ids: string[]; prompt: string}): Promise<{text: string; model: string; reasoningEffort: string; ids: string[]; mode: "single" | "batch"}>;
   listProjects(): Promise<{ entries: NativeLibraryEntry[]; problems: { filename: string; reason: string }[] }>;

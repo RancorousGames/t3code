@@ -1,5 +1,15 @@
 import type { DesktopOpenRigSeatSessions, DesktopOpenRigSeatTopology } from "@t3tools/contracts";
-import { chatGPTSessionCreationOrigin, type BrowserSession } from "../../chatGPTBrowserSessions";
+/** The sidebar appearance utilities depend on a structural session view,
+ * not T3's store. Embedded apps reuse them without loading router/recovery. */
+export interface ChatGPTSidebarAppearanceSession {
+  id: string;
+  project?: string | undefined;
+  markedAsWorkerAt?: number | undefined;
+  humanControlled?: boolean | undefined;
+  binding?: { role: "manager" | "worker" | "personal" } | undefined;
+  spawnRequestId?: string | undefined;
+  creationOrigin?: "manual" | "backend" | undefined;
+}
 
 /** Only the explicit RigSpec role (never a display title) establishes manager type. */
 export function isOpenRigManagerRole(role: string | null): boolean {
@@ -58,11 +68,11 @@ export function verifiedManagerChatGPTTabIds(
 
 /** Use one stable project label for every child/row even in status-only groups. */
 export function chatGPTSidebarProjectTitles(
-  sessions: readonly BrowserSession[],
+  sessions: readonly ChatGPTSidebarAppearanceSession[],
   groupedByProject: readonly {
     readonly title: string | null;
     readonly key: string | null;
-    readonly rows: readonly { readonly session: BrowserSession }[];
+    readonly rows: readonly { readonly session: ChatGPTSidebarAppearanceSession }[];
   }[],
 ): ReadonlyMap<string, string> {
   const titles = new Map<string, string>();
@@ -80,7 +90,7 @@ export function chatGPTSidebarProjectTitles(
 
 /** Manager seats outrank both human adoption and creation origin. */
 export function chatGPTSessionDisplayRole(
-  session: BrowserSession,
+  session: ChatGPTSidebarAppearanceSession,
   verifiedManager: boolean,
 ): "manager" | "worker" | "human" {
   // A verified manager always stays a manager. Otherwise the user's explicit
@@ -89,7 +99,8 @@ export function chatGPTSessionDisplayRole(
   if (session.markedAsWorkerAt !== undefined) return "worker";
   if (session.humanControlled) return "human";
   if (session.binding) return session.binding.role === "worker" ? "worker" : "human";
-  return chatGPTSessionCreationOrigin(session) === "backend" ? "worker" : "human";
+  return (session.spawnRequestId?.trim() ? "backend" : session.creationOrigin) === "backend"
+    ? "worker" : "human";
 }
 
 /** User-selected personal highlight colors, independent of AI activity color. */

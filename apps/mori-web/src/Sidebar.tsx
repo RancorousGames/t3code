@@ -98,7 +98,7 @@ export function Sidebar() {
 
         <div className="nav-label">AI assistance</div>
         <button type="button" className={navClass(screen === "chatgpt")} onClick={() => showScreen("chatgpt")}>
-          <Icon name="sparkle" />ChatGPT chats
+          <Icon name="sparkle" />AI Chats
         </button>
 
         <div className="nav-label">Reference</div>

@@ -1,5 +1,23 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
-import type { BrowserSession } from "./chatGPTBrowserSessions";
+/** Structural session data shared by T3 and independent embedded apps. */
+export interface ChatGPTContextMenuSession {
+  id: string;
+  title: string;
+  parentSessionId?: string | null | undefined;
+  snoozedUntil?: number | undefined;
+  verificationPending?: boolean | undefined;
+  borderColor?: string | undefined;
+  hidden?: boolean | undefined;
+  project?: string | undefined;
+  markedAsWorkerAt?: number | undefined;
+  humanControlled?: boolean | undefined;
+  binding?: {
+    role: "manager" | "worker" | "personal";
+    taskRef?: { board: string; id: string } | null | undefined;
+  } | undefined;
+  spawnRequestId?: string | undefined;
+  creationOrigin?: "manual" | "backend" | undefined;
+}
 import { chatGPTSessionDisplayRole } from "./components/sidebar/chatGPTSidebarVisuals";
 
 export type ChatGPTContextAction = string;
@@ -13,8 +31,8 @@ const item = (id: string, label: string, extra: Partial<MenuItem> = {}): MenuIte
 
 /** Data-only native T3 menu model; all click/position/submenu handling belongs to LocalApi. */
 export function buildChatGPTSessionContextMenu(input: {
-  session: BrowserSession;
-  sessions: readonly BrowserSession[];
+  session: ChatGPTContextMenuSession;
+  sessions: readonly ChatGPTContextMenuSession[];
   managerIds: ReadonlySet<string>;
   projects: readonly string[];
   snoozePresets: readonly SnoozePreset[];
