@@ -3,78 +3,6 @@
   "name": "Monku no Mori · Interface (EN → JA)",
   "rows": [
     {
-      "id": "ui.8ea3907c9443a2",
-      "source": "— Empty",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:523 (text); src/ImportWizard.tsx:536 (text)"
-    },
-    {
-      "id": "ui.e9bf85f3f385d8",
-      "source": ". New AI drafts use",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:138 (text)"
-    },
-    {
-      "id": "ui.8231683d8f0405",
-      "source": ". Saving updates it.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:79 (text)"
-    },
-    {
-      "id": "ui.03dc3db6418bde",
-      "source": ". Untick any line to keep it. Your current text stays in Versions; locked lines are skipped.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:147 (text)"
-    },
-    {
-      "id": "ui.f6d5d63004e6dc",
-      "source": "” appears in",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:123 (text)"
-    },
-    {
-      "id": "ui.c77e2405b62437",
-      "source": "” isn’t in any line yet. New lines that use it are checked.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:123 (text)"
-    },
-    {
-      "id": "ui.e3194569c31037",
-      "source": "” should be",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:208 (text)"
-    },
-    {
-      "id": "ui.2c8f357eab9cae",
-      "source": "% translated",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Sidebar.tsx",
-      "note": "src/Sidebar.tsx:80 (text)"
-    },
-    {
       "id": "ui.f8b8883f0c9d8d",
       "source": "1 hour",
       "ai": "",
@@ -126,7 +54,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:349 (text); src/Matrix.tsx:565 (text)"
+      "note": "src/ImportWizard.tsx:358 (text)"
     },
     {
       "id": "ui.8143aa12e22ea9",
@@ -165,15 +93,6 @@
       "note": "src/Inspector.tsx:255 (text); src/Reference.tsx:135 (text)"
     },
     {
-      "id": "ui.b92cfd151e6761",
-      "source": "Add to “",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:495 (text)"
-    },
-    {
       "id": "ui.067166c5d868b8",
       "source": "Add to glossary",
       "ai": "",
@@ -183,13 +102,13 @@
       "note": "src/TermModal.tsx:56 (text)"
     },
     {
-      "id": "ui.11fb682be0a023",
-      "source": "AI",
+      "id": "ui.df0fbf9c008fb1",
+      "source": "Add to project",
       "ai": "",
       "final": "",
       "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:136 (text)"
+      "sourceFile": "src/GoogleConnect.tsx",
+      "note": "src/GoogleConnect.tsx:120 (text)"
     },
     {
       "id": "ui.22a65461bf9b44",
@@ -207,7 +126,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:482 (text)"
+      "note": "src/ImportWizard.tsx:491 (text)"
     },
     {
       "id": "ui.62e74382a14a81",
@@ -306,7 +225,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:550 (text)"
+      "note": "src/ImportWizard.tsx:559 (text)"
     },
     {
       "id": "ui.73843394f5eeba",
@@ -336,15 +255,6 @@
       "note": "localization/seed.ja.json:1 (seed)"
     },
     {
-      "id": "ui.10da9283742bcf",
-      "source": "available); untranslated labels remain English.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:407 (text)"
-    },
-    {
       "id": "ui.b05093f407473e",
       "source": "Awaiting verification",
       "ai": "",
@@ -360,7 +270,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:192 (text); src/ImportWizard.tsx:591 (text)"
+      "note": "src/AIChatsSidebar.tsx:192 (text); src/ImportWizard.tsx:600 (text)"
     },
     {
       "id": "ui.0a80c30b5ace16",
@@ -378,7 +288,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:110 (text)"
+      "note": "src/GoogleConnect.tsx:111 (text)"
     },
     {
       "id": "ui.19766ed6ccb2f4",
@@ -387,7 +297,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:593 (text); src/TermModal.tsx:85 (text)"
+      "note": "src/ImportWizard.tsx:602 (text); src/TermModal.tsx:85 (text)"
     },
     {
       "id": "ui.44067f4dc9e06f",
@@ -432,16 +342,7 @@
       "final": "キャラクター",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:528 (text); src/Popovers.tsx:273 (text); src/Reference.tsx:58 (title); src/Reference.tsx:344 (text); localization/seed.ja.json:1 (seed)"
-    },
-    {
-      "id": "ui.f685225552cb5c",
-      "source": "chars · source",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Chrome.tsx",
-      "note": "src/Chrome.tsx:96 (text)"
+      "note": "src/ImportWizard.tsx:537 (text); src/Popovers.tsx:273 (text); src/Reference.tsx:58 (title); src/Reference.tsx:344 (text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.50a4122943273a",
@@ -480,22 +381,13 @@
       "note": "src/Inspector.tsx:166 (title); localization/seed.ja.json:1 (seed)"
     },
     {
-      "id": "ui.c7f937836f5d82",
-      "source": "Choose",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:468 (text)"
-    },
-    {
       "id": "ui.6d4e30eea6946a",
       "source": "Choose files…",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:299 (text)"
+      "note": "src/ImportWizard.tsx:308 (text)"
     },
     {
       "id": "ui.6e8eb2b02596d8",
@@ -504,7 +396,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:302 (text)"
+      "note": "src/ImportWizard.tsx:311 (text)"
     },
     {
       "id": "ui.fc8c5efac1fbde",
@@ -513,16 +405,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:101 (text)"
-    },
-    {
-      "id": "ui.793b188375badd",
-      "source": "Choose the application interface language. Japanese uses translations from the “Monku no Mori · Interface” project (",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:407 (text)"
+      "note": "src/GoogleConnect.tsx:102 (text)"
     },
     {
       "id": "ui.3b7ea51793e9d9",
@@ -558,7 +441,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Dialogs.tsx",
-      "note": "src/Dialogs.tsx:130 (aria-label); src/Dialogs.tsx:224 (aria-label); src/ImportWizard.tsx:273 (aria-label); src/TermModal.tsx:58 (aria-label); src/TermModal.tsx:119 (aria-label); src/WindowControls.tsx:36 (aria-label); src/WindowControls.tsx:36 (title)"
+      "note": "src/Dialogs.tsx:130 (aria-label); src/Dialogs.tsx:224 (aria-label); src/ImportWizard.tsx:282 (aria-label); src/TermModal.tsx:58 (aria-label); src/TermModal.tsx:119 (aria-label); src/WindowControls.tsx:36 (aria-label); src/WindowControls.tsx:36 (title)"
     },
     {
       "id": "ui.8bac9aaa7bbd11",
@@ -684,7 +567,7 @@
       "final": "コンテキスト",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:521 (text); src/Popovers.tsx:265 (text); src/Reference.tsx:202 (title); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:530 (text); src/Popovers.tsx:265 (text); src/Reference.tsx:202 (title); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.31fbef162594de",
@@ -693,7 +576,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:601 (text)"
+      "note": "src/ImportWizard.tsx:610 (text)"
     },
     {
       "id": "ui.593e5fe9624a6d",
@@ -702,7 +585,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:118 (text)"
+      "note": "src/GoogleConnect.tsx:122 (text)"
     },
     {
       "id": "ui.b1c0540d4d935a",
@@ -837,7 +720,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:281 (aria-label); src/Notifications.tsx:85 (title)"
+      "note": "src/ImportWizard.tsx:290 (aria-label); src/Notifications.tsx:85 (title)"
     },
     {
       "id": "ui.b7bb3f342402da",
@@ -855,7 +738,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:336 (text)"
+      "note": "src/ImportWizard.tsx:345 (text)"
     },
     {
       "id": "ui.11a6767d5674c7",
@@ -865,15 +748,6 @@
       "status": "pending",
       "sourceFile": "src/Dialogs.tsx",
       "note": "src/Dialogs.tsx:121 (label); src/Dialogs.tsx:248 (text); src/Inspector.tsx:137 (text); src/TermModal.tsx:170 (text)"
-    },
-    {
-      "id": "ui.c9725b8c9e108f",
-      "source": "Done: replaced in",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:161 (text)"
     },
     {
       "id": "ui.0ca9f9fe82be94",
@@ -918,7 +792,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:295 (text)"
+      "note": "src/ImportWizard.tsx:304 (text)"
     },
     {
       "id": "ui.72ffe6724adccf",
@@ -963,16 +837,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Chrome.tsx",
-      "note": "src/Chrome.tsx:102 (text)"
-    },
-    {
-      "id": "ui.d9dc3d03a72a00",
-      "source": "EN → JA ·",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:203 (text)"
+      "note": "src/Chrome.tsx:105 (text)"
     },
     {
       "id": "ui.916fb40bdc0a59",
@@ -1035,7 +900,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:631 (text)"
+      "note": "src/ImportWizard.tsx:640 (text)"
     },
     {
       "id": "ui.d56e4bf4050c08",
@@ -1044,7 +909,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:554 (text)"
+      "note": "src/ImportWizard.tsx:563 (text)"
     },
     {
       "id": "ui.6808184362598b",
@@ -1107,7 +972,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:111 (placeholder)"
+      "note": "src/GoogleConnect.tsx:112 (placeholder)"
     },
     {
       "id": "ui.d4192919eeea7b",
@@ -1125,7 +990,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:111 (aria-label)"
+      "note": "src/GoogleConnect.tsx:112 (aria-label)"
     },
     {
       "id": "ui.42dc364d2e0281",
@@ -1182,22 +1047,13 @@
       "note": "src/GoogleSyncPanel.tsx:72 (text)"
     },
     {
-      "id": "ui.5ec9391b203c8c",
-      "source": "Fix these before starting:",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:571 (text)"
-    },
-    {
       "id": "ui.5fd97744889078",
       "source": "Folders are scanned recursively. Your original files are never changed; export writes translated copies.",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:296 (text)"
+      "note": "src/ImportWizard.tsx:305 (text)"
     },
     {
       "id": "ui.218197693424e0",
@@ -1206,7 +1062,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:514 (text)"
+      "note": "src/ImportWizard.tsx:523 (text)"
     },
     {
       "id": "ui.2e16edd69259fa",
@@ -1251,7 +1107,7 @@
       "final": "用語集",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:534 (text); src/Reference.tsx:133 (title); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:543 (text); src/Reference.tsx:133 (title); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.ffb999a4360050",
@@ -1296,7 +1152,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:94 (text)"
+      "note": "src/GoogleConnect.tsx:95 (text)"
     },
     {
       "id": "ui.30170e4b9491b0",
@@ -1308,31 +1164,13 @@
       "note": "src/GoogleSyncPanel.tsx:50 (text)"
     },
     {
-      "id": "ui.a95f0555c0219e",
-      "source": "Google worksheet",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:561 (text)"
-    },
-    {
       "id": "ui.e12154eb4ca974",
       "source": "Google Workspace",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:98 (text); src/ImportWizard.tsx:336 (text); src/Popovers.tsx:309 (text)"
-    },
-    {
-      "id": "ui.8dbb16383d4f5b",
-      "source": "Google Workspace ·",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Chrome.tsx",
-      "note": "src/Chrome.tsx:66 (text)"
+      "note": "src/GoogleConnect.tsx:99 (text); src/ImportWizard.tsx:345 (text); src/Popovers.tsx:309 (text)"
     },
     {
       "id": "ui.abd6532ea33e08",
@@ -1344,22 +1182,13 @@
       "note": "src/Popovers.tsx:312 (text)"
     },
     {
-      "id": "ui.dca382564b4f08",
-      "source": "Header: row",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:389 (text)"
-    },
-    {
       "id": "ui.7e6fefff0f0aeb",
       "source": "Hidden",
       "ai": "",
       "final": "非表示",
       "status": "translated",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:184 (text); src/AIChatsSidebar.tsx:269 (text); src/Reference.tsx:471 (text); localization/seed.ja.json:1 (seed)"
+      "note": "src/AIChatsSidebar.tsx:184 (text); src/Reference.tsx:471 (text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.4cae557d8e8745",
@@ -1398,22 +1227,13 @@
       "note": "localization/seed.ja.json:1 (seed)"
     },
     {
-      "id": "ui.871d945bdfeb9d",
-      "source": "Import from New project",
+      "id": "ui.81d1d2b903ec3f",
+      "source": "Import as new",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:118 (text)"
-    },
-    {
-      "id": "ui.8bc1d53cc57c24",
-      "source": "In",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:147 (text)"
+      "note": "src/GoogleConnect.tsx:121 (text)"
     },
     {
       "id": "ui.4ca06a005d299a",
@@ -1539,7 +1359,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:554 (text)"
+      "note": "src/ImportWizard.tsx:563 (text)"
     },
     {
       "id": "ui.e9bef0b0f3c25e",
@@ -1558,15 +1378,6 @@
       "status": "translated",
       "sourceFile": "localization/seed.ja.json",
       "note": "localization/seed.ja.json:1 (seed)"
-    },
-    {
-      "id": "ui.a511909161e1b8",
-      "source": "Layout",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:367 (text); src/ImportWizard.tsx:445 (text)"
     },
     {
       "id": "ui.d7852cd0d2453e",
@@ -1605,31 +1416,13 @@
       "note": "src/Reference.tsx:139 (text); src/Reference.tsx:340 (text)"
     },
     {
-      "id": "ui.e877133d7d3004",
-      "source": "lines ·",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:203 (text)"
-    },
-    {
       "id": "ui.acf932d9f0e496",
       "source": "lines already in the project",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:557 (text)"
-    },
-    {
-      "id": "ui.93ccff89ef581b",
-      "source": "lines from",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:553 (text)"
+      "note": "src/ImportWizard.tsx:566 (text)"
     },
     {
       "id": "ui.363cb87b623d04",
@@ -1638,7 +1431,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:559 (text)"
+      "note": "src/ImportWizard.tsx:568 (text)"
     },
     {
       "id": "ui.9105f01a3036d5",
@@ -1647,7 +1440,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:122 (text)"
+      "note": "src/GoogleConnect.tsx:126 (text)"
     },
     {
       "id": "ui.1803aa5595d876",
@@ -1656,7 +1449,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:431 (text)"
+      "note": "src/MoriApp.tsx:432 (text)"
     },
     {
       "id": "ui.a424e33d90931d",
@@ -1701,16 +1494,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:596 (text)"
-    },
-    {
-      "id": "ui.4028aadcb2f8e1",
-      "source": "mapped rows · column",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/GoogleSyncPanel.tsx",
-      "note": "src/GoogleSyncPanel.tsx:62 (text)"
+      "note": "src/ImportWizard.tsx:605 (text)"
     },
     {
       "id": "ui.76a2171c057b73",
@@ -1755,7 +1539,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Chrome.tsx",
-      "note": "src/Chrome.tsx:46 (alt); src/MoriApp.tsx:426 (text)"
+      "note": "src/Chrome.tsx:46 (alt); src/MoriApp.tsx:427 (text)"
     },
     {
       "id": "ui.2f5875bf399bbb",
@@ -1764,16 +1548,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:125 (text)"
-    },
-    {
-      "id": "ui.1c83da139d0804",
-      "source": "Monku-owned Google copy ·",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/GoogleSyncPanel.tsx",
-      "note": "src/GoogleSyncPanel.tsx:62 (text)"
+      "note": "src/GoogleConnect.tsx:129 (text)"
     },
     {
       "id": "ui.dcd1d5223f73b3",
@@ -1809,7 +1584,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:636 (text)"
+      "note": "src/ImportWizard.tsx:645 (text)"
     },
     {
       "id": "ui.18fdd549b2ed36",
@@ -1854,7 +1629,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:503 (text)"
+      "note": "src/ImportWizard.tsx:512 (text)"
     },
     {
       "id": "ui.a41eb2bf7245d3",
@@ -1863,7 +1638,7 @@
       "final": "新しいプロジェクト",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:498 (text); src/MoriApp.tsx:437 (text); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:507 (text); src/MoriApp.tsx:438 (text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.cf8d3c2d8e84bb",
@@ -1917,7 +1692,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:181 (toast)"
+      "note": "src/MoriApp.tsx:182 (toast)"
     },
     {
       "id": "ui.dedc5d13072ebf",
@@ -1935,7 +1710,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:185 (toast)"
+      "note": "src/MoriApp.tsx:186 (toast)"
     },
     {
       "id": "ui.4585399900d70b",
@@ -1953,7 +1728,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:470 (text)"
+      "note": "src/ImportWizard.tsx:479 (text)"
     },
     {
       "id": "ui.a5f746f26b1b99",
@@ -1971,7 +1746,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:190 (toast)"
+      "note": "src/MoriApp.tsx:191 (toast)"
     },
     {
       "id": "ui.610521342aa316",
@@ -2043,7 +1818,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:472 (text)"
+      "note": "src/ImportWizard.tsx:481 (text)"
     },
     {
       "id": "ui.56e54b1f971ce4",
@@ -2079,7 +1854,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:557 (text)"
+      "note": "src/ImportWizard.tsx:566 (text)"
     },
     {
       "id": "ui.ec110e5ea9374c",
@@ -2098,15 +1873,6 @@
       "status": "pending",
       "sourceFile": "src/Overlays.tsx",
       "note": "src/Overlays.tsx:113 (text)"
-    },
-    {
-      "id": "ui.3f59d8d369db77",
-      "source": "not translated yet",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:138 (text)"
     },
     {
       "id": "ui.d8da2c49df39d9",
@@ -2133,7 +1899,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:160 (toast)"
+      "note": "src/MoriApp.tsx:161 (toast)"
     },
     {
       "id": "ui.057b0b09c4e1fe",
@@ -2151,7 +1917,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:412 (text)"
+      "note": "src/ImportWizard.tsx:421 (text)"
     },
     {
       "id": "ui.788011833a5a0f",
@@ -2161,15 +1927,6 @@
       "status": "pending",
       "sourceFile": "src/Notifications.tsx",
       "note": "src/Notifications.tsx:94 (aria-label)"
-    },
-    {
-      "id": "ui.d08d62282644eb",
-      "source": "of 3",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:585 (text)"
     },
     {
       "id": "ui.e32df1da6b1582",
@@ -2197,15 +1954,6 @@
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
       "note": "src/Reference.tsx:448 (text); src/Reference.tsx:455 (text); localization/seed.ja.json:1 (seed)"
-    },
-    {
-      "id": "ui.ac98902e3a62a3",
-      "source": "on this line",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Chrome.tsx",
-      "note": "src/Chrome.tsx:99 (text)"
     },
     {
       "id": "ui.7849b5e475c5ee",
@@ -2277,7 +2025,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:431 (text)"
+      "note": "src/MoriApp.tsx:432 (text)"
     },
     {
       "id": "ui.8f838ebe56bdd4",
@@ -2286,7 +2034,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:519 (text)"
+      "note": "src/ImportWizard.tsx:528 (text)"
     },
     {
       "id": "ui.6bc8faf9a5543e",
@@ -2295,7 +2043,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:339 (text)"
+      "note": "src/ImportWizard.tsx:348 (text)"
     },
     {
       "id": "ui.baa3a7526da1ce",
@@ -2322,7 +2070,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:343 (placeholder)"
+      "note": "src/ImportWizard.tsx:352 (placeholder)"
     },
     {
       "id": "ui.349f2bf10c9b27",
@@ -2340,7 +2088,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:396 (aria-label)"
+      "note": "src/ImportWizard.tsx:405 (aria-label)"
     },
     {
       "id": "ui.aa9a890936f6fb",
@@ -2349,7 +2097,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:396 (title)"
+      "note": "src/ImportWizard.tsx:405 (title)"
     },
     {
       "id": "ui.43fd77d2ed8dcd",
@@ -2394,7 +2142,7 @@
       "final": "プロジェクト名",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:510 (text); src/Reference.tsx:336 (text); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:519 (text); src/Reference.tsx:336 (text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.04e2a9728af758",
@@ -2412,7 +2160,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:344 (aria-label)"
+      "note": "src/ImportWizard.tsx:353 (aria-label)"
     },
     {
       "id": "ui.3447cb6338d786",
@@ -2421,7 +2169,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:351 (text)"
+      "note": "src/ImportWizard.tsx:360 (text)"
     },
     {
       "id": "ui.f8e40a3a13f15d",
@@ -2430,7 +2178,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:561 (text)"
+      "note": "src/ImportWizard.tsx:570 (text)"
     },
     {
       "id": "ui.64c43fef596245",
@@ -2493,7 +2241,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:399 (aria-label)"
+      "note": "src/ImportWizard.tsx:408 (aria-label)"
     },
     {
       "id": "ui.24d3bc83dd3f1c",
@@ -2502,7 +2250,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:399 (title)"
+      "note": "src/ImportWizard.tsx:408 (title)"
     },
     {
       "id": "ui.3064d79a295cef",
@@ -2550,15 +2298,6 @@
       "note": "src/TermModal.tsx:144 (text)"
     },
     {
-      "id": "ui.99a38501936be0",
-      "source": "Replace in",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:168 (text)"
-    },
-    {
       "id": "ui.645982c52b7c11",
       "source": "Reset all",
       "ai": "",
@@ -2600,8 +2339,8 @@
       "ai": "",
       "final": "レビュー",
       "status": "translated",
-      "sourceFile": "src/TermModal.tsx",
-      "note": "src/TermModal.tsx:169 (text); localization/seed.ja.json:1 (seed)"
+      "sourceFile": "localization/seed.ja.json",
+      "note": "localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.eeae19712c445b",
@@ -2649,15 +2388,6 @@
       "note": "src/Reference.tsx:202 (description)"
     },
     {
-      "id": "ui.3d1b466939ee09",
-      "source": "Runs as you type: placeholders, line breaks",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:168 (text)"
-    },
-    {
       "id": "ui.b4f9b3025c7d2c",
       "source": "Same English elsewhere",
       "ai": "",
@@ -2691,7 +2421,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:542 (text)"
+      "note": "src/ImportWizard.tsx:551 (text)"
     },
     {
       "id": "ui.431e4352cedef9",
@@ -2709,7 +2439,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:578 (text)"
+      "note": "src/ImportWizard.tsx:587 (text)"
     },
     {
       "id": "ui.91a42dc8d385cf",
@@ -2889,7 +2619,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:559 (text)"
+      "note": "src/ImportWizard.tsx:568 (text)"
     },
     {
       "id": "ui.1dbcee68244321",
@@ -2898,7 +2628,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:104 (text)"
+      "note": "src/GoogleConnect.tsx:105 (text)"
     },
     {
       "id": "ui.48f0d3d397d49f",
@@ -2907,7 +2637,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:103 (text)"
+      "note": "src/GoogleConnect.tsx:104 (text)"
     },
     {
       "id": "ui.fb7f28fffefbb2",
@@ -2916,7 +2646,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:107 (text)"
+      "note": "src/GoogleConnect.tsx:108 (text)"
     },
     {
       "id": "ui.5b7e4e69b16061",
@@ -2943,7 +2673,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:183 (text); src/AIChatsSidebar.tsx:270 (text)"
+      "note": "src/AIChatsSidebar.tsx:183 (text)"
     },
     {
       "id": "ui.5bd638b645eb32",
@@ -2952,7 +2682,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:631 (text)"
+      "note": "src/ImportWizard.tsx:640 (text)"
     },
     {
       "id": "ui.fa125556f136a7",
@@ -2970,7 +2700,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:631 (text); src/Inspector.tsx:106 (title); src/Matrix.tsx:28 (label); src/Popovers.tsx:136 (label)"
+      "note": "src/ImportWizard.tsx:640 (text); src/Inspector.tsx:106 (title); src/Matrix.tsx:28 (label); src/Popovers.tsx:136 (label)"
     },
     {
       "id": "ui.b4e1e1050c09d5",
@@ -2979,16 +2709,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:529 (text)"
-    },
-    {
-      "id": "ui.9b66106890a843",
-      "source": "spoken by",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:96 (text)"
+      "note": "src/ImportWizard.tsx:538 (text)"
     },
     {
       "id": "ui.daec459ab6cce9",
@@ -2997,7 +2718,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:357 (text)"
+      "note": "src/ImportWizard.tsx:366 (text)"
     },
     {
       "id": "ui.aa17b38f6c562d",
@@ -3006,7 +2727,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:587 (text)"
+      "note": "src/ImportWizard.tsx:596 (text)"
     },
     {
       "id": "ui.1c84f1c021fca1",
@@ -3015,7 +2736,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:519 (text)"
+      "note": "src/ImportWizard.tsx:528 (text)"
     },
     {
       "id": "ui.920e413c7d411b",
@@ -3025,15 +2746,6 @@
       "status": "translated",
       "sourceFile": "localization/seed.ja.json",
       "note": "localization/seed.ja.json:1 (seed)"
-    },
-    {
-      "id": "ui.8e6a6cca7aae1d",
-      "source": "Step",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:585 (text)"
     },
     {
       "id": "ui.a13bc11d1e8530",
@@ -3051,7 +2763,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:484 (text)"
+      "note": "src/ImportWizard.tsx:493 (text)"
     },
     {
       "id": "ui.733378b2ef6991",
@@ -3105,7 +2817,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:631 (text)"
+      "note": "src/ImportWizard.tsx:640 (text)"
     },
     {
       "id": "ui.cb380dc8dd691a",
@@ -3123,7 +2835,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:328 (toast)"
+      "note": "src/MoriApp.tsx:329 (toast)"
     },
     {
       "id": "ui.95d2eb4bc9e0fa",
@@ -3150,7 +2862,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:199 (toast)"
+      "note": "src/MoriApp.tsx:200 (toast)"
     },
     {
       "id": "ui.008cfadb77318c",
@@ -3159,7 +2871,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:122 (toast)"
+      "note": "src/MoriApp.tsx:123 (toast)"
     },
     {
       "id": "ui.d0f62545074d3f",
@@ -3177,25 +2889,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:516 (text)"
-    },
-    {
-      "id": "ui.f21bb6fa756196",
-      "source": "to continue.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:468 (text)"
-    },
-    {
-      "id": "ui.217655f48dde4e",
-      "source": "to do",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Sidebar.tsx",
-      "note": "src/Sidebar.tsx:91 (text)"
+      "note": "src/ImportWizard.tsx:525 (text)"
     },
     {
       "id": "ui.100ec1bc78a4cc",
@@ -3205,33 +2899,6 @@
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
       "note": "src/Matrix.tsx:41 (label)"
-    },
-    {
-      "id": "ui.e8f585eec943d0",
-      "source": "to fix",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:83 (text)"
-    },
-    {
-      "id": "ui.249a20756dacd3",
-      "source": "to glossary",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:568 (text)"
-    },
-    {
-      "id": "ui.9c46b38e241584",
-      "source": "to sync",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/GoogleSyncPanel.tsx",
-      "note": "src/GoogleSyncPanel.tsx:65 (text)"
     },
     {
       "id": "ui.06bb3f7fe22ce5",
@@ -3360,15 +3027,6 @@
       "note": "src/AIChatsSidebar.tsx:240 (title)"
     },
     {
-      "id": "ui.c1c1009d3f37ec",
-      "source": "Update",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:164 (text)"
-    },
-    {
       "id": "ui.c36d819e7bc6d2",
       "source": "Use",
       "ai": "",
@@ -3483,7 +3141,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:493 (aria-label)"
+      "note": "src/ImportWizard.tsx:502 (aria-label)"
     },
     {
       "id": "ui.fc9c7f74dbbab3",
@@ -3492,7 +3150,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:383 (title)"
+      "note": "src/ImportWizard.tsx:392 (title)"
     },
     {
       "id": "ui.af7c3334b6c47b",
@@ -3528,7 +3186,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:124 (text)"
+      "note": "src/GoogleConnect.tsx:128 (text)"
     },
     {
       "id": "ui.5474eef8d0f179",
@@ -3599,25 +3257,25 @@
     "project": "You are localizing Monku no Mori itself: an EN→JA desktop translation editor with a Matrix, AI Chats, glossary, characters, project imports and exports. These strings are button labels, tooltips, instructions, menus and status text, not story dialogue. Source locations are in each row's notes."
   },
   "sourceFiles": [
-    "src/ImportWizard.tsx",
-    "src/TermModal.tsx",
-    "src/Inspector.tsx",
-    "src/Sidebar.tsx",
     "src/ChatGPTScreen.tsx",
     "src/Reference.tsx",
+    "src/Inspector.tsx",
     "src/CodexTranslationPanel.tsx",
+    "src/ImportWizard.tsx",
+    "src/Sidebar.tsx",
+    "src/TermModal.tsx",
+    "src/GoogleConnect.tsx",
     "localization/seed.ja.json",
     "src/AIChatsSidebar.tsx",
     "src/Matrix.tsx",
     "src/Popovers.tsx",
-    "src/GoogleConnect.tsx",
-    "src/Chrome.tsx",
     "src/Dialogs.tsx",
     "src/Notifications.tsx",
+    "src/Chrome.tsx",
     "src/GoogleSyncPanel.tsx",
     "src/MoriApp.tsx",
     "src/WindowControls.tsx",
     "src/Overlays.tsx"
   ],
-  "lastModified": "2026-11-03T21:43:46.470Z"
+  "lastModified": "2026-11-03T21:53:43.349Z"
 }

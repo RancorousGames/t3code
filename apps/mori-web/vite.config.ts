@@ -1,10 +1,11 @@
 import react from "@vitejs/plugin-react";
+import { moriUiLocalizationPlugin } from "./scripts/vite-ui-localization.mjs";
 import { defineConfig } from "vite";
 
 // The UI is self-contained: no T3 component imports, so no Tailwind or path aliases are needed.
 export default defineConfig({
   base: "./",
-  plugins: [react()],
+  plugins: [moriUiLocalizationPlugin(), react()],
   resolve: {
     dedupe: ["react", "react-dom"],
   },

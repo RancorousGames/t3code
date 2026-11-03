@@ -18,15 +18,23 @@ function add(source,file,line,context){
  if(source.length<2||source.length>420||!/[A-Za-z]/.test(source))return;
  if(/^(https?:|file:|\.\/|\.{2}\/|--|data-|aria-|<)/.test(source))return;
  if(/^[a-z][\w./:-]*$/.test(source))return;
+ // Fragments beside JSX expressions cannot be translated independently.
+ if (/^[.,;:!?”)—]/.test(source) || /[“([{]$/.test(source)) return;
  const id="ui."+crypto.createHash("sha256").update(source).digest("hex").slice(0,14);
  const item=catalog.get(id)||{id,source,locations:new Set()};
  item.locations.add(file+":"+line+" ("+context+")");
  catalog.set(id,item);
 }
-function walk(node,file){
+function walk(node,file,parent){
  if(!node||typeof node!=="object"||!node.type)return;
  const line=node.loc?.start.line||0;
- if(node.type==="JSXText")add(node.value,file,line,"text");
+ if(node.type==="JSXText"){
+  // If a label contains dynamic siblings (e.g. 3 files or a quoted name),
+  // a fragment is not a valid standalone translation unit.
+  const dynamic=parent?.type==="JSXElement" && parent.children?.some(child=>
+   child.type==="JSXExpressionContainer" && child.expression?.type!=="JSXEmptyExpression");
+  if(!dynamic)add(node.value,file,line,"text");
+ }
  if(node.type==="JSXAttribute"){
   const name=node.name?.name;
   const val=node.value?.type==="StringLiteral"?node.value:node.value?.expression;
@@ -40,8 +48,8 @@ function walk(node,file){
   add(node.value.value,file,line,node.key?.name||node.key?.value);
  for(const [key,child] of Object.entries(node)){
   if(["loc","start","end","tokens","comments","leadingComments","trailingComments","extra","errors"].includes(key))continue;
-  if(Array.isArray(child)){for(const x of child)if(x?.type)walk(x,file);}
-  else if(child?.type)walk(child,file);
+  if(Array.isArray(child)){for(const x of child)if(x?.type)walk(x,file,node);}
+  else if(child?.type)walk(child,file,node);
  }
 }
 for(const file of fs.readdirSync(path.join(root,"src")).filter(x=>x.endsWith(".tsx")&&!x.endsWith(".test.tsx")).sort()){
@@ -87,7 +95,10 @@ if(process.argv.includes("--install")){
     }
    }
    const existing=new Set(project.rows.map(r=>r.id));
-   project.rows.push(...old.rows.filter(r=>!existing.has(r.id)));
+   // Keep retired rows only if a person or AI has already translated them.
+   // Untranslated extracted fragments are not part of the current catalog.
+   project.rows.push(...old.rows.filter(r=>!existing.has(r.id)&&(r.final?.trim()||r.ai?.trim()))
+    .map(row=>({...row,sourceFile:"_retired/"+(row.sourceFile||"unknown")})));
    project.glossary=old.glossary?.length?old.glossary:project.glossary;
    project.context=old.context||project.context;
   }
