@@ -32,6 +32,7 @@ export interface MoriBackend {
   windowIsMaximized(): Promise<boolean>;
   onWindowMaximized(listener: (maximized: boolean) => void): () => void;
   chatSessionMenu(items: MoriMenuItem[], position: { x: number; y: number }): Promise<string | null>;
+  saveChatBatchFiles(request: { projectId: string; requestId: string; ids: string[]; files: {name: string; content: string}[] }): Promise<{folder:string;files:string[];requestId:string}>;
   codexTranslationConfig(): Promise<{provider: string; model: string; reasoningEffort: string; available: boolean}>;
   codexTranslate(request: {mode: "single" | "batch"; ids: string[]; prompt: string}): Promise<{text: string; model: string; reasoningEffort: string; ids: string[]; mode: "single" | "batch"}>;
   listProjects(): Promise<{ entries: NativeLibraryEntry[]; problems: { filename: string; reason: string }[] }>;

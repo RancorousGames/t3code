@@ -47,6 +47,13 @@ export interface AIChatsSidebarProps {
   onAssignGroup: (id: string, group: string) => void;
   onDoubleClick: (session: MoriChatSession) => void;
   onUnsnooze: (id: string) => void;
+  onRunBatch: () => void;
+  onReviewBatch: () => void;
+  batchStatus: string;
+  batchPending: boolean;
+  batchReady: boolean;
+  batchCount: number;
+  batchBusy: boolean;
   now: number;
 }
 
@@ -69,7 +76,8 @@ function orderedSessions(items: MoriChatSession[], activeId: string | null, now:
 
 export function AIChatsSidebar({
   sessions, activeId, collapsed, onCollapse, onCreate, onSelect, onClose,
-  onRename, onMenu, onGroupMenu, permanentGroups, onMove, onAssignGroup, onDoubleClick, onUnsnooze, now,
+  onRename, onMenu, onGroupMenu, permanentGroups, onMove, onAssignGroup, onDoubleClick, onUnsnooze,
+  onRunBatch, onReviewBatch, batchStatus, batchPending, batchReady, batchCount, batchBusy, now,
 }: AIChatsSidebarProps) {
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
@@ -249,6 +257,15 @@ export function AIChatsSidebar({
         ))}
         {!visible.length && <p className="mori-ai-empty">{query ? "No matching sessions." :
           mode === "hidden" ? "No hidden sessions." : mode === "snoozed" ? "No snoozed sessions." : "No sessions. Use + to start one."}</p>}
+      </div>
+      <div className="mori-ai-batch-actions">
+        {batchStatus && <span className="mori-ai-batch-status" role="status" title={batchStatus}>{batchStatus}</span>}
+        <button type="button" className="mori-ai-batch-button" disabled={batchBusy || (batchPending && !batchReady) || (!batchPending && !batchCount)}
+          onClick={batchReady ? onReviewBatch : onRunBatch}
+          title={batchReady ? "Review ChatGPT JSON proposals" : "Send up to three eligible lines to the current ChatGPT session with inline instruction and context files"}>
+          <Icon name="sparkle" size="xs" />
+          {batchBusy ? "Sending…" : batchReady ? "Review AI drafts" : batchPending ? "Batch in progress" : `Translate ${batchCount} lines`}
+        </button>
       </div>
       <footer className="mori-ai-side-foot">
         {hidden.length > 0 && <button type="button" onClick={() => setMode(mode === "hidden" ? "normal" : "hidden")}>Hidden {hidden.length}</button>}

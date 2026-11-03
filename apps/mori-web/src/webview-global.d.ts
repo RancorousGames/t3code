@@ -7,6 +7,15 @@ interface MoriElectronWebview extends HTMLElement {
   isLoading(): boolean;
   sendInputEvent(event: { type: "keyDown" | "keyUp"; keyCode: string }): Promise<void>;
 }
+// T3 shared browser automation has an optional native bridge branch. Mori's
+// sessions use WebviewTag, but the optional field keeps shared types complete.
+interface Window {
+  desktopBridge?: { stableChatGPTViewRequest?: (request: {
+    operation: string;
+    identity: { sessionId: string; environmentId: string; profileId: string };
+    expression?: string;
+  }) => Promise<{ result?: unknown }> };
+}
 interface HTMLElementTagNameMap {
   webview: MoriElectronWebview;
 }

@@ -23,6 +23,11 @@ export function registerNativeChatGPTAutomationSession(environmentId: string, se
     nativeSessionEnvironments.set(sessionId, environmentId);
 }
 function findWebview(runtimeTabId: string): ChatGPTWebview {
+  // Prefer an explicitly mounted guest over the T3-native engine preference.
+  // Standalone hosts such as Mori mount their own Chromium webview with a
+  // UUID session id, even when the shared module defaults to native mode.
+  const mounted = findMountedChatGPTGuest(runtimeTabId);
+  if (mounted) return mounted as ChatGPTWebview;
   if (isPersistentChatGPTSessionOptedIn(runtimeTabId)) {
     const environmentId = nativeSessionEnvironments.get(runtimeTabId);
     const bridge =
@@ -41,9 +46,7 @@ function findWebview(runtimeTabId: string): ChatGPTWebview {
       isLoading: () => false,
     } as unknown as ChatGPTWebview;
   }
-  const guest = findMountedChatGPTGuest(runtimeTabId);
-  if (!guest) throw new Error("ChatGPT guest webview has not attached.");
-  return guest as ChatGPTWebview;
+  throw new Error("ChatGPT guest webview has not attached.");
 }
 
 /** Guest DOM focus can move Electron keyboard focus away from T3's current pane.

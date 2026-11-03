@@ -8,6 +8,7 @@ const { createProjectStore, validateProject } = require("./project-store.cjs");
 const { createPublicSheetReader } = require("./public-sheet.cjs");
 const { createGoogleWorkspace } = require("./google-workspace.cjs");
 const { createCodexTranslator } = require("./codex-translation.cjs");
+const { createChatBatchFileStore } = require("./ai-context-files.cjs");
 
 // Entirely separate profile, project library and OS application identity from T3.
 // Non-packaged QA may run in an isolated disposable profile without touching
@@ -19,6 +20,7 @@ app.setAppUserModelId("games.rancorous.monkunomori");
 app.setName("Monku no Mori");
 const projectStore = createProjectStore(app.getPath("userData"));
 const codexTranslator = createCodexTranslator({ userDataDir: app.getPath("userData") });
+const saveChatBatchFiles = createChatBatchFileStore(app.getPath("userData"));
 const googleWorkspace = createGoogleWorkspace({ userDataDir: app.getPath("userData"), safeStorage, openExternal: url => shell.openExternal(url) });
 
 const acquiredLock = app.requestSingleInstanceLock();
@@ -133,6 +135,7 @@ if (!acquiredLock) {
       } catch (error) { finish(null); throw error; }
     }));
 
+    secure("ai:chat-batch-files", request => saveChatBatchFiles(request));
     secure("ai:codex-configuration", () => codexTranslator.getConfig());
     secure("ai:codex-translate", request => codexTranslator.translate(request));
     secure("projects:list", () => projectStore.list());
