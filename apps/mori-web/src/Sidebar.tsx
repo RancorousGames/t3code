@@ -1,9 +1,35 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import { useApp, type Screen } from "./app-context.ts";
 import { Icon } from "./Icons.tsx";
 import { statusOf, checkRow } from "./insights.ts";
 import type { MoriProject } from "./model.ts";
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]?.toUpperCase() ?? "").join("");
+
+function ProjectName({ name }: { name: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [fontSize, setFontSize] = useState(13.5);
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    const context = document.createElement("canvas").getContext("2d");
+    if (!element || !context) return;
+    const fit = () => {
+      const style = getComputedStyle(element);
+      context.font = `${style.fontWeight} 13.5px ${style.fontFamily}`;
+      const textWidth = context.measureText(name).width;
+      if (!textWidth || !element.clientWidth) return;
+      const next = Math.min(13.5, Math.max(11, 13.5 * element.clientWidth / textWidth));
+      setFontSize(current => Math.abs(current - next) < 0.1 ? current : next);
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    fit();
+    return () => observer.disconnect();
+  }, [name]);
+
+  return <span ref={ref} className="pname" style={{ display: "block", fontSize, whiteSpace: "normal", overflow: "visible", overflowWrap: "anywhere", textOverflow: "clip", lineHeight: 1.25 }}>{name}</span>;
+}
 
 /** Folder part of a source path: "dialogue/chapter1.json" is in "dialogue". */
 const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
@@ -46,8 +72,7 @@ export function Sidebar() {
       <button type="button" className="proj" onClick={event => openPop({ kind: "projects", anchor: event.currentTarget, width: 280 })}>
         <span className="pmark">{initials(project.name)}</span>
         <span style={{ minWidth: 0 }}>
-          <span className="pname" style={{ display: "block" }}>{project.name}</span>
-          <span className="pmeta" style={{ display: "block" }}>EN → JA · {rows.length} lines</span>
+          <ProjectName name={project.name} />
         </span>
         <Icon name="chevron-down" size="sm" />
         <span className="proj-prog">
