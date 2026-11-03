@@ -45,7 +45,7 @@ const socketFor = (dir: string) => {
     ? "\\\\.\\pipe\\t3code-browser-host-" + hash
     : NodePath.join(NodeOS.tmpdir(), "t3code-browser-host-" + hash + ".sock");
 };
-const request = async (
+const requestOnce = async (
   socketPath: string,
   method: string,
   path: string,
@@ -87,6 +87,22 @@ const request = async (
     req.end(body === undefined ? undefined : JSON.stringify(body));
   });
 
+// Retry only Windows named-pipe connect EPERM, before any request reached the host.
+const request = async (
+  socketPath: string,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<unknown> => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await requestOnce(socketPath, method, path, body);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "EPERM" || attempt >= 5) throw error;
+      await delay(100 * (attempt + 1));
+    }
+  }
+};
 /** Things the host tells T3, because Windows delivers input straight to the page. */
 export type PersistentChatGPTHostEvent =
   | { type: "close-requested"; sessionId: string }
