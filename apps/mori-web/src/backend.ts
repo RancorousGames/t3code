@@ -18,6 +18,11 @@ export interface GoogleDriveFile {
 }
 export interface MoriBackend {
   readonly version: number;
+  windowMinimize(): Promise<void>;
+  windowToggleMaximize(): Promise<boolean>;
+  windowClose(): Promise<void>;
+  windowIsMaximized(): Promise<boolean>;
+  onWindowMaximized(listener: (maximized: boolean) => void): () => void;
   codexTranslationConfig(): Promise<{provider: string; model: string; reasoningEffort: string; available: boolean}>;
   codexTranslate(request: {mode: "single" | "batch"; ids: string[]; prompt: string}): Promise<{text: string; model: string; reasoningEffort: string; ids: string[]; mode: "single" | "batch"}>;
   listProjects(): Promise<{ entries: NativeLibraryEntry[]; problems: { filename: string; reason: string }[] }>;

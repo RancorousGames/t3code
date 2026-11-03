@@ -6,6 +6,7 @@ import { checkRow } from "./insights.ts";
 import { keyLabel } from "./shortcuts.ts";
 import type { SaveState } from "./store.ts";
 import { nativeMori } from "./backend.ts";
+import { WindowControls } from "./WindowControls.tsx";
 
 // The window has no menu bar: commands live in the search bar (Ctrl+K), keys are listed in F1,
 // and every other action sits next to the thing it changes.
@@ -64,6 +65,7 @@ export function Titlebar() {
           <span className={googleConnected ? "ldot" : "ldot off"} />
           Google Workspace · {googleConnected ? "connected" : "not connected"}
         </button>
+        <WindowControls />
       </div>
     </header>
   );

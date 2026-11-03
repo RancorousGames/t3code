@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppContext, type AppValue, type ModalState, type PopState, type Screen } from "./app-context.ts";
 import { StatusBar, Titlebar } from "./Chrome.tsx";
+import { WindowControls } from "./WindowControls.tsx";
 import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
 import { ShortcutsModal, PaletteModal, TemplatesModal } from "./Dialogs.tsx";
 import { FocusScreen } from "./Focus.tsx";
@@ -373,6 +374,10 @@ export function MoriApp() {
       <>
         <IconSprite />
         <div className="app">
+          <header className="titlebar boot-titlebar">
+            <div className="tb-left">Monku no Mori</div>
+            <div className="tb-right"><WindowControls /></div>
+          </header>
           <div className="boot">
             {booting ? (
               <div><b>Opening Mori</b>Loading your projects…</div>

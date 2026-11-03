@@ -36,8 +36,8 @@ if (!acquiredLock) {
     }
     Menu.setApplicationMenu(null);
     const mainWindow = new BrowserWindow({
-      titleBarStyle: "hidden",
-      titleBarOverlay: { color: "#090d0c", symbolColor: "#a6b6ac", height: 40 },
+      frame: false,
+      backgroundColor: "#090d0c",
       autoHideMenuBar: true,
       width: 1400,
       height: 900,
@@ -79,6 +79,17 @@ if (!acquiredLock) {
         return handler(...args);
       });
     }
+
+    secure("window:minimize", () => mainWindow.minimize());
+    secure("window:toggle-maximize", () => {
+      if (mainWindow.isMaximized()) mainWindow.unmaximize();
+      else mainWindow.maximize();
+      return mainWindow.isMaximized();
+    });
+    secure("window:close", () => mainWindow.close());
+    secure("window:is-maximized", () => mainWindow.isMaximized());
+    mainWindow.on("maximize", () => mainWindow.webContents.send("mori:window:maximized", true));
+    mainWindow.on("unmaximize", () => mainWindow.webContents.send("mori:window:maximized", false));
 
     secure("ai:codex-configuration", () => codexTranslator.getConfig());
     secure("ai:codex-translate", request => codexTranslator.translate(request));

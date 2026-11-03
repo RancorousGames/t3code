@@ -6,6 +6,15 @@ const { contextBridge, ipcRenderer } = require("electron");
 const call = (name, ...args) => ipcRenderer.invoke("mori:" + name, ...args);
 contextBridge.exposeInMainWorld("moriBackend", Object.freeze({
   version: 1,
+  windowMinimize: () => call("window:minimize"),
+  windowToggleMaximize: () => call("window:toggle-maximize"),
+  windowClose: () => call("window:close"),
+  windowIsMaximized: () => call("window:is-maximized"),
+  onWindowMaximized: listener => {
+    const handler = (_event, maximized) => listener(maximized);
+    ipcRenderer.on("mori:window:maximized", handler);
+    return () => ipcRenderer.removeListener("mori:window:maximized", handler);
+  },
   codexTranslationConfig: () => call("ai:codex-configuration"),
   codexTranslate: request => call("ai:codex-translate", request),
   listProjects: () => call("projects:list"),
