@@ -685,8 +685,10 @@ export function ChatGPTNativeRecoveryCoordinator({
               lease.yieldToSession(id);
               finishRecoveryAttempt(env, id, "Native action still pending; outcome unknown");
             } else if ("error" in settled) {
-              decision(id, "action-rejected", "Native bridge rejected recovery operation.");
-              finishRecoveryAttempt(env, id, "Native action rejected; no verified recovery");
+              const why = String(settled.error instanceof Error ? settled.error.message : settled.error)
+                .split("\n")[0]?.slice(0, 165) ?? "unknown error";
+              decision(id, "action-rejected", `Native recovery rejected: ${why}`);
+              finishRecoveryAttempt(env, id, `Native action rejected (${why}); no verified recovery`);
             } else {
               const result = settled.value as { result?: string } | null;
               if (specialStop && result?.result === "stop-clicked" &&

@@ -82,7 +82,10 @@ export async function guardedNativeChatGPTReload(input: {
     if (location.href !== ${JSON.stringify(snapshot.url)}) return false;
     const probe = (${inspectChatGPTComposer.toString()})(document, location.href);
     if (probe.status !== 'empty') return false;
-    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"]');
+    // Match the same composer variants as inspectChatGPTComposer above. The
+    // current ChatGPT Slate/contenteditable textbox has no prompt-textarea ID;
+    // the old narrower selector silently denied every otherwise safe reload.
+    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],[contenteditable="true"][role="textbox"],[contenteditable="true"][data-placeholder],textarea[placeholder]');
     const form = editor?.closest('form');
     if (!form || form.querySelector('img,video,audio,[data-testid*="attachment"],[data-testid*="upload-preview"],[data-state="recording"],[data-state="uploading"],[aria-label^="Remove file"],[aria-label^="Remove attachment"]') ||
         Array.from(form.querySelectorAll('input[type="file"]')).some(input => input.files?.length)) return false;
