@@ -38,11 +38,11 @@ function Section({ id, title, badge, children }: { id: string; title: string; ba
 }
 
 function InspectorBody({ row }: { row: MoriRow }) {
-  const { project, actions, visible, bindings, openPop, adopt, insertToken, toast, step } = useApp();
+  const { project, actions, visible, bindings, openPop, adopt, insertToken, toast, step, prefs } = useApp();
   const [editingVoice, setEditingVoice] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState("");
-  const glossary = project.glossary;
-  const character = project.characters.find(c => c.id === row.characterId);
+  const glossary = prefs.glossaryEnabled ? project.glossary : [];
+  const character = prefs.charactersEnabled ? project.characters.find(c => c.id === row.characterId) : undefined;
   const status = statusOf(row);
   const warnings = checkRow(row, glossary);
   const terms = glossaryHits(row.source, glossary);
@@ -103,7 +103,7 @@ function InspectorBody({ row }: { row: MoriRow }) {
         <div className="ih-file"><Icon name="file" size="xs" />{row.sourceFile ?? "No source file"}</div>
       </div>
 
-      <Section id="speaker" title="Speaker">
+      {prefs.charactersEnabled && <Section id="speaker" title="Speaker">
         {character ? (
           <>
             <div className="who">
@@ -161,11 +161,11 @@ function InspectorBody({ row }: { row: MoriRow }) {
             </div>
           </>
         )}
-      </Section>
+      </Section>}
 
       <Section id="checks" title="Checks" badge={warningBadge}>
         {!row.final.trim() ? (
-          <p className="muted" style={{ fontSize: 12.5 }}>Runs as you type: placeholders, line breaks and glossary terms.</p>
+          <p className="muted" style={{ fontSize: 12.5 }}>Runs as you type: placeholders, line breaks{prefs.glossaryEnabled ? " and glossary terms" : ""}.</p>
         ) : (
           <>
             {warnings.map((warning, index) => {
@@ -231,7 +231,7 @@ function InspectorBody({ row }: { row: MoriRow }) {
         )}
       </Section>
 
-      <Section id="gloss" title="Glossary in this line" badge={terms.length ? <span className="badge">{terms.length}</span> : null}>
+      {prefs.glossaryEnabled && <Section id="gloss" title="Glossary in this line" badge={terms.length ? <span className="badge">{terms.length}</span> : null}>
         {terms.length ? (
           terms.map(term => {
             const used = row.final.includes(term.jp.trim());
@@ -250,7 +250,7 @@ function InspectorBody({ row }: { row: MoriRow }) {
         ) : (
           <p className="muted" style={{ fontSize: 12.5 }}>No glossary terms in this line.</p>
         )}
-      </Section>
+      </Section>}
 
       {duplicates.length > 0 && (
         <Section id="dupes" title="Same English elsewhere" badge={<span className="badge">{duplicates.length}</span>}>

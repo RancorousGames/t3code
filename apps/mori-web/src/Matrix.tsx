@@ -24,7 +24,7 @@ interface ColumnDef {
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
-  { key: "id", label: "Line", fixed: 96 },
+  { key: "id", label: "Line", fixed: 96, min: 64, collapsible: true, resizable: true },
   { key: "speaker", label: "Speaker", fixed: 136, min: 96, collapsible: true, resizable: true },
   { key: "src", label: "Source · EN", fr: 1.1, min: 220, collapsible: true, resizable: true, color: "#a6b6ac" },
   { key: "dev", label: "Dev draft", fr: 0.8, min: 160, collapsible: true, resizable: true, color: "#c2b18e" },
@@ -45,7 +45,8 @@ const FILTERS: { id: RowFilter; label: string }[] = [
   { id: "warnings", label: "" },
 ];
 
-const isResizable = (key: ColumnKey): key is ResizableColumn => key === "speaker" || key === "src" || key === "dev" || key === "ai" || key === "tr";
+const isResizable = (key: ColumnKey): key is ResizableColumn => key === "id" || key === "speaker" || key === "src" || key === "dev" || key === "ai" || key === "tr";
+const shownColumns = (prefs: MoriPrefs) => COLUMN_DEFS.filter(def => prefs.charactersEnabled || def.key !== "speaker");
 
 /** Map the position clicked in the rendered (glossary-marked) text to a textarea offset.
  * Marked renders each newline as one ↵ character plus a br, so the selected text's
@@ -66,7 +67,7 @@ function clickedTextOffset(cell: HTMLElement, value: string, x: number, y: numbe
 
 /** Grid template for the Matrix. Collapsed columns become a thin strip; dragged columns get a px width. */
 function columnTemplate(prefs: MoriPrefs, overrides: Partial<Record<ResizableColumn, number>> = {}): string {
-  return COLUMN_DEFS.map(def => {
+  return shownColumns(prefs).map(def => {
     if (isResizable(def.key)) {
       const pref = prefs.columns[def.key];
       if (pref.collapsed) return `${COLLAPSED_WIDTH}px`;
@@ -79,7 +80,7 @@ function columnTemplate(prefs: MoriPrefs, overrides: Partial<Record<ResizableCol
 }
 
 function minimumWidth(prefs: MoriPrefs): number {
-  return COLUMN_DEFS.reduce((sum, def) => {
+  return shownColumns(prefs).reduce((sum, def) => {
     if (isResizable(def.key) && prefs.columns[def.key].collapsed) return sum + COLLAPSED_WIDTH;
     if (isResizable(def.key) && prefs.columns[def.key].width) return sum + (prefs.columns[def.key].width ?? 0);
     return sum + (def.fixed ?? def.min ?? 0);
@@ -113,10 +114,10 @@ export function LineEditor({ value, onChange, className = "editor" }: { value: s
 
 function LineRow({ row, dupes, active }: { row: MoriRow; dupes: string[]; active: boolean }) {
   const { project, actions, prefs, bindings, select, adopt, toggleLock, openPop, setColumn } = useApp();
-  const character = project.characters.find(c => c.id === row.characterId);
+  const character = prefs.charactersEnabled ? project.characters.find(c => c.id === row.characterId) : undefined;
   const status = statusOf(row);
-  const warnings = checkRow(row, project.glossary);
-  const glossary = project.glossary;
+  const glossary = prefs.glossaryEnabled ? project.glossary : [];
+  const warnings = checkRow(row, glossary);
 
   const collapsedCell = (key: ColumnKey, color: string | undefined, label: string, has: boolean) => (
     <div
@@ -125,13 +126,13 @@ function LineRow({ row, dupes, active }: { row: MoriRow; dupes: string[]; active
       title={`${label} — click to expand`}
       onClick={event => { event.stopPropagation(); if (isResizable(key)) setColumn(key, { collapsed: false }); }}
     >
-      {has && <span className="cdot" style={{ background: color ?? "var(--text-3)" }} />}
+      {key === "id" ? <span className={`sdot ${status}`} title={`${row.id} · ${STATUS_LABEL[status]}`} /> : has && <span className="cdot" style={{ background: color ?? "var(--text-3)" }} />}
     </div>
   );
 
   const cell = (def: ColumnDef) => {
     if (isResizable(def.key) && prefs.columns[def.key].collapsed) {
-      const has = def.key === "speaker" ? !!row.characterId
+      const has = def.key === "id" ? true : def.key === "speaker" ? !!row.characterId
         : def.key === "src" ? !!row.source
         : def.key === "dev" ? !!row.legacy
         : !!row.ai;
@@ -243,7 +244,7 @@ function LineRow({ row, dupes, active }: { row: MoriRow; dupes: string[]; active
         }
       }}
     >
-      {COLUMN_DEFS.map(def => cell(def))}
+      {shownColumns(prefs).map(def => cell(def))}
     </div>
   );
 }
@@ -251,7 +252,7 @@ function LineRow({ row, dupes, active }: { row: MoriRow; dupes: string[]; active
 export function MatrixScreen() {
   const { project, view, setView, visible, activeId, prefs, setColumn, setPrefs, bindings, openPop, folded, toggleFold, go } = useApp();
   const matrixRef = useRef<HTMLDivElement>(null);
-  const glossary = project.glossary;
+  const glossary = prefs.glossaryEnabled ? project.glossary : [];
   const activeRow = project.rows.find(row => row.id === activeId);
 
   const scope = useMemo(
@@ -358,7 +359,7 @@ export function MatrixScreen() {
           <input id="mori-find" value={view.query} placeholder="Find in lines" onChange={event => setView({ query: event.target.value })} />
           {bindings.find && <KeyCaps binding={bindings.find} />}
         </label>
-        <button
+        {prefs.charactersEnabled && <button
           type="button"
           className={`btn${view.speaker !== "any" ? " on" : ""}`}
           onClick={event => openPop({ kind: "speakerFilter", anchor: event.currentTarget, align: "end", width: 230 })}
@@ -366,7 +367,7 @@ export function MatrixScreen() {
           <Icon name="users" size="sm" />
           <span>{speakerLabel}</span>
           <Icon name="chevron-down" size="xs" />
-        </button>
+        </button>}
         <button
           type="button"
           className="btn icon"
@@ -394,7 +395,7 @@ export function MatrixScreen() {
           style={{ ...cssVar("--cols", columnTemplate(prefs)), minWidth: minimumWidth(prefs) }}
         >
           <div className="hrow">
-            {COLUMN_DEFS.map(def => {
+            {shownColumns(prefs).map(def => {
               if (isResizable(def.key) && prefs.columns[def.key].collapsed) {
                 return (
                   <div

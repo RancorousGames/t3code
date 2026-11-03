@@ -11,6 +11,8 @@ import { characterColor, cssVar } from "./theme.ts";
 
 /** Body of whichever popover is open. Rendered inside PopoverFrame, reads live state from context. */
 export function PopoverContent({ kind, rowId }: { kind: "speaker" | "speakerFilter" | "columns" | "projects" | "templates" | "integrations"; rowId?: string | undefined }) {
+  const { prefs } = useApp();
+  if (!prefs.charactersEnabled && (kind === "speaker" || kind === "speakerFilter")) return null;
   switch (kind) {
     case "speaker": return rowId ? <SpeakerPopover rowId={rowId} /> : null;
     case "speakerFilter": return <SpeakerFilterPopover />;
@@ -130,6 +132,7 @@ function SpeakerFilterPopover() {
 }
 
 const COLLAPSIBLE: { key: ResizableColumn; label: string; color: string }[] = [
+  { key: "id", label: "Line", color: "var(--text-3)" },
   { key: "speaker", label: "Speaker", color: "var(--text-3)" },
   { key: "src", label: "Source · EN", color: "#a6b6ac" },
   { key: "dev", label: "Dev draft", color: "#c2b18e" },
@@ -141,7 +144,7 @@ function ColumnsPopover() {
   return (
     <>
       <PopLabel>Columns</PopLabel>
-      {COLLAPSIBLE.map(column => {
+      {COLLAPSIBLE.filter(column => prefs.charactersEnabled || column.key !== "speaker").map(column => {
         const shown = !prefs.columns[column.key].collapsed;
         return (
           <Opt key={column.key} onPick={() => setColumn(column.key, { collapsed: shown })}>
@@ -224,7 +227,7 @@ function ProjectsPopover() {
 }
 
 function TemplatesPopover() {
-  const { project, actions, openModal, closePop, toast } = useApp();
+  const { project, actions, openModal, closePop, toast, prefs } = useApp();
   const templates = useTemplates();
   const contexts = templates.filter(t => t.kind === "context");
   const characters = templates.filter(t => t.kind === "character");
@@ -266,8 +269,8 @@ function TemplatesPopover() {
         </Opt>
       ))}
       {contexts.length === 0 && <p className="pop-note">No saved context templates yet.</p>}
-      <PopLabel>Characters</PopLabel>
-      {[...EXAMPLE_CHARACTERS, ...characters.filter((t): t is CharacterTemplate => t.kind === "character")].map(t => (
+      {prefs.charactersEnabled && <PopLabel>Characters</PopLabel>}
+      {prefs.charactersEnabled && [...EXAMPLE_CHARACTERS, ...characters.filter((t): t is CharacterTemplate => t.kind === "character")].map(t => (
         <Opt key={t.id} onPick={() => {
           const existing = project.characters.find(c => c.name.toLowerCase() === t.name.toLowerCase());
           if (!existing) actions.addCharacter({ name: t.name, role: t.role, tone: t.tone, description: t.description });
@@ -278,14 +281,14 @@ function TemplatesPopover() {
           <span className="opt-t"><span>{t.name}</span><span className="sub">{t.tone}</span></span>
         </Opt>
       ))}
-      <PopLabel>Glossaries</PopLabel>
-      {glossaries.map(t => t.kind === "glossary" && (
+      {prefs.glossaryEnabled && <PopLabel>Glossaries</PopLabel>}
+      {prefs.glossaryEnabled && glossaries.map(t => t.kind === "glossary" && (
         <Opt key={t.id} onPick={() => applyGlossary(t)}>
           <Icon name="book" size="sm" />
           <span className="opt-t"><span>{t.name}</span><span className="sub">{t.terms.length} terms</span></span>
         </Opt>
       ))}
-      {glossaries.length === 0 && <p className="pop-note">Save a glossary from the Glossary screen.</p>}
+      {prefs.glossaryEnabled && glossaries.length === 0 && <p className="pop-note">Save a glossary from the Glossary screen.</p>}
       <div className="pop-sep" />
       <Opt onPick={saveContext}>
         <Icon name="plus" size="sm" />

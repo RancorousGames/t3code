@@ -54,12 +54,12 @@ function Ring({ done, total }: { done: number; total: number }) {
 }
 
 export function Sidebar() {
-  const { project, screen, go, view, setView, openPop, openModal } = useApp();
+  const { project, screen, go, view, setView, openPop, openModal, prefs, setPrefs } = useApp();
   const rows = project.rows;
   const translated = rows.filter(row => statusOf(row) === "translated").length;
   const drafts = rows.filter(row => statusOf(row) === "draft").length;
   const todo = rows.filter(row => !row.isLocked && statusOf(row) !== "translated").length;
-  const warnings = rows.filter(row => checkRow(row, project.glossary).length > 0).length;
+  const warnings = rows.filter(row => checkRow(row, prefs.glossaryEnabled ? project.glossary : []).length > 0).length;
   const percent = rows.length ? Math.round(100 * translated / rows.length) : 0;
   const folders = groupFiles(project);
 
@@ -102,12 +102,12 @@ export function Sidebar() {
         </button>
 
         <div className="nav-label">Reference</div>
-        <button type="button" className={navClass(screen === "characters")} onClick={() => showScreen("characters")}>
+        {prefs.charactersEnabled && <button type="button" className={navClass(screen === "characters")} onClick={() => showScreen("characters")}>
           <Icon name="users" />Characters<span className="count">{project.characters.length}</span>
-        </button>
-        <button type="button" className={navClass(screen === "glossary")} onClick={() => showScreen("glossary")}>
+        </button>}
+        {prefs.glossaryEnabled && <button type="button" className={navClass(screen === "glossary")} onClick={() => showScreen("glossary")}>
           <Icon name="book" />Glossary<span className="count">{project.glossary.length}</span>
-        </button>
+        </button>}
         <button type="button" className={navClass(screen === "context")} onClick={() => showScreen("context")}>
           <Icon name="scroll" />Context
         </button>
@@ -116,12 +116,15 @@ export function Sidebar() {
         </button>
 
         <div className="nav-label">
-          Files
-          <button type="button" title="Import files into a new project" aria-label="Import files into a new project" onClick={() => openModal({ kind: "import", step: 1 })}>
+          <button type="button" className="files-toggle" aria-expanded={prefs.filesExpanded} aria-controls="mori-sidebar-files" onClick={() => setPrefs({ filesExpanded: !prefs.filesExpanded })}>
+            <Icon name="chevron-down" size="xs" className="files-chev" />Files
+          </button>
+          <button type="button" title="Import files into a new project" aria-label="Import files into a new project" onClick={() => { setPrefs({ filesExpanded: true }); openModal({ kind: "import", step: 1 }); }}>
             <Icon name="plus" size="xs" />
           </button>
         </div>
-        {folders.map(folder => (
+        <div id="mori-sidebar-files" hidden={!prefs.filesExpanded}>
+        {prefs.filesExpanded && folders.map(folder => (
           <div key={folder.name || "root"}>
             <div className="folder"><Icon name="folder" size="sm" />{folder.name || "(top level)"}</div>
             {folder.files.map(file => {
@@ -144,7 +147,8 @@ export function Sidebar() {
             })}
           </div>
         ))}
-        {!folders.length && <p className="muted" style={{ padding: "6px 8px", fontSize: 12 }}>No source files yet.</p>}
+        {prefs.filesExpanded && !folders.length && <p className="muted" style={{ padding: "6px 8px", fontSize: 12 }}>No source files yet.</p>}
+        </div>
       </nav>
 
       <div className="side-foot">

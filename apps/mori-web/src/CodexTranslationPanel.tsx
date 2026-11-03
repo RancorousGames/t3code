@@ -3,6 +3,7 @@ import { useApp } from "./app-context.ts";
 import { nativeMori } from "./backend.ts";
 import { batchTranslationPrompt, nextDraftCandidates, parseBatchReply } from "./ai-batch.ts";
 import { checkRow } from "./insights.ts";
+import { projectForTranslation } from "./prefs.ts";
 
 const MODEL = "gpt-6-luna";
 const EFFORT = "low";
@@ -10,7 +11,7 @@ const EFFORT = "low";
 /** A short-lived translation-only Codex subscription run. All generation
  * and model selection happens in the native host, never in renderer JS. */
 export function CodexTranslationPanel() {
-  const { project, activeRow, actions, toast } = useApp();
+  const { project, activeRow, actions, toast, prefs } = useApp();
   const native = nativeMori();
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("");
@@ -25,7 +26,7 @@ export function CodexTranslationPanel() {
       return;
     }
     const rows = selected.filter(row => row !== undefined);
-    const prompt = batchTranslationPrompt(project, rows);
+    const prompt = batchTranslationPrompt(projectForTranslation(project, prefs), rows);
     setRunning(true); setStatus(`Codex Luna 6, low reasoning: translating ${ids.length} line(s)…`);
     setPreview(null);
     try {
@@ -87,7 +88,7 @@ export function CodexTranslationPanel() {
         {(() => {
           const row = project.rows.find(row => row.id === id);
           if (!row) return null;
-          const check = checkRow({ ...row, final: japanese }, project.glossary);
+          const check = checkRow({ ...row, final: japanese }, prefs.glossaryEnabled ? project.glossary : []);
           return check.length ? <small>{check.map(w => w.message).join(" · ")}</small> : null;
         })()}
       </div>)}

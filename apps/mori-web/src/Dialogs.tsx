@@ -134,7 +134,7 @@ type PaletteItem = { title: string; detail: string; keys?: string; run: () => vo
 
 /** Ctrl+K: actions, characters and lines in one list. Arrows move, Enter opens. */
 export function PaletteModal() {
-  const { project, bindings, closeModal, runAction, setView, select, go } = useApp();
+  const { project, bindings, closeModal, runAction, setView, select, go, prefs } = useApp();
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -146,7 +146,7 @@ export function PaletteModal() {
       keys: bindings[action.id],
       run: () => runAction(action.id as ActionId),
     })),
-    ...project.characters.map(character => ({
+    ...(prefs.charactersEnabled ? project.characters : []).map(character => ({
       title: character.name,
       detail: `Character · ${character.role || "no role yet"}`,
       run: () => { setView({ speaker: character.id, filter: "all", file: null }); go("matrix"); },

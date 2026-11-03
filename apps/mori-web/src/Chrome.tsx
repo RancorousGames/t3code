@@ -82,8 +82,8 @@ const saveLabel = (save: SaveState): { text: string; color: string } => {
 
 export function StatusBar() {
   const { project, save, activeRow, bindings, openModal, prefs } = useApp();
-  const character = activeRow && project.characters.find(c => c.id === activeRow.characterId);
-  const warnings = activeRow ? checkRow(activeRow, project.glossary).length : 0;
+  const character = prefs.charactersEnabled && activeRow && project.characters.find(c => c.id === activeRow.characterId);
+  const warnings = activeRow ? checkRow(activeRow, prefs.glossaryEnabled ? project.glossary : []).length : 0;
   const label = saveLabel(save);
   return (
     <>

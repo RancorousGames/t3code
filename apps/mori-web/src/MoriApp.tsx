@@ -25,6 +25,7 @@ const DEFAULT_VIEW: ViewFilters = { filter: "all", query: "", speaker: "any", fi
 const TOAST_MS = 2600;
 
 const NO_ROWS: MoriProject["rows"] = [];
+const NO_GLOSSARY: MoriProject["glossary"] = [];
 
 /** Matches the translation editor. Only the active line mounts one. */
 const editorSelector = "textarea[data-editor]";
@@ -51,12 +52,12 @@ export function MoriApp() {
   const bootStarted = useRef(false);
 
   const rows = project?.rows ?? NO_ROWS;
-  const glossary = useMemo(() => project?.glossary ?? [], [project]);
+  const glossary = prefs.glossaryEnabled ? (project?.glossary ?? NO_GLOSSARY) : NO_GLOSSARY;
 
-  const names = useMemo(() => new Map((project?.characters ?? []).map(c => [c.id, c.name])), [project]);
+  const names = useMemo(() => new Map((prefs.charactersEnabled ? project?.characters ?? [] : []).map(c => [c.id, c.name])), [project, prefs.charactersEnabled]);
   const visible = useMemo(
-    () => (project ? visibleRows(project.rows, view, names, activeId, project.glossary) : []),
-    [project, view, names, activeId],
+    () => (project ? visibleRows(project.rows, prefs.charactersEnabled ? view : { ...view, speaker: "any" }, names, activeId, glossary) : []),
+    [project, view, names, activeId, glossary, prefs.charactersEnabled],
   );
   const activeRow = rows.find(row => row.id === activeId) ?? null;
 
@@ -67,6 +68,17 @@ export function MoriApp() {
   }, []);
 
   const setView = useCallback((patch: Partial<ViewFilters>) => setViewState(current => ({ ...current, ...patch })), []);
+  const go = useCallback((next: Screen) => {
+    if ((next === "characters" && !prefs.charactersEnabled) || (next === "glossary" && !prefs.glossaryEnabled)) return;
+    setScreen(next);
+  }, [prefs.charactersEnabled, prefs.glossaryEnabled]);
+  useEffect(() => {
+    if (!prefs.charactersEnabled) {
+      setViewState(current => current.speaker === "any" ? current : { ...current, speaker: "any" });
+      if (screen === "characters") setScreen("matrix");
+    }
+    if (!prefs.glossaryEnabled && screen === "glossary") setScreen("matrix");
+  }, [prefs.charactersEnabled, prefs.glossaryEnabled, screen]);
   // Pressing the same anchor again closes its popover, matching a toggle button.
   const openPop = useCallback((next: PopState) => setPop(current => current?.anchor === next.anchor ? null : next), []);
   const closePop = useCallback(() => setPop(null), []);
@@ -185,7 +197,7 @@ export function MoriApp() {
         if (activeRow) toggleLock(activeRow.id);
         break;
       case "speaker": {
-        if (!activeRow) break;
+        if (!prefs.charactersEnabled || !activeRow) break;
         const chip = document.querySelector<HTMLElement>(`[data-spk="${CSS.escape(activeRow.id)}"]`);
         if (!chip) toast("The speaker column is collapsed. Expand it to pick a speaker.");
         else openPop({ kind: "speaker", anchor: chip, rowId: activeRow.id, width: 290 });
@@ -352,7 +364,7 @@ export function MoriApp() {
       saveBindings(next);
     },
     screen,
-    go: setScreen,
+    go,
     view,
     setView,
     visible,
@@ -409,8 +421,8 @@ export function MoriApp() {
 
   const workspace = screen === "matrix" ? <MatrixScreen />
     : screen === "focus" ? <FocusScreen />
-    : screen === "characters" ? <CharactersScreen />
-    : screen === "glossary" ? <GlossaryScreen />
+    : screen === "characters" && prefs.charactersEnabled ? <CharactersScreen />
+    : screen === "glossary" && prefs.glossaryEnabled ? <GlossaryScreen />
     : screen === "context" ? <ContextScreen />
     : screen === "chatgpt" ? <ChatGPTScreen />
     : screen === "project" ? <ProjectScreen />

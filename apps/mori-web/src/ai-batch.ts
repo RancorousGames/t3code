@@ -23,7 +23,9 @@ export function batchTranslationPrompt(project: MoriProject, rows: MoriRow[]): s
     .map(term => ({english:term.en,japanese:term.jp,note:term.explanation})).slice(0, 60);
   return [
     "Translate these game localization lines from English to Japanese. You are an assistant to a human game translator.",
-    "Respect the character's personality, tone, register and the game's glossary. Preserve all tokens/placeholders, line breaks and game-specific markup.",
+    "Preserve all tokens/placeholders, line breaks and game-specific markup.",
+    project.characters.length ? "Use any provided character voice, personality, tone and register." : "",
+    project.glossary.length ? "Respect the provided game terminology." : "",
     "Do not overwrite or modify existing curated text. Return proposals only.",
     "Output STRICT JSON and no prose or markdown, matching:",
     '{"translations":[{"id":"the exact string ID","japanese":"natural Japanese translation"}]}',

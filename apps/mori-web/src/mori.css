@@ -79,6 +79,10 @@ input,textarea,select{font:inherit;color:inherit}
 .nav-label{font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-4);padding:16px 8px 6px;display:flex;align-items:center;justify-content:space-between}
 .nav-label button{color:var(--text-4);border-radius:5px;width:18px;height:18px;display:grid;place-items:center}
 .nav-label button:hover{background:var(--bg-4);color:var(--text)}
+.nav-label .files-toggle{display:inline-flex;align-items:center;gap:6px;width:auto;height:22px;padding:0 5px;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit}
+.files-toggle .files-chev{transition:transform .15s ease}
+.files-toggle[aria-expanded="false"] .files-chev{transform:rotate(-90deg)}
+#mori-sidebar-files[hidden]{display:none}
 .ni{display:flex;align-items:center;gap:10px;height:30px;padding:0 8px;border-radius:7px;color:var(--text-2);width:100%;font-size:13px}
 .ni:hover,.ni.pop-open{background:var(--bg-3);color:var(--text)}
 .ni.active{background:var(--bg-4);color:var(--text)}

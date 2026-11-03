@@ -375,6 +375,20 @@ export function SettingsScreen() {
           </div>
         </div>
         <div className="set-row">
+          <div><b>Characters</b><span>Hide character tools, speaker controls and voice context in translation requests. Existing characters are preserved.</span></div>
+          <div className="seg wide" role="group" aria-label="Enable characters">
+            <button type="button" className={prefs.charactersEnabled ? "on" : ""} onClick={() => setPrefs({ charactersEnabled: true })}>On</button>
+            <button type="button" className={!prefs.charactersEnabled ? "on" : ""} onClick={() => setPrefs({ charactersEnabled: false })}>Off</button>
+          </div>
+        </div>
+        <div className="set-row">
+          <div><b>Glossary</b><span>Hide terminology tools and stop using glossary terms for translation suggestions, highlights or warnings. Saved terms are preserved.</span></div>
+          <div className="seg wide" role="group" aria-label="Enable glossary">
+            <button type="button" className={prefs.glossaryEnabled ? "on" : ""} onClick={() => setPrefs({ glossaryEnabled: true })}>On</button>
+            <button type="button" className={!prefs.glossaryEnabled ? "on" : ""} onClick={() => setPrefs({ glossaryEnabled: false })}>Off</button>
+          </div>
+        </div>
+        <div className="set-row">
           <div><b>Inspector</b><span>The panel on the right of the Matrix with checks, versions and voice notes.</span></div>
           <div className="seg wide">
             <button type="button" className={prefs.inspectorOpen ? "on" : ""} onClick={() => setPrefs({ inspectorOpen: true })}>Shown</button>

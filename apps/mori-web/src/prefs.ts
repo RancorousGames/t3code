@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import type { MoriProject } from "./model.ts";
 
 // Workspace preferences only. Translation data is never stored here.
-export type ResizableColumn = "speaker" | "src" | "dev" | "ai" | "tr";
+export type ResizableColumn = "id" | "speaker" | "src" | "dev" | "ai" | "tr";
 export type JapaneseClickMode = "position" | "end" | "selectAll";
 
 export interface ColumnPref {
@@ -16,6 +17,10 @@ export interface MoriPrefs {
   jaFont: string;
   /** Cursor placement when clicking a Japanese translation cell to start editing. */
   japaneseClickMode: JapaneseClickMode;
+  /** Optional reference features. Disabling them preserves all project data. */
+  charactersEnabled: boolean;
+  glossaryEnabled: boolean;
+  filesExpanded: boolean;
   inspectorOpen: boolean;
   columns: Record<ResizableColumn, ColumnPref>;
 }
@@ -31,6 +36,7 @@ export const JA_FONTS = [
 const TEXT_SCALES = { sm: "0.9", md: "1", lg: "1.12" } as const;
 
 export const DEFAULT_COLUMN_PREFS: MoriPrefs["columns"] = {
+  id: { collapsed: false, width: null },
   speaker: { collapsed: false, width: null },
   src: { collapsed: false, width: null },
   dev: { collapsed: true, width: null },
@@ -43,10 +49,23 @@ const defaults: MoriPrefs = {
   textSize: "md",
   jaFont: "BIZ UDPGothic",
   japaneseClickMode: "position",
+  charactersEnabled: true,
+  glossaryEnabled: true,
+  filesExpanded: true,
   inspectorOpen: true,
   // The dev draft column starts collapsed: it is reference material, not the working text.
   columns: DEFAULT_COLUMN_PREFS,
 };
+
+/** Strip optional reference metadata only when constructing AI translation requests.
+ * The saved project remains unchanged so re-enabling a feature restores everything. */
+export function projectForTranslation(project: MoriProject, prefs: MoriPrefs): MoriProject {
+  return prefs.charactersEnabled && prefs.glossaryEnabled ? project : {
+    ...project,
+    characters: prefs.charactersEnabled ? project.characters : [],
+    glossary: prefs.glossaryEnabled ? project.glossary : [],
+  };
+}
 
 const STORAGE_KEY = "mori.prefs.v1";
 
@@ -58,6 +77,9 @@ const load = (): MoriPrefs => {
       ...stored,
       japaneseClickMode: stored.japaneseClickMode === "end" || stored.japaneseClickMode === "selectAll"
         ? stored.japaneseClickMode : "position",
+      charactersEnabled: stored.charactersEnabled !== false,
+      glossaryEnabled: stored.glossaryEnabled !== false,
+      filesExpanded: stored.filesExpanded !== false,
       columns: { ...defaults.columns, ...stored.columns },
     };
   } catch {
