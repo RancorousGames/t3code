@@ -169,27 +169,31 @@ export function DesktopAppActivationCoordinator() {
         const desired = new Set<string>();
         for (const item of snapshot.messages) {
           if (item.status !== "queued" || item.reason !== "guest_unmounted") continue;
-          const session = sessions.find(s => s.id === item.sessionId);
+          // Durable outbox uses the public Bootstrap ID, while local native
+          // Chromium pages and the renderer session store use the internal ID.
+          const session = sessions.find(s =>
+            s.id === item.sessionId || s.bootstrapIdentity?.publicId === item.sessionId,
+          );
           if (!session || session.hidden ||
               (session.bootstrapIdentity?.conversationId) !== item.conversationId)
             continue;
-          desired.add(item.sessionId);
-          if (!held.has(item.sessionId)) {
-            requestChatGPTDeliveryMount(idleEnvironmentId, item.sessionId);
-            held.add(item.sessionId);
+          desired.add(session.id);
+          if (!held.has(session.id)) {
+            requestChatGPTDeliveryMount(idleEnvironmentId, session.id);
+            held.add(session.id);
           }
           // Native Chromium is not mounted by legacy preview retention. A
           // queued Caffy message must revive its own exact recipient even when
           // background warming is paused or at zero capacity. Never navigate
           // an existing native page; attach only after an authoritative miss.
-          if (isPersistentChatGPTSessionOptedIn(item.sessionId)) {
+          if (isPersistentChatGPTSessionOptedIn(session.id)) {
             const bridge = window.desktopBridge?.stableChatGPTViewRequest;
             const saved = getLocalStorageItem(
-              chatGPTBrowserLastUrlKey(idleEnvironmentId, item.sessionId), Schema.String,
+              chatGPTBrowserLastUrlKey(idleEnvironmentId, session.id), Schema.String,
             );
             const url = resolveWarmChatGPTConversationUrl(session, saved);
             if (bridge && url && chatGPTConversationIdFromUrl(url) === item.conversationId) {
-              await warmMissingNativeChatGPT(bridge, idleEnvironmentId, item.sessionId, url);
+              await warmMissingNativeChatGPT(bridge, idleEnvironmentId, session.id, url);
             }
           }
           // Report a mounted recipient even if the normal warm scheduler is
