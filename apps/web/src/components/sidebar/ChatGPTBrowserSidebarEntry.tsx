@@ -853,19 +853,32 @@ export function ChatGPTBrowserSidebarEntry({
   // Layout mutations may change the route's selected row without a deliberate
   // user navigation. Keep the sidebar viewport stable for those transitions.
   const automaticSelectionTarget = useRef<string | null>(null);
+  const sessionListRef = useRef<HTMLUListElement>(null);
   const pendingScrollRestore = useRef<{ viewport: HTMLElement; top: number } | null>(null);
+  const scrollRestoreFrame = useRef<number | null>(null);
   const preserveSidebarScroll = () => {
-    const viewport = document
-      .querySelector<HTMLElement>('[data-sidebar="content"]')
-      ?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    const viewport = sessionListRef.current?.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]',
+    );
     if (viewport) pendingScrollRestore.current = { viewport, top: viewport.scrollTop };
   };
   useLayoutEffect(() => {
     const saved = pendingScrollRestore.current;
     if (!saved) return;
-    pendingScrollRestore.current = null;
     if (saved.viewport.isConnected) saved.viewport.scrollTop = saved.top;
+    if (scrollRestoreFrame.current !== null) cancelAnimationFrame(scrollRestoreFrame.current);
+    // The close and its route update can commit separately; restore again next frame.
+    scrollRestoreFrame.current = requestAnimationFrame(() => {
+      if (pendingScrollRestore.current === saved) {
+        if (saved.viewport.isConnected) saved.viewport.scrollTop = saved.top;
+        pendingScrollRestore.current = null;
+      }
+      scrollRestoreFrame.current = null;
+    });
   }, [sessions, activeSessionId]);
+  useEffect(() => () => {
+    if (scrollRestoreFrame.current !== null) cancelAnimationFrame(scrollRestoreFrame.current);
+  }, []);
   const navigateAfterSidebarMutation = (nextId: string | null) => {
     automaticSelectionTarget.current = nextId;
     return nextId
@@ -884,7 +897,9 @@ export function ChatGPTBrowserSidebarEntry({
   useEffect(() => {
     if (previousNavigationId.current === activeSessionId) return;
     previousNavigationId.current = activeSessionId;
-    if (!activeSessionId) return;
+    // Closing or hiding the selected session should not expand every project
+    // group just because the fallback session becomes selected.
+    if (!activeSessionId || automaticSelectionTarget.current === activeSessionId) return;
     // Programmatic navigation (including duplicate-session Switch) must reveal
     // the selected row, even if the sidebar was showing snoozed/hidden workers.
     setShowHidden(false);
@@ -1681,7 +1696,7 @@ export function ChatGPTBrowserSidebarEntry({
   );
 
   return (
-    <SidebarMenu>
+    <SidebarMenu ref={sessionListRef}>
       <SidebarMenuItem>
         <SidebarMenuButton
           onClick={() => void navigate({ to: "/browser" })}
@@ -2870,9 +2885,10 @@ export function ChatGPTBrowserSidebarEntry({
                                     variant="ghost-muted"
                                     aria-label={`Close ${session.title}`}
                                     disabled={closingId !== null}
-                                    onClick={() =>
-                                      void closeSession(session.id, "sidebar-user-action")
-                                    }
+                                    onClick={(event) => {
+                                      event.currentTarget.blur();
+                                      void closeSession(session.id, "sidebar-user-action");
+                                    }}
                                   >
                                     <XIcon aria-hidden />
                                   </Button>
