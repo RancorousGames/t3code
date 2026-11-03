@@ -133,7 +133,7 @@ function ChatGPTBackgroundQueueOwner({
   return null;
 }
 
-/** Keep a small ordinary working set plus all proven important sessions. */
+/** Retain a bounded automatic working set; explicit selection/delivery can mount on demand. */
 export function ChatGPTGuestRetention({
   sidebarRuntimesAvailable = true,
 }: {
@@ -149,6 +149,7 @@ export function ChatGPTGuestRetention({
   const warmedIds = useWarmChatGPTSessionIds(environmentId);
   const unloadProfile = useOmniworkPreferences((state) => state.unloadProfile);
   const recentGuests = useOmniworkPreferences((state) => state.recentGuests);
+  const warmCount = useOmniworkPreferences((state) => state.chatGPTWarmSessionCount);
   const loadAllStartup = useOmniworkPreferences((state) => state.loadAllChatGPTSessionsOnStartup);
   // UNKNOWN send receipts are not delivered prompts. Restore only their exact
   // persisted conversation owners for inspection; never retry the composer.
@@ -182,7 +183,7 @@ export function ChatGPTGuestRetention({
     const plan = getChatGPTStartupLoadPlan(
       environmentId,
       sessions.map((session) => session.id),
-      loadAllStartup,
+      loadAllStartup && warmCount >= sessions.length,
     );
     if (activeSessionId) plan.activatedIds.add(activeSessionId);
     for (const id of uncertainOwners) plan.activatedIds.add(id);
@@ -288,7 +289,20 @@ export function ChatGPTGuestRetention({
         },
       ];
     });
-    return recentChatGPTGuestKeys(candidates, protectedKeys);
+    // The warm setting is a global ceiling for automatic legacy guest retention,
+    // not an extra allowance on top of managers/recovery/recent sessions.
+    // Explicit foreground navigation and targeted delivery mount independently.
+    const ranked = candidates.toSorted((a, b) => {
+      const priority = (key: string) => {
+        const id = sessions.find((session) =>
+          JSON.stringify([environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId]) === key)?.id;
+        if (id === activeSessionId) return 0;
+        if (id && deliveryRequests[`${environmentId}:${id}`]) return 1;
+        return protectedKeys.has(key) ? 2 : 3;
+      };
+      return priority(a.key) - priority(b.key) || b.lastUsedAt - a.lastUsedAt;
+    });
+    return recentChatGPTGuestKeys(ranked, protectedKeys, warmCount);
   }, [
     activeSessionId,
     environmentId,
@@ -298,6 +312,7 @@ export function ChatGPTGuestRetention({
     now,
     unloadProfile,
     recentGuests,
+    warmCount,
     deliveryRequests,
     warmedIds,
     manuallyUnloaded,

@@ -2747,49 +2747,24 @@ export function ChatGPTBrowserSidebarEntry({
                                                   );
                                                   return;
                                                 }
-                                                const presets = resolveSnoozePresets(
-                                                  new Date(),
-                                                  timestampFormat,
-                                                  environmentId,
+                                                // Three consecutive double-click snoozes: 24h, 72h, 7d.
+                                                // Only actual interaction resets quickSnoozeStep.
+                                                const nextStep = Math.min(
+                                                  (session.quickSnoozeStep ?? -1) + 1, 2,
                                                 );
-                                                const ladder = presets.filter(
-                                                  (entry) => entry.id !== "next-week",
+                                                const durations = [24, 72, 168];
+                                                const until =
+                                                  Date.now() + durations[nextStep]! * 3_600_000;
+                                                preserveSidebarScroll();
+                                                event.currentTarget.blur();
+                                                quickSnoozeSession(session.id, until, nextStep);
+                                                const next = visibleSessions.find(
+                                                  (entry) =>
+                                                    entry.id !== session.id && !isSnoozed(entry),
                                                 );
-                                                const previousId = [
-                                                  "hour",
-                                                  "three-hours",
-                                                  "evening",
-                                                  "tomorrow",
-                                                ][session.quickSnoozeStep ?? -1];
-                                                const previousIndex = ladder.findIndex(
-                                                  (entry) => entry.id === previousId,
+                                                void navigateAfterSidebarMutation(
+                                                  next?.id ?? null,
                                                 );
-                                                const nextIndex = Math.min(
-                                                  previousIndex + 1,
-                                                  ladder.length - 1,
-                                                );
-                                                const preset = ladder[nextIndex];
-                                                if (preset) {
-                                                  preserveSidebarScroll();
-                                                  event.currentTarget.blur();
-                                                  quickSnoozeSession(
-                                                    session.id,
-                                                    Date.parse(preset.snoozedUntil),
-                                                    [
-                                                      "hour",
-                                                      "three-hours",
-                                                      "evening",
-                                                      "tomorrow",
-                                                    ].indexOf(preset.id),
-                                                  );
-                                                  const next = visibleSessions.find(
-                                                    (entry) =>
-                                                      entry.id !== session.id && !isSnoozed(entry),
-                                                  );
-                                                  void navigateAfterSidebarMutation(
-                                                    next?.id ?? null,
-                                                  );
-                                                }
                                               }}
                                             >
                                               {isChildSession && (

@@ -70,7 +70,7 @@ export interface WarmCandidate {
   readonly lastActiveAt: number; // Last verified working timestamp
   readonly lastActivityAt: number; // Latest recorded activity or direct interaction
   readonly createdAt: number;
-  /** Explicitly important guests may join an already full warm set without eviction. */
+  /** Explicit message delivery may be admitted outside automatic warm capacity. */
   readonly exceedTarget?: boolean;
 }
 

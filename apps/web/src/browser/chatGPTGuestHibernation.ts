@@ -84,6 +84,7 @@ export const CHATGPT_MIN_RETAINED_GUESTS = 5;
 export function recentChatGPTGuestKeys(
   candidates: ReadonlyArray<{ readonly key: string; readonly lastUsedAt: number }>,
   protectedKeys: ReadonlySet<string> = new Set(),
+  totalLimit = Number.POSITIVE_INFINITY,
 ): string[] {
   const keys = new Set(candidates.map(({ key }) => key));
   const policy = activeOmniworkUnloadPolicy();
@@ -92,21 +93,33 @@ export function recentChatGPTGuestKeys(
       ? Number.POSITIVE_INFINITY
       : (useOmniworkPreferences.getState().recentGuests ?? policy.minRecentGuests);
   // Important sessions do not compete against the five ordinary recent slots.
-  const protectedCandidates = [...protectedKeys].filter((key) => keys.has(key));
+  const protectedCandidates = candidates
+    .filter(({ key }) => protectedKeys.has(key))
+    .map(({ key }) => key);
   const ordinary = [...candidates]
     .filter(({ key }) => !protectedKeys.has(key))
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     .slice(0, ordinaryLimit)
     .map(({ key }) => key);
-  return [...protectedCandidates, ...ordinary];
+  return [...protectedCandidates, ...ordinary].slice(0, totalLimit);
 }
 
 /** Retention overrides old hibernation flags without treating restoration as use. */
 export function retainChatGPTGuests(keys: readonly string[]): void {
   const current = useChatGPTGuestHibernation.getState().retained;
   if (Object.keys(current).length === keys.length && keys.every((key) => current[key])) return;
-  useChatGPTGuestHibernation.setState({
-    retained: Object.fromEntries(keys.map((key) => [key, true])),
+  useChatGPTGuestHibernation.setState((state) => {
+    const keep = new Set(keys);
+    // Demote previously auto-retained guests that lost a slot. Otherwise
+    // a snooze expiry can leave every old renderer resident indefinitely.
+    const released = Object.keys(state.retained).filter((key) => !keep.has(key));
+    return {
+      retained: Object.fromEntries(keys.map((key) => [key, true])),
+      hibernated: {
+        ...state.hibernated,
+        ...Object.fromEntries(released.map((key) => [key, true as const])),
+      },
+    };
   });
 }
 

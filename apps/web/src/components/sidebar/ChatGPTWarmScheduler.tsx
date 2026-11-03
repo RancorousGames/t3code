@@ -48,10 +48,14 @@ export function ChatGPTWarmScheduler() {
   const pendingGuestIds = useRef(new Map<string, string>());
   const recipientMountReports = useRef(new Set<string>());
   const retryAfter = useRef(new Map<string, number>()).current;
+  const nativeResidentIds = useRef(new Set<string>());
   const plan = useMemo(() => {
     if (!isElectron || !environmentId || sessions.length === 0) return null;
-    return getChatGPTStartupLoadPlan(environmentId, sessions.map((session) => session.id), loadAllStartup);
-  }, [environmentId, sessions, loadAllStartup]);
+    return getChatGPTStartupLoadPlan(
+      environmentId, sessions.map((session) => session.id),
+      loadAllStartup && warmCount >= sessions.length,
+    );
+  }, [environmentId, sessions, loadAllStartup, warmCount]);
 
   useEffect(() => {
     if (!isElectron || !environmentId || !plan) {
@@ -116,7 +120,11 @@ export function ChatGPTWarmScheduler() {
       try {
         // The native Electron registry, not DOM webview membership, is the
         // authority for whether a Chrome page is already resident.
-        const observations = await Promise.all(nativeSessions.map(async (session) => ({
+        // Count every resident native page, including snoozed and manually
+        // unloaded sessions. Excluding them used to open more than the cap.
+        const allNativeSessions = sessions.filter((session) =>
+          isPersistentChatGPTSessionOptedIn(session.id));
+        const observations = await Promise.all(allNativeSessions.map(async (session) => ({
           session,
           status: await nativeChatGPTPageStatus(bridge, environmentId, session.id),
         })));
@@ -125,6 +133,7 @@ export function ChatGPTWarmScheduler() {
           observations.filter(({ status }) => status.residency === "resident")
             .map(({ session }) => session.id),
         );
+        nativeResidentIds.current = loadedIds;
         for (const { session, status } of observations) {
           // Missing candidates are already visible in the ordered plan; only
           // record host state when an actual page exists or a load fails.
@@ -140,13 +149,14 @@ export function ChatGPTWarmScheduler() {
             "Native host status is uncertain; no load is inferred.");
         }
         // An uncertain IPC result must never be treated as an unloaded page.
+        const eligibleIds = new Set(nativeSessions.map((session) => session.id));
         const candidates = observations
-          .filter(({ status }) => status.residency !== "unknown")
+          .filter(({ session, status }) => eligibleIds.has(session.id) && status.residency !== "unknown")
           .map(({ session }) => ({
             id: session.id,
             selected: session.id === selectedId,
             deliveryPending: pendingGuestIds.current.has(session.id),
-            exceedTarget: pendingGuestIds.current.has(session.id),
+            exceedTarget: false,
             activeBeforeFailure: wasWarmSessionActiveBeforeFailure(environmentId, session.id),
             recentlyClicked: warmRecentClickRanks(environmentId, selectedId ?? null).get(session.id) ?? -1,
             highlighted: Boolean(session.borderColor),
@@ -157,12 +167,18 @@ export function ChatGPTWarmScheduler() {
             lastActivityAt: session.lastDirectInteractionAt ?? 0,
             createdAt: session.createdAt ?? 0,
           }));
-        const selection = { candidates, loadedIds, targetCount: warmCount, now };
+        const legacyMountedCount = document.querySelectorAll<HTMLElement>(
+          MOUNTED_CHATGPT_GUEST_SELECTOR,
+        ).length;
+        const selection = {
+          candidates, loadedIds,
+          targetCount: Math.max(0, warmCount - legacyMountedCount), now,
+        };
         const scheduled = plannedWarmChatGPTSessions(selection);
         const fullPriority = plannedWarmChatGPTSessions({ ...selection, targetCount: loadedIds.size + candidates.length + 1 });
         logChatGPTRecoveryPriority(environmentId, "native",
           fullPriority.map((id) => ({ id, reason: warmPriorityReason(candidates.find((c) => c.id === id)!, now) })),
-          scheduled, `Native Chromium: ${loadedIds.size} resident, ${candidates.length} candidates; priority order is advisory, no loaded page is evicted.`,
+          scheduled, `Native Chromium: ${loadedIds.size} resident (including snoozed), ${candidates.length} eligible; no loaded page is evicted.`,
           "warm", scheduled.map((id, ordinal) => ({ id,
             earliestAt: Math.max(now, lastStartedAt.current + 12_000) + ordinal * 12_000,
           })));
@@ -238,7 +254,10 @@ export function ChatGPTWarmScheduler() {
         loggedMissingUrls = false;
       }
       const nativeEligible = eligible.filter((session) => isPersistentChatGPTSessionOptedIn(session.id));
-      if (nativeEligible.length > 0) {
+      const hasNativeSessions = sessions.some((session) =>
+        isPersistentChatGPTSessionOptedIn(session.id));
+      if (!hasNativeSessions) nativeResidentIds.current = new Set();
+      if (hasNativeSessions) {
         void warmNative(nativeEligible, now);
         // The old scheduler's DOM-only occupancy is invalid for Chrome views.
         // Do not wake them through legacy preview sessions or retry them every
@@ -291,7 +310,7 @@ export function ChatGPTWarmScheduler() {
           id: session.id,
           selected: session.id === selectedId,
           deliveryPending: pendingGuestIds.current.has(session.id),
-          exceedTarget: pendingGuestIds.current.has(session.id),
+          exceedTarget: false,
           activeBeforeFailure: wasWarmSessionActiveBeforeFailure(environmentId, session.id),
           recentlyClicked: clickRanks.get(session.id) ?? -1,
           highlighted: Boolean(session.borderColor),
@@ -308,7 +327,7 @@ export function ChatGPTWarmScheduler() {
       const selection = {
         candidates,
         loadedIds: snapshot.occupiedIds,
-        targetCount: warmCount, now,
+        targetCount: Math.max(0, warmCount - nativeResidentIds.current.size), now,
       };
       const planned = plannedWarmChatGPTSessions(selection);
       const fullPriority = plannedWarmChatGPTSessions({

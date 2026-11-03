@@ -120,6 +120,7 @@ beforeEach(() => {
   mocks.recentWorkingIds.clear();
   mocks.sessions = Array.from({ length: 8 }, (_, i) => ({ id: `${i}` }));
   useOmniworkPreferences.getState().setUnloadProfile("balanced");
+  useOmniworkPreferences.getState().setChatGPTWarmSessionCount(8);
   useChatGPTGuestHibernation.setState({
     hibernated: Object.fromEntries(mocks.sessions.map(({ id }) => [key(id), true])),
     touchedAt: Object.fromEntries(mocks.sessions.map(({ id }, i) => [key(id), i * 1_000])),
@@ -195,13 +196,33 @@ describe("ChatGPT recent guest retention", () => {
     await act(async () => {
       renderer = create(<ChatGPTGuestRetention />);
     });
-    for (const id of ["0", "2", "3", "4", "5", "6", "13", "12", "11", "10", "9"]) {
+    for (const id of ["0", "2", "3", "4", "5", "6", "13", "12"]) {
       expect(isChatGPTGuestHibernated(key(id))).toBe(false);
     }
-    // Old ordinary guests do not consume memory just because protected guests do.
+    // Protected recovery and manager guests count toward the same warm ceiling.
+    for (const id of ["11", "10", "9"]) {
+      expect(isChatGPTGuestHibernated(key(id))).toBe(true);
+    }
     expect(isChatGPTGuestHibernated(key("7"))).toBe(true);
     expect(isChatGPTGuestHibernated(key("8"))).toBe(true);
     expect(mocks.cachedManagers?.ids).toEqual(["3"]);
+  });
+
+  it("never exceeds a six-guest automatic retention budget after snoozes expire", async () => {
+    mocks.sessions = Array.from({ length: 20 }, (_, i) => ({
+      id: String(i),
+      ...(i >= 6 ? { snoozedUntil: Date.now() + 30_000 } : {}),
+    }));
+    useOmniworkPreferences.getState().setChatGPTWarmSessionCount(6);
+    useChatGPTGuestHibernation.setState({
+      hibernated: Object.fromEntries(mocks.sessions.map(({ id }) => [key(id), true])),
+      touchedAt: Object.fromEntries(mocks.sessions.map(({ id }, i) => [key(id), i * 1_000])),
+      retained: {},
+      woken: {},
+    });
+    await act(async () => { renderer = create(<ChatGPTGuestRetention />); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(mocks.sessions.filter(({ id }) => !isChatGPTGuestHibernated(key(id)))).toHaveLength(6);
   });
 
   it("preserves previously verified managers while OpenRig is unavailable", async () => {
