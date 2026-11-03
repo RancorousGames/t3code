@@ -53,6 +53,7 @@ import {
   type OmniHubKeepAwakeTarget,
 } from "./omniHubKeepAwake.logic";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import { CaffyV2Settings } from "./CaffyV2Settings";
 
 // Snapshots are cheap local reads; 15s keeps "next attempt" honest without
 // polling hard. Polling pauses while the window is hidden.
@@ -685,13 +686,15 @@ export function OmniHubKeepAwakeSettingsPanel({
   return (
     <SettingsPageContainer>
       <p className="px-3 text-xs leading-relaxed text-muted-foreground sm:px-4">
-        Caffy provides timed wakes and authorized resume-on-idle continuations. Existing timed wakes
-        remain under OmniHub ownership until the tested OpenRig migration. T3's independently callable
-        when-idle message queue is not a Caffy mode. This view refreshes automatically while open.
+        New Caffy monitors and TaskBoard queued work are T3-owned. Existing legacy
+        OmniHub timers and OpenRig subscriptions remain visible below until safely reconciled.
+        T3's independently callable when-idle delivery queue is shared by both.
         {result ? <> Observed {relativeLabel(result.observedAtMs)}.</> : null}
       </p>
 
-      <SettingsSection title="Resume on idle" headerAction={
+      <CaffyV2Settings />
+
+      <SettingsSection title="Legacy OpenRig resume on idle" headerAction={
         <Button size="xs" variant="ghost-muted" onClick={() => void managed.refresh()}
           disabled={managed.refreshing} aria-label="Refresh managed Caffy subscriptions">
           <RefreshIcon refreshing={managed.refreshing} /> Refresh

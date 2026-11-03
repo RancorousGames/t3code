@@ -31,6 +31,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { DesktopAppActivationBroker } from "./DesktopAppActivationBroker.ts";
 import { ChatGPTDeliveryQueue } from "./ChatGPTDeliveryQueue.ts";
 import { CaffyScheduler } from "./CaffyScheduler.ts";
+import { TaskBoardWorkCoordinator } from "./TaskBoardWorkCoordinator.ts";
 import { ChatGPTExecutionReceiptProducer } from "./ChatGPTExecutionReceiptProducer.ts";
 import { ChatGPTIdleTransitionJournal, type VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -376,6 +377,9 @@ export const make = Effect.gen(function* () {
       stop: (id) => { if (powerSaveBlocker.isStarted(id)) powerSaveBlocker.stop(id); },
     },
   );
+  const taskBoardCoordinator = new TaskBoardWorkCoordinator(
+    path.resolve(desktopEnvironment.stateDir), caffy,
+  );
   const handleRequest = (
     request: DesktopAppActivationRequest,
   ): Promise<DesktopAppActivationResponse> => {
@@ -394,15 +398,20 @@ export const make = Effect.gen(function* () {
               const entries = (inventory.data as {sessions?: Array<{
                 id: string; browserSessionId?: string; publicSessionId?: string;
                 conversationId?: string | null;
-                bootstrapIdentity?: {conversationId?: string};
+                bootstrapIdentity?: {conversationId?: string; publicId?: string};
               }>}).sessions ?? [];
               const match = entries.filter(item => item.id === request.sessionId ||
-                item.browserSessionId === request.sessionId || item.publicSessionId === request.sessionId);
+                item.browserSessionId === request.sessionId || item.publicSessionId === request.sessionId ||
+                item.bootstrapIdentity?.publicId === request.sessionId);
               if (match.length === 1)
                 conversationId = match[0]?.conversationId ?? match[0]?.bootstrapIdentity?.conversationId;
             }
           }
-          const data = action === "set"
+          const data = action === "capacity"
+            ? await caffy.capacity()
+            : action === "tasks"
+              ? taskBoardCoordinator.status()
+            : action === "set"
             ? await caffy.set({
                 sessionId: request.sessionId ?? "",
                 conversationId: conversationId ?? "",
@@ -528,6 +537,7 @@ export const make = Effect.gen(function* () {
           ),
           Effect.ensuring(
             Effect.sync(() => {
+              taskBoardCoordinator.close();
               caffy.close();
               deliveries.close();
               broker.close();
@@ -535,7 +545,7 @@ export const make = Effect.gen(function* () {
           ),
         ),
     ).pipe(
-      Effect.tap(() => Effect.sync(() => { deliveries.start(); caffy.start(); })), 
+      Effect.tap(() => Effect.sync(() => { deliveries.start(); caffy.start(); taskBoardCoordinator.start(); })),  
       Effect.asVoid,
     ),
     setRendererReady: Effect.fn("DesktopAppActivation.setRendererReady")(function* (ready) {

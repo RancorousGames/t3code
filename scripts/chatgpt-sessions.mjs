@@ -20,7 +20,7 @@ export async function controlSessions(
     return computeChatGPTCapacityStatus(inventory);
   }
   if (input?.action === "caffy") {
-    const actions = new Set(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup"]);
+    const actions = new Set(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks"]);
     if (!actions.has(input.op)) throw new Error("Unknown Caffy operation.");
     const fields = ["action", "op", "sessionId", "conversationId", "mode",
       "durationMinutes", "intervalMinutes", "onceOnly", "startup", "keepAwake",
@@ -29,7 +29,7 @@ export async function controlSessions(
       throw new Error("Unexpected Caffy fields.");
     if (input.op === "set" && (!input.sessionId || !input.conversationId || !input.mode))
       throw new Error("Caffy set requires sessionId, conversationId and mode.");
-    if (!["list", "policy", "status"].includes(input.op) && typeof input.sessionId !== "string")
+    if (!["list", "policy", "status", "capacity", "tasks"].includes(input.op) && typeof input.sessionId !== "string")
       throw new Error("Caffy action requires sessionId.");
     const { action: _action, op, ...args } = input;
     const response = await exchange(controlAddress(home), {

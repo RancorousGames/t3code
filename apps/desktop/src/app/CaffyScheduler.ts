@@ -32,7 +32,7 @@ export interface CaffyConfig {
 }
 interface CaffyStore { version: 2; entries: CaffyConfig[]; keepT3Busy: boolean; maxWorking: number }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
-const WAKE_TEXT = "Continue working on your current assignment. If you have genuinely finished, call caffy.stop() for this session so it no longer wakes you.";
+const WAKE_TEXT = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
 const CLOCK = 10_000;
 const valid = (row: CaffyConfig): boolean =>
   !!row && UUID.test(row.sessionId) && UUID.test(row.conversationId) &&
@@ -48,6 +48,7 @@ export class CaffyScheduler {
   private readonly entries = new Map<string, CaffyConfig>();
   private keepT3Busy = false;
   private maxWorking = 6;
+  private taskReservations = 0;
   private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private pumping = false;
@@ -93,8 +94,27 @@ export class CaffyScheduler {
     this.syncPower();
   }
 
+  /** Existing OmniHub monitors remain owned by their old scheduler until
+   * a verified cancellation/transfer. Never silently start a parallel wake. */
+  private legacyConflict(sessionId: string, conversationId: string): boolean {
+    const root = process.env.LOCALAPPDATA;
+    if (!root) return false;
+    try {
+      const store = JSON.parse(NodeFS.readFileSync(
+        NodePath.join(root, "OmniHub", "temporary-keep-awake-v1.json"), "utf8",
+      )) as {monitors?: Record<string, {state?: string; target?: {
+        sessionId?: string; expectedConversationId?: string;
+      }}>};
+      return Object.values(store.monitors ?? {}).some(monitor =>
+        !["cancelled", "completed", "exhausted"].includes(monitor.state ?? "") &&
+        (monitor.target?.sessionId === sessionId ||
+         monitor.target?.expectedConversationId === conversationId));
+    } catch { return false; }
+  }
+
   private syncPower() {
     const active = [...this.entries.values()].some(row => !row.paused && row.keepAwake &&
+      (row.mode !== "queued" || this.keepT3Busy) &&
       (row.expiresAt === null || row.expiresAt > Date.now()));
     if (active && this.blockerId === null) {
       try { this.blockerId = this.power.start(); } catch { /* never prevent scheduler progress */ }
@@ -108,7 +128,13 @@ export class CaffyScheduler {
     this.started = true;
     let changed = false;
     for (const row of this.entries.values()) {
-      if (row.startup && !row.paused && !row.pendingMessageId) {
+      if (this.legacyConflict(row.sessionId, row.conversationId)) {
+        row.paused = true;
+        row.lastError = "A legacy OmniHub wake still owns this session; cancel/reconcile it before enabling T3 Caffy.";
+        changed = true;
+      }
+      if (row.startup && !row.paused && !row.pendingMessageId &&
+          (row.expiresAt === null || row.expiresAt > Date.now())) {
         row.pendingWake = true;
         row.pendingReason = "startup";
         changed = true;
@@ -184,6 +210,9 @@ export class CaffyScheduler {
     }
     const canonicalId = identity?.id ?? input.sessionId;
     const browserSessionId = identity?.browserSessionId ?? input.sessionId;
+    if (this.legacyConflict(canonicalId, input.conversationId) ||
+        this.legacyConflict(input.sessionId, input.conversationId))
+      throw new Error("Legacy OmniHub Caffy monitor still owns this session; cancel it before scheduling T3 Caffy.");
     const now = Date.now();
     const prior = this.lookup(input.sessionId);
     if (prior?.pendingMessageId && prior.conversationId !== input.conversationId)
@@ -192,14 +221,17 @@ export class CaffyScheduler {
       prior.mode === input.mode && prior.expiresAt ===
         (input.durationMinutes === undefined ? null : prior.createdAt + input.durationMinutes * 60_000) &&
       prior.onceOnly === (input.onceOnly ?? false) &&
-      prior.startup === (input.startup ?? true) &&
+      prior.startup === (input.startup ?? false) &&
       prior.keepAwake === (input.keepAwake ?? true) &&
       prior.intervalMinutes === intervalMinutes;
-    if (same) return prior;
+    if (same) {
+      if (prior.paused) { prior.paused = false; prior.lastError = null; this.save(); void this.pump(); }
+      return prior;
+    }
     const row: CaffyConfig = {
       sessionId: canonicalId, browserSessionId, conversationId: input.conversationId,
       mode: input.mode, intervalMinutes,
-      startup: input.startup ?? true, onceOnly: input.onceOnly ?? false,
+      startup: input.startup ?? false, onceOnly: input.onceOnly ?? false,
       keepAwake: input.keepAwake ?? true, paused: false, createdAt: now,
       expiresAt: input.durationMinutes === undefined ? null : now + input.durationMinutes * 60_000,
       nextDueAt: input.mode === "periodic" ? now + intervalMinutes * 60_000 : null,
@@ -230,6 +262,8 @@ export class CaffyScheduler {
   pause(sessionId: string, paused: boolean) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
+    if (!paused && this.legacyConflict(row.sessionId, row.conversationId))
+      throw new Error("Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.");
     row.paused = paused;
     this.save();
     if (!paused) void this.pump();
@@ -247,6 +281,8 @@ export class CaffyScheduler {
   wake(sessionId: string) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
+    if (this.legacyConflict(row.sessionId, row.conversationId))
+      throw new Error("Legacy OmniHub monitor still owns this session; cancel it before waking.");
     row.pendingWake = true;
     row.pendingReason = "manual";
     this.save();
@@ -291,19 +327,20 @@ export class CaffyScheduler {
       return null;
     const entries = (reply.data as { sessions?: Array<{
       id?: string; publicSessionId?: string; browserSessionId?: string;
-      conversationId?: string; bootstrapIdentity?: {conversationId?:string};
+      conversationId?: string; bootstrapIdentity?: {conversationId?:string; publicId?:string};
       activity?: string; status?: string; statusObservedAt?: string;
       closedAt?: unknown;
     }> }).sessions;
     if (!Array.isArray(entries)) return null;
     const matches = entries.filter(entry => entry.id === sessionId ||
-      entry.browserSessionId === sessionId || entry.publicSessionId === sessionId);
+      entry.browserSessionId === sessionId || entry.publicSessionId === sessionId ||
+      entry.bootstrapIdentity?.publicId === sessionId);
     const entry = matches.length === 1 ? matches[0] : null;
     return entry?.id && entry.closedAt == null &&
       (entry.conversationId === conversationId ||
         entry.bootstrapIdentity?.conversationId === conversationId)
       ? {
-          id: entry.id, browserSessionId: entry.browserSessionId ?? entry.id,
+          id: entry.bootstrapIdentity?.publicId ?? entry.id, browserSessionId: entry.browserSessionId ?? entry.id,
           working: (() => {
             const observedAt = Date.parse(entry.statusObservedAt ?? "");
             return Number.isFinite(observedAt) && observedAt <= Date.now() + 1000 &&
@@ -323,18 +360,31 @@ export class CaffyScheduler {
       ? response.data as Record<string, unknown> : null;
   }
 
-  private async hasCapacity(): Promise<boolean> {
-    if (!this.keepT3Busy) return false;
+  setTaskReservations(count: number) {
+    this.taskReservations = Math.max(0, Math.floor(count));
+  }
+
+  async capacity(extraReserved = 0): Promise<{
+    observedAt: string; limit: number; working: number; reserved: number;
+    unknown: number; used: number; available: number;
+    admissible: boolean; reason: string | null;
+  }> {
+    const policy = this.keepT3Busy;
+    const unavailable = (reason: string) => ({
+      observedAt: new Date().toISOString(), limit: this.maxWorking,
+      working: 0, reserved: extraReserved + this.taskReservations, unknown: 1,
+      used: this.maxWorking, available: 0, admissible: false, reason,
+    });
     const reply = await this.request({
       version: 1, requestId: NodeCrypto.randomUUID(),
       type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
     });
-    if (!reply.ok || !("data" in reply) || !reply.data || typeof reply.data !== "object") return false;
+    if (!reply.ok || !("data" in reply) || !reply.data || typeof reply.data !== "object") return unavailable("T3 inventory unavailable");
     const data = reply.data as { sessions?: Array<{
       id?: string; activity?: string; status?: string; statusObservedAt?: string;
     }>; total?: number; hasMore?: boolean; incomplete?: boolean };
     if (!Array.isArray(data.sessions) || data.hasMore || data.incomplete ||
-        (data.total !== undefined && data.total !== data.sessions.length)) return false;
+        (data.total !== undefined && data.total !== data.sessions.length)) return unavailable("T3 inventory incomplete");
     const now = Date.now();
     const workingIds = new Set(data.sessions.filter(s => {
       const observed = Date.parse(s.statusObservedAt ?? "");
@@ -345,11 +395,25 @@ export class CaffyScheduler {
     // Count it as a provisional slot, or one pump could enqueue 6+ wakes.
     const reserved = [...this.entries.values()].filter(row =>
       row.mode === "queued" &&
-      !workingIds.has(row.sessionId) &&
+      !workingIds.has(row.sessionId) && !workingIds.has(row.browserSessionId ?? row.sessionId) &&
       (row.pendingMessageId !== null ||
         (row.lastWakeAt !== null && now - row.lastWakeAt < 120_000))).length;
-    return workingIds.size + reserved < this.maxWorking;
+    const totalReserved = reserved + extraReserved + this.taskReservations;
+    const used = workingIds.size + totalReserved;
+    return {
+      observedAt: new Date(now).toISOString(), limit: this.maxWorking,
+      working: workingIds.size, reserved: totalReserved, unknown: 0,
+      used, available: Math.max(0, this.maxWorking - used),
+      admissible: policy && used < this.maxWorking,
+      reason: !policy ? "Keep T3 Busy disabled" : used < this.maxWorking ? null : "At capacity",
+    };
   }
+
+  private async hasCapacity(): Promise<boolean> {
+    return (await this.capacity()).admissible;
+  }
+
+  get policyEnabled(): boolean { return this.keepT3Busy; }
 
   private async pump() {
     if (!this.started || this.pumping) return;
@@ -358,9 +422,21 @@ export class CaffyScheduler {
       const now = Date.now();
       for (const row of [...this.entries.values()]) {
         if (row.expiresAt !== null && row.expiresAt <= now && !row.pendingMessageId) {
-          this.entries.delete(row.sessionId);
-          this.save();
-          continue;
+          if (row.mode === "periodic" && !row.onceOnly && !row.paused &&
+              (row.lastWakeAt === null || row.lastWakeAt < row.expiresAt)) {
+            // A finite periodic monitor includes its final due wake, even if
+            // T3 was unavailable at the deadline. Drain it exactly once.
+            row.pendingWake = true;
+            row.pendingReason = "periodic";
+            row.onceOnly = true;
+            row.expiresAt = null;
+            row.nextDueAt = null;
+            this.save();
+          } else {
+            this.entries.delete(row.sessionId);
+            this.save();
+            continue;
+          }
         }
         if (row.pendingMessageId) {
           try {
@@ -384,13 +460,21 @@ export class CaffyScheduler {
           this.save();
         }
         if (!row.pendingWake) continue;
+        if (this.legacyConflict(row.sessionId, row.conversationId)) {
+          row.paused = true;
+          row.lastError = "Legacy OmniHub monitor owns this session; T3 Caffy suspended to avoid duplicate waking.";
+          this.save();
+          continue;
+        }
         if (row.mode === "queued" && !(await this.hasCapacity().catch(() => false))) continue;
         // A cold or errored session cannot pass a live guarded read until
         // it has been mounted. Enqueue from the exact registry binding so
         // the *existing* T3 delivery queue will mount/recover it. The guarded
         // send still refuses a working composer, draft or wrong conversation.
         const bound = await this.registered(row.sessionId, row.conversationId).catch(() => null);
-        if (!bound || bound.working) continue;
+        if (this.entries.get(row.sessionId) !== row || row.paused ||
+            (row.mode === "queued" && !this.keepT3Busy) ||
+            !bound || bound.working) continue;
         // Persist the exact stable message ID before enqueue; an ambiguous
         // result is reconciled by this ID rather than generating another wake.
         const messageId = NodeCrypto.randomUUID();

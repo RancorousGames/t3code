@@ -113,6 +113,33 @@ export async function openTaskSession(
     const shown = await command(board, ["task", "show", id]);
     const task = shown.task ?? shown;
     if (task.id !== id) throw Error("TaskBoard returned a different task identity.");
+    if (input.requireQueue === true) {
+      // Automatic pickup is authorized only by a current, exact TaskBoard queue
+      // identity while its per-task launch lock is held. Manual Start now skips
+      // this gate entirely.
+      const intent = await command(board, ["task", "execution", id, "show"]);
+      if (typeof input.queueRequest !== "string" ||
+          intent.mode !== "queue" ||
+          intent.queue_request !== input.queueRequest ||
+          intent.queue_attempt || intent.queue_receipt ||
+          intent.queue_retired_receipt || intent.start_now_request ||
+          task.column !== "ai-ready" || task.archived ||
+          task.completed || task.claimed_by || task.kind !== "task" &&
+          task.kind !== "recurring" ||
+          task.attention?.some(flag => ["blocked", "needs-user", "question"].includes(flag)) ||
+          task.blocked_reason || task.review_status === "open") {
+        return {
+          taskRef: {board, id}, status: "no_longer_queued", created: false,
+          message: "Queued task changed or is no longer executable. No session was started.",
+        };
+      }
+      if (shown.readiness !== "ready") {
+        return {
+          taskRef: {board, id}, status: "blocked", created: false,
+          message: "Canonical TaskBoard readiness is not ready. No session was started.",
+        };
+      }
+    }
 
     const claim = task.claimed_by;
     const taskRef = { board, id };
@@ -134,9 +161,11 @@ export async function openTaskSession(
         throw Error("Claimed ChatGPT ID matches multiple sessions; refusing ambiguous focus.");
       if (browserMatches.length === 1) {
         const sessionId = browserMatches[0].id;
-        const focused = await control({ action: "focus", sessionId }, { home, exchange });
-        if (focused.sessionId !== sessionId)
-          throw Error("T3 did not acknowledge the exact claimed session focus.");
+        if (!input.background) {
+          const focused = await control({ action: "focus", sessionId }, { home, exchange });
+          if (focused.sessionId !== sessionId)
+            throw Error("T3 did not acknowledge the exact claimed session focus.");
+        }
         if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
         return { taskRef, status: "opened", kind: "chatgpt", sessionId, created: false };
       }
@@ -217,7 +246,8 @@ export async function openTaskSession(
       // public t3: prefix also works with the new Bootstrap session registry.
       await command(board, ["task", "claim", "--agent", `t3:${result.sessionId}`, id]);
       if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
-      await control({ action: "focus", sessionId: result.sessionId }, { home, exchange });
+      if (!input.background)
+        await control({ action: "focus", sessionId: result.sessionId }, { home, exchange });
       return {
         taskRef,
         status: result.promptDelivery === "user_turn_observed" ? "created" : "prompt_unknown",

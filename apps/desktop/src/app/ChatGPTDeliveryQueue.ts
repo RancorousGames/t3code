@@ -50,7 +50,7 @@ const isWakeBody = (body: string) =>
   /^\[WAKE [1-9]\d*\] - To stop wakes, call keep_awake\.complete\([a-f0-9]{12}\)\. Total time elapsed: (?:\d+h)?\d+m$/.test(
     body,
   );
-const isCaffyWakeBody = (body: string) => body.startsWith("Continue working on your current assignment. If you have genuinely finished, call caffy.stop()");
+const isCaffyWakeBody = (body: string) => body.startsWith("Continue working on your current assignment. If everything is genuinely finished, stop Caffy");
 const deliveryText = (record: DeliveryRecord) =>
   isWakeBody(record.body) ? record.body : `${MARKER(record.messageId)}\n${record.body}`;
 // Existing marked messages use bounded retry; wake messages remain reconciliation-only.

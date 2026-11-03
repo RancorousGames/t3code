@@ -556,7 +556,7 @@ export function ChatGPTBrowserSidebarEntry({
       action: "set", sessionId, mode,
       ...(conversationId ? { conversationId } : {}),
       ...(durationMinutes !== undefined ? { durationMinutes } : {}),
-      intervalMinutes: 20, startup: !onceOnly, onceOnly, keepAwake: true,
+      intervalMinutes: 20, startup: false, onceOnly, keepAwake: true,
     });
     setKeepAwakeFeedback(
       `Caffy scheduled: ${mode === "queued" ? "Queued idle" : mode === "periodic" ? "Every 20 minutes" : "Idle"} · ${onceOnly ? "once" : durationMinutes === undefined ? "infinite" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
@@ -1218,7 +1218,8 @@ export function ChatGPTBrowserSidebarEntry({
     const activeCaffy = caffyState && typeof caffyState === "object" &&
       "mode" in caffyState && "startup" in caffyState &&
       ["idle", "periodic", "queued"].includes(String(caffyState.mode))
-        ? caffyState as { mode: "idle" | "periodic" | "queued"; startup: boolean }
+        ? caffyState as { mode: "idle" | "periodic" | "queued"; startup: boolean;
+            onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null }
         : null;
     const keepT3Busy = caffyPolicy && typeof caffyPolicy === "object" &&
       "keepT3Busy" in caffyPolicy && caffyPolicy.keepT3Busy === true;
@@ -1399,6 +1400,10 @@ export function ChatGPTBrowserSidebarEntry({
           setKeepAwakeFeedback("Caffy stopped for this session.");
         } else if (action === "caffy:queued") {
           await configureCaffy(sessionId, "queued");
+        } else if (action === "caffy:pause") {
+          if (!activeCaffy) throw new Error("No active Caffy monitor.");
+          await control({ action: activeCaffy.paused ? "resume" : "pause", sessionId });
+          setKeepAwakeFeedback(activeCaffy.paused ? "Caffy resumed." : "Caffy paused.");
         } else if (action === "caffy:busy") {
           const result = await control({ action: "policy", keepT3Busy: !keepT3Busy });
           setKeepAwakeFeedback(
