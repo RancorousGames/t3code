@@ -74,7 +74,17 @@ while (true) {
   } catch (error) {
     // Never log URL ticket, token, source text or project content to stdout.
     process.stdout.write(JSON.stringify({
-      id: id ?? null, error: error instanceof Error ? error.name : "ConnectionUnavailable",
+      id: id ?? null,
+      // Expose only a sanitized exception class/shape for Hub diagnostics.
+      // Never include error messages, stacks, request contents or credentials.
+      error: error instanceof Error ? error.name :
+        typeof error === "object" && error !== null ?
+          (typeof (error as { _tag?: unknown })._tag === "string" ?
+            (error as { _tag: string })._tag :
+            typeof (error as { name?: unknown }).name === "string" ?
+              (error as { name: string }).name :
+              `Unclassified_${Object.keys(error).filter(key => /^[A-Za-z_]{1,32}$/.test(key)).slice(0,4).join("_")}`) :
+          "ConnectionUnavailable",
     }) + "\n");
     // A stale WS can fail after hours of idle time. Dispose and replace the
     // authenticated socket for the NEXT input only; never replay this one.
