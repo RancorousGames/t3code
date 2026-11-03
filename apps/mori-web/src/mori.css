@@ -610,3 +610,8 @@ input,textarea,select{font:inherit;color:inherit}
 .mori-ai-menu-sub{padding-left:10px;border-left:1px solid var(--line-2);margin-left:7px}
 .mori-ai-menu-sep{border-top:1px solid var(--line-2);margin-top:5px;padding-top:5px}
 @media(max-width:900px){.mori-ai-side{flex-basis:225px}.mori-ai-side-head{gap:1px;padding-left:8px}}
+
+/* Translation is edited directly in the row, without stacked input cards. */
+.matrix .c-tr,.matrix .row:hover .c-tr,.matrix .row.active .c-tr{margin:0;padding:13px 14px;border-radius:0;background:transparent;box-shadow:none}
+.matrix .c-tr .editor{min-height:1.7em;border:0;border-radius:0;padding:0;background:transparent;box-shadow:none}
+.matrix.compact .c-tr,.matrix.compact .row.active .c-tr{padding:8px 12px}
