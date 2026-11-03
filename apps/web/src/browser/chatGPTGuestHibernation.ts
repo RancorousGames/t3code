@@ -7,13 +7,9 @@ import {
   useOmniworkPreferences,
 } from "../omniwork/chatGPTUnloadPolicy";
 
-// Each ChatGPT guest costs its own renderer (roughly 0.4-1 GB). Sessions that
-// are not shown and have not worked recently are unmounted; their preview
-// session and conversation URL stay, so waking simply reloads the guest.
-// Callers pass runtime tab ids, but state is keyed by environment and thread:
-// the runtime id carries the server epoch, and the hibernated set is persisted
-// so a restart restores the loaded guests and the most recently used sessions.
-// Guest unloading remains independent of the two-hour blue activity indicator.
+// Hibernation preserves conversation URLs and uses environment/thread keys
+// so a server restart can restore an unloaded guest without losing its session.
+// Physical eviction never relies on the two-hour sidebar activity color alone.
 export const CHATGPT_GUEST_HIBERNATE_AFTER_MS = 15 * 60 * 1_000;
 
 interface ChatGPTGuestHibernationState {
@@ -26,11 +22,13 @@ interface ChatGPTGuestHibernationState {
   readonly retained: Record<string, true>;
   /** User-opened guests do not compete for automatic retention slots. */
   readonly userOpened: Record<string, true>;
+  /** Soft-limit evictions remain cold until a real user or delivery wake. */
+  readonly autoEvicted: Record<string, true>;
 }
 
 export const useChatGPTGuestHibernation = create<ChatGPTGuestHibernationState>()(
   persist(
-    () => ({ hibernated: {}, manuallyUnloaded: {}, woken: {}, touchedAt: {}, retained: {}, userOpened: {} }),
+    () => ({ hibernated: {}, manuallyUnloaded: {}, woken: {}, touchedAt: {}, retained: {}, userOpened: {}, autoEvicted: {} }),
     {
       name: "t3code:chatgpt-guest-hibernation:v1",
       storage: createJSONStorage(() =>
@@ -40,6 +38,7 @@ export const useChatGPTGuestHibernation = create<ChatGPTGuestHibernationState>()
         hibernated: state.hibernated,
         manuallyUnloaded: state.manuallyUnloaded,
         touchedAt: state.touchedAt,
+        autoEvicted: state.autoEvicted,
       }),
     },
   ),
@@ -77,6 +76,7 @@ export function selectChatGPTGuestHibernated(
   const key = chatGPTGuestKey(runtimeTabId);
   return (
     state.manuallyUnloaded?.[key] === true ||
+    state.autoEvicted?.[key] === true ||
     (state.hibernated[key] === true && state.retained[key] !== true)
   );
 }
@@ -109,21 +109,14 @@ export function recentChatGPTGuestKeys(
 export function retainChatGPTGuests(keys: readonly string[]): void {
   const current = useChatGPTGuestHibernation.getState().retained;
   if (Object.keys(current).length === keys.length && keys.every((key) => current[key])) return;
-  useChatGPTGuestHibernation.setState((state) => {
-    const keep = new Set(keys);
-    // Demote previously auto-retained guests that lost a slot. Otherwise
-    // a snooze expiry can leave every old renderer resident indefinitely.
-    const released = Object.keys(state.retained).filter(
-      (key) => !keep.has(key) && !state.userOpened?.[key],
-    );
-    return {
-      retained: Object.fromEntries(keys.map((key) => [key, true])),
-      hibernated: {
-        ...state.hibernated,
-        ...Object.fromEntries(released.map((key) => [key, true as const])),
-      },
-    };
-  });
+  useChatGPTGuestHibernation.setState((state) => ({
+    // Losing a priority slot is not evidence that a guest is idle.
+    // Actual eviction requires a fresh verified idle/composer check.
+    retained: Object.fromEntries(keys.map((key) => [key, true])),
+    hibernated: Object.fromEntries(
+      Object.entries(state.hibernated).filter(([key]) => !keys.includes(key)),
+    ),
+  }));
 }
 
 /** Last real use, preserved across app restarts. */
@@ -170,9 +163,11 @@ export function wakeChatGPTGuest(runtimeTabId: string, now = Date.now()): void {
   useChatGPTGuestHibernation.setState((state) => {
     const { [key]: _wasHibernated, ...hibernated } = state.hibernated;
     const { [key]: _wasManuallyUnloaded, ...manuallyUnloaded } = state.manuallyUnloaded ?? {};
+    const { [key]: _wasAutoEvicted, ...autoEvicted } = state.autoEvicted ?? {};
     return {
       hibernated,
       manuallyUnloaded,
+      autoEvicted,
       woken: state.woken[key] ? state.woken : { ...state.woken, [key]: true },
       touchedAt: { ...state.touchedAt, [key]: now },
     };
@@ -217,5 +212,20 @@ export function clearChatGPTGuestUserOpened(runtimeTabId: string): void {
     if (!state.userOpened?.[key]) return state;
     const { [key]: _removed, ...userOpened } = state.userOpened;
     return { userOpened };
+  });
+}
+
+/** Called only after verifying a background guest is idle with an empty composer. */
+export function evictVerifiedIdleChatGPTGuest(runtimeTabId: string): void {
+  const key = chatGPTGuestKey(runtimeTabId);
+  useChatGPTGuestHibernation.setState((state) => {
+    const { [key]: _wasRetained, ...retained } = state.retained;
+    const { [key]: _wasUserOpened, ...userOpened } = state.userOpened ?? {};
+    return {
+      retained,
+      userOpened,
+      autoEvicted: { ...state.autoEvicted, [key]: true },
+      hibernated: { ...state.hibernated, [key]: true },
+    };
   });
 }

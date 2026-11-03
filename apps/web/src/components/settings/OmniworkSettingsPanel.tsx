@@ -398,7 +398,7 @@ export function OmniworkSettingsPanel() {
         <SettingsRow
           id="omniwork-chatgpt-max-auto-count"
           title="Maximum automatically retained sessions"
-          description="Limit background retention (default 12). Does not unload sessions you explicitly opened; manual sessions may exceed this limit."
+          description="Soft limit (default 12): opening sessions always works. Above this limit, T3 unloads only verified light-grey idle sessions with empty composers; active/error sessions remain loaded."
           control={
             <Select
               value={String(chatGPTMaxAutoSessionCount)}

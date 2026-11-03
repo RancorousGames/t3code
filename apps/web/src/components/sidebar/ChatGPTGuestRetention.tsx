@@ -40,6 +40,7 @@ import {
   useChatGPTSessionQueueDriver,
 } from "../../chatGPTSessionMessageQueue";
 import { ChatGPTWarmScheduler } from "./ChatGPTWarmScheduler";
+import { ChatGPTIdleOverflowUnloader } from "./ChatGPTIdleOverflowUnloader";
 import { useChatGPTBootstrapRegistration } from "../../browser/useChatGPTBootstrapRegistration";
 import { ChatGPTRestartContinuation } from "./ChatGPTRestartContinuation";
 import { getChatGPTStartupLoadPlan } from "../../omniwork/chatGPTStartupLoadPolicy";
@@ -146,6 +147,7 @@ export function ChatGPTGuestRetention({
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
   const touchedAt = useChatGPTGuestHibernation((state) => state.touchedAt);
   const manuallyUnloaded = useChatGPTGuestHibernation((state) => state.manuallyUnloaded);
+  const autoEvicted = useChatGPTGuestHibernation((state) => state.autoEvicted);
   const userOpened = useChatGPTGuestHibernation((state) => state.userOpened);
   const warmedIds = useWarmChatGPTSessionIds(environmentId);
   const unloadProfile = useOmniworkPreferences((state) => state.unloadProfile);
@@ -241,6 +243,8 @@ export function ChatGPTGuestRetention({
     const candidates = sessions.flatMap((session) => {
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
+      if (autoEvicted?.[key] && activeSessionId !== session.id &&
+          !deliveryRequests[`${environmentId}:${session.id}`]) return [];
       const recentUseAt = Math.max(
         touchedAt[key] ?? 0,
         session.lastDirectInteractionAt ?? 0,
@@ -334,6 +338,7 @@ export function ChatGPTGuestRetention({
     deliveryRequests,
     warmedIds,
     manuallyUnloaded,
+    autoEvicted,
   ]);
 
   useEffect(() => retainChatGPTGuests(retainedKeys), [retainedKeys]);
@@ -349,6 +354,13 @@ export function ChatGPTGuestRetention({
         />
       ))}
       <ChatGPTWarmScheduler />
+      <ChatGPTIdleOverflowUnloader
+        environmentId={environmentId}
+        sessions={sessions}
+        selectedId={activeSessionId}
+        maxCount={maxAutoCount}
+        deliveryRequests={deliveryRequests}
+      />
       <ChatGPTRestartContinuation environmentId={environmentId} />
       {sessions
         .filter((session) => !session.hidden)

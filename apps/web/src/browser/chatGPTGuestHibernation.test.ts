@@ -4,6 +4,7 @@ import {
   CHATGPT_GUEST_HIBERNATE_AFTER_MS,
   chatGPTGuestKey,
   hibernateChatGPTGuest,
+  evictVerifiedIdleChatGPTGuest,
   openChatGPTGuestByUser,
   clearChatGPTGuestUserOpened,
   isChatGPTGuestHibernated,
@@ -117,6 +118,9 @@ describe("chatGPT guest hibernation store", () => {
     expect(isChatGPTGuestHibernated("session-2")).toBe(true);
     expect(useChatGPTGuestHibernation.getState().touchedAt).toEqual({});
     retainChatGPTGuests(["session-2", ...keys.slice(0, 4)]);
+    // Losing automatic priority alone must not evict a potentially busy guest.
+    expect(isChatGPTGuestHibernated("session-3")).toBe(false);
+    evictVerifiedIdleChatGPTGuest("session-3");
     expect(isChatGPTGuestHibernated("session-3")).toBe(true);
     expect(isChatGPTGuestHibernated("session-2")).toBe(false);
   });

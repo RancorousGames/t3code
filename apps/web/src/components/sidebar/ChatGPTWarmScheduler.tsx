@@ -8,7 +8,7 @@ import { chatGPTBrowserLastUrlKey, chatGPTBrowserLastWorkingKey, chatGPTBrowserT
 import { isElectron } from "../../env";
 import { getLocalStorageItem } from "../../hooks/useLocalStorage";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { isChatGPTGuestHibernated, isChatGPTGuestManuallyUnloaded, wakeChatGPTGuest } from "../../browser/chatGPTGuestHibernation";
+import { isChatGPTGuestHibernated, isChatGPTGuestManuallyUnloaded, useChatGPTGuestHibernation, wakeChatGPTGuest } from "../../browser/chatGPTGuestHibernation";
 import { MOUNTED_CHATGPT_GUEST_SELECTOR } from "../../browser/mountedChatGPTGuest";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
 import { nativeChatGPTPageStatus, warmMissingNativeChatGPT } from "../../browser/nativeChatGPTWarmSession";
@@ -239,7 +239,9 @@ export function ChatGPTWarmScheduler() {
         const unloadKey = isPersistentChatGPTSessionOptedIn(session.id)
           ? session.id
           : JSON.stringify([environmentId, thread.threadId]);
-        if (isChatGPTGuestManuallyUnloaded(unloadKey) && !deliveryPending) return false;
+        if ((isChatGPTGuestManuallyUnloaded(unloadKey) ||
+          useChatGPTGuestHibernation.getState().autoEvicted?.[unloadKey]) && !deliveryPending)
+          return false;
         let savedUrl: string | null = null;
         try {
           savedUrl = getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, session.id), Schema.String);
