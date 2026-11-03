@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useApp } from "./app-context.ts";
 import { Icon } from "./Icons.tsx";
 import { KeyCaps } from "./Overlays.tsx";
+import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
 import { Marked } from "./Marked.tsx";
 import { checkRow, matchesFilter, statusOf, type RowFilter } from "./insights.ts";
 import { editFinalText, type MoriRow } from "./model.ts";
@@ -112,7 +113,7 @@ export function LineEditor({ value, onChange, className = "editor" }: { value: s
   );
 }
 
-function LineRow({ row, dupes, active }: { row: MoriRow; dupes: string[]; active: boolean }) {
+function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; dupes: string[]; active: boolean; columns: ColumnDef[]; sideBySide: boolean }) {
   const { project, actions, prefs, bindings, select, adopt, toggleLock, openPop, setColumn } = useApp();
   const character = prefs.charactersEnabled ? project.characters.find(c => c.id === row.characterId) : undefined;
   const status = statusOf(row);
@@ -131,7 +132,7 @@ function LineRow({ row, dupes, active }: { row: MoriRow; dupes: string[]; active
   );
 
   const cell = (def: ColumnDef) => {
-    if (isResizable(def.key) && prefs.columns[def.key].collapsed) {
+    if (!sideBySide && isResizable(def.key) && prefs.columns[def.key].collapsed) {
       const has = def.key === "id" ? true : def.key === "speaker" ? !!row.characterId
         : def.key === "src" ? !!row.source
         : def.key === "dev" ? !!row.legacy
@@ -244,14 +245,17 @@ function LineRow({ row, dupes, active }: { row: MoriRow; dupes: string[]; active
         }
       }}
     >
-      {shownColumns(prefs).map(def => cell(def))}
+      {columns.map(def => cell(def))}
     </div>
   );
 }
 
-export function MatrixScreen() {
+export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: boolean; onToggleSideBySide: () => void }) {
   const { project, view, setView, visible, activeId, prefs, setColumn, setPrefs, bindings, openPop, folded, toggleFold, go } = useApp();
   const matrixRef = useRef<HTMLDivElement>(null);
+  const splitRef = useRef<HTMLDivElement>(null);
+  const [browserWidth, setBrowserWidth] = useState(46);
+  const columns = sideBySide ? COLUMN_DEFS.filter(def => ["id", "src", "tr", "st"].includes(def.key)) : shownColumns(prefs);
   const glossary = prefs.glossaryEnabled ? project.glossary : [];
   const activeRow = project.rows.find(row => row.id === activeId);
 
@@ -377,7 +381,13 @@ export function MatrixScreen() {
         >
           <Icon name="columns" />
         </button>
-        <button
+        <button type="button" className={`btn sm${sideBySide ? " on" : ""}`}
+          aria-label="Toggle side-by-side ChatGPT browser" aria-pressed={sideBySide}
+          title="Optional Matrix and ChatGPT side-by-side view for copying and pasting"
+          onClick={onToggleSideBySide}>
+          <Icon name="columns" size="sm" />Split view
+        </button>
+        {!sideBySide && <button
           type="button"
           className={`btn icon${prefs.inspectorOpen ? " on" : ""}`}
           title={`Inspector (${keyLabel(bindings.inspector)})`}
@@ -385,18 +395,20 @@ export function MatrixScreen() {
           onClick={() => setPrefs({ inspectorOpen: !prefs.inspectorOpen })}
         >
           <Icon name="panel" />
-        </button>
+        </button>}
       </div>
 
+      <div ref={splitRef} className={`matrix-content${sideBySide ? " side-by-side" : ""}`}
+        style={{ gridTemplateColumns: sideBySide ? `minmax(0, ${100 - browserWidth}fr) 8px minmax(0, ${browserWidth}fr)` : "minmax(0, 1fr)" }}>
       <div className="scroll">
         <div
           ref={matrixRef}
           className={`matrix${prefs.density === "compact" ? " compact" : ""}`}
-          style={{ ...cssVar("--cols", columnTemplate(prefs)), minWidth: minimumWidth(prefs) }}
+          style={{ ...cssVar("--cols", sideBySide ? "76px minmax(185px, 1fr) minmax(195px, 1.1fr) 48px" : columnTemplate(prefs)), minWidth: sideBySide ? 504 : minimumWidth(prefs) }}
         >
           <div className="hrow">
-            {shownColumns(prefs).map(def => {
-              if (isResizable(def.key) && prefs.columns[def.key].collapsed) {
+            {columns.map(def => {
+              if (!sideBySide && isResizable(def.key) && prefs.columns[def.key].collapsed) {
                 return (
                   <div
                     key={def.key}
@@ -469,12 +481,34 @@ export function MatrixScreen() {
                     row={row}
                     active={row.id === activeId}
                     dupes={(dupeIndex.get(row.source.trim()) ?? []).filter(id => id !== row.id)}
+                    columns={columns}
+                    sideBySide={sideBySide}
                   />
                 ))}
               </section>
             );
           })}
         </div>
+      </div>
+      {sideBySide && <>
+        <div className="matrix-split-divider" role="separator" tabIndex={0}
+          aria-label="Resize Matrix and ChatGPT panes" aria-orientation="vertical"
+          aria-valuemin={30} aria-valuemax={55} aria-valuenow={browserWidth}
+          title="Drag to resize; use arrow keys when focused"
+          onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
+          onPointerMove={event => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId) || !splitRef.current) return;
+            const bounds = splitRef.current.getBoundingClientRect();
+            setBrowserWidth(Math.max(30, Math.min(55, 100 * (bounds.right - event.clientX) / bounds.width)));
+          }}
+          onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+          onKeyDown={event => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            setBrowserWidth(width => Math.max(30, Math.min(55, width + (event.key === "ArrowLeft" ? 3 : -3))));
+          }} />
+        <div className="matrix-chat-pane"><ChatGPTScreen compact /></div>
+      </>}
       </div>
     </>
   );

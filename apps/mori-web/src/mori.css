@@ -615,6 +615,23 @@ input,textarea,select{font:inherit;color:inherit}
 .matrix .c-tr,.matrix .row:hover .c-tr,.matrix .row.active .c-tr{margin:0;padding:13px 14px;border-radius:0;background:transparent;box-shadow:none}
 .matrix .c-tr .editor{min-height:1.7em;border:0;border-radius:0;padding:0;background:transparent;box-shadow:none}
 .matrix.compact .c-tr,.matrix.compact .row.active .c-tr{padding:8px 12px}
+/* Optional copy/paste fallback: Matrix on the left, a real ChatGPT webview on the right. */
+.matrix-content{display:grid;grid-template-columns:minmax(0,1fr);flex:1;min-height:0;min-width:0;overflow:hidden}
+.matrix-content>.scroll{min-width:0;min-height:0}
+.matrix-content.side-by-side>.scroll{overflow:auto}
+.matrix-chat-pane{min-width:0;min-height:0;overflow:hidden;border-left:1px solid var(--line-2);background:#090b0e}
+.matrix-chat-pane .mori-ai{height:100%;width:100%;min-height:0}
+.matrix-split-divider{position:relative;z-index:4;cursor:col-resize;background:var(--bg-3);touch-action:none}
+.matrix-split-divider:hover,.matrix-split-divider:focus-visible{background:var(--moss-2);outline:0}
+.matrix-split-divider::after{content:"";position:absolute;left:3px;top:calc(50% - 27px);width:2px;height:54px;border-radius:3px;background:var(--line-3)}
+.mori-ai.compact{display:flex;flex-direction:column}
+.mori-ai-compact-head{display:flex;align-items:center;gap:7px;padding:5px 8px;min-height:38px;flex:none;border-bottom:1px solid var(--line-2);background:var(--bg-1);color:var(--text-2)}
+.mori-ai-compact-head>.i{color:var(--moss)}
+.mori-ai-compact-head select{flex:1;min-width:0;height:27px;padding:0 7px;border-radius:6px;border:1px solid var(--line-2);background:var(--bg-2);color:var(--text);font-size:12px}
+.mori-ai-compact-head button{display:inline-flex;align-items:center;gap:4px;flex:none;height:27px;padding:0 7px;border:1px solid var(--line-2);border-radius:6px;white-space:nowrap;font-size:11px}
+.mori-ai-compact-head button:hover{background:var(--bg-4);color:var(--text)}
+.mori-ai.compact .mori-ai-batch-floating{right:10px;max-width:calc(100% - 20px)}
+
 /* AI-chat batch worker: keeps the browser unobstructed until review is needed. */
 .mori-ai-batch-actions{display:flex;flex-direction:column;gap:5px;padding:8px 10px 7px;border-top:1px solid var(--line)}
 .mori-ai-batch-button{display:flex;align-items:center;justify-content:center;gap:6px;min-height:29px;padding:5px 8px;border:1px solid var(--moss-bd);border-radius:7px;font-size:12px;font-weight:600;background:var(--moss-bg);color:var(--moss)}

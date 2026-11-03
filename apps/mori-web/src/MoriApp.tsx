@@ -38,6 +38,9 @@ export function MoriApp() {
   const { prefs, update: updatePrefs, setColumn } = usePrefs();
   const [bindings, setBindingsState] = useState<Bindings>(loadBindings);
   const [screen, setScreen] = useState<Screen>("matrix");
+  // Optional copy/paste fallback; never replaces the normal Matrix workflow.
+  const [matrixSplit, setMatrixSplit] = useState(() => localStorage.getItem("mori.matrix.side-by-side") === "true");
+  useEffect(() => { localStorage.setItem("mori.matrix.side-by-side", String(matrixSplit)); }, [matrixSplit]);
   const [view, setViewState] = useState<ViewFilters>(DEFAULT_VIEW);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [folded, setFolded] = useState<Set<string>>(() => new Set());
@@ -436,7 +439,7 @@ export function MoriApp() {
     );
   }
 
-  const workspace = screen === "matrix" ? <MatrixScreen />
+  const workspace = screen === "matrix" ? <MatrixScreen sideBySide={matrixSplit} onToggleSideBySide={() => setMatrixSplit(value => !value)} />
     : screen === "focus" ? <FocusScreen />
     : screen === "characters" && prefs.charactersEnabled ? <CharactersScreen />
     : screen === "glossary" && prefs.glossaryEnabled ? <GlossaryScreen />
@@ -456,7 +459,7 @@ export function MoriApp() {
             {value.notice && <div className="notice" role="alert">{value.notice}</div>}
             {workspace}
           </main>
-          {screen === "matrix" && prefs.inspectorOpen && <Inspector />}
+          {screen === "matrix" && prefs.inspectorOpen && !matrixSplit && <Inspector />}
         </div>
         <StatusBar />
       </div>

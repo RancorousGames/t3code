@@ -91,8 +91,8 @@ function FallbackMenu({ state, close }: { state: FallbackMenuState; close: () =>
   </>;
 }
 
-export function ChatGPTScreen() {
-  const { project, prefs, actions, toast } = useApp();
+export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
+  const { project, prefs, actions, toast, go } = useApp();
   const [sessions, setSessions] = useState<MoriChatSession[]>(loadChatSessions);
   const sessionsRef = useRef(sessions);
   const [selectedId, setSelectedId] = useState<string | null>(() => selectInitial(project.id, sessions));
@@ -462,7 +462,18 @@ export function ChatGPTScreen() {
   };
 
   return (
-    <div className="mori-ai" aria-label="AI Chats">
+    <div className={`mori-ai${compact ? " compact" : ""}`} aria-label="AI Chats">
+      {compact && <div className="mori-ai-compact-head">
+        <Icon name="sparkle" size="sm" />
+        <select aria-label="ChatGPT session" value={activeId ?? ""} onChange={event => event.target.value && choose(event.target.value)}>
+          <option value="">Choose a chat...</option>
+          {projectSessions.filter(session => !session.hidden).map(session => (
+            <option key={session.id} value={session.id}>{session.title || "New chat"}</option>
+          ))}
+        </select>
+        <button type="button" title="New ChatGPT session" onClick={add}><Icon name="plus" size="sm" />New</button>
+        <button type="button" title="Open full AI Chats view" onClick={() => go("chatgpt")}><Icon name="expand" size="sm" />Full</button>
+      </div>}
       <div className="mori-ai-browser">
         {active ? <webview
           key={active.id}
@@ -476,7 +487,7 @@ export function ChatGPTScreen() {
             <button type="button" onClick={add}>New chat</button>
           </div>}
       </div>
-      <AIChatsSidebar sessions={projectSessions} activeId={activeId}
+      {!compact && <AIChatsSidebar sessions={projectSessions} activeId={activeId}
         collapsed={!sidebarOpen} now={clock}
         onCollapse={() => setSidebarOpen(v => !v)}
         onCreate={add} onSelect={choose} onClose={id => { void close(id); }}
@@ -489,7 +500,7 @@ export function ChatGPTScreen() {
         onRunBatch={() => { void worker.run(); }}
         batchStatus={worker.status} batchPending={!!worker.job}
         batchCount={worker.draftable.length}
-        batchBusy={worker.sending} />
+        batchBusy={worker.sending} />}
       {worker.job && worker.job.stage !== "ready" && <div className="mori-ai-batch-floating" role="status">
         <span title={worker.job.folder ?? ""}>{worker.status}</span>
         {worker.job.request.sessionId !== activeId
