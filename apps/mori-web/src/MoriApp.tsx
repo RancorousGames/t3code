@@ -210,6 +210,26 @@ export function MoriApp() {
   keyHandler.current = event => {
     if (event.isComposing || event.keyCode === 229) return;
     if (capturingRef.current) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "a") {
+      const target = event.target;
+      // Text fields keep their native Select All behavior; elsewhere only the current view is selectable.
+      if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select, [role="textbox"]'))) return;
+      const content = modal ? document.querySelector(".overlay .modal")
+        : pop ? document.querySelector(".pop")
+        : screen === "matrix" ? document.querySelector(".matrix")
+        : screen === "chatgpt" ? document.querySelector(".mori-ai-browser")
+        : document.querySelector(".main .screen");
+      event.preventDefault();
+      if (content) {
+        const range = document.createRange();
+        range.selectNodeContents(content);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
+      return;
+    }
+
     if (event.key === "Escape") {
       if (pop) {
         event.preventDefault();
