@@ -10,6 +10,7 @@ import {
   hasAdmittedCapacityMessage,
 } from "../../chatGPTSessionMessageQueue";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
+import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { isChatGPTStartupSessionDeferred } from "../../omniwork/chatGPTStartupLoadPolicy";
 import { useWarmChatGPTSessionIds } from "../../omniwork/chatGPTWarmSessionPolicy";
 import { resolveWarmChatGPTConversationUrl } from "../../omniwork/chatGPTWarmConversationUrl";
@@ -56,6 +57,9 @@ export function ChatGPTBrowserSessionRuntime({
   );
   const previewState = useThreadPreviewState(threadRef);
   const warmedIds = useWarmChatGPTSessionIds(environmentId);
+  const deliveryRequired = useChatGPTDeliveryMountRequests(
+    (state) => state.required[`${environmentId}:${sessionId}`] === true,
+  );
   const [capacityAdmitted, setCapacityAdmitted] = useState(() =>
     hasAdmittedCapacityMessage(environmentId, sessionId),
   );
@@ -80,6 +84,7 @@ export function ChatGPTBrowserSessionRuntime({
   // The startup plan uses a plain Set, which cannot trigger a React update.
   // Selection must bypass deferral directly, even when the warm scheduler is full.
   const startupDeferred =
+    !deliveryRequired &&
     !capacityAdmitted &&
     !selected &&
     !warmedIds.includes(sessionId) &&
