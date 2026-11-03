@@ -68,29 +68,21 @@ const PROBE = `(() => ({
   })(),
 }))()`;
 
-/** Only click the Retry button inside a positively verified load-error page.
- * A transiently absent composer must never grant permission to reload.
- * Validate the exact URL, error panel, drafts, uploads and generating state
- * again IN the same guest JS turn as the action. */
-function nativeRetryExpression(expectedUrl: string, networkFailure = false): string {
+/** An explicit red error panel can contain a Retry OR Try again control.
+ * Recheck the exact failing page and unsent input before asking Chromium itself
+ * to reload it; clicking a provider button is not a browser page reload. */
+function nativeRedReloadGuardExpression(expectedUrl: string): string {
   return `(() => {
     if (location.href !== ${JSON.stringify(expectedUrl)}) return "route-changed";
-    const explicitError = (${hasChatGPTLoadFailure.toString()})();
-    if (!explicitError && !${networkFailure}) return "error-cleared";
+    if (!(${hasChatGPTLoadFailure.toString()})()) return "error-cleared";
     const editors = [...document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],[contenteditable="true"][role="textbox"],form textarea,textarea[placeholder]')];
     if (editors.some(el => (el instanceof HTMLTextAreaElement ? el.value :
       (el.innerText ?? el.textContent ?? "")).trim())) return "draft-present";
-    if (document.querySelector('[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]')) return "generation-visible";
+    const stop = document.querySelector('[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+    if (stop && stop.getClientRects().length > 0 && !stop.hasAttribute("disabled")) return "generation-visible";
     if (document.querySelector('[data-testid*="attachment"],[data-testid*="upload-preview"],[data-state="recording"],[data-state="uploading"],[aria-label^="Remove file"],[aria-label^="Remove attachment"]') ||
         [...document.querySelectorAll('input[type="file"]')].some(input => input.files?.length)) return "attachments-present";
-    const visible = el => el.getClientRects().length > 0 && !el.hasAttribute("disabled");
-    const button = [...document.querySelectorAll('button,[role="button"]')].find(
-      el => visible(el) && /^retry$/i.test(el.textContent?.trim() ?? "") &&
-      !el.closest('[data-message-author-role],article,pre,code'));
-    if (!button && !${networkFailure}) return "retry-missing";
-    if (button) button.click();
-    else location.reload();
-    return "retry-issued";
+    return "reload-safe";
   })()`;
 }
 
@@ -642,16 +634,31 @@ export function ChatGPTNativeRecoveryCoordinator({
               });
             } else if (failure === "load-failure") {
               const identity = { environmentId: env, sessionId: id, profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find((entry) => entry.id === id)) };
-              // On a main-frame network error the guest may not execute JS
-              // at all. The native owner's reload is the only recovery lane.
-              // Both host snapshots already confirmed the exact failed route.
-              pendingAction = second.loadError && !second.explicitLoadFailure
-                ? bridge({ operation: "reload", identity }).then(() => ({ result: "reload-issued" }))
-                : bridge({
-                  operation: "evaluate",
-                  identity,
-                  expression: nativeRetryExpression(second.url, !!second.loadError),
-                });
+              // Red recovery must actually reload the Chromium page, not
+              // depend on ChatGPT's Retry/Try again button text. A main-frame
+              // network error cannot execute guest JS; two matching host
+              // snapshots are the prerequisite in that case.
+              pendingAction = (async () => {
+                const origin = second.explicitLoadFailure ? "provider-error-panel" : "main-frame-network-error";
+                if (second.explicitLoadFailure) {
+                  const checked = await bridge({
+                    operation: "evaluate",
+                    identity,
+                    expression: nativeRedReloadGuardExpression(second.url),
+                  }) as { result?: string; url?: string };
+                  if (typeof checked.url === "string" && checked.url !== second.url)
+                    return { result: "red-guard-route-changed" };
+                  if (checked.result !== "reload-safe")
+                    return { result: `red-guard-${checked.result ?? "unconfirmed"}` };
+                }
+                logChatGPTRecoveryTimeline(env, "native", "retry",
+                  `Red native Chromium reload requested (${origin}); verified conversation binding and unchanged failure.`,
+                  { sessionId: id, attempt });
+                // The host returns after invoking webContents.reload(), not
+                // after the new page is healthy. Only a later probe proves that.
+                await bridge({ operation: "reload", identity });
+                return { result: "red-native-reload-issued", origin };
+              })();
             } else {
               pendingAction = guardedNativeChatGPTReload({
                 environmentId: env,
@@ -680,17 +687,23 @@ export function ChatGPTNativeRecoveryCoordinator({
             ]);
             if (deadline) clearTimeout(deadline);
             if (settled.timedOut) {
-              decision(id, "action-unconfirmed", "Native operation timed out; never blindly duplicate an unknown action.");
+              decision(id, "action-unconfirmed", failure === "load-failure"
+                ? "Red native Chromium reload not acknowledged within 8 seconds; awaiting original host operation."
+                : "Native operation timed out; never blindly duplicate an unknown action.");
               yielded = true;
               lease.yieldToSession(id);
-              finishRecoveryAttempt(env, id, "Native action still pending; outcome unknown");
+              finishRecoveryAttempt(env, id, failure === "load-failure"
+                ? "Red native Chromium reload request pending; host acknowledgement unknown"
+                : "Native action still pending; outcome unknown");
             } else if ("error" in settled) {
               const why = String(settled.error instanceof Error ? settled.error.message : settled.error)
                 .split("\n")[0]?.slice(0, 165) ?? "unknown error";
               decision(id, "action-rejected", `Native recovery rejected: ${why}`);
-              finishRecoveryAttempt(env, id, `Native action rejected (${why}); no verified recovery`);
+              finishRecoveryAttempt(env, id, failure === "load-failure"
+                ? `Red native Chromium reload request rejected (${why}); no verified recovery`
+                : `Native action rejected (${why}); no verified recovery`);
             } else {
-              const result = settled.value as { result?: string } | null;
+              const result = settled.value as { result?: string; origin?: string } | null;
               if (specialStop && result?.result === "stop-clicked" &&
                   second.lastUserTurnKey && second.lastUserTurn !== null)
                 saveNativeOrangeEpisode(env, id, {
@@ -700,16 +713,20 @@ export function ChatGPTNativeRecoveryCoordinator({
               const confirmed =
                 specialStop ? result?.result === "stop-clicked"
                 : failure === "missing-composer" ? result?.result === "reload-issued"
-                : failure === "load-failure" ? (result?.result === "retry-issued" || result?.result === "reload-issued")
+                : failure === "load-failure" ? result?.result === "red-native-reload-issued"
                   : !!result &&
                     typeof result === "object" &&
                     ("nativeReloadIssued" in result || "requestedNavigation" in result);
               finishRecoveryAttempt(
                 env,
                 id,
-                confirmed
-                  ? "Native action dispatched; independent health verification pending"
-                  : `Native action not dispatched: ${result?.result ?? "changed state or unsafe"}`,
+                failure === "load-failure"
+                  ? confirmed
+                    ? `Red native Chromium reload acknowledged (${result?.origin}); independent health verification pending`
+                    : `Red page reload not dispatched: ${result?.result ?? "changed state or unsafe"}`
+                  : confirmed
+                    ? "Native action dispatched; independent health verification pending"
+                    : `Native action not dispatched: ${result?.result ?? "changed state or unsafe"}`,
               );
             }
           } finally {

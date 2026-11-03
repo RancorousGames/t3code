@@ -465,14 +465,17 @@ export function noteRecoveryVerified(environment: string, id: string): void {
   state.failureStreak = Math.max(state.redFailureStreak, state.orangeFailureStreak);
   state.backoffUntil = Math.max(state.redBackoffUntil, state.orangeBackoffUntil);
   state.targets = state.targets.filter((target) => target !== id);
-  append(state, id, "recovered", "Health verified after " + entry.attempts + " attempt(s)");
-  logChatGPTRecoveryTimeline(
-    environment,
-    backendFor(id),
-    "health",
-    `Independent health check passed; recovery resolved after ${entry.attempts} attempt(s).`,
-    { sessionId: id },
+  const redReloadAcknowledged = entry.red && state.history.some((event) =>
+    event.id === id && event.at >= entry.firstSeenAt && event.kind === "outcome" &&
+    event.detail.startsWith("Red native Chromium reload acknowledged"),
   );
+  const detail = redReloadAcknowledged
+    ? `Red recovery: native page reload was acknowledged and independent DOM health is now verified after ${entry.attempts} attempt(s).`
+    : entry.red
+      ? `Red failure cleared by independent health check; no acknowledged native Chromium page reload in this episode (attempts: ${entry.attempts}).`
+      : `Independent health check passed; recovery resolved after ${entry.attempts} attempt(s).`;
+  append(state, id, "recovered", detail);
+  logChatGPTRecoveryTimeline(environment, backendFor(id), "health", detail, { sessionId: id });
   save(environment, state);
 }
 
@@ -505,7 +508,7 @@ export function beginRecoveryAttempt(
   entry.manualPriority = false;
   entry.awaitingHealthCheck = false;
   entry.lastAttemptAt = Date.now();
-  entry.lastOutcome = "dispatched " + action;
+  entry.lastOutcome = (entry.red ? "started " : "dispatched ") + action;
   append(state, id, "attempt", action + " #" + entry.attempts + " | priority: " + entry.reason);
   recordChatGPTRecoveryAttemptLog(environment, {
     at: entry.lastAttemptAt,
@@ -518,7 +521,9 @@ export function beginRecoveryAttempt(
     environment,
     backendFor(id),
     "attempt",
-    `Automatic recovery action dispatched: ${action}; priority ${entry.reason}.`,
+    entry.red
+      ? `Automatic red recovery attempt started: ${action}; priority ${entry.reason}. Awaiting native host acknowledgement.`
+      : `Automatic recovery action dispatched: ${action}; priority ${entry.reason}.`,
     { sessionId: id, attempt: entry.attempts },
   );
   save(environment, state);
