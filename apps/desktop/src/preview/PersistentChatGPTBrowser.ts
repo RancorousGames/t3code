@@ -57,6 +57,7 @@ const requestOnce = async (
         socketPath,
         method,
         path,
+        agent: hostAgent,
         timeout: 15_000,
         headers: {
           authorization: "Bearer " + tokenFor(dataDir()),
@@ -88,6 +89,15 @@ const requestOnce = async (
   });
 
 // Retry only Windows named-pipe connect EPERM, before any request reached the host.
+// Windows named pipes reject bursts of parallel connects with EPERM when
+// dozens of sidebar health probes arrive in one renderer tick. Reuse a bounded
+// pool instead of opening unbounded pipe handles under Node's global agent.
+const hostAgent = new NodeHttp.Agent({
+  keepAlive: true,
+  maxSockets: 6,
+  maxTotalSockets: 6,
+  maxFreeSockets: 3,
+});
 const request = async (
   socketPath: string,
   method: string,
@@ -100,6 +110,25 @@ const request = async (
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== "EPERM" || attempt >= 5) throw error;
       await delay(100 * (attempt + 1));
+    }
+  }
+};
+/** Read-only guest probes may be replayed after pipe-level admission failures.
+ * No navigation, input, evaluation or other mutation uses this retry path. */
+const safeRead = async (
+  socket: string,
+  path: "/sessions/snapshot" | "/sessions/probe" | "/sessions/status",
+  payload: unknown,
+): Promise<unknown> => {
+  for (let retry = 0; ; retry++) {
+    try {
+      return await request(socket, "POST", path, payload);
+    } catch (error) {
+      if (retry >= 2 ||
+          !["EPERM", "EAGAIN", "EBUSY", "ECONNRESET"].includes(
+            (error as NodeJS.ErrnoException)?.code ?? ""))
+        throw error;
+      await delay((retry + 1) * 250);
     }
   }
 };
@@ -515,12 +544,11 @@ export async function persistentChatGPTRequest(input: PersistentChatGPTRequest):
       case "evaluate":
         return await request(socket, "POST", "/sessions/evaluate", input);
       case "status":
-        return await request(socket, "POST", "/sessions/status", input);
+        return await safeRead(socket, "/sessions/status", input);
       case "snapshot":
       case "probe": {
-        return await request(
+        return await safeRead(
           socket,
-          "POST",
           input.operation === "snapshot" ? "/sessions/snapshot" : "/sessions/probe",
           input,
         );
