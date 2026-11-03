@@ -7,6 +7,7 @@
 import { BrowserWindow } from "electron";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { appendChatGPTRecoveryAudit } from "./chatGPTRecoveryAudit.ts";
 
 import * as DesktopIpc from "../DesktopIpc.ts";
 import { STABLE_CHATGPT_VIEW_REQUEST_CHANNEL } from "../channels.ts";
@@ -38,6 +39,13 @@ const Rectangle = Schema.Struct({
   height: Schema.Number,
 });
 const Request = Schema.Union([
+  Schema.Struct({
+    operation: Schema.Literal("recovery_event"),
+    identity: Identity,
+    kind: Schema.String,
+    detail: Schema.String,
+    attempt: Schema.optional(Schema.Number),
+  }),
   Schema.Struct({
     operation: Schema.Literal("attach"),
     identity: Identity,
@@ -126,6 +134,15 @@ export const stableChatGPTViewRequestIpc = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.stableChatGPTView")(function* (input, event) {
     const owner = trustedOwner(event?.sender.id ?? -1);
     const identity: StableChatGPTIdentity = input.identity;
+    // The audit must work for missing/unloaded native guests and must never
+    // accidentally create an Electron browser registry or load a page.
+    if (input.operation === "recovery_event") {
+      return yield* Effect.try({
+        try: () => appendChatGPTRecoveryAudit({ ...identity, kind: input.kind,
+          detail: input.detail, attempt: input.attempt }),
+        catch: (error) => error instanceof Error ? error : new Error(String(error)),
+      });
+    }
     const registry = registryFor(owner);
     // The dedicated test slice retains the in-process renderer. Every real
     // ChatGPT session must use the persistent native HWND owner, even if an

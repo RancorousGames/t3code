@@ -1828,6 +1828,13 @@ export interface DesktopBridge {
   stableChatGPTViewRequest?: (
     input:
       | {
+          operation: "recovery_event";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+          kind: string;
+          detail: string;
+          attempt?: number;
+        }
+      | {
           operation: "attach";
           identity: { sessionId: string; environmentId: string; profileId: string };
           url: string;

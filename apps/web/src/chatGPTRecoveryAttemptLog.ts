@@ -3,7 +3,7 @@ import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore"
 /** Local, content-free history; unlike the recovery queue, survives T3 restarts. */
 export interface ChatGPTRecoveryAttemptLogEntry {
   readonly at: number;
-  readonly kind: "attempt" | "backoff";
+  readonly kind: "attempt" | "backoff" | "deferred" | "outcome";
   readonly sessionId: string;
   readonly sessionName: string;
   readonly attemptNumber: number;
@@ -21,7 +21,7 @@ export function readChatGPTRecoveryAttemptLog(environmentId: string): ChatGPTRec
     return parsed.filter((value): value is ChatGPTRecoveryAttemptLogEntry =>
       value !== null && typeof value === "object" &&
       Number.isFinite(value.at) && value.at > 0 &&
-      (value.kind === "attempt" || value.kind === "backoff") &&
+      (value.kind === "attempt" || value.kind === "backoff" || value.kind === "deferred" || value.kind === "outcome") &&
       typeof value.sessionId === "string" && typeof value.sessionName === "string" &&
       Number.isSafeInteger(value.attemptNumber) && value.attemptNumber >= 0 &&
       typeof value.detail === "string",

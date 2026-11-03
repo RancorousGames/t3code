@@ -89,11 +89,10 @@ export function RecoveryAttemptsDialog({
             </Button>
           </div>
           <DialogDescription>
-            Chronological automatic recovery attempt log, newest first. Includes the ten-minute
-            pause after twenty consecutive verified failures. Read-only and retained across T3
-            restarts (up to 5,000 recent entries). Export readable timeline includes startup order,
-            user selections, attempts, retries and verified outcomes for both native Chromium and
-            legacy webviews.
+            Real attempts, confirmed outcomes, and explicit reasons why recovery was deferred.
+            Deferred entries are not attempts. Records survive restarts (up to 5,000 entries);
+            export includes scheduling, attempts, retries and verified health for native Chromium
+            and legacy webviews.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
@@ -104,7 +103,7 @@ export function RecoveryAttemptsDialog({
                 <tr>
                   <th className="w-[27%] px-3 py-2 font-medium">Timestamp</th>
                   <th className="w-[35%] px-3 py-2 font-medium">Session / ID</th>
-                  <th className="w-[13%] px-3 py-2 font-medium">Attempt</th>
+                  <th className="w-[13%] px-3 py-2 font-medium">Status</th>
                   <th className="w-[25%] px-3 py-2 font-medium">Action</th>
                 </tr>
               </thead>
@@ -133,11 +132,11 @@ export function RecoveryAttemptsDialog({
                       </div>
                     </td>
                     <td className="px-3 py-2 tabular-nums align-top">
-                      {entry.kind === "backoff" ? "20 failures" : "#" + entry.attemptNumber}
+                      {entry.kind === "backoff" ? "Backoff" : entry.kind === "deferred" ? "Waiting" : entry.kind === "outcome" ? `Result #${entry.attemptNumber}` : `Attempt #${entry.attemptNumber}`}
                     </td>
                     <td className="px-3 py-2 align-top">
                       <div
-                        className={entry.kind === "backoff" ? "font-semibold text-amber-500" : ""}
+                        className={entry.kind === "backoff" || entry.kind === "deferred" ? "text-amber-500" : ""}
                       >
                         {entry.kind === "backoff" ? "10-minute pause" : entry.detail}
                       </div>
@@ -154,7 +153,7 @@ export function RecoveryAttemptsDialog({
           </div>
           {!entries.length && (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No recovery attempts or pauses have been recorded yet.
+              No recovery observations have been recorded yet.
             </p>
           )}
         </DialogPanel>

@@ -15,6 +15,7 @@ import { nativeChatGPTPageStatus, warmMissingNativeChatGPT } from "../../browser
 import { beginChatGPTRecoveryTimeline, logChatGPTRecoveryAttempt, logChatGPTRecoveryHealth, logChatGPTRecoveryPriority, logChatGPTRecoveryTimeline } from "../../chatGPTRecoveryTimeline";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import { useChatGPTRecoverySettings } from "../../chatGPTRecoverySettings";
+import { readRecoveryQueue } from "./chatGPTRecoveryQueue";
 import { getChatGPTStartupLoadPlan } from "../../omniwork/chatGPTStartupLoadPolicy";
 import { warmRecentClickRanks, wasWarmSessionActiveBeforeFailure } from "../../omniwork/chatGPTWarmPriorityHistory";
 import { resolveWarmChatGPTConversationUrl } from "../../omniwork/chatGPTWarmConversationUrl";
@@ -23,8 +24,8 @@ import { snapshotWarmSessionOccupancy } from "../../omniwork/chatGPTWarmOccupanc
 import { activateWarmChatGPTSession, finishWarmChatGPTSessionLoad, nextWarmChatGPTSession, plannedWarmChatGPTSessions, publishWarmChatGPTForecast, useChatGPTWarmSessions } from "../../omniwork/chatGPTWarmSessionPolicy";
 import { useOpenRigManagerChatGPTSessions } from "./useOpenRigManagerChatGPTSessions";
 
-const warmPriorityReason = (c: { selected: boolean; activeBeforeFailure: boolean; deliveryPending?: boolean; recentlyClicked: number; highlighted: boolean; lastActiveAt: number; manager: boolean; lastActivityAt: number }, now: number) =>
-  c.selected ? "selected by user" : c.deliveryPending ? "pending message delivery" : c.activeBeforeFailure ? "working before failure" :
+const warmPriorityReason = (c: { selected: boolean; activeBeforeFailure: boolean; recoveryQueued?: boolean; deliveryPending?: boolean; recentlyClicked: number; highlighted: boolean; lastActiveAt: number; manager: boolean; lastActivityAt: number }, now: number) =>
+  c.selected ? "selected by user" : c.deliveryPending ? "pending message delivery" : c.recoveryQueued ? "verified recovery waiting for resident browser" : c.activeBeforeFailure ? "working before failure" :
   c.recentlyClicked >= 0 ? "recent click #" + (c.recentlyClicked + 1) :
   c.highlighted ? "highlighted" : c.lastActiveAt >= now - 2 * 60 * 60_000 && c.lastActiveAt > 0 ? "active within 2 hours" :
   c.manager ? "manager" : c.lastActivityAt > 0 ? "recent activity" : "creation time";
@@ -150,12 +151,14 @@ export function ChatGPTWarmScheduler() {
         }
         // An uncertain IPC result must never be treated as an unloaded page.
         const eligibleIds = new Set(nativeSessions.map((session) => session.id));
+        const queuedRecovery = new Set(Object.keys(readRecoveryQueue(environmentId).failures));
         const candidates = observations
           .filter(({ session, status }) => eligibleIds.has(session.id) && status.residency !== "unknown")
           .map(({ session }) => ({
             id: session.id,
             selected: session.id === selectedId,
             deliveryPending: pendingGuestIds.current.has(session.id),
+            recoveryQueued: queuedRecovery.has(session.id),
             exceedTarget: false,
             activeBeforeFailure: wasWarmSessionActiveBeforeFailure(environmentId, session.id),
             recentlyClicked: warmRecentClickRanks(environmentId, selectedId ?? null).get(session.id) ?? -1,

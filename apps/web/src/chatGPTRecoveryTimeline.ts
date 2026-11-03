@@ -1,4 +1,5 @@
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
+import { readChatGPTSessionProfileId } from "./chatGPTAccountProfiles";
 
 /** Content-free, restart-persistent diagnostics for a human-readable startup/recovery timeline.
  * Every item is an observation, not a claim that navigation or recovery succeeded. */
@@ -92,6 +93,24 @@ export function logChatGPTRecoveryTimeline(
       ...extra,
       ...(extra.sessionId ? { sessionTitle: titleFor(environmentId, extra.sessionId) } : {}),
     };
+    // Mirror real native recovery observations to an on-disk NDJSON audit.
+    // The host accepts these even if no Chromium page is currently resident.
+    // This record is not a claim that a queued action was actually dispatched.
+    if (backend === "native" && extra.sessionId) {
+      const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+      if (bridge) {
+        void Promise.resolve(bridge({
+          operation: "recovery_event",
+          identity: {
+            environmentId, sessionId: extra.sessionId,
+            profileId: readChatGPTSessionProfileId(environmentId, extra.sessionId),
+          },
+          kind, detail: detail.slice(0, 220),
+          ...(extra.attempt !== undefined ? { attempt: extra.attempt } : {}),
+        })).catch((error: unknown) =>
+          console.warn("[ChatGPT recovery] Native audit write failed:", error));
+      }
+    }
     localStorage.setItem(
       KEY(environmentId),
       JSON.stringify([...readChatGPTRecoveryTimeline(environmentId), entry].slice(-MAX_ITEMS)),

@@ -531,6 +531,10 @@ export function finishRecoveryAttempt(environment: string, id: string, outcome: 
   state.failures[id]!.awaitingHealthCheck = true;
   state.failures[id]!.lastOutcome = outcome;
   append(state, id, "outcome", outcome);
+  recordChatGPTRecoveryAttemptLog(environment, {
+    at: Date.now(), kind: "outcome", sessionId: id,
+    attemptNumber: state.failures[id]!.attempts, detail: outcome,
+  });
   logChatGPTRecoveryTimeline(
     environment,
     backendFor(id),

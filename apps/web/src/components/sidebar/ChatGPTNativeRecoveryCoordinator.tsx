@@ -16,6 +16,7 @@ import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
 import { inspectChatGPTPage } from "../../chatGPTSessionDom";
 import { allowsChatGPTOrangeRecoveryAction } from "../../chatGPTOrangeRecoveryStrategy";
 import { recordChatGPTRecoveryAttemptLog } from "../../chatGPTRecoveryAttemptLog";
+import { logChatGPTRecoveryTimeline } from "../../chatGPTRecoveryTimeline";
 import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import { recordChatGPTRecoveryEvent } from "../../chatGPTRecoveryDiagnostics";
 import { recordChatGPTRecoveryObservation } from "../../chatGPTRecoveryMetrics";
@@ -281,6 +282,24 @@ export function ChatGPTNativeRecoveryCoordinator({
     let running = false;
     let rescan = false;
     let discoveryCursor = 0;
+    // Keep known-uninspectable guests queued, but do not allow them to occupy
+    // scarce recovery dispatch slots while inspectable peers can be repaired.
+    const suspendedIds = new Set<string>();
+    const lastDecision = new Map<string, { code: string; at: number }>();
+    /** A decision describes why an orange candidate did (or did not) run.
+     * A scheduled progress bar alone is never evidence of an action. */
+    const decision = (id: string, code: string, detail: string) => {
+      const previous = lastDecision.get(id);
+      const now = Date.now();
+      if (previous?.code === code && now - previous.at < 60_000) return;
+      lastDecision.set(id, { code, at: now });
+      logChatGPTRecoveryTimeline(env, "native", "deferred", `${code}: ${detail}`, { sessionId: id });
+      recordChatGPTRecoveryAttemptLog(env, {
+        at: now, kind: "deferred", sessionId: id,
+        attemptNumber: readRecoveryQueue(env).failures[id]?.attempts ?? 0,
+        detail: `${code}: ${detail}`,
+      });
+    };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const env = environmentId;
     const context = (): RecoveryQueueContext => {
@@ -291,6 +310,7 @@ export function ChatGPTNativeRecoveryCoordinator({
         selectedId: input.selectedId ?? null,
         managerIds: input.managerIds,
         interruptedIds: input.interruptedIds,
+        suspendedIds: [...suspendedIds],
       };
     };
     const signal = (delay = 120) => {
@@ -327,10 +347,35 @@ export function ChatGPTNativeRecoveryCoordinator({
           discoveryCursor = (discoveryCursor + Math.min(3, unqueued.length)) % unqueued.length;
         let lastObservedAt = 0;
         for (const id of candidates) {
-          if (disposed || !ids.has(id) || hasUncertainChatGPTSend(env, id)) continue;
-          if (isChatGPTRecoveryMutationPending(env, id)) continue;
+          if (disposed || !ids.has(id)) continue;
+          if (hasUncertainChatGPTSend(env, id)) {
+            suspendedIds.add(id);
+            reconcileRecoveryQueue(env, context());
+            decision(id, "uncertain-send", "Recovery deferred to avoid duplicating an unconfirmed message.");
+            continue;
+          }
+          if (isChatGPTRecoveryMutationPending(env, id)) {
+            suspendedIds.add(id);
+            reconcileRecoveryQueue(env, context());
+            decision(id, "mutation-pending", "Another recovery or manual action owns this guest.");
+            continue;
+          }
           const first = await observeNative(bridge, env, id);
-          if (!first || first.loading) continue;
+          if (!first) {
+            suspendedIds.add(id);
+            reconcileRecoveryQueue(env, context());
+            if (currentInputs().redIds.includes(id) || currentInputs().interruptedIds.includes(id) || pending.failures[id])
+              decision(id, "guest-unavailable", "No inspectable native guest. Waiting for normal capped warm loading, not creating an extra page.");
+            continue;
+          }
+          if (first.loading) {
+            suspendedIds.add(id);
+            reconcileRecoveryQueue(env, context());
+            if (currentInputs().redIds.includes(id) || currentInputs().interruptedIds.includes(id) || pending.failures[id])
+              decision(id, "guest-loading", "Chromium navigation in progress; retry after it settles.");
+            continue;
+          }
+          suspendedIds.delete(id);
           lastObservedAt = Date.now();
           const existingEpisode = nativeOrangeEpisode(env, id);
           if (existingEpisode && chatGPTConversationIdFromUrl(first.url) === existingEpisode.conversationId) {
@@ -353,9 +398,15 @@ export function ChatGPTNativeRecoveryCoordinator({
                 continue;
               const next = existingEpisode.stage === "stop" ? "type" : "send";
               if (next === "send" && !allowsChatGPTOrangeRecoveryAction(
-                readChatGPTRecoverySettings().orangeStrategy, "continue")) continue;
+                readChatGPTRecoverySettings().orangeStrategy, "continue")) {
+                decision(id, "continue-disabled", "Orange recovery settings prohibit sending Continue.");
+                continue;
+              }
               const lease = tryAcquireChatGPTRecoveryMutation(env, id, "automatic", "continue");
-              if (!lease) continue;
+              if (!lease) {
+                decision(id, "continue-lock", "Another guest mutation is active; follow-up deferred.");
+                continue;
+              }
               try {
                 // Persist an at-most-once marker before invoking the guest. A lost
                 // IPC reply must not cause a duplicate Continue on the next scan.
@@ -366,6 +417,7 @@ export function ChatGPTNativeRecoveryCoordinator({
                   attemptNumber: readRecoveryQueue(env).failures[id]?.attempts ?? 0,
                   detail: next === "type" ? "native orange Continue typing" : "native orange Continue send",
                 });
+                logChatGPTRecoveryTimeline(env, "native", "attempt", `Guarded orange ${next} on exact stalled user turn.`, { sessionId: id });
                 const identity = { environmentId: env, sessionId: id,
                   profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find(s => s.id === id)) };
                 const response = await bridge({
@@ -378,9 +430,12 @@ export function ChatGPTNativeRecoveryCoordinator({
                   });
                 recordChatGPTRecoveryEvent(env, id, "native-orange-action",
                   `${next}:${response.result ?? "unconfirmed"}`);
+                logChatGPTRecoveryTimeline(env, "native", "outcome",
+                  `Native orange ${next}: ${response.result ?? "unconfirmed"}.`, { sessionId: id });
               } catch (error) {
                 recordChatGPTRecoveryEvent(env, id, "native-orange-action",
                   `${next}:bridge-unconfirmed`);
+                decision(id, "continue-unconfirmed", `Native orange ${next} outcome unknown; action not duplicated.`);
                 console.warn("[T3 native recovery] Orange follow-up outcome unknown:", error);
               } finally { lease.release(); }
               continue;
@@ -401,11 +456,17 @@ export function ChatGPTNativeRecoveryCoordinator({
             try { localStorage.removeItem(orangeKey(env, id)); } catch { /* best effort */ }
           }
           if (healthy(first)) {
+            const wasQueued = !!readRecoveryQueue(env).failures[id];
             noteRecoveryVerified(env, id);
+            if (wasQueued) logChatGPTRecoveryTimeline(env, "native", "health",
+              `Verified healthy DOM (${first.activity}); no mutation necessary.`, { sessionId: id });
             continue;
           }
           const failure = reason(first);
-          if (!failure) continue;
+          if (!failure) {
+            decision(id, "unclassified", `Guest reports ${first.activity}; no positively verified recoverable error.`);
+            continue;
+          }
           const savedUrl = (() => {
             try {
               return JSON.parse(
@@ -430,17 +491,23 @@ export function ChatGPTNativeRecoveryCoordinator({
             // Report the error even if navigation never reached the expected route.
             // Never attempt automatic recovery without a matching binding.
             noteRecoveryFailure(env, id, failure, ctx);
+            decision(id, "identity-unverified", "Guest conversation does not match saved/registered binding; mutation prohibited.");
             continue;
           }
           noteRecoveryFailure(env, id, failure, ctx);
           const queue = reconcileRecoveryQueue(env, ctx);
           const entry = queue.failures[id];
-          if (!entry || !queue.targets.includes(id)) continue;
+          if (!entry || !queue.targets.includes(id)) {
+            decision(id, "queue-wait", "Verified failure is waiting for its turn among ranked recovery targets.");
+            continue;
+          }
           const settings = readChatGPTRecoverySettings();
           if (failure === "missing-composer" &&
               (first.draftEmpty === false || first.stopVisible ||
-                Date.now() - entry.firstSeenAt < settings.missingComposerSeconds * 1_000))
+                Date.now() - entry.firstSeenAt < settings.missingComposerSeconds * 1_000)) {
+            decision(id, "composer-grace", "Composer absent; waiting for sustained failure and guarding drafts/generation.");
             continue;
+          }
           const now = Date.now();
           const history = readRecoveryHistory(env);
           const lane = entry.red ? "red" : "orange";
@@ -456,14 +523,17 @@ export function ChatGPTNativeRecoveryCoordinator({
                   now,
                   settings.perSessionSeconds * 1_000,
                 )))
-          )
+          ) {
+            decision(id, "cooldown", `Recovery grace, global lane cooldown or per-session cooldown is active. Last attempt ${entry.lastAttemptAt || "never"}.`);
             continue;
+          }
 
           // A separate, current browser probe is required at the point of
           // mutation; an earlier red sidebar color never authorizes a reload.
           const second = await observeNative(bridge, env, id);
           if (!second || second.loading || second.url !== first.url || reason(second) !== failure) {
             if (second && healthy(second)) noteRecoveryVerified(env, id);
+            decision(id, "verification-changed", "Independent second inspection did not confirm the same recoverable failure.");
             continue;
           }
           const specialStop = failure !== "load-failure" && failure !== "missing-composer" &&
@@ -476,7 +546,10 @@ export function ChatGPTNativeRecoveryCoordinator({
           // guard. Use the exact-turn Stop/Continue sequence instead.
           const lease = tryAcquireChatGPTRecoveryMutation(
             env, id, "automatic", specialStop ? "stop" : "reload");
-          if (!lease) continue;
+          if (!lease) {
+            decision(id, "mutation-lock", "Recovery lease already held; retry when it is released.");
+            continue;
+          }
           let pendingAction: Promise<unknown> | null = null;
           let yielded = false;
           try {
@@ -490,9 +563,15 @@ export function ChatGPTNativeRecoveryCoordinator({
             // positively identifies a recoverable failure. Retry only that panel.
             if (failure === "load-failure" && !second.explicitLoadFailure && !second.loadError)
               continue;
-            if (failure !== "load-failure" && settings.orangeStrategy === "observe-only") continue;
+            if (failure !== "load-failure" && settings.orangeStrategy === "observe-only") {
+              decision(id, "observe-only", "Orange mutation disabled in recovery settings.");
+              continue;
+            }
             const attempt = beginRecoveryAttempt(env, id, `native:${failure}`);
-            if (attempt === null) continue;
+            if (attempt === null) {
+              decision(id, "queue-denied", "Recovery attempt not admitted by queue/backoff.");
+              continue;
+            }
             recordRecoveryAttempt(env, id, Date.now(), ctx.eligibleIds, lane);
             recordChatGPTRecoveryEvent(env, id, "native-recovery-attempt", failure);
             if (specialStop) {
@@ -519,11 +598,16 @@ export function ChatGPTNativeRecoveryCoordinator({
               });
             } else if (failure === "load-failure") {
               const identity = { environmentId: env, sessionId: id, profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find((entry) => entry.id === id)) };
-              pendingAction = bridge({
-                operation: "evaluate",
-                identity,
-                expression: nativeRetryExpression(second.url, !!second.loadError),
-              });
+              // On a main-frame network error the guest may not execute JS
+              // at all. The native owner's reload is the only recovery lane.
+              // Both host snapshots already confirmed the exact failed route.
+              pendingAction = second.loadError && !second.explicitLoadFailure
+                ? bridge({ operation: "reload", identity }).then(() => ({ result: "reload-issued" }))
+                : bridge({
+                  operation: "evaluate",
+                  identity,
+                  expression: nativeRetryExpression(second.url, !!second.loadError),
+                });
             } else {
               pendingAction = guardedNativeChatGPTReload({
                 environmentId: env,
@@ -552,10 +636,12 @@ export function ChatGPTNativeRecoveryCoordinator({
             ]);
             if (deadline) clearTimeout(deadline);
             if (settled.timedOut) {
+              decision(id, "action-unconfirmed", "Native operation timed out; never blindly duplicate an unknown action.");
               yielded = true;
               lease.yieldToSession(id);
               finishRecoveryAttempt(env, id, "Native action still pending; outcome unknown");
             } else if ("error" in settled) {
+              decision(id, "action-rejected", "Native bridge rejected recovery operation.");
               finishRecoveryAttempt(env, id, "Native action rejected; no verified recovery");
             } else {
               const result = settled.value as { result?: string } | null;
@@ -568,7 +654,7 @@ export function ChatGPTNativeRecoveryCoordinator({
               const confirmed =
                 specialStop ? result?.result === "stop-clicked"
                 : failure === "missing-composer" ? result?.result === "reload-issued"
-                : failure === "load-failure" ? result?.result === "retry-issued"
+                : failure === "load-failure" ? (result?.result === "retry-issued" || result?.result === "reload-issued")
                   : !!result &&
                     typeof result === "object" &&
                     ("nativeReloadIssued" in result || "requestedNavigation" in result);

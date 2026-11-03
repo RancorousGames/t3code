@@ -66,6 +66,8 @@ export interface WarmCandidate {
   readonly selected: boolean;
   readonly deliveryPending?: boolean;
   readonly activeBeforeFailure: boolean;
+  /** A verified recovery target gets the next free automatic warm slot. */
+  readonly recoveryQueued?: boolean;
   readonly recentlyClicked: number; // 0–2 this T3 launch; -1 = not in recent three
   readonly lastActiveAt: number; // Last verified working timestamp
   readonly lastActivityAt: number; // Latest recorded activity or direct interaction
@@ -103,13 +105,14 @@ export function nextWarmChatGPTSession(input: WarmSelection): string | null {
   const priority = (c: WarmCandidate): number => {
     if (c.selected) return 0;
     if (c.deliveryPending) return 1;
-    if (c.activeBeforeFailure) return 2;
-    if (c.recentlyClicked >= 0) return 3;
-    if (c.highlighted) return 4;
-    if (c.lastActiveAt > 0 && c.lastActiveAt >= input.now - RECENT_MS) return 5;
-    if (c.manager) return 6;
-    if (c.lastActivityAt > 0) return 7;
-    return 8;
+    if (c.recoveryQueued) return 2;
+    if (c.activeBeforeFailure) return 3;
+    if (c.recentlyClicked >= 0) return 4;
+    if (c.highlighted) return 5;
+    if (c.lastActiveAt > 0 && c.lastActiveAt >= input.now - RECENT_MS) return 6;
+    if (c.manager) return 7;
+    if (c.lastActivityAt > 0) return 8;
+    return 9;
   };
   const choice = input.candidates
     .filter((candidate) =>
