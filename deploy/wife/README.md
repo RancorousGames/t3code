@@ -1,74 +1,66 @@
-# Windows 11 setup: T3 Code + Monku no Mori
+# T3 Code + Monku no Mori — other-PC updater
 
-This deliberately uses a **separate source checkout on her PC**, not a copy of
-the developer's installation or Windows user profile. Git contains code only;
-Monku projects, ChatGPT logins, T3 sessions, Google logins and provider tokens
-remain local to her Windows account.
+The other PC gets an independent checkout and local profiles. The updater is
+maintained inside Git, not in a standalone script on anyone's Desktop.
 
-## First time (one PC)
+## First-time changeover from the old .ps1
 
-Open PowerShell, install prerequisites:
+Copy **`deploy/wife/T3-Monku-Updater.exe`** from this repo to the other PC
+Desktop and double-click it. It also works on a fresh Windows PC with no
+checkout: the EXE embeds a minimal installer and clones from GitHub.
 
-```powershell
-winget install --id Git.Git -e
-winget install --id OpenJS.NodeJS -e
-winget install --id Python.Python.3.13 -e
-```
+The EXE checks/installs Git, Node, Python 3.13, and pnpm as needed, updates
+`%USERPROFILE%\t3code` from **GitHub `main`**, builds Monku and T3,
+and launches them. Existing `wife-deploy` checkouts fast-forward to `main`;
+local edits, profile data and accounts are never reset.
 
-Open a **new** PowerShell after installation (to refresh PATH):
+Once installed, the desktop shortcut **Update T3 and Monku** points to the
+**repo-owned** `%USERPROFILE%\t3code\deploy\wife\T3-Monku-Updater.exe`.
+Future updates are a double-click. The obsolete Desktop
+`Install-T3-Monku-Latest.ps1` can be deleted once this works.
 
-```powershell
-npm install -g pnpm@12.14.0
-git clone https://github.com/RancorousGames/t3code.git "$env:USERPROFILE\t3code"
-& "$env:USERPROFILE\t3code\deploy\wife\Update-Wife.cmd"
-```
+The EXE automatically stages a temporary copy outside the checkout before
+pulling, so the repo can update the running launcher safely. It fetches new
+installer logic first and then invokes the current
+`deploy/wife/Install-T3-Monku.ps1`, instead of executing a stale Desktop file.
 
-If the repository is private, GitHub may request authorization on the first
-clone/pull. Give her account read access rather than copying your own GitHub
-credentials. Deployments use the `wife-deploy` branch because the fork's GitHub `main`
-has diverged from the developer's local `main`. Push the local main commits
-with `git push origin main:wife-deploy` (fast-forward only); uncommitted changes
-are not included. The updater switches an initial `main` clone to `wife-deploy`.
+## Update behavior
 
-The first successful update creates three Desktop shortcuts: **T3 Code
-(Custom)**, **Monku no Mori**, and **Update T3 + Mori**. Future updates:
-**push commits on your PC; she clicks Update T3 + Mori**. The updater refuses
-non-fast-forward merges and local tracked edits; it never resets her checkout.
+- **Close Monku first.** The updater refuses to modify anything while it is
+  open, rather than discarding unsaved translations.
+- Existing T3 sessions are preserved through the T3 backup/restart workflow;
+  T3 may momentarily disconnect during its own rebuild.
+- Git updates use fast-forward only. A wrong remote, unrelated branch, local
+  tracked changes or build failure stops the update without hard reset.
+- Monku projects remain at `%APPDATA%\MonkuNoMori`, independently of Git.
+  T3 browser sessions and all credentials remain on their own PC.
 
-Do not put projects inside the git checkout. Monku data stays at
-`%APPDATA%\MonkuNoMori`; T3's local data remains independent of
-the developer's. Both are preserved by source updates.
+The updater shows progress/errors in its own window. Log:
+`%LOCALAPPDATA%\T3MonkuInstaller\install.log`.
+For remote launch it supports `--headless` and writes
+`%LOCALAPPDATA%\T3MonkuInstaller\launcher.log`, returning the real exit code.
 
-## T3 remote support
+## Repo maintenance
 
-On **her** T3 instance open **Settings → Sharing & access**. Either sign into
-the same T3 Connect account you use to connect to machines (then select her
-environment on your T3), or enable Network access and use a one-time LAN
-pairing link. Tailscale/pairing can extend this outside the house without
-sharing a T3 Connect login. Windows does not provide the T3 background service;
-leave T3 running when you need to access her environment.
+- Install/update logic: `deploy/wife/Install-T3-Monku.ps1`.
+- EXE source: `deploy/wife/UpdaterLauncher.cs`.
+- Rebuild the versioned EXE after changing either file using
+  `deploy/wife/Build-Updater.ps1` on Windows, then commit the generated
+  `T3-Monku-Updater.exe` with the source. The Windows .NET Framework compiler
+  is sufficient; no extra SDK is required.
+- `Update-Wife.ps1` / `Update-Wife.cmd` remain as compatibility launchers.
+- `Publish-Wife.cmd` publishes committed main and mirrors it to
+  `wife-deploy` only for compatibility with older setups.
 
-T3 remote connection grants access to T3 projects, sessions and agents. It
-is **not Windows Remote Desktop** and does not itself let you click arbitrary
-Windows programs.
+## Linked T3 remote updates
+
+Linked environments can maintain a connection to the other PC, but linking
+alone does not confer Windows desktop access or arbitrary shell execution.
+A remote updater trigger has to run explicitly on the other PC, where this EXE
+can execute headlessly. Updating T3 may interrupt the link during restart.
 
 ## Optional Monku Google Sheets login
 
 `apps/mori-desktop/private/google-oauth-client.json` is intentionally excluded
-from Git. If Google Workspace login is needed, transfer only that OAuth client
-configuration separately, then restart Monku (or configure it in Monku). Do
-not copy your Google or ChatGPT login tokens. Back up her `.mori` projects
-periodically.
-
-## Update behavior
-
-Close **Monku no Mori** before clicking Update; T3 can be running. The update
-downloads the latest wife-deploy branch, installs changed dependencies, builds both
-apps, safely restarts T3, and opens Mori. On a first install with no browser
-sessions, T3 uses its fresh-profile launch path. The log is at
-`%LOCALAPPDATA%\T3MoriDeployment\update.log`.
-
-A missing tool, build failure, uncommitted local edit or non-fast-forward
-history stops the update with an actionable message instead of doing a hard
-reset. Keep the current application profile and repository directory for
-subsequent runs.
+from Git. Configure OAuth separately on the other PC; never copy account tokens
+or Monku projects between Windows profiles.
