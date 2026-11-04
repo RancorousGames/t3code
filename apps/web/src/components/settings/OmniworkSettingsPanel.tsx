@@ -17,6 +17,7 @@ import {
   type ChatGPTBrowserEngine,
 } from "../../browser/persistentChatGPTSessionMode";
 import { OmniworkToolsSection } from "./OmniworkToolsSection";
+import { CaffyV2Settings } from "./CaffyV2Settings";
 import { ChatGPTRecoverySettingsControls } from "../sidebar/ChatGPTRecoverySettingsControls";
 import { useChatGPTDefaultView } from "../../chatGPTSessionViewPreferences";
 import { useChatGPTRestartContinuationEnabled } from "../../omniwork/chatGPTRestartContinuationSetting";
@@ -421,6 +422,7 @@ export function OmniworkSettingsPanel() {
           }
         />
       </SettingsSection>
+      {desktop && <CaffyV2Settings capacityOnly />}
       <SettingsSection title="Live tasks">
         <SettingsRow
           id="omniwork-live-task-runtime"

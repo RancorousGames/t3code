@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import { SettingsSection } from "./settingsLayout";
+import { T3_CAFFY_UPDATED_EVENT } from "../../hooks/useT3CaffyOverview";
 
 interface Monitor {
   sessionId: string;
@@ -28,7 +29,7 @@ interface Capacity {
 }
 
 /** T3 is the only scheduler for all newly created Caffy monitors. */
-export function CaffyV2Settings() {
+export function CaffyV2Settings({ capacityOnly = false }: { capacityOnly?: boolean } = {}) {
   const [config, setConfig] = useState<Config | null>(null);
   const [capacity, setCapacity] = useState<Capacity | null>(null);
   const [limit, setLimit] = useState("6");
@@ -74,13 +75,14 @@ export function CaffyV2Settings() {
     setUpdating(true);
     try {
       await api({ action: "policy", ...input });
+      window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally { setUpdating(false); }
   };
   return (
-    <SettingsSection title="T3-owned Caffy & queued work" headerAction={
+    <SettingsSection title={capacityOnly ? "ChatGPT work capacity" : "T3-owned Caffy & queued work"} headerAction={
       <Button size="xs" variant="ghost-muted" onClick={() => void refresh()}>Refresh</Button>
     }>
       <div className="space-y-3 px-3 py-3 text-xs sm:px-4">
@@ -110,8 +112,8 @@ export function CaffyV2Settings() {
               Limit: {capacity.limit} · Available: {capacity.available}
               {capacity.reason ? ` · ${capacity.reason}` : ""}
             </p>}
-            <p className="font-medium">{config.entries.length} active monitor(s)</p>
-            {config.entries.map(entry => (
+            {!capacityOnly && <p className="font-medium">{config.entries.length} configured monitor(s)</p>}
+            {!capacityOnly && config.entries.map(entry => (
               <div className="space-y-1 rounded border px-2 py-2" key={entry.sessionId}>
                 <div className="font-mono">{entry.sessionId}</div>
                 <div>

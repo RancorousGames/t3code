@@ -18,6 +18,7 @@ import {
   SearchIcon,
   SparklesIcon,
   SlidersHorizontalIcon,
+  TimerResetIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -150,6 +151,7 @@ import { ChatGPTCompletedWorkerCleanup } from "./ChatGPTCompletedWorkerCleanup";
 import { ChatGPTAIInterfaceCleanup } from "./ChatGPTAIInterfaceCleanup";
 import { isAIInterfaceSession } from "../../chatGPTAIInterfaceSessions";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
+import { useT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "../../hooks/useT3CaffyOverview";
 import {
   updateChatGPTRecoverySettings,
   useChatGPTRecoverySettings,
@@ -520,6 +522,16 @@ export function ChatGPTBrowserSidebarEntry({
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [clockNow, setClockNow] = useState(() => Date.now());
+  const caffyOverview = useT3CaffyOverview();
+  const activeCaffyMonitors = useMemo(() => {
+    const entries = new Map<string, NonNullable<typeof caffyOverview>["entries"][number]>();
+    for (const monitor of caffyOverview?.entries ?? []) {
+      if (monitor.paused || (monitor.expiresAt !== null && monitor.expiresAt <= clockNow)) continue;
+      entries.set(monitor.sessionId, monitor);
+      if (monitor.browserSessionId) entries.set(monitor.browserSessionId, monitor);
+    }
+    return entries;
+  }, [caffyOverview, clockNow]);
   const [menuFeedback, setMenuFeedback] = useState<string | null>(null);
   const [menuDialog, setMenuDialog] = useState<ChatGPTSessionMenuDialogState | null>(null);
   const [keepAwakeFeedback, setKeepAwakeFeedback] = useState<string | null>(null);
@@ -561,6 +573,7 @@ export function ChatGPTBrowserSidebarEntry({
     setKeepAwakeFeedback(
       `Caffy scheduled: ${mode === "queued" ? "Queued idle" : mode === "periodic" ? "Every 20 minutes" : "Idle"} · ${onceOnly ? "once" : durationMinutes === undefined ? "infinite" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
     );
+    window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
   };
   useEffect(() => {
     if (!keepAwakeFeedback) return;
@@ -930,6 +943,9 @@ export function ChatGPTBrowserSidebarEntry({
   const activeSessionCount = sessions.filter(
     (session) => activities[session.id]?.age === "working",
   ).length;
+  // This is the T3 work-admission limit, distinct from the warm-webview ceiling.
+  const workCapacity = caffyOverview?.maxWorking ?? null;
+  const belowWorkCapacity = workCapacity !== null && activeSessionCount < workCapacity;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
   // Like Hidden, the Snoozed view falls back to active sessions once it empties.
@@ -1438,6 +1454,7 @@ export function ChatGPTBrowserSidebarEntry({
             await configureCaffy(sessionId, mode, hours * 60);
           }
         }
+        window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
       } else if (action.startsWith("highlight:")) {
         const color = action.slice(10);
         setSessionBorderColor(sessionId, color === "none" ? null : color);
@@ -1797,9 +1814,15 @@ export function ChatGPTBrowserSidebarEntry({
               ChatGPT
             </span>
             <span
-              className="shrink-0 text-2xs font-semibold text-lime-500 dark:text-lime-400"
-              aria-label={`${activeSessionCount} active ChatGPT sessions`}
-              title={`${activeSessionCount} active ChatGPT sessions (including workers hidden from the sidebar)`}
+              className={`shrink-0 text-2xs font-semibold tabular-nums ${belowWorkCapacity
+                ? "text-sky-500 dark:text-sky-400"
+                : "text-lime-500 dark:text-lime-400"}`}
+              aria-label={workCapacity !== null
+                ? `${activeSessionCount} of ${workCapacity} active ChatGPT session capacity`
+                : `${activeSessionCount} active ChatGPT sessions`}
+              title={workCapacity !== null
+                ? `${activeSessionCount}/${workCapacity} active sessions / T3 automatic work capacity (includes hidden workers). Manual sessions can exceed capacity.`
+                : `${activeSessionCount} active ChatGPT sessions (T3 capacity unavailable)`}
             >
               {activeSessionCount}
             </span>
@@ -2545,6 +2568,16 @@ export function ChatGPTBrowserSidebarEntry({
                                 lastRebootAt: null,
                               };
                               const needsAnswer = pendingQuestionIds.has(session.id);
+                              const caffyMonitor = activeCaffyMonitors.get(session.id);
+                              const caffyLabel = caffyMonitor
+                                ? `Caffy: ${caffyMonitor.mode === "queued" ? "Queued wake on idle" :
+                                    caffyMonitor.mode === "idle" ? "Wake on idle" :
+                                    caffyMonitor.mode === "periodic" ? `Periodic every ${caffyMonitor.intervalMinutes} min` :
+                                    "Wake on startup"}${caffyMonitor.onceOnly ? " (once)" : ""}${
+                                    caffyMonitor.mode === "queued" && !caffyOverview?.keepT3Busy
+                                      ? " — waiting for Keep T3 Busy"
+                                      : ""}`
+                                : null;
                               const isVerifiedManager = managerIds.has(session.id);
                               const displayRole = chatGPTSessionDisplayRole(
                                 session,
@@ -2572,6 +2605,9 @@ export function ChatGPTBrowserSidebarEntry({
                                     <div className="text-foreground/75">
                                       {recoveryLabel ?? model.statusLine}
                                     </div>
+                                    {caffyLabel && (
+                                      <div className="text-sky-400/90">{caffyLabel}</div>
+                                    )}
                                     <div className="text-foreground/75">
                                       {isVerifiedManager ? "Manager · " : ""}
                                       {creationOrigin === "manual"
@@ -2878,6 +2914,17 @@ export function ChatGPTBrowserSidebarEntry({
                                                 >
                                                   ?
                                                 </span>
+                                              )}
+                                              {caffyLabel && (
+                                                <TimerResetIcon
+                                                  aria-label={caffyLabel}
+                                                  className={`size-3.5 shrink-0 ${caffyMonitor?.mode === "queued" &&
+                                                    !caffyOverview?.keepT3Busy
+                                                      ? "text-sky-400/50"
+                                                      : "text-sky-400"}`}
+                                                >
+                                                  <title>{caffyLabel}</title>
+                                                </TimerResetIcon>
                                               )}
                                               {Number.isFinite(session.snoozedUntil) &&
                                                 session.snoozedUntil! <= clockNow && (
