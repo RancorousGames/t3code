@@ -16,7 +16,7 @@ interface UpdateStatus {
 
 const statusDirectory = () => join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "T3MoriDeployment");
 const statusFile = () => join(statusDirectory(), "remote-update.json");
-const updateLog = () => join(statusDirectory(), "update.log");
+const updateLog = () => join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "T3MonkuInstaller", "launcher.log");
 
 const readStatus = (): UpdateStatus | null => {
   try {
