@@ -22,6 +22,8 @@ describe("ChatGPT native sidebar menu", () => {
     const menu = buildChatGPTSessionContextMenu(state);
     expect(menu.some((item) => /rename|reload/i.test(item.label))).toBe(false);
     expect(menu.find((item) => item.id === "copy")?.children?.length).toBe(5);
+    expect(menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")?.label)
+      .toBe("ChatGPT URL");
     const parent = menu.find((item) => item.id === "parent");
     expect(parent?.children?.map((item) => item.id)).toEqual(["parent:set", "parent:detach"]);
     expect(parent?.children?.[0]?.children?.[0]?.id).toBe("parent:another");
@@ -29,6 +31,11 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu.find((item) => item.id === "task:open")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "reboot")).toBeDefined();
     expect(menu.find((item) => item.id === "caffy")?.children?.length).toBeGreaterThan(4);
+  });
+  it("disables URL copy when the conversation URL is unavailable", () => {
+    const menu = buildChatGPTSessionContextMenu({ ...state, hasConversationUrl: false });
+    expect(menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")?.disabled)
+      .toBe(true);
   });
   it("offers idle duration presets and nested periodic intervals including custom", () => {
     const menu = buildChatGPTSessionContextMenu({ ...state, caffy: {

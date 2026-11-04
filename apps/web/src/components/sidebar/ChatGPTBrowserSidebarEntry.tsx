@@ -1254,6 +1254,7 @@ export function ChatGPTBrowserSidebarEntry({
           now: Date.now(),
           working: activities[sessionId]?.age === "working",
           hasTask: !!session.binding?.taskRef,
+          hasConversationUrl: !!savedUrl,
           caffy: activeCaffy,
           keepT3Busy: Boolean(keepT3Busy),
         }).filter((item) => item.id !== "reboot" && item.id !== "snooze:clear"),

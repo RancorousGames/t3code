@@ -49,6 +49,8 @@ describe("ChatGPT session actions", () => {
     expect(availableChatGPTSessionActions(normal).some((action) => action.id === "agent_reboot")).toBe(false);
     const guarded = context({ age: "inactive" }, { canReboot: true, canReload: true });
     expect(chatGPTNativeActionMenu(guarded).map((item) => item.id)).toContain("registry:agent_reboot");
+    expect(chatGPTNativeActionMenu({ ...guarded, hasConversationUrl: true })
+      .some((item) => item.id === "registry:copy_url")).toBe(false);
     const caller = vi.fn(async () => ({ ok: true }));
     await runChatGPTSessionAction("agent_reboot", "target-id", guarded, caller);
     expect(caller).toHaveBeenCalledWith("agent_reboot", "target-id");

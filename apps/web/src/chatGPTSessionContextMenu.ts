@@ -41,6 +41,7 @@ export function buildChatGPTSessionContextMenu(input: {
   now: number;
   working: boolean;
   hasTask: boolean;
+  hasConversationUrl?: boolean;
   caffy?: { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
     onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
     intervalMinutes: number } | null;
@@ -88,7 +89,7 @@ export function buildChatGPTSessionContextMenu(input: {
       children: [
         item("copy:t3-id", "T3 Session ID"),
         item("copy:conversation-id", "ChatGPT Conversation ID"),
-        item("copy:url", "ChatGPT URL"),
+        item("copy:url", "ChatGPT URL", { disabled: input.hasConversationUrl === false }),
         item("copy:title", "Session title"),
         item("copy:parent-id", "Parent Session ID", {
           disabled: !Boolean(session.parentSessionId),

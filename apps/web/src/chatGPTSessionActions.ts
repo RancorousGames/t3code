@@ -110,7 +110,7 @@ export function chatGPTNativeActionMenu(
   context: ChatGPTSessionActionContext,
 ): ContextMenuItem<string>[] {
   const nativeIds: readonly ChatGPTSessionActionId[] = [
-    "open", "reload", "unsnooze", "agent_reboot", "copy_url",
+    "open", "reload", "unsnooze", "agent_reboot",
   ];
   return availableChatGPTSessionActions(context)
     .filter((action) => nativeIds.includes(action.id))

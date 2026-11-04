@@ -163,13 +163,16 @@ export const make = Effect.gen(function* () {
         hasInsertedDestructiveSeparator = true;
       }
 
+      const hasSubmenu = !!item.children?.length;
       const itemOption: Electron.MenuItemConstructorOptions = {
-        label: item.label,
+        label: hasSubmenu && item.checked ? `✓ ${item.label}` : item.label,
         enabled: !item.disabled,
-        ...(typeof item.checked === "boolean" ? { type: "checkbox", checked: item.checked } : {}),
+        // Electron checkbox items cannot also act as submenu triggers.
+        ...(hasSubmenu ? { type: "submenu" } :
+          typeof item.checked === "boolean" ? { type: "checkbox", checked: item.checked } : {}),
       };
-      if (item.children && item.children.length > 0) {
-        itemOption.submenu = buildTemplate(item.children, complete);
+      if (hasSubmenu) {
+        itemOption.submenu = buildTemplate(item.children!, complete);
       } else {
         itemOption.click = () => complete(Option.some(item.id));
       }
