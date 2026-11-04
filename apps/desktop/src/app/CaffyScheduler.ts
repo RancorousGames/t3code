@@ -68,7 +68,8 @@ export class CaffyScheduler {
   private shutdownError: string | null = null;
   private readonly shutdownPC: () => void;
   private readonly workingReports = new Map<string, { observedAt: number; ids: Set<string> }>();
-  private taskReservations = 0;
+  private taskReservations: Array<{requestId: string; sessionId: string | null}> = [];
+  private taskBoardInventoryReady = false;
   private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private pumping = false;
@@ -773,8 +774,15 @@ export class CaffyScheduler {
       ? response.data as Record<string, unknown> : null;
   }
 
-  setTaskReservations(count: number) {
-    this.taskReservations = Math.max(0, Math.floor(count));
+  setTaskReservations(
+    reservations: ReadonlyArray<{requestId: string; sessionId: string | null}>,
+    inventoryReady = true,
+  ) {
+    this.taskReservations = reservations.map(row => ({
+      requestId: row.requestId,
+      sessionId: row.sessionId,
+    }));
+    this.taskBoardInventoryReady = inventoryReady;
   }
 
   async capacity(extraReserved = 0): Promise<{
@@ -785,7 +793,7 @@ export class CaffyScheduler {
     const policy = this.keepT3Busy;
     const unavailable = (reason: string) => ({
       observedAt: new Date().toISOString(), limit: this.maxWorking,
-      working: 0, reserved: extraReserved + this.taskReservations, unknown: 1,
+      working: 0, reserved: extraReserved + this.taskReservations.length, unknown: 1,
       used: this.maxWorking, available: 0, admissible: false, reason,
     });
     const reply = await this.request({
@@ -820,8 +828,18 @@ export class CaffyScheduler {
         .some(id => !!id && workingIds.has(canonical(id))) &&
       (row.pendingMessageId !== null ||
         (row.lastWakeAt !== null && now - row.lastWakeAt < 120_000))).length;
-    const totalReserved = reserved + extraReserved + this.taskReservations;
+    const taskReserved = this.taskReservations.filter(row =>
+      !row.sessionId || !workingIds.has(canonical(row.sessionId))).length;
+    const totalReserved = reserved + extraReserved + taskReserved;
     const used = workingIds.size + totalReserved;
+    if (!this.taskBoardInventoryReady) {
+      return {
+        observedAt: new Date(now).toISOString(), limit: this.maxWorking,
+        working: workingIds.size, reserved: totalReserved, unknown: 1,
+        used: this.maxWorking, available: 0, admissible: false,
+        reason: "TaskBoard queue reservation inventory unavailable",
+      };
+    }
     return {
       observedAt: new Date(now).toISOString(), limit: this.maxWorking,
       working: workingIds.size, reserved: totalReserved, unknown: 0,
@@ -852,7 +870,7 @@ export class CaffyScheduler {
         } catch { return true; } // UNKNOWN outbox outcome: fail closed.
       });
       if (snapshot.unknown > 0 || snapshot.working > 0 || sending ||
-          this.taskReservations > 0) {
+          this.taskReservations.length > 0 || !this.taskBoardInventoryReady) {
         this.shutdownIdleSince = null;
         return;
       }

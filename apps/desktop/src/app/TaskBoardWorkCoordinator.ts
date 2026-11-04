@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 import * as NodeCP from "node:child_process";
 import type { CaffyScheduler } from "./CaffyScheduler.ts";
 
-interface Project { id: string; name: string; path: string }
+interface Project { id: string; name: string; path: string; dispatchEnabled: boolean }
 interface Catalog { schema: 1; projects: Project[]; hiddenPaths?: string[] }
 type QueueState = "queued" | "reserved" | "starting" | "working" | "completed";
 interface QueueItem {
@@ -26,11 +26,25 @@ interface QueueItem {
   legacyOpenRig: boolean;
   error?: string | null;
 }
-interface QueueSnapshot { boardRoot: string; items: QueueItem[] }
-const ROOT = process.env.T3CODE_HOME
-  ? NodePath.resolve(process.env.T3CODE_HOME, "..")
-  : NodePath.resolve(process.cwd(), "..", "..");
-const TASKBOARD_CLI = NodePath.resolve(ROOT, "..", "TaskBoard", "packages", "task-cli", "target", "release", "taskboard.exe");
+interface QueueSnapshot { boardRoot: string; items: QueueItem[]; dispatchEnabled: boolean }
+const ROOT_CANDIDATES = [
+  process.env.T3CODE_REPO_ROOT,
+  NodePath.resolve(import.meta.dirname, "..", "..", "..", ".."),
+  process.cwd(),
+  NodePath.resolve(process.cwd(), ".."),
+  NodePath.resolve(process.cwd(), "..", ".."),
+  "D:\\SSDProjects\\Tools\\t3code",
+].filter((value): value is string => !!value).map(value => NodePath.resolve(value));
+function resolveRoot(): string {
+  const root = ROOT_CANDIDATES.find(value =>
+    NodeFS.existsSync(NodePath.join(value, "scripts", "taskboard-dispatch.mjs")));
+  if (!root) throw new Error("T3 TaskBoard dispatcher scripts could not be located.");
+  return root;
+}
+const ROOT = resolveRoot();
+const TASKBOARD_CLI = process.env.TASKBOARD_CLI
+  ? NodePath.resolve(process.env.TASKBOARD_CLI)
+  : NodePath.resolve(ROOT, "..", "TaskBoard", "packages", "task-cli", "target", "release", "taskboard.exe");
 const TASKBOARD_CATALOG = () => NodePath.join(
   process.env.APPDATA ?? NodePath.join(process.env.USERPROFILE ?? "", "AppData", "Roaming"),
   "TaskBoard", "projects.json",
@@ -79,6 +93,7 @@ function rootKey(value: string) { return NodePath.resolve(value).toLowerCase(); 
 
 export class TaskBoardWorkCoordinator {
   private readonly caffy: CaffyScheduler;
+  private readonly home: string;
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private busy = false;
@@ -86,58 +101,76 @@ export class TaskBoardWorkCoordinator {
   private lastObservedAt: string | null = null;
   private snapshots: QueueSnapshot[] = [];
 
-  constructor(_stateDir: string, caffy: CaffyScheduler) {
+  constructor(stateDir: string, caffy: CaffyScheduler) {
     this.caffy = caffy;
+    // The desktop state directory is <T3 home>/userdata (or /dev in a
+    // source-checkout run). Standalone CLI requests must use the same pipe.
+    this.home = NodePath.resolve(stateDir, "..");
   }
 
   private projects(): Project[] {
     let catalog: Catalog;
     try { catalog = JSON.parse(NodeFS.readFileSync(TASKBOARD_CATALOG(), "utf8")) as Catalog; }
-    catch { return []; }
-    if (catalog.schema !== 1 || !Array.isArray(catalog.projects)) return [];
+    catch (error) { throw new Error(`TaskBoard project catalog unavailable: ${String(error)}`); }
+    if (catalog.schema !== 1 || !Array.isArray(catalog.projects) ||
+        (catalog.hiddenPaths !== undefined &&
+          (!Array.isArray(catalog.hiddenPaths) || catalog.hiddenPaths.some(path => typeof path !== "string"))))
+      throw new Error("TaskBoard project catalog has an unsupported schema.");
     const hidden = new Set((catalog.hiddenPaths ?? []).map(rootKey));
     const seen = new Set<string>();
-    return catalog.projects.filter(project => {
-      if (!project || typeof project.path !== "string") return false;
+    const projects: Project[] = [];
+    for (const project of catalog.projects) {
+      if (!project || typeof project.path !== "string" || !NodePath.isAbsolute(project.path))
+        throw new Error("TaskBoard project catalog contains an invalid board path.");
       const key = rootKey(project.path);
-      if (seen.has(key) || hidden.has(key) || !NodeFS.existsSync(NodePath.join(project.path, "_board.md")))
-        return false;
+      if (seen.has(key)) continue;
+      if (!NodeFS.existsSync(NodePath.join(project.path, "_board.md")))
+        throw new Error(`TaskBoard project board is missing: ${project.path}`);
       seen.add(key);
-      return true;
-    });
+      // Hidden projects still contribute live reservation capacity and Starting
+      // reconciliation; only new selections are suppressed while hidden.
+      projects.push({ ...project, dispatchEnabled: !hidden.has(key) });
+    }
+    return projects;
   }
 
   private async readQueues(): Promise<QueueSnapshot[]> {
     if (!NodeFS.existsSync(TASKBOARD_CLI)) throw new Error("Local TaskBoard CLI missing.");
-    const snapshots: QueueSnapshot[] = [];
-    for (const project of this.projects()) {
-      try {
+    try {
+      const snapshots: QueueSnapshot[] = [];
+      for (const project of this.projects()) {
         const output = await cli(TASKBOARD_CLI, [
           "--json", "--root", project.path, "task", "queue", "list",
         ]) as { schema?: string; boardRoot?: string; items?: QueueItem[]; observedAt?: string };
         if (output.schema !== "taskboard-dispatch-queue/v1" ||
             rootKey(output.boardRoot ?? "") !== rootKey(project.path) ||
             !Array.isArray(output.items)) {
-          throw new Error("TaskBoard returned an invalid dispatch queue snapshot.");
+          throw new Error(`TaskBoard ${project.name} returned an invalid dispatch queue snapshot.`);
         }
-        snapshots.push({ boardRoot: project.path, items: output.items });
+        snapshots.push({ boardRoot: project.path, items: output.items, dispatchEnabled: project.dispatchEnabled });
         this.lastObservedAt = output.observedAt ?? new Date().toISOString();
-      } catch (error) {
-        this.lastError = `TaskBoard ${project.name}: ${String(error)}`;
       }
+      this.snapshots = snapshots;
+      this.lastError = null;
+      this.syncReservations(true);
+      return snapshots;
+    } catch (error) {
+      // Never admit another T3 automatic worker from a partial/unknown TaskBoard
+      // inventory. Preserve the last known reservations but fail closed.
+      this.syncReservations(false);
+      throw error;
     }
-    this.snapshots = snapshots;
-    this.syncReservations();
-    return snapshots;
   }
 
   private reservations(snapshots = this.snapshots): Array<{
-    boardRoot: string; taskId: string; requestId: string; state: "reserved" | "starting";
-    expiresAt: string | null;
+    boardRoot: string; taskId: string; requestId: string;
+    state: "reserved" | "starting" | "working";
+    expiresAt: string | null; sessionId: string | null;
   }> {
     const now = Date.now();
     return snapshots.flatMap(board => board.items.flatMap(item => {
-      if ((item.state !== "reserved" && item.state !== "starting") ||
+      const state = item.state;
+      if ((state !== "reserved" && state !== "starting" && state !== "working") ||
           !item.reservationId || item.legacyOpenRig) return [];
       const expiresAt = item.reservationExpiresAt ?? null;
       // An expired reservation which never entered Starting is not capacity.
@@ -145,13 +178,15 @@ export class TaskBoardWorkCoordinator {
           Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) <= now) return [];
       return [{
         boardRoot: board.boardRoot, taskId: item.taskId, requestId: item.reservationId,
-        state: item.state, expiresAt,
+        state, expiresAt, sessionId: state === "working" ? item.sessionId ?? null : null,
       }];
     }));
   }
 
-  private syncReservations() {
-    this.caffy.setTaskReservations(this.reservations().length);
+  private syncReservations(inventoryReady: boolean) {
+    this.caffy.setTaskReservations(this.reservations().map(row => ({
+      requestId: row.requestId, sessionId: row.sessionId,
+    })), inventoryReady);
   }
 
   status() {
@@ -163,7 +198,7 @@ export class TaskBoardWorkCoordinator {
       reservations,
       lastError: this.lastError,
       queued: this.snapshots.reduce((n, board) => n + board.items.filter(item =>
-        item.state === "queued" && !item.legacyOpenRig).length, 0),
+        item.state === "queued" && !item.claimed && !item.legacyOpenRig).length, 0),
       legacyOpenRig: this.snapshots.reduce((n, board) => n + board.items.filter(item =>
         item.legacyOpenRig).length, 0),
     };
@@ -174,7 +209,9 @@ export class TaskBoardWorkCoordinator {
     this.running = true;
     this.timer = setInterval(() => { void this.pump(); }, PUMP_INTERVAL_MS);
     this.timer.unref?.();
-    // Let the session inventory and live working snapshot recover on startup.
+    // Refresh TaskBoard-owned reservations immediately for accurate capacity;
+    // delay only admission until T3's working-session inventory has recovered.
+    void this.readQueues().catch(error => { this.lastError = String(error); });
     setTimeout(() => { void this.pump(); }, 12_000).unref?.();
   }
 
@@ -182,7 +219,7 @@ export class TaskBoardWorkCoordinator {
     this.running = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    this.caffy.setTaskReservations(0);
+    this.caffy.setTaskReservations([], false);
   }
 
   private async taskCommand(boardRoot: string, args: string[]) {
@@ -203,13 +240,14 @@ export class TaskBoardWorkCoordinator {
   private async starting(item: QueueItem, boardRoot: string, requestId: string) {
     if (!this.running) return;
     const result = await cli("node.exe", [
-      NodePath.join(ROOT, "scripts", "chatgpt-sessions.mjs"),
+      NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
     ], JSON.stringify({
       action: "open-task",
       taskRef: { board: boardRoot, id: item.taskId },
       intent: "implement", kind: "chatgpt", background: true,
       requireQueue: true, queueRequest: item.queueRequest, reservationId: requestId,
-    }), 115_000) as { status?: string; sessionId?: string; message?: string; definitelyNotCreated?: boolean };
+      home: this.home,
+    }), 115_000) as { status?: string; sessionId?: string; message?: string; definitelyNotCreated?: boolean }
 
     if (result.definitelyNotCreated === true) {
       await this.taskCommand(boardRoot, [
@@ -250,7 +288,7 @@ export class TaskBoardWorkCoordinator {
         .map(item => ({ boardRoot: board.boardRoot, item })));
       if (starting.length) {
         const next = starting[0]!;
-        this.syncReservations();
+        this.syncReservations(true);
         await this.starting(next.item, next.boardRoot, next.item.reservationId!);
         return;
       }
@@ -259,18 +297,19 @@ export class TaskBoardWorkCoordinator {
       if (!this.caffy.policyEnabled) return;
 
       // Resume an unexpired Reserved task, or replace an expired lease.
-      const reserved = snapshots.flatMap(board => board.items
+      const reserved = snapshots.flatMap(board => board.dispatchEnabled ? board.items
         .filter(item => item.state === "reserved" && item.reservationId && !item.legacyOpenRig)
-        .map(item => ({ boardRoot: board.boardRoot, item })));
+        .map(item => ({ boardRoot: board.boardRoot, item })) : []);
       if (reserved.length) {
         const next = reserved[0]!;
         const expiry = Date.parse(next.item.reservationExpiresAt ?? "");
         const liveLease = Number.isFinite(expiry) && expiry > Date.now();
         if (liveLease) {
-          this.syncReservations();
-          // A reservation already occupies one slot, so admissible=false
-          // at exactly 3/3 is expected. But a user may have started more
-          // workers since the reservation was made; never oversubscribe.
+          this.syncReservations(true);
+          // The reservation already occupies one slot, so admissible=false
+          // at precisely 3/3 is expected. But a human may have started more
+          // workers since the reservation was made. Never move Reserved to
+          // Starting if actual workers + all reservations now exceed the cap.
           const capacity = await this.caffy.capacity().catch(() => null);
           if (!capacity || capacity.unknown > 0 || capacity.used > capacity.limit) return;
           await this.startReserved(next.boardRoot, next.item, next.item.reservationId!);
@@ -293,10 +332,10 @@ export class TaskBoardWorkCoordinator {
         return;
       }
 
-      const queued = snapshots.flatMap(board => board.items
+      const queued = snapshots.flatMap(board => board.dispatchEnabled ? board.items
         .filter(item => item.state === "queued" && item.readiness && !item.claimed &&
           !item.legacyOpenRig && UUID.test(item.queueRequest))
-        .map(item => ({ boardRoot: board.boardRoot, item })));
+        .map(item => ({ boardRoot: board.boardRoot, item })) : []);
       queued.sort((a, b) =>
         (a.item.priority === "urgent" ? 0 : 1) - (b.item.priority === "urgent" ? 0 : 1) ||
         a.item.created.localeCompare(b.item.created) ||
@@ -319,7 +358,7 @@ export class TaskBoardWorkCoordinator {
           await this.readQueues();
           continue;
         }
-        this.syncReservations();
+        this.syncReservations(true);
         await this.startReserved(candidate.boardRoot, candidate.item, requestId);
         return; // One selection at a time; capacity is sampled again next pump.
       }

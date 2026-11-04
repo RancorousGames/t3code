@@ -21,6 +21,7 @@ import { controlNativeThreads } from "./t3-native-threads.mjs";
 
 const execFile = promisify(execFileCallback);
 const ROOT = Path.resolve(import.meta.dirname, "..");
+const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
 function taskboardExecutable() {
   if (process.env.TASKBOARD_CLI) return process.env.TASKBOARD_CLI;
@@ -110,33 +111,79 @@ export async function openTaskSession(
     throw error;
   }
   try {
+    let priorAttempt = null;
+    try {
+      priorAttempt = JSON.parse(await FSP.readFile(journal, "utf8"));
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
     const shown = await command(board, ["task", "show", id]);
     const task = shown.task ?? shown;
     if (task.id !== id) throw Error("TaskBoard returned a different task identity.");
     if (input.requireQueue === true) {
-      // Automatic pickup is authorized only by a current, exact TaskBoard queue
-      // identity while its per-task launch lock is held. Manual Start now skips
-      // this gate entirely.
-      const intent = await command(board, ["task", "execution", id, "show"]);
-      if (typeof input.queueRequest !== "string" ||
-          intent.mode !== "queue" ||
-          intent.queue_request !== input.queueRequest ||
-          intent.queue_attempt || intent.queue_receipt ||
-          intent.queue_retired_receipt || intent.start_now_request ||
-          task.column !== "ai-ready" || task.archived ||
-          task.completed || task.claimed_by || task.kind !== "task" &&
-          task.kind !== "recurring" ||
-          task.attention?.some(flag => ["blocked", "needs-user", "question"].includes(flag)) ||
-          task.blocked_reason || task.review_status === "open") {
-        return {
-          taskRef: {board, id}, status: "no_longer_queued", created: false,
-          message: "Queued task changed or is no longer executable. No session was started.",
-        };
+      // T3 may dispatch only a TaskBoard-owned reservation. The TaskBoard
+      // board lock is the authority for the request ID and lifecycle state.
+      const queueIntent = await command(board, ["task", "execution", id, "show"]);
+      const reservationId = input.reservationId;
+      const alreadyWorking = queueIntent.queue_state === "working" &&
+        queueIntent.queue_reservation_id === reservationId &&
+        typeof queueIntent.queue_session_id === "string" &&
+        task.claimed_by === `t3:${queueIntent.queue_session_id}`;
+      const legacyQitem = typeof queueIntent.queue_request === "string"
+        ? `qitem-taskboard-${queueIntent.queue_request}` : null;
+      const priorReservationAttempt = priorAttempt?.requestId === reservationId;
+      const legacyOpenRig = (queueIntent.queue_attempt || queueIntent.queue_receipt) &&
+        queueIntent.queue_retired_receipt !== legacyQitem;
+      const identityInvalid = typeof input.queueRequest !== "string" ||
+        typeof reservationId !== "string" || !UUID.test(reservationId) ||
+        queueIntent.mode !== "queue" ||
+        queueIntent.queue_request !== input.queueRequest ||
+        queueIntent.queue_reservation_id !== reservationId ||
+        !["starting", "working"].includes(queueIntent.queue_state) || legacyOpenRig;
+      const taskInvalid = task.archived || task.completed || task.kind !== "task" &&
+        task.kind !== "recurring";
+      const noLongerReady = !alreadyWorking && (task.claimed_by || task.column !== "ai-ready" ||
+        task.attention?.some(flag => ["blocked", "needs-user", "question"].includes(flag)) ||
+        task.blocked_reason || task.review_status === "open" || shown.readiness !== "ready");
+      if (priorAttempt && !priorReservationAttempt) {
+        // A TaskBoard queue item may be dispatched again after its previous T3
+        // worker was durably marked Working and later released. The board's
+        // new Starting reservation is only possible after that prior lifecycle
+        // left Starting; an unresolved spawn is never auto-requeued by TaskBoard.
+        // Retire only this task's exact old journal, and only for a fresh,
+        // unclaimed Starting reservation with the same immutable queue request.
+        const supersededQueueAttempt =
+          queueIntent.mode === "queue" &&
+          queueIntent.queue_request === input.queueRequest &&
+          queueIntent.queue_state === "starting" &&
+          queueIntent.queue_reservation_id === reservationId &&
+          !task.claimed_by &&
+          priorAttempt.intent === "implement" &&
+          priorAttempt.kind === "chatgpt" &&
+          UUID.test(priorAttempt.requestId ?? "");
+        if (supersededQueueAttempt) {
+          const saved = JSON.parse(await FSP.readFile(journal, "utf8"));
+          if (saved.requestId !== priorAttempt.requestId)
+            throw Error("Spawn journal changed during queue lifecycle reconciliation.");
+          await FSP.rm(journal);
+          priorAttempt = null;
+        } else {
+          return {
+            taskRef: {board, id}, status: "reconcile_required", created: false,
+            definitelyNotCreated: false,
+            message: "The durable T3 spawn journal belongs to a different request ID; preserve this reservation for manual reconciliation.",
+          };
+        }
       }
-      if (shown.readiness !== "ready") {
+      if (identityInvalid || taskInvalid || (noLongerReady && !priorReservationAttempt)) {
+        const definitelyNotCreated = !priorReservationAttempt;
         return {
-          taskRef: {board, id}, status: "blocked", created: false,
-          message: "Canonical TaskBoard readiness is not ready. No session was started.",
+          taskRef: {board, id},
+          status: definitelyNotCreated ? "no_longer_queued" : "reconcile_required",
+          created: false, definitelyNotCreated,
+          message: priorReservationAttempt
+            ? "A prior spawn attempt exists; task eligibility changed, so preserve Starting and reconcile the exact T3 session."
+            : "TaskBoard reservation or queue eligibility changed. No session was started.",
         };
       }
     }
@@ -187,12 +234,6 @@ export async function openTaskSession(
       return { taskRef, status: "opened", kind: "native", threadId, created: false };
     }
     if (claim) throw Error(`Task is claimed by ${claim}; will not take another agent's claim.`);
-    let priorAttempt = null;
-    try {
-      priorAttempt = JSON.parse(await FSP.readFile(journal, "utf8"));
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
     if (input.intent && !["conversation", "implement"].includes(input.intent))
       throw Error("intent must be conversation or implement.");
     const intent = priorAttempt?.intent ?? input.intent ?? "conversation";
@@ -215,7 +256,7 @@ export async function openTaskSession(
           taskBoard: board,
           taskId: id,
         },
-        priorAttempt?.requestId ?? Crypto.randomUUID(),
+        priorAttempt?.requestId ?? (input.requireQueue === true ? input.reservationId : undefined) ?? Crypto.randomUUID(),
       );
       const address = controlAddress(home);
       let response;
@@ -223,7 +264,11 @@ export async function openTaskSession(
         // Persist the correlation key before any operation that could create a guest.
         await FSP.writeFile(
           journal,
-          JSON.stringify({ kind, intent, requestId: request.requestId }),
+          JSON.stringify({
+            kind, intent, requestId: request.requestId,
+            taskRef: { board, id },
+            queueRequest: input.requireQueue === true ? input.queueRequest : null,
+          }),
           { flag: "wx" },
         );
         try {
@@ -232,7 +277,35 @@ export async function openTaskSession(
           /* indeterminate */
         }
       }
-      const receipt = response ? classifySpawnResponse(response, request) : null;
+      let receipt;
+      try {
+        receipt = response ? classifySpawnResponse(response, request) : null;
+      } catch (error) {
+        // A correlated negative T3 response is a definitive rejection before
+        // session creation. Only this case may release the TaskBoard start slot.
+        if (response?.ok === false) {
+          try {
+            const saved = JSON.parse(await FSP.readFile(journal, "utf8"));
+            if (saved.requestId !== request.requestId)
+              throw new Error("Spawn journal belongs to another request.");
+            await FSP.rm(journal);
+          } catch (cleanupError) {
+            // Without removing the exact failed request's journal we cannot
+            // accept a fresh reservation ID; keep Starting and reconcile.
+            return {
+              taskRef, status: "rejected_reconcile_required", created: false,
+              definitelyNotCreated: false, requestId: request.requestId,
+              message: `T3 rejected before creation, but its journal could not be safely reset: ${String(cleanupError)}`,
+            };
+          }
+          return {
+            taskRef, status: "rejected", created: false, definitelyNotCreated: true,
+            requestId: request.requestId,
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+        throw error;
+      }
       const result = receipt ?? (await reconcileCreatedSpawn(address, request, exchange));
       if (!result.sessionId)
         return {
@@ -244,7 +317,16 @@ export async function openTaskSession(
         };
       // Backend-created sessions have permanent IDs at spawn. The canonical
       // public t3: prefix also works with the new Bootstrap session registry.
-      await command(board, ["task", "claim", "--agent", `t3:${result.sessionId}`, id]);
+      if (input.requireQueue === true) {
+        await command(board, [
+          "task", "queue", "working", id,
+          "--queue-request", input.queueRequest,
+          "--request-id", input.reservationId,
+          "--session-id", result.sessionId,
+        ]);
+      } else {
+        await command(board, ["task", "claim", "--agent", `t3:${result.sessionId}`, id]);
+      }
       if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
       if (!input.background)
         await control({ action: "focus", sessionId: result.sessionId }, { home, exchange });
