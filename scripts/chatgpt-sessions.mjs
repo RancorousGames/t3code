@@ -20,16 +20,16 @@ export async function controlSessions(
     return computeChatGPTCapacityStatus(inventory);
   }
   if (input?.action === "caffy") {
-    const actions = new Set(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks"]);
+    const actions = new Set(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "working_snapshot"]);
     if (!actions.has(input.op)) throw new Error("Unknown Caffy operation.");
     const fields = ["action", "op", "sessionId", "conversationId", "mode",
       "durationMinutes", "intervalMinutes", "onceOnly", "startup", "keepAwake",
-      "keepT3Busy", "maxWorking"];
+      "keepT3Busy", "maxWorking", "shutdownWhenIdle", "workingSessionIds", "workingReporterId"];
     if (Object.keys(input).some(field => !fields.includes(field)))
       throw new Error("Unexpected Caffy fields.");
     if (input.op === "set" && (!input.sessionId || !input.mode))
       throw new Error("Caffy set requires sessionId and mode; T3 resolves the exact conversation.");
-    if (!["list", "policy", "status", "capacity", "tasks"].includes(input.op) && typeof input.sessionId !== "string")
+    if (!["list", "policy", "status", "capacity", "tasks", "working_snapshot"].includes(input.op) && typeof input.sessionId !== "string")
       throw new Error("Caffy action requires sessionId.");
     const { action: _action, op, ...args } = input;
     const response = await exchange(controlAddress(home), {

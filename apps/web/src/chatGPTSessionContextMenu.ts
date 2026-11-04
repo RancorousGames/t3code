@@ -45,7 +45,6 @@ export function buildChatGPTSessionContextMenu(input: {
   caffy?: { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
     onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
     intervalMinutes: number } | null;
-  keepT3Busy?: boolean;
 }): MenuItem[] {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
@@ -184,7 +183,6 @@ export function buildChatGPTSessionContextMenu(input: {
           checked: input.caffy?.startup ?? false,
           separatorBefore: true,
         }),
-        item("caffy:busy", "Keep T3 Busy (queued work)", { checked: input.keepT3Busy ?? false }),
         item("caffy:stop", "Stop Caffy", {
           disabled: !input.caffy,
           separatorBefore: true,

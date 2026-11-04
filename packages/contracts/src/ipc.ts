@@ -1906,7 +1906,7 @@ export interface DesktopBridge {
   readChatGPTDeliveryDiagnostics?: () => Promise<DesktopChatGPTDeliveryDiagnostics>;
   /** Durable T3-owned Caffy API; no OpenRig dependency. */
   caffyControl?: (input: {
-    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks";
+    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "working_snapshot";
     sessionId?: string;
     conversationId?: string;
     mode?: "idle" | "periodic" | "queued" | "startup";
@@ -1917,6 +1917,9 @@ export interface DesktopBridge {
     keepAwake?: boolean;
     keepT3Busy?: boolean;
     maxWorking?: number;
+    shutdownWhenIdle?: boolean;
+    workingSessionIds?: readonly string[];
+    workingReporterId?: string;
   }) => Promise<unknown>;
   /** Read-only OpenRig Caffy managed idle subscriptions (not T3 queued messages). */
   /** Shared OpenRig capacity admission for T3 Wait for slot messages. */

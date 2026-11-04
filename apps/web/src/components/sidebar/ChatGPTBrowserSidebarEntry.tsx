@@ -1,3 +1,4 @@
+// @effect-diagnostics cryptoRandomUUID:off -- Ephemeral browser-window reporter ID for multi-window activity telemetry.
 import { useAtomValue } from "@effect/atom-react";
 import { publicChatGPTParentId, publicChatGPTSessionId } from "../../chatGPTBootstrapIdentity";
 import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
@@ -549,6 +550,36 @@ export function ChatGPTBrowserSidebarEntry({
   };
   const [clockNow, setClockNow] = useState(() => Date.now());
   const caffyOverview = useT3CaffyOverview();
+  const [viewPolicyBusy, setViewPolicyBusy] = useState(false);
+  const [workingReporterId] = useState(() => crypto.randomUUID());
+  const updateViewCaffyPolicy = async (
+    input: { keepT3Busy?: boolean; shutdownWhenIdle?: boolean },
+  ) => {
+    const api = window.desktopBridge?.caffyControl;
+    if (!api || viewPolicyBusy) return;
+    if (input.shutdownWhenIdle === true) {
+      const warning = "Force shutdown this PC when all ChatGPT sessions have been idle for at least 30 seconds? All running programs will be closed without saving. The setting automatically switches OFF before shutdown.";
+      const approved = await (
+        readLocalApi()?.dialogs.confirm(warning, { variant: "destructive" }) ??
+        Promise.resolve(window.confirm(warning))
+      );
+      if (!approved) return;
+    }
+    setViewPolicyBusy(true);
+    try {
+      await api({ action: "policy", ...input });
+      window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+      setMenuFeedback(input.shutdownWhenIdle === true
+        ? "Forced PC shutdown armed. It will disarm before initiating shutdown."
+        : input.shutdownWhenIdle === false
+          ? "Automatic PC shutdown cancelled."
+          : input.keepT3Busy ? "Keep T3 Busy enabled." : "Keep T3 Busy disabled.");
+    } catch (error) {
+      setMenuFeedback(`Caffy policy failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setViewPolicyBusy(false);
+    }
+  };
   const activeCaffyMonitors = useMemo(() => {
     const entries = new Map<string, NonNullable<typeof caffyOverview>["entries"][number]>();
     for (const monitor of caffyOverview?.entries ?? []) {
@@ -970,6 +1001,29 @@ export function ChatGPTBrowserSidebarEntry({
   const activeSessionCount = sessions.filter(
     (session) => activities[session.id]?.age === "working",
   ).length;
+  // The same exact working IDs shown in the header gate backend auto-admission.
+  const workingSessionIds = sessions.filter(session => activities[session.id]?.age === "working")
+    .map(session => session.id);
+  const workingIdsKey = workingSessionIds.join(",");
+  const allSessionIdsKey = sessions.map(session => session.id).join(",");
+  useEffect(() => {
+    const report = window.desktopBridge?.caffyControl;
+    if (!report) return;
+    let disposed = false;
+    let busy = false;
+    const send = async () => {
+      if (disposed || busy || !environmentId ||
+          (sessions.length > 0 && !sessions.every(s => activities[s.id]))) return;
+      busy = true;
+      try {
+        await report({ action: "working_snapshot", workingSessionIds, workingReporterId });
+      } catch { /* Backend fails closed when this live count is unavailable. */ }
+      finally { busy = false; }
+    };
+    void send();
+    const timer = window.setInterval(() => { void send(); }, 8_000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [workingIdsKey, workingReporterId, allSessionIdsKey, environmentId, Object.keys(activities).length]);
   // This is the T3 work-admission limit, distinct from the warm-webview ceiling.
   const workCapacity = caffyOverview?.maxWorking ?? null;
   const belowWorkCapacity = workCapacity !== null && activeSessionCount < workCapacity;
@@ -1255,9 +1309,6 @@ export function ChatGPTBrowserSidebarEntry({
     const caffyState = caffyControl
       ? await caffyControl({ action: "status", sessionId }).catch(() => null)
       : null;
-    const caffyPolicy = caffyControl
-      ? await caffyControl({ action: "list" }).catch(() => null)
-      : null;
     const activeCaffy = caffyState && typeof caffyState === "object" &&
       "mode" in caffyState && "startup" in caffyState &&
       ["idle", "periodic", "queued", "startup"].includes(String(caffyState.mode))
@@ -1265,8 +1316,6 @@ export function ChatGPTBrowserSidebarEntry({
             onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
             intervalMinutes: number }
         : null;
-    const keepT3Busy = caffyPolicy && typeof caffyPolicy === "object" &&
-      "keepT3Busy" in caffyPolicy && caffyPolicy.keepT3Busy === true;
     const action = await api.contextMenu.show(
       [
         ...chatGPTNativeActionMenu(registryContext),
@@ -1281,7 +1330,6 @@ export function ChatGPTBrowserSidebarEntry({
           hasTask: !!session.binding?.taskRef,
           hasConversationUrl: !!savedUrl,
           caffy: activeCaffy,
-          keepT3Busy: Boolean(keepT3Busy),
         }).filter((item) => item.id !== "reboot" && item.id !== "snooze:clear"),
       ],
       position,
@@ -1449,12 +1497,6 @@ export function ChatGPTBrowserSidebarEntry({
           if (!activeCaffy) throw new Error("No active Caffy monitor.");
           await control({ action: activeCaffy.paused ? "resume" : "pause", sessionId });
           setKeepAwakeFeedback(activeCaffy.paused ? "Caffy resumed." : "Caffy paused.");
-        } else if (action === "caffy:busy") {
-          const result = await control({ action: "policy", keepT3Busy: !keepT3Busy });
-          setKeepAwakeFeedback(
-            result && typeof result === "object" && "keepT3Busy" in result && result.keepT3Busy
-              ? "Keep T3 Busy enabled." : "Keep T3 Busy disabled.",
-          );
         } else if (action === "caffy:startup") {
           if (activeCaffy) {
             await control({ action: "startup", sessionId, startup: !activeCaffy.startup });
@@ -1913,6 +1955,24 @@ export function ChatGPTBrowserSidebarEntry({
                     title="Pause automatic recovery and warm loading together. Manually opening sessions remains available; already loaded sessions stay open."
                   >
                     Auto recovery + warm load
+                  </MenuCheckboxItem>
+                  <MenuCheckboxItem
+                    checked={caffyOverview?.keepT3Busy ?? false}
+                    disabled={viewPolicyBusy || !caffyOverview}
+                    aria-label="Keep T3 Busy"
+                    title="Allow TaskBoard automatic starts and queued Caffy wakes, within T3 working-agent capacity."
+                    onCheckedChange={(checked) => void updateViewCaffyPolicy({ keepT3Busy: checked })}
+                  >
+                    Keep T3 Busy
+                  </MenuCheckboxItem>
+                  <MenuCheckboxItem
+                    checked={caffyOverview?.shutdownWhenIdle ?? false}
+                    disabled={viewPolicyBusy || !caffyOverview}
+                    aria-label="Turn PC off when idle"
+                    title="Force shutdown Windows after 30 seconds without working ChatGPT sessions or pending automatic work. Error sessions count as idle. Disarms before shutdown."
+                    onCheckedChange={(checked) => void updateViewCaffyPolicy({ shutdownWhenIdle: checked })}
+                  >
+                    Turn PC off when idle
                   </MenuCheckboxItem>
                   <MenuCheckboxItem
                     checked={showWorkers}

@@ -21,6 +21,7 @@ interface Config {
 }
 interface Capacity {
   working: number;
+  unknown: number;
   reserved: number;
   limit: number;
   available: number;
@@ -108,8 +109,10 @@ export function CaffyV2Settings({ capacityOnly = false }: { capacityOnly?: boole
                 onClick={() => void setPolicy({maxWorking: Number(limit)})}>Save</Button>
             </div>
             {capacity && <p className="text-muted-foreground">
-              Working: {capacity.working} · Reserved: {capacity.reserved} ·
-              Limit: {capacity.limit} · Available: {capacity.available}
+              {capacity.unknown > 0
+                ? "Live session activity unavailable — automatic starts paused."
+                : <>Working: {capacity.working} · Reserved: {capacity.reserved} ·
+                  Limit: {capacity.limit} · Available: {capacity.available}</>}
               {capacity.reason ? ` · ${capacity.reason}` : ""}
             </p>}
             {!capacityOnly && <p className="font-medium">{config.entries.length} configured monitor(s)</p>}

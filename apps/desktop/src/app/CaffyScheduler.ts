@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off -- T3 owns local durable timers and power requests.
 // T3-owned Caffy. No OpenRig or OmniHub scheduler dependency.
 import * as NodeCrypto from "node:crypto";
+import * as NodeCP from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
@@ -32,7 +33,7 @@ export interface CaffyConfig {
   lastWakeAt: number | null;
   lastError: string | null;
 }
-interface CaffyStore { version: 2; entries: CaffyConfig[]; keepT3Busy: boolean; maxWorking: number }
+interface CaffyStore { version: 2; entries: CaffyConfig[]; keepT3Busy: boolean; maxWorking: number; shutdownWhenIdle?: boolean }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const WAKE_TEXT = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
 const CLOCK = 10_000;
@@ -50,6 +51,12 @@ export class CaffyScheduler {
   private readonly entries = new Map<string, CaffyConfig>();
   private keepT3Busy = false;
   private maxWorking = 6;
+  private shutdownWhenIdle = false;
+  private shutdownIdleSince: number | null = null;
+  private shutdownChecking = false;
+  private shutdownError: string | null = null;
+  private readonly shutdownPC: () => void;
+  private readonly workingReports = new Map<string, { observedAt: number; ids: Set<string> }>();
   private taskReservations = 0;
   private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -66,7 +73,18 @@ export class CaffyScheduler {
     deliveries: ChatGPTDeliveryQueue,
     request: Request,
     power: { start: () => number; stop: (id: number) => void },
+    shutdownPC: () => void = () => {
+      if (process.platform !== "win32")
+        throw new Error("Forced shutdown supported only on Windows.");
+      // /f forcibly closes unsaved apps; /t 0 requests immediate poweroff.
+      const result = NodeCP.spawnSync("shutdown.exe", ["/s", "/f", "/t", "0"], {
+        windowsHide: true, encoding: "utf8", timeout: 5_000,
+      });
+      if (result.error || result.status !== 0)
+        throw new Error(`Shutdown request refused: ${result.error?.message ?? result.stderr ?? result.status}`);
+    },
   ) {
+    this.shutdownPC = shutdownPC;
     this.deliveries = deliveries;
     this.request = request;
     this.power = power;
@@ -77,6 +95,7 @@ export class CaffyScheduler {
       if (saved.version === 2 && Array.isArray(saved.entries)) {
         for (const row of saved.entries) if (valid(row)) this.entries.set(row.sessionId, row);
         this.keepT3Busy = saved.keepT3Busy === true;
+        this.shutdownWhenIdle = saved.shutdownWhenIdle === true;
         if (Number.isInteger(saved.maxWorking) && saved.maxWorking >= 1 && saved.maxWorking <= 100)
           this.maxWorking = saved.maxWorking;
       }
@@ -105,6 +124,7 @@ export class CaffyScheduler {
       NodeFS.writeFileSync(tmp, JSON.stringify({
         version: 2, entries: [...this.entries.values()],
         keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
+        shutdownWhenIdle: this.shutdownWhenIdle,
       } satisfies CaffyStore), { encoding: "utf8", flush: true });
       NodeFS.renameSync(tmp, this.file);
     } finally {
@@ -161,7 +181,7 @@ export class CaffyScheduler {
     }
     if (changed) this.save();
     this.syncPower();
-    this.timer = setInterval(() => { void this.pump(); }, CLOCK);
+    this.timer = setInterval(() => { void this.pump(); void this.checkShutdown(); }, CLOCK);
     this.timer.unref?.();
     void this.pump();
   }
@@ -170,6 +190,8 @@ export class CaffyScheduler {
     this.started = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.workingReports.clear();
+    this.shutdownIdleSince = null;
     if (this.blockerId !== null) {
       try { this.power.stop(this.blockerId); } finally { this.blockerId = null; }
     }
@@ -222,11 +244,40 @@ export class CaffyScheduler {
       entries: [...this.entries.values()],
       keepT3Busy: this.keepT3Busy,
       maxWorking: this.maxWorking,
+      shutdownWhenIdle: this.shutdownWhenIdle,
+      shutdownError: this.shutdownError,
     };
   }
 
-  policy(input: { keepT3Busy?: boolean | undefined; maxWorking?: number | undefined }) {
+  /**
+   * The ChatGPT header reports its exact working IDs from live DOM-native
+   * session activity. The main process also reads the roster and takes the
+   * UNION so a stale/filtered inventory cannot undercount active agents.
+   * An unavailable header snapshot fails closed for auto-admission.
+   */
+  reportWorkingSnapshot(ids: readonly string[], reporterId = "default") {
+    if (!Array.isArray(ids) || ids.length > 20_000 ||
+        typeof reporterId !== "string" || reporterId.length > 128 ||
+        !reporterId ||
+        ids.some(id => typeof id !== "string" || !id.trim() || id.length > 256))
+      throw new Error("Invalid working session snapshot.");
+    this.workingReports.set(reporterId, { ids: new Set(ids), observedAt: Date.now() });
+    if (ids.length > 0) this.shutdownIdleSince = null;
+    void this.checkShutdown();
+    return { accepted: true };
+  }
+
+  policy(input: {
+    keepT3Busy?: boolean | undefined;
+    maxWorking?: number | undefined;
+    shutdownWhenIdle?: boolean | undefined;
+  }) {
     if (input.keepT3Busy !== undefined) this.keepT3Busy = input.keepT3Busy;
+    if (input.shutdownWhenIdle !== undefined) {
+      this.shutdownWhenIdle = input.shutdownWhenIdle;
+      this.shutdownIdleSince = null;
+      this.shutdownError = null;
+    }
     if (input.maxWorking !== undefined) {
       if (!Number.isInteger(input.maxWorking) || input.maxWorking < 1 || input.maxWorking > 100)
         throw new Error("maxWorking must be 1..100.");
@@ -235,7 +286,8 @@ export class CaffyScheduler {
     this.save();
     this.deliveries.resumeAllowed();
     void this.pump();
-    return { keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking };
+    return { keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
+      shutdownWhenIdle: this.shutdownWhenIdle, shutdownError: this.shutdownError };
   }
 
   async set(input: {
@@ -480,11 +532,17 @@ export class CaffyScheduler {
     if (!Array.isArray(data.sessions) || data.hasMore || data.incomplete ||
         (data.total !== undefined && data.total !== data.sessions.length)) return unavailable("T3 inventory incomplete");
     const now = Date.now();
+    for (const [reporter, state] of this.workingReports)
+      if (now - state.observedAt > 25_000) this.workingReports.delete(reporter);
+    if (this.workingReports.size === 0)
+      return unavailable("Live ChatGPT working-session count unavailable");
     const workingIds = new Set(data.sessions.filter(s => {
       const observed = Date.parse(s.statusObservedAt ?? "");
       return Number.isFinite(observed) && observed <= now + 1000 && now - observed <= 15_000 &&
         (s.activity === "working" || s.status === "working");
     }).map(s => s.id).filter((id): id is string => !!id));
+    for (const report of this.workingReports.values())
+      for (const id of report.ids) workingIds.add(id);
     // A newly queued message may not yet be reflected as 'working' by T3.
     // Count it as a provisional slot, or one pump could enqueue 6+ wakes.
     const reserved = [...this.entries.values()].filter(row =>
@@ -503,11 +561,71 @@ export class CaffyScheduler {
     };
   }
 
+  /** Do not force a shutdown on a transient zero or stale observation.
+   * Error/orange/red sessions are not working. Persist OFF before /s /f /t 0.
+   * No fallback to guessed zero when the live header or inventory is missing. */
+  private async checkShutdown(): Promise<void> {
+    if (!this.started || !this.shutdownWhenIdle || this.shutdownChecking) return;
+    this.shutdownChecking = true;
+    try {
+      const snapshot = await this.capacity();
+      if (!this.started || !this.shutdownWhenIdle) return;
+      // A completed queued wake has a two-minute capacity cooldown; it is
+      // *not* an active session and must not hold the PC awake indefinitely.
+      // Only actual workers, active outbox attempts or pending starts matter.
+      const sending = [...this.entries.values()].some(row => {
+        if (row.paused || !row.pendingMessageId) return false;
+        try {
+          return ["queued", "sending", "uncertain"].includes(
+            this.deliveries.status(row.pendingMessageId).status,
+          );
+        } catch { return true; } // UNKNOWN outbox outcome: fail closed.
+      });
+      if (snapshot.unknown > 0 || snapshot.working > 0 || sending ||
+          this.taskReservations > 0) {
+        this.shutdownIdleSince = null;
+        return;
+      }
+      const now = Date.now();
+      if (this.shutdownIdleSince === null) {
+        this.shutdownIdleSince = now;
+        return;
+      }
+      if (now - this.shutdownIdleSince < 30_000) return;
+      // Disarm durably BEFORE initiating /f. A failed OS call will remain off
+      // rather than unexpectedly retry and terminate the user's later work.
+      this.shutdownWhenIdle = false;
+      this.shutdownIdleSince = null;
+      this.save();
+      try { this.shutdownPC(); }
+      catch (error) {
+        this.shutdownError = error instanceof Error ? error.message : String(error);
+      }
+    } catch {
+      this.shutdownIdleSince = null;
+    } finally {
+      this.shutdownChecking = false;
+    }
+  }
+
   private async hasCapacity(): Promise<boolean> {
     return (await this.capacity()).admissible;
   }
 
   get policyEnabled(): boolean { return this.keepT3Busy; }
+
+  /**
+   * TaskBoard yields to waiting queued Caffy recipients, including unloaded
+   * ChatGPT pages, before it can claim another automatic worker slot.
+   * Invalid bindings are excluded once their reconciliation error is known.
+   */
+  get hasPendingQueuedWakes(): boolean {
+    const now = Date.now();
+    return this.keepT3Busy && [...this.entries.values()].some(row =>
+      row.mode === "queued" && row.pendingWake && !row.paused &&
+      !row.pendingMessageId && row.lastError === null &&
+      (row.expiresAt === null || row.expiresAt > now));
+  }
 
   private async pump() {
     if (!this.started) return;
@@ -516,7 +634,10 @@ export class CaffyScheduler {
     try {
       await this.reconcileIdentityAliases().catch(() => {});
       const now = Date.now();
-      for (const row of [...this.entries.values()]) {
+      const rows = [...this.entries.values()].sort((a,b) =>
+        Number(b.mode === "queued" && b.pendingWake && !b.paused) -
+        Number(a.mode === "queued" && a.pendingWake && !a.paused));
+      for (const row of rows) {
         if (row.expiresAt !== null && row.expiresAt <= now && !row.pendingMessageId) {
           if (row.mode === "periodic" && !row.onceOnly && !row.paused &&
               (row.lastWakeAt === null || row.lastWakeAt < row.expiresAt)) {

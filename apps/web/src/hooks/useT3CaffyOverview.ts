@@ -15,6 +15,7 @@ export interface T3CaffyEntry {
 export interface T3CaffyOverview {
   maxWorking: number;
   keepT3Busy: boolean;
+  shutdownWhenIdle: boolean;
   entries: T3CaffyEntry[];
 }
 
@@ -40,6 +41,7 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
             !("maxWorking" in data) || typeof data.maxWorking !== "number" ||
             !Number.isInteger(data.maxWorking) || data.maxWorking < 1 ||
             !("keepT3Busy" in data) || typeof data.keepT3Busy !== "boolean" ||
+            !("shutdownWhenIdle" in data) || typeof data.shutdownWhenIdle !== "boolean" ||
             !("entries" in data) || !Array.isArray(data.entries)) {
           setOverview(null);
           return;
@@ -54,6 +56,7 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
         setOverview({
           maxWorking: data.maxWorking,
           keepT3Busy: data.keepT3Busy,
+          shutdownWhenIdle: data.shutdownWhenIdle,
           entries,
         });
       } catch {

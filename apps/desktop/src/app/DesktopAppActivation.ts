@@ -411,7 +411,9 @@ export const make = Effect.gen(function* () {
                 conversationId = match[0]?.conversationId ?? match[0]?.bootstrapIdentity?.conversationId;
             }
           }
-          const data = action === "capacity"
+          const data = action === "working_snapshot"
+            ? caffy.reportWorkingSnapshot(request.workingSessionIds ?? [], request.workingReporterId)
+            : action === "capacity"
             ? await caffy.capacity()
             : action === "tasks"
               ? taskBoardCoordinator.status()
@@ -429,7 +431,8 @@ export const make = Effect.gen(function* () {
             : action === "list" || action === "status"
               ? caffy.status(action === "status" ? request.sessionId : undefined)
             : action === "policy"
-              ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking })
+              ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking,
+                  shutdownWhenIdle: request.shutdownWhenIdle })
             : action === "stop"
               ? caffy.stop(request.sessionId ?? "")
             : action === "pause" || action === "resume"
