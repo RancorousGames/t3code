@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @effect-diagnostics globalFetch:off -- this bounded Bun-only bridge uses the platform HTTP client.
 /**
  * Long-lived authenticated T3 agent-provider/v1 bridge for OmniHub.
  *
@@ -64,7 +65,25 @@ while (true) {
     if (typeof id !== "string" || !id || typeof message.method !== "string" ||
         typeof message.params !== "object" || message.params === null)
       throw new Error("Invalid bounded provider request");
-    const rpcResult = await Effect.runPromise(client[WS_METHODS.agentProviderCall]({
+    if (message.method === "sessions.history" &&
+        typeof message.params.session === "object" &&
+        message.params.session?.id?.startsWith("thread:")) {
+      try {
+        const data = await nativeHistoryFromHttp(message.params);
+        process.stdout.write(JSON.stringify({
+          id, result: { apiVersion: T3_AGENT_PROVIDER_VERSION,
+            requestId: id, ok: true, data },
+        }) + "\n");
+      } catch {
+        process.stdout.write(JSON.stringify({
+          id, result: { apiVersion: T3_AGENT_PROVIDER_VERSION,
+            requestId: id, ok: false,
+            error: { code: "Unavailable", message: "Native history HTTP read failed",
+              retryable: true } },
+        }) + "\n");
+      }
+      continue;
+    }    const rpcResult = await Effect.runPromise(client[WS_METHODS.agentProviderCall]({
       apiVersion: T3_AGENT_PROVIDER_VERSION,
       requestId: id,
       method: message.method,
@@ -91,6 +110,70 @@ while (true) {
     return true;
   }
 }
+}
+/** Native thread history is already available from T3's bounded authenticated
+ * HTTP API. Its WS provider RPC currently drops the connection on real timelines. */
+async function nativeHistoryFromHttp(params: Record<string, unknown>) {
+  const session = params.session as { provider?: string; id?: string } | undefined;
+  if (session?.provider !== "t3" || !session.id?.startsWith("thread:") ||
+      params.expectedEnvironmentId !== environmentId)
+    throw new Error("Invalid native history session/environment");
+  const rawId = decodeURIComponent(session.id.slice("thread:".length));
+  if (!rawId || encodeURIComponent(rawId) !== session.id.slice("thread:".length))
+    throw new Error("Invalid native thread identity");
+  const cursor = typeof params.cursor === "string" && params.cursor
+    ? params.cursor
+    : Buffer.from(JSON.stringify({
+      v: 1, seq: 0, st: rawId, si: "provider-http-history-start",
+      p: Number.MAX_SAFE_INTEGER,
+    })).toString("base64url");
+  const endpoint = new URL(candidate.toString());
+  endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
+  endpoint.pathname = "/api/orchestration/threads/" + encodeURIComponent(rawId) + "/history";
+  endpoint.search = "";
+  endpoint.searchParams.set("cursor", cursor);
+  endpoint.searchParams.set("view", "conversation");
+  const response = await fetch(endpoint, {
+    headers: {
+      Authorization: "Bearer " + token,
+      "x-t3-orchestration-protocol": String(ORCHESTRATION_PROTOCOL_VERSION),
+    },
+    signal: AbortSignal.timeout(16_000),
+  });
+  if (!response.ok) throw new Error("Native history HTTP status " + response.status);
+  const page = await response.json() as {
+    items: Array<{ sourceThreadId: string; sourceItemId: string; visibility: string;
+      item: { type: string; text?: string; markdown?: string; updatedAt?: string;
+        streaming?: boolean } }>;
+    snapshotSequence: number; nextCursor: string | null; hasMoreHistory: boolean;
+  };
+  if (!Array.isArray(page.items) || typeof page.snapshotSequence !== "number")
+    throw new Error("Invalid native history API response");
+  return {
+    items: page.items.map((row) => {
+      const item = row.item;
+      const text = typeof item.text === "string" ? item.text
+        : typeof item.markdown === "string" ? item.markdown : null;
+      return {
+        id: "turn:" + encodeURIComponent(row.sourceThreadId) + ":" +
+          encodeURIComponent(row.sourceItemId),
+        revision: page.snapshotSequence,
+        kind: item.type,
+        at: item.updatedAt ?? null,
+        author: item.type === "user_message" ? "user"
+          : item.type === "assistant_message" ? "assistant" : "native",
+        parts: [
+          ...(text === null ? [] : [{ type: "text", text }]),
+          { type: "native.turn_item", sourceThreadId: row.sourceThreadId,
+            sourceItemId: row.sourceItemId, visibility: row.visibility, item },
+        ],
+        streaming: item.streaming === true,
+        completeness: item.streaming === true ? "Partial" : "Full",
+      };
+    }),
+    older: page.nextCursor, newer: null, complete: !page.hasMoreHistory,
+    snapshotSequence: page.snapshotSequence,
+  };
 }
 const lineReader = Readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const input = lineReader[Symbol.asyncIterator]();
