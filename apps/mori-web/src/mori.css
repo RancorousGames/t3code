@@ -438,6 +438,10 @@ input,textarea,select{font:inherit;color:inherit}
 .boot{grid-column:2/-1;min-height:0;display:grid;place-items:center;color:var(--text-3);font-size:13px;padding:24px;text-align:center}
 .boot b{display:block;color:var(--text);font-size:15px;margin-bottom:6px}
 .boot .btn{margin-top:14px}
+.mori-global-drop{position:fixed;z-index:150;inset:42px 12px 34px;display:grid;place-items:center;pointer-events:none;border:3px dashed var(--moss);border-radius:14px;background:rgba(23,47,35,.84);color:var(--text);font-size:20px;font-weight:600}
+.mori-export-check{display:grid;gap:8px;padding:12px;margin-top:14px;border:1px solid var(--line-3);border-radius:9px;background:var(--bg-2);font-size:12.5px}
+.mori-export-check-actions{display:flex;flex-wrap:wrap;gap:7px;justify-content:flex-end;align-items:center}
+.mori-export-check .muted{font-size:12px;line-height:1.5}
 .notice{display:flex;align-items:center;gap:8px;padding:7px 14px;font-size:12px;color:var(--lantern);background:var(--lantern-bg);border-bottom:1px solid var(--lantern-bd)}
 .notice .btn{margin-left:auto}
 .screen{flex:1;overflow:auto;min-height:0;padding:22px 28px 40px}

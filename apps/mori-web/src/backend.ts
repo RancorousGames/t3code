@@ -43,7 +43,8 @@ export interface MoriBackend {
   restoreRevision(id: string, revisionId: string): Promise<unknown>;
   openProjectBackup(): Promise<{ project: unknown; filename: string } | null>;
   saveProjectBackup(project: MoriProject): Promise<{ filename: string } | null>;
-  exportInterchange(request: { format: "json" | "csv" | "po"; filename: string; data: string }): Promise<{ filename: string } | null>;
+  exportInterchange(request: { projectId: string; format: "json" | "csv" | "po"; filename: string; data: string; quick?: boolean }): Promise<{ filename: string; quick: boolean } | null>;
+  exportOriginals(request: { projectId: string; format: "original"; filename: string; data: Uint8Array; quick?: boolean }): Promise<{ filename: string; quick: boolean } | null>;
   readPublicSheet(id: string, gid?: string): Promise<string>;
   googleStatus(): Promise<{ configured: boolean; connected: boolean; scopes: string[] }>;
   googleConfigure(): Promise<{ configured: boolean; connected: boolean } | null>;

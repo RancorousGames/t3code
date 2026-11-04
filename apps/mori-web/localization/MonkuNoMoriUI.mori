@@ -18,7 +18,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:533 (jsx-text); src/ImportWizard.tsx:546 (jsx-text)"
+      "note": "src/ImportWizard.tsx:541 (jsx-text); src/ImportWizard.tsx:554 (jsx-text)"
     },
     {
       "id": "ui.a0b1f57edf1792",
@@ -27,7 +27,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:445 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:453 (jsx-expression)"
     },
     {
       "id": "ui.e9bf85f3f385d8",
@@ -55,6 +55,33 @@
       "status": "pending",
       "sourceFile": "src/TermModal.tsx",
       "note": "src/TermModal.tsx:147 (jsx-text)"
+    },
+    {
+      "id": "ui.d92acb96893e3b",
+      "source": "· Current edits saved at {0}",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:439 (jsx-expression)"
+    },
+    {
+      "id": "ui.d73f96d6738890",
+      "source": "· Save failed: {0}",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:439 (jsx-expression)"
+    },
+    {
+      "id": "ui.370ede7a010a2d",
+      "source": "· Saving current edits…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:439 (jsx-expression)"
     },
     {
       "id": "ui.f6d5d63004e6dc",
@@ -90,7 +117,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:346 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:401 (ui-call:toast)"
     },
     {
       "id": "ui.c4f0b531bd6e61",
@@ -126,7 +153,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:583 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:600 (jsx-expression)"
     },
     {
       "id": "ui.4cf1b0e4636fc2",
@@ -144,7 +171,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:152 (jsx-attribute:title); src/Matrix.tsx:494 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:153 (jsx-attribute:title); src/Matrix.tsx:516 (jsx-attribute:title)"
     },
     {
       "id": "ui.216aa96b96f47a",
@@ -171,7 +198,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:162 (ui-branch)"
+      "note": "src/ImportWizard.tsx:150 (ui-branch)"
     },
     {
       "id": "ui.cef20f90617528",
@@ -180,16 +207,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:550 (jsx-expression)"
-    },
-    {
-      "id": "ui.4b554a4a63d1c1",
-      "source": "{0} lines have text to write; {1} don’t, so those keep what the original file had. Export anyway?",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:264 (ui-call:confirm)"
+      "note": "src/Matrix.tsx:572 (jsx-expression)"
     },
     {
       "id": "ui.f8a7b8805c7152",
@@ -198,7 +216,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:138 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:190 (ui-call:toast)"
     },
     {
       "id": "ui.d2e1c6883a0df5",
@@ -216,7 +234,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:550 (jsx-expression)"
+      "note": "src/Matrix.tsx:572 (jsx-expression)"
     },
     {
       "id": "ui.dd095ff1fc2d0a",
@@ -225,7 +243,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:141 (ui-branch)"
+      "note": "src/ImportWizard.tsx:129 (ui-branch)"
     },
     {
       "id": "ui.09b3402aaf7613",
@@ -234,7 +252,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:370 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:378 (jsx-expression)"
     },
     {
       "id": "ui.e500e2805d12d5",
@@ -261,7 +279,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:138 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:190 (ui-call:toast)"
     },
     {
       "id": "ui.ac8c8d96c8af8b",
@@ -270,7 +288,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:131 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:183 (ui-call:toast)"
     },
     {
       "id": "ui.e12077f1d6da3b",
@@ -280,15 +298,6 @@
       "status": "pending",
       "sourceFile": "src/Dialogs.tsx",
       "note": "src/Dialogs.tsx:50 (object-property:message)"
-    },
-    {
-      "id": "ui.71696f1de8ff0f",
-      "source": "{0}/{1} lines have output text; {2} empty, {3} quality warnings. Export anyway? This is a normalized table, not the original file structure.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:248 (ui-call:confirm)"
     },
     {
       "id": "ui.f8b8883f0c9d8d",
@@ -315,7 +324,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:485 (ui-branch)"
+      "note": "src/Matrix.tsx:507 (ui-branch)"
     },
     {
       "id": "ui.e5f14376a23af8",
@@ -324,7 +333,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:320 (jsx-text)"
+      "note": "src/Reference.tsx:361 (jsx-text)"
     },
     {
       "id": "ui.73ee4507a50988",
@@ -369,7 +378,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:280 (ui-branch); src/ImportWizard.tsx:359 (jsx-text); src/Matrix.tsx:600 (jsx-text)"
+      "note": "src/ImportWizard.tsx:288 (ui-branch); src/ImportWizard.tsx:367 (jsx-text); src/Matrix.tsx:622 (jsx-text)"
     },
     {
       "id": "ui.8143aa12e22ea9",
@@ -378,7 +387,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:104 (jsx-text)"
+      "note": "src/Reference.tsx:105 (jsx-text)"
     },
     {
       "id": "ui.727765544ebbe3",
@@ -387,7 +396,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:119 (ui-call:toast)"
+      "note": "src/Reference.tsx:120 (ui-call:toast)"
     },
     {
       "id": "ui.01792a33c228a7",
@@ -396,7 +405,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:276 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:284 (jsx-expression)"
     },
     {
       "id": "ui.8e31b1bb655972",
@@ -414,7 +423,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:256 (jsx-text); src/Reference.tsx:135 (jsx-text); src/TermModal.tsx:86 (jsx-expression)"
+      "note": "src/Inspector.tsx:256 (jsx-text); src/Reference.tsx:136 (jsx-text); src/TermModal.tsx:86 (jsx-expression)"
     },
     {
       "id": "ui.b92cfd151e6761",
@@ -423,7 +432,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:505 (jsx-text)"
+      "note": "src/ImportWizard.tsx:513 (jsx-text)"
     },
     {
       "id": "ui.067166c5d868b8",
@@ -441,7 +450,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:120 (jsx-text); src/ImportWizard.tsx:617 (jsx-expression)"
+      "note": "src/GoogleConnect.tsx:120 (jsx-text); src/ImportWizard.tsx:637 (jsx-expression)"
     },
     {
       "id": "ui.7e1db04af593ae",
@@ -459,7 +468,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:354 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:410 (ui-call:toast)"
     },
     {
       "id": "ui.74b09e52826353",
@@ -504,7 +513,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:492 (jsx-text)"
+      "note": "src/ImportWizard.tsx:500 (jsx-text)"
     },
     {
       "id": "ui.62e74382a14a81",
@@ -531,7 +540,7 @@
       "final": "AI下書き",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:79 (version-label); src/Matrix.tsx:33 (object-getter:label); src/Popovers.tsx:140 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:79 (version-label); src/Matrix.tsx:34 (object-getter:label); src/Popovers.tsx:140 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.af0d24c1255397",
@@ -540,7 +549,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:480 (jsx-text); src/Reference.tsx:481 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:549 (jsx-text); src/Reference.tsx:550 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.18bf16b0a86992",
@@ -576,7 +585,7 @@
       "final": "すべて",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:42 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:43 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.2f2b467abeb011",
@@ -630,7 +639,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:596 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:618 (jsx-attribute:title)"
     },
     {
       "id": "ui.8890f264bb0dcc",
@@ -639,7 +648,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:560 (jsx-text)"
+      "note": "src/ImportWizard.tsx:568 (jsx-text)"
     },
     {
       "id": "ui.e4dc96fd957fcc",
@@ -657,7 +666,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:400 (ui-variable:speakerLabel); src/Popovers.tsx:114 (jsx-text)"
+      "note": "src/Matrix.tsx:422 (ui-variable:speakerLabel); src/Popovers.tsx:114 (jsx-text)"
     },
     {
       "id": "ui.65e7f879a69301",
@@ -675,7 +684,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:465 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:473 (jsx-expression)"
     },
     {
       "id": "ui.4740b07f0a0d1c",
@@ -702,7 +711,7 @@
       "final": "末尾",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:460 (ui-option); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:529 (ui-option); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.10da9283742bcf",
@@ -711,7 +720,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:420 (jsx-text)"
+      "note": "src/Reference.tsx:489 (jsx-text)"
     },
     {
       "id": "ui.b05093f407473e",
@@ -729,7 +738,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:195 (jsx-text); src/ImportWizard.tsx:601 (jsx-text)"
+      "note": "src/AIChatsSidebar.tsx:195 (jsx-text); src/ImportWizard.tsx:618 (jsx-text)"
     },
     {
       "id": "ui.0a80c30b5ace16",
@@ -738,7 +747,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:306 (jsx-text)"
+      "note": "src/Reference.tsx:343 (jsx-text)"
     },
     {
       "id": "ui.fdbd423cb57b3e",
@@ -757,6 +766,15 @@
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
       "note": "src/AIChatsSidebar.tsx:270 (jsx-expression)"
+    },
+    {
+      "id": "ui.f1021b9fb9c695",
+      "source": "Before exporting:",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:380 (jsx-text)"
     },
     {
       "id": "ui.bc70e07f569787",
@@ -783,7 +801,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:603 (jsx-text); src/TermModal.tsx:85 (jsx-text)"
+      "note": "src/ImportWizard.tsx:620 (jsx-text); src/Reference.tsx:393 (jsx-text); src/TermModal.tsx:85 (jsx-text)"
     },
     {
       "id": "ui.474db8366dccf7",
@@ -792,7 +810,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:284 (ui-call:toast)"
+      "note": "src/Reference.tsx:321 (ui-call:toast)"
     },
     {
       "id": "ui.44067f4dc9e06f",
@@ -810,7 +828,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:86 (jsx-attribute:placeholder)"
+      "note": "src/Reference.tsx:87 (jsx-attribute:placeholder)"
     },
     {
       "id": "ui.b101ba02b70ff2",
@@ -819,7 +837,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:495 (jsx-text)"
+      "note": "src/Reference.tsx:564 (jsx-text)"
     },
     {
       "id": "ui.d8bd8799d5e990",
@@ -855,7 +873,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:349 (jsx-expression)"
+      "note": "src/Reference.tsx:414 (jsx-expression)"
     },
     {
       "id": "ui.f098517e88838e",
@@ -864,7 +882,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:506 (ui-return)"
+      "note": "src/MoriApp.tsx:567 (ui-return)"
     },
     {
       "id": "ui.1405a63e8a78b8",
@@ -891,7 +909,7 @@
       "final": "キャラクター",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:538 (jsx-text); src/Popovers.tsx:287 (jsx-text); src/Reference.tsx:58 (jsx-attribute:title); src/Reference.tsx:344 (jsx-text); src/Reference.tsx:466 (explicit-translation); src/Sidebar.tsx:104 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:546 (jsx-text); src/Popovers.tsx:287 (jsx-text); src/Reference.tsx:59 (jsx-attribute:title); src/Reference.tsx:409 (jsx-text); src/Reference.tsx:535 (explicit-translation); src/Sidebar.tsx:104 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.f685225552cb5c",
@@ -990,7 +1008,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:478 (jsx-text)"
+      "note": "src/ImportWizard.tsx:486 (jsx-text)"
     },
     {
       "id": "ui.f034ef686636b0",
@@ -1008,16 +1026,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:445 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:453 (jsx-expression)"
     },
     {
-      "id": "ui.ff7a777703fdfb",
-      "source": "Choose a project from the top left, or import your own files.",
+      "id": "ui.b699367a5ac599",
+      "source": "Choose a project from the top left, or drop files or folders anywhere to import.",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:434 (jsx-expression)"
+      "note": "src/MoriApp.tsx:493 (jsx-expression)"
     },
     {
       "id": "ui.6d4e30eea6946a",
@@ -1026,7 +1044,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:309 (jsx-text)"
+      "note": "src/ImportWizard.tsx:317 (jsx-text)"
     },
     {
       "id": "ui.6e8eb2b02596d8",
@@ -1035,7 +1053,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:312 (jsx-text)"
+      "note": "src/ImportWizard.tsx:320 (jsx-text)"
     },
     {
       "id": "ui.fc8c5efac1fbde",
@@ -1053,7 +1071,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:420 (jsx-text)"
+      "note": "src/Reference.tsx:489 (jsx-text)"
     },
     {
       "id": "ui.0615570f9ea136",
@@ -1107,7 +1125,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Dialogs.tsx",
-      "note": "src/Dialogs.tsx:131 (jsx-attribute:aria-label); src/Dialogs.tsx:225 (jsx-attribute:aria-label); src/ImportWizard.tsx:283 (jsx-attribute:aria-label); src/TermModal.tsx:58 (jsx-attribute:aria-label); src/TermModal.tsx:119 (jsx-attribute:aria-label); src/WindowControls.tsx:36 (jsx-attribute:aria-label); src/WindowControls.tsx:36 (jsx-attribute:title)"
+      "note": "src/Dialogs.tsx:131 (jsx-attribute:aria-label); src/Dialogs.tsx:225 (jsx-attribute:aria-label); src/ImportWizard.tsx:291 (jsx-attribute:aria-label); src/TermModal.tsx:58 (jsx-attribute:aria-label); src/TermModal.tsx:119 (jsx-attribute:aria-label); src/WindowControls.tsx:36 (jsx-attribute:aria-label); src/WindowControls.tsx:36 (jsx-attribute:title)"
     },
     {
       "id": "ui.59546c79643cfc",
@@ -1170,7 +1188,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:511 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:533 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.2dc2308a0f0d67",
@@ -1188,7 +1206,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:510 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:532 (jsx-attribute:title)"
     },
     {
       "id": "ui.b085369075ac56",
@@ -1215,7 +1233,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:147 (jsx-text); src/Reference.tsx:499 (jsx-text)"
+      "note": "src/Popovers.tsx:147 (jsx-text); src/Reference.tsx:568 (jsx-text)"
     },
     {
       "id": "ui.bfed87639ca86f",
@@ -1224,7 +1242,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:456 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:478 (jsx-attribute:title)"
     },
     {
       "id": "ui.9aec0c12c412d8",
@@ -1233,7 +1251,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:457 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:479 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.459a23a5980fd5",
@@ -1251,7 +1269,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:434 (jsx-text)"
+      "note": "src/Reference.tsx:503 (jsx-text)"
     },
     {
       "id": "ui.99452646e34b69",
@@ -1296,7 +1314,7 @@
       "final": "コンテキスト",
       "status": "translated",
       "sourceFile": "src/Dialogs.tsx",
-      "note": "src/Dialogs.tsx:209 (label-map); src/ImportWizard.tsx:531 (jsx-text); src/Popovers.tsx:279 (jsx-text); src/Reference.tsx:202 (jsx-attribute:title); src/Sidebar.tsx:110 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Dialogs.tsx:209 (label-map); src/ImportWizard.tsx:539 (jsx-text); src/Popovers.tsx:279 (jsx-text); src/Reference.tsx:203 (jsx-attribute:title); src/Sidebar.tsx:110 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.31fbef162594de",
@@ -1305,16 +1323,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:611 (jsx-text)"
+      "note": "src/ImportWizard.tsx:631 (jsx-text)"
     },
     {
-      "id": "ui.f8d9f6c28695db",
-      "source": "Copies of the imported files in their own format, with your Japanese written in. A spreadsheet gets it in its translation column (or a new “Japanese” column); JSON, PO, scripts, text and Word files get it in place of the English. Several files download as one zip.",
+      "id": "ui.21a6ba4191282b",
+      "source": "Copies of the imported files in their own format, with your Japanese written in. A spreadsheet gets it in its translation column (or a new “Japanese” column); JSON, PO, scripts, text and Word files get it in place of the English. Several files export as one zip.",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:309 (jsx-expression)"
+      "note": "src/Reference.tsx:346 (jsx-expression)"
     },
     {
       "id": "ui.593e5fe9624a6d",
@@ -1341,7 +1359,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:410 (ui-call:toast)"
+      "note": "src/Reference.tsx:479 (ui-call:toast)"
     },
     {
       "id": "ui.3747766faa6247",
@@ -1377,7 +1395,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:280 (ui-branch)"
+      "note": "src/ImportWizard.tsx:288 (ui-branch)"
     },
     {
       "id": "ui.303e1619b80336",
@@ -1389,13 +1407,22 @@
       "note": "src/Popovers.tsx:42 (ui-call:toast)"
     },
     {
+      "id": "ui.636fb8e44b170c",
+      "source": "critical issue",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:380 (jsx-text)"
+    },
+    {
       "id": "ui.4b8eacea37b775",
       "source": "CSV (Excel-friendly)",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:323 (jsx-text)"
+      "note": "src/Reference.tsx:364 (jsx-text)"
     },
     {
       "id": "ui.c8ebeb3728bc16",
@@ -1404,7 +1431,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:330 (jsx-text)"
+      "note": "src/Reference.tsx:375 (jsx-text)"
     },
     {
       "id": "ui.97b0560280ed60",
@@ -1431,7 +1458,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:388 (jsx-text)"
+      "note": "src/Reference.tsx:457 (jsx-text)"
     },
     {
       "id": "ui.e2d0a54968ead2",
@@ -1449,7 +1476,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:288 (ui-call:confirm)"
+      "note": "src/Reference.tsx:325 (ui-call:confirm)"
     },
     {
       "id": "ui.3fb7023fd0f6ee",
@@ -1458,7 +1485,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:42 (ui-call:confirm)"
+      "note": "src/Reference.tsx:43 (ui-call:confirm)"
     },
     {
       "id": "ui.7ede8c92eda0f4",
@@ -1467,7 +1494,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:100 (jsx-text)"
+      "note": "src/Reference.tsx:101 (jsx-text)"
     },
     {
       "id": "ui.9c0b617e79e94d",
@@ -1476,7 +1503,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:392 (jsx-text)"
+      "note": "src/Reference.tsx:461 (jsx-text)"
     },
     {
       "id": "ui.a1c06240a02b55",
@@ -1485,7 +1512,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:175 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:176 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f0fb79920853cb",
@@ -1494,7 +1521,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:45 (ui-call:toast)"
+      "note": "src/Reference.tsx:46 (ui-call:toast)"
     },
     {
       "id": "ui.c1fbcfd2534217",
@@ -1503,7 +1530,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:390 (jsx-text)"
+      "note": "src/Reference.tsx:459 (jsx-text)"
     },
     {
       "id": "ui.367c602c86cec7",
@@ -1512,7 +1539,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:480 (jsx-text)"
+      "note": "src/Reference.tsx:549 (jsx-text)"
+    },
+    {
+      "id": "ui.143fdc68c318f5",
+      "source": "Detected columns:",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:571 (jsx-text)"
     },
     {
       "id": "ui.9a338849bafc57",
@@ -1521,7 +1557,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:80 (version-label); src/Matrix.tsx:32 (object-getter:label); src/Popovers.tsx:139 (object-getter:label)"
+      "note": "src/Inspector.tsx:80 (version-label); src/Matrix.tsx:33 (object-getter:label); src/Popovers.tsx:139 (object-getter:label)"
     },
     {
       "id": "ui.599fc58fd0f769",
@@ -1530,7 +1566,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:170 (jsx-text)"
+      "note": "src/Reference.tsx:171 (jsx-text)"
     },
     {
       "id": "ui.bf56ebba684c6f",
@@ -1566,7 +1602,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:291 (jsx-attribute:aria-label); src/Notifications.tsx:85 (jsx-attribute:title)"
+      "note": "src/ImportWizard.tsx:299 (jsx-attribute:aria-label); src/Notifications.tsx:85 (jsx-attribute:title)"
     },
     {
       "id": "ui.b7bb3f342402da",
@@ -1584,7 +1620,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:346 (jsx-text)"
+      "note": "src/ImportWizard.tsx:354 (jsx-text)"
     },
     {
       "id": "ui.11a6767d5674c7",
@@ -1620,7 +1656,7 @@
       "final": "下書きのみ",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:39 (label-map); src/Matrix.tsx:44 (object-getter:label); src/Reference.tsx:342 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:40 (label-map); src/Matrix.tsx:45 (object-getter:label); src/Reference.tsx:407 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e9a88691df3595",
@@ -1683,7 +1719,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:520 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:542 (jsx-attribute:title)"
     },
     {
       "id": "ui.59af4ccc9a80ad",
@@ -1692,7 +1728,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:575 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:597 (jsx-attribute:title)"
     },
     {
       "id": "ui.5117d3a44045cf",
@@ -1710,7 +1746,34 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:305 (jsx-text)"
+      "note": "src/ImportWizard.tsx:313 (jsx-text)"
+    },
+    {
+      "id": "ui.81c093adb29634",
+      "source": "Drop files to add to",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:524 (jsx-text)"
+    },
+    {
+      "id": "ui.851bbd2bc78977",
+      "source": "Drop files to create a project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:477 (jsx-text)"
+    },
+    {
+      "id": "ui.e4fc3916f76a26",
+      "source": "Edit mappings",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:573 (jsx-text)"
     },
     {
       "id": "ui.7d9889d74dd943",
@@ -1719,7 +1782,7 @@
       "final": "ショートカットを編集",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:496 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:565 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.773dbe3eef2b4d",
@@ -1755,7 +1818,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:467 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:536 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.e4962546b4121f",
@@ -1764,7 +1827,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:474 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:543 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.ba118bf7fc9c1a",
@@ -1773,7 +1836,7 @@
       "final": "英語",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:31 (object-getter:label); src/Popovers.tsx:138 (object-getter:label); src/Reference.tsx:139 (jsx-text); src/Reference.tsx:423 (jsx-text); src/TermModal.tsx:68 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:32 (object-getter:label); src/Popovers.tsx:138 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:492 (jsx-text); src/TermModal.tsx:68 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.b0743af92dedfb",
@@ -1791,7 +1854,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:147 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:148 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.acfc438f1aa99b",
@@ -1836,7 +1899,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:641 (jsx-text)"
+      "note": "src/ImportWizard.tsx:661 (jsx-text)"
     },
     {
       "id": "ui.d56e4bf4050c08",
@@ -1845,7 +1908,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:564 (jsx-text)"
+      "note": "src/ImportWizard.tsx:581 (jsx-text)"
     },
     {
       "id": "ui.6808184362598b",
@@ -1854,7 +1917,25 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:300 (jsx-text)"
+      "note": "src/Reference.tsx:337 (jsx-text)"
+    },
+    {
+      "id": "ui.ea8f3980f6b7ba",
+      "source": "Export again to {0}",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:354 (jsx-attribute:title); src/Reference.tsx:368 (jsx-attribute:title)"
+    },
+    {
+      "id": "ui.9f33a05694a836",
+      "source": "Export anyway",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:394 (jsx-text)"
     },
     {
       "id": "ui.307cfd717ce3d8",
@@ -1863,16 +1944,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:257 (ui-call:toast); src/Reference.tsx:267 (ui-call:toast); src/Reference.tsx:280 (ui-call:toast)"
+      "note": "src/Reference.tsx:304 (ui-call:toast); src/Reference.tsx:317 (ui-call:toast)"
     },
     {
-      "id": "ui.e58a1a86879f7c",
-      "source": "Export files",
+      "id": "ui.be2159d8890694",
+      "source": "Export files…",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:314 (jsx-expression)"
+      "note": "src/Reference.tsx:351 (jsx-expression)"
     },
     {
       "id": "ui.df339cb8da1471",
@@ -1881,7 +1962,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:322 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:363 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.49f983b685f5f2",
@@ -1890,7 +1971,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:325 (jsx-text)"
+      "note": "src/Reference.tsx:366 (jsx-text)"
     },
     {
       "id": "ui.463bb0335cb180",
@@ -1899,7 +1980,7 @@
       "final": "翻訳を書き出す",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:303 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:340 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.529061237e8353",
@@ -1908,7 +1989,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:255 (ui-call:toast); src/Reference.tsx:265 (ui-call:toast)"
+      "note": "src/Reference.tsx:283 (ui-call:toast); src/Reference.tsx:287 (ui-call:toast); src/Reference.tsx:297 (ui-call:toast); src/Reference.tsx:300 (ui-call:toast)"
     },
     {
       "id": "ui.a2dd9cbb7013bb",
@@ -1917,7 +1998,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:314 (jsx-expression)"
+      "note": "src/Reference.tsx:351 (jsx-expression)"
     },
     {
       "id": "ui.9b1b32df6fe5f8",
@@ -1953,7 +2034,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:423 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:445 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.da8a78c49cc63f",
@@ -1989,7 +2070,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:441 (jsx-attribute:placeholder); src/shortcuts.ts:19 (object-getter:label)"
+      "note": "src/Matrix.tsx:463 (jsx-attribute:placeholder); src/shortcuts.ts:19 (object-getter:label)"
     },
     {
       "id": "ui.e5a78058be3c64",
@@ -2034,7 +2115,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:581 (jsx-text)"
+      "note": "src/ImportWizard.tsx:598 (jsx-text)"
     },
     {
       "id": "ui.5fd97744889078",
@@ -2043,7 +2124,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:306 (jsx-text)"
+      "note": "src/ImportWizard.tsx:314 (jsx-text)"
     },
     {
       "id": "ui.218197693424e0",
@@ -2052,7 +2133,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:524 (jsx-text)"
+      "note": "src/ImportWizard.tsx:532 (jsx-text)"
     },
     {
       "id": "ui.7bc08b6337c0fc",
@@ -2097,7 +2178,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:323 (jsx-text)"
+      "note": "src/Reference.tsx:364 (jsx-text)"
     },
     {
       "id": "ui.1d59a5e097147b",
@@ -2106,7 +2187,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:207 (jsx-text)"
+      "note": "src/Reference.tsx:208 (jsx-text)"
     },
     {
       "id": "ui.1af8632de10237",
@@ -2124,7 +2205,7 @@
       "final": "用語集",
       "status": "translated",
       "sourceFile": "src/Dialogs.tsx",
-      "note": "src/Dialogs.tsx:209 (label-map); src/ImportWizard.tsx:544 (jsx-text); src/Reference.tsx:133 (jsx-attribute:title); src/Reference.tsx:473 (explicit-translation); src/Sidebar.tsx:107 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Dialogs.tsx:209 (label-map); src/ImportWizard.tsx:552 (jsx-text); src/Reference.tsx:134 (jsx-attribute:title); src/Reference.tsx:542 (explicit-translation); src/Sidebar.tsx:107 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.ffb999a4360050",
@@ -2151,7 +2232,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:345 (jsx-text)"
+      "note": "src/Reference.tsx:410 (jsx-text)"
     },
     {
       "id": "ui.e8da58933ba835",
@@ -2223,7 +2304,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:571 (jsx-text)"
+      "note": "src/ImportWizard.tsx:588 (jsx-text)"
     },
     {
       "id": "ui.e12154eb4ca974",
@@ -2232,7 +2313,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:99 (jsx-text); src/ImportWizard.tsx:346 (jsx-text); src/Popovers.tsx:323 (jsx-text)"
+      "note": "src/GoogleConnect.tsx:99 (jsx-text); src/ImportWizard.tsx:354 (jsx-text); src/Popovers.tsx:323 (jsx-text)"
     },
     {
       "id": "ui.8dbb16383d4f5b",
@@ -2277,7 +2358,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:429 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:451 (jsx-attribute:title)"
     },
     {
       "id": "ui.10f44e5a1fbc77",
@@ -2286,7 +2367,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:394 (jsx-attribute:aria-label)"
+      "note": "src/ImportWizard.tsx:402 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.dca382564b4f08",
@@ -2295,7 +2376,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:399 (jsx-text)"
+      "note": "src/ImportWizard.tsx:407 (jsx-text)"
     },
     {
       "id": "ui.7e6fefff0f0aeb",
@@ -2304,7 +2385,7 @@
       "final": "非表示",
       "status": "translated",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:187 (jsx-text); src/AIChatsSidebar.tsx:194 (jsx-expression); src/AIChatsSidebar.tsx:274 (jsx-text); src/Reference.tsx:491 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/AIChatsSidebar.tsx:187 (jsx-text); src/AIChatsSidebar.tsx:194 (jsx-expression); src/AIChatsSidebar.tsx:274 (jsx-text); src/Reference.tsx:560 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.4cae557d8e8745",
@@ -2313,7 +2394,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:466 (jsx-text)"
+      "note": "src/Reference.tsx:535 (jsx-text)"
     },
     {
       "id": "ui.6676e30f7159bf",
@@ -2322,7 +2403,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:473 (jsx-text)"
+      "note": "src/Reference.tsx:542 (jsx-text)"
     },
     {
       "id": "ui.1a12c033712488",
@@ -2403,7 +2484,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:488 (jsx-text)"
+      "note": "src/Reference.tsx:557 (jsx-text)"
     },
     {
       "id": "ui.b520ee5076f3e4",
@@ -2412,7 +2493,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:471 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:493 (jsx-attribute:title)"
     },
     {
       "id": "ui.5eaf4cfeb16f08",
@@ -2430,7 +2511,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:422 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:491 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.90d042a2f1c1e7",
@@ -2457,7 +2538,7 @@
       "final": "日本語",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:34 (object-getter:label); src/Reference.tsx:139 (jsx-text); src/TermModal.tsx:71 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:35 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/TermModal.tsx:71 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.a62cf07e0f035c",
@@ -2466,7 +2547,7 @@
       "final": "日本語欄のクリック",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:458 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:527 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.aba289c61f916b",
@@ -2475,7 +2556,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:459 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:528 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.5a93621db47ae2",
@@ -2484,7 +2565,7 @@
       "final": "日本語フォント",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:452 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:521 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.bc5548ca42ab69",
@@ -2493,7 +2574,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:153 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:154 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.8c415b73246754",
@@ -2502,7 +2583,7 @@
       "final": "日本語テキストのサイズ",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:444 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:513 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.b1753576cb804b",
@@ -2511,7 +2592,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:323 (jsx-text)"
+      "note": "src/Reference.tsx:364 (jsx-text)"
     },
     {
       "id": "ui.57219179ff761f",
@@ -2538,7 +2619,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:564 (jsx-text)"
+      "note": "src/ImportWizard.tsx:581 (jsx-text)"
     },
     {
       "id": "ui.b21729d54baf5e",
@@ -2547,7 +2628,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:161 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:213 (ui-call:toast)"
     },
     {
       "id": "ui.e9bef0b0f3c25e",
@@ -2556,7 +2637,7 @@
       "final": "キーボードショートカット",
       "status": "translated",
       "sourceFile": "src/Dialogs.tsx",
-      "note": "src/Dialogs.tsx:102 (jsx-text); src/Reference.tsx:495 (explicit-translation); src/shortcuts.ts:27 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Dialogs.tsx:102 (jsx-text); src/Reference.tsx:564 (explicit-translation); src/shortcuts.ts:27 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.a4fe65264ef7db",
@@ -2565,7 +2646,7 @@
       "final": "表示言語",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:420 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:489 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.ab80540d98d274",
@@ -2574,7 +2655,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:446 (ui-option)"
+      "note": "src/Reference.tsx:515 (ui-option)"
+    },
+    {
+      "id": "ui.b801cfcfe5af1a",
+      "source": "Latest recovery snapshot: {0}",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:438 (jsx-expression)"
     },
     {
       "id": "ui.a511909161e1b8",
@@ -2583,7 +2673,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:377 (jsx-text); src/ImportWizard.tsx:455 (jsx-text)"
+      "note": "src/ImportWizard.tsx:385 (jsx-text); src/ImportWizard.tsx:463 (jsx-text)"
     },
     {
       "id": "ui.b28e9bf955c1dd",
@@ -2601,7 +2691,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:96 (jsx-text); src/Reference.tsx:165 (jsx-text)"
+      "note": "src/Reference.tsx:97 (jsx-text); src/Reference.tsx:166 (jsx-text)"
     },
     {
       "id": "ui.d7852cd0d2453e",
@@ -2610,7 +2700,7 @@
       "final": "行",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:29 (object-getter:label); src/Popovers.tsx:136 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:30 (object-getter:label); src/Popovers.tsx:136 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.a3a88a55dd50fa",
@@ -2655,7 +2745,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:378 (jsx-text); src/Reference.tsx:361 (jsx-text)"
+      "note": "src/ImportWizard.tsx:386 (jsx-text); src/Reference.tsx:426 (jsx-text)"
     },
     {
       "id": "ui.3b26a5427458ed",
@@ -2664,7 +2754,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:139 (jsx-text); src/Reference.tsx:340 (jsx-text)"
+      "note": "src/Reference.tsx:140 (jsx-text); src/Reference.tsx:405 (jsx-text)"
     },
     {
       "id": "ui.acf932d9f0e496",
@@ -2673,7 +2763,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:567 (jsx-text)"
+      "note": "src/ImportWizard.tsx:584 (jsx-text)"
     },
     {
       "id": "ui.003f36c3c727dc",
@@ -2691,7 +2781,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:563 (jsx-text)"
+      "note": "src/ImportWizard.tsx:580 (jsx-text)"
     },
     {
       "id": "ui.363cb87b623d04",
@@ -2700,7 +2790,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:569 (jsx-text)"
+      "note": "src/ImportWizard.tsx:586 (jsx-text)"
     },
     {
       "id": "ui.d1cc5db08a356d",
@@ -2709,7 +2799,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:565 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:582 (jsx-expression)"
     },
     {
       "id": "ui.9105f01a3036d5",
@@ -2727,7 +2817,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:430 (jsx-text)"
+      "note": "src/MoriApp.tsx:489 (jsx-text)"
     },
     {
       "id": "ui.14dc14eafae8e4",
@@ -2754,7 +2844,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:244 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:245 (jsx-attribute:title)"
     },
     {
       "id": "ui.14493f5f5470ed",
@@ -2772,7 +2862,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:94 (jsx-text); src/Matrix.tsx:46 (object-getter:label)"
+      "note": "src/Inspector.tsx:94 (jsx-text); src/Matrix.tsx:47 (object-getter:label)"
     },
     {
       "id": "ui.7979b7fe8fb10d",
@@ -2781,7 +2871,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:230 (jsx-expression)"
+      "note": "src/Matrix.tsx:231 (jsx-expression)"
     },
     {
       "id": "ui.15297923dfdf89",
@@ -2790,7 +2880,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:343 (jsx-text)"
+      "note": "src/Reference.tsx:408 (jsx-text)"
     },
     {
       "id": "ui.4dd297af3a3658",
@@ -2835,7 +2925,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:606 (jsx-text)"
+      "note": "src/ImportWizard.tsx:627 (jsx-expression)"
     },
     {
       "id": "ui.4028aadcb2f8e1",
@@ -2880,7 +2970,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:446 (ui-option)"
+      "note": "src/Reference.tsx:515 (ui-option)"
     },
     {
       "id": "ui.841ec9d7111d7a",
@@ -2943,7 +3033,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:371 (jsx-text)"
+      "note": "src/Reference.tsx:436 (jsx-text)"
     },
     {
       "id": "ui.bbf7fcfd800cea",
@@ -2952,7 +3042,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Chrome.tsx",
-      "note": "src/Chrome.tsx:46 (jsx-attribute:alt); src/MoriApp.tsx:416 (jsx-text)"
+      "note": "src/Chrome.tsx:46 (jsx-attribute:alt); src/MoriApp.tsx:474 (jsx-text)"
     },
     {
       "id": "ui.2f5875bf399bbb",
@@ -2979,7 +3069,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:433 (jsx-expression)"
+      "note": "src/MoriApp.tsx:492 (jsx-expression)"
     },
     {
       "id": "ui.ab611a9e415134",
@@ -2997,7 +3087,7 @@
       "final": "名前",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:78 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:79 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.912759f4fdc46c",
@@ -3006,7 +3096,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:266 (ui-call:prompt); src/Reference.tsx:192 (ui-call:prompt)"
+      "note": "src/Popovers.tsx:266 (ui-call:prompt); src/Reference.tsx:193 (ui-call:prompt)"
     },
     {
       "id": "ui.2bf1c88cba98a0",
@@ -3015,7 +3105,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:122 (ui-call:prompt)"
+      "note": "src/Reference.tsx:123 (ui-call:prompt)"
     },
     {
       "id": "ui.6cb7dad53219a6",
@@ -3024,7 +3114,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:646 (jsx-text)"
+      "note": "src/ImportWizard.tsx:666 (jsx-text)"
     },
     {
       "id": "ui.18fdd549b2ed36",
@@ -3042,7 +3132,7 @@
       "final": "新規キャラクター",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:59 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:60 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.d06e7a8a528ad2",
@@ -3096,7 +3186,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:513 (jsx-text)"
+      "note": "src/ImportWizard.tsx:521 (jsx-text)"
     },
     {
       "id": "ui.a41eb2bf7245d3",
@@ -3105,7 +3195,7 @@
       "final": "新しいプロジェクト",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:141 (ui-branch); src/ImportWizard.tsx:276 (jsx-expression); src/ImportWizard.tsx:508 (jsx-text); src/MoriApp.tsx:436 (jsx-text); src/shortcuts.ts:28 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:129 (ui-branch); src/ImportWizard.tsx:284 (jsx-expression); src/ImportWizard.tsx:516 (jsx-text); src/MoriApp.tsx:495 (jsx-text); src/shortcuts.ts:28 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.cf8d3c2d8e84bb",
@@ -3132,7 +3222,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:565 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:582 (jsx-expression)"
     },
     {
       "id": "ui.dc76f83181f492",
@@ -3177,7 +3267,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:184 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:236 (ui-call:toast)"
     },
     {
       "id": "ui.dedc5d13072ebf",
@@ -3186,7 +3276,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:73 (jsx-text)"
+      "note": "src/Reference.tsx:74 (jsx-text)"
     },
     {
       "id": "ui.0709f10582eccf",
@@ -3195,7 +3285,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:188 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:240 (ui-call:toast)"
     },
     {
       "id": "ui.b87c858242a566",
@@ -3231,7 +3321,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:480 (jsx-text)"
+      "note": "src/ImportWizard.tsx:488 (jsx-text)"
     },
     {
       "id": "ui.5c950e7048ab80",
@@ -3249,7 +3339,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:532 (jsx-text)"
+      "note": "src/Matrix.tsx:554 (jsx-text)"
     },
     {
       "id": "ui.ee7bc80b93e945",
@@ -3267,7 +3357,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:193 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:245 (ui-call:toast)"
     },
     {
       "id": "ui.a657a29e6bcaf1",
@@ -3279,13 +3369,22 @@
       "note": "src/GoogleSyncPanel.tsx:20 (ui-call:setMessage)"
     },
     {
+      "id": "ui.c5ae4b7308aeec",
+      "source": "No previous recovery snapshot yet.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:438 (jsx-expression)"
+    },
+    {
       "id": "ui.329a6532ae3b77",
       "source": "No project selected",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:433 (jsx-expression)"
+      "note": "src/MoriApp.tsx:492 (jsx-expression)"
     },
     {
       "id": "ui.610521342aa316",
@@ -3303,7 +3402,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:68 (jsx-expression)"
+      "note": "src/Reference.tsx:69 (jsx-expression)"
     },
     {
       "id": "ui.eb177654c6d02b",
@@ -3339,7 +3438,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:385 (jsx-text)"
+      "note": "src/Reference.tsx:454 (jsx-text)"
     },
     {
       "id": "ui.6978194a01ce1a",
@@ -3357,7 +3456,7 @@
       "final": "原文ファイルなし",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:104 (jsx-expression); src/Matrix.tsx:543 (ui-branch); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:104 (jsx-expression); src/Matrix.tsx:565 (ui-branch); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e624562fd557be",
@@ -3366,7 +3465,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:365 (jsx-text)"
+      "note": "src/Reference.tsx:430 (jsx-text)"
     },
     {
       "id": "ui.d0cc33d34565a2",
@@ -3393,7 +3492,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:482 (jsx-text)"
+      "note": "src/ImportWizard.tsx:490 (jsx-text)"
     },
     {
       "id": "ui.56e54b1f971ce4",
@@ -3411,7 +3510,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:184 (jsx-text)"
+      "note": "src/Reference.tsx:185 (jsx-text)"
     },
     {
       "id": "ui.80b35e0792e81a",
@@ -3447,7 +3546,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:567 (jsx-text)"
+      "note": "src/ImportWizard.tsx:584 (jsx-text)"
     },
     {
       "id": "ui.98b1024757dbd7",
@@ -3501,7 +3600,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:576 (jsx-text)"
+      "note": "src/ImportWizard.tsx:593 (jsx-text)"
     },
     {
       "id": "ui.d8da2c49df39d9",
@@ -3510,7 +3609,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:139 (jsx-text); src/Reference.tsx:160 (jsx-attribute:aria-label); src/TermModal.tsx:74 (jsx-text)"
+      "note": "src/Reference.tsx:140 (jsx-text); src/Reference.tsx:161 (jsx-attribute:aria-label); src/TermModal.tsx:74 (jsx-text)"
     },
     {
       "id": "ui.eb1fa11281bc28",
@@ -3528,7 +3627,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:163 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:215 (ui-call:toast)"
     },
     {
       "id": "ui.057b0b09c4e1fe",
@@ -3546,7 +3645,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:371 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:379 (jsx-expression)"
     },
     {
       "id": "ui.a3c4b0c36d7d09",
@@ -3555,7 +3654,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:422 (jsx-text)"
+      "note": "src/ImportWizard.tsx:430 (jsx-text)"
     },
     {
       "id": "ui.788011833a5a0f",
@@ -3582,7 +3681,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:595 (jsx-text)"
+      "note": "src/ImportWizard.tsx:612 (jsx-text)"
     },
     {
       "id": "ui.e32df1da6b1582",
@@ -3600,7 +3699,7 @@
       "final": "オフ",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:469 (jsx-text); src/Reference.tsx:476 (jsx-text); src/Reference.tsx:483 (jsx-expression); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:538 (jsx-text); src/Reference.tsx:545 (jsx-text); src/Reference.tsx:552 (jsx-expression); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.13001175612531",
@@ -3609,7 +3708,7 @@
       "final": "オン",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:468 (jsx-text); src/Reference.tsx:475 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:537 (jsx-text); src/Reference.tsx:544 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.ac98902e3a62a3",
@@ -3627,7 +3726,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:319 (jsx-text)"
+      "note": "src/Reference.tsx:360 (jsx-text)"
     },
     {
       "id": "ui.89cf5166e1cb7e",
@@ -3645,7 +3744,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:408 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:430 (jsx-attribute:title)"
     },
     {
       "id": "ui.1e848b37800b8d",
@@ -3726,7 +3825,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:430 (jsx-text)"
+      "note": "src/MoriApp.tsx:489 (jsx-text)"
     },
     {
       "id": "ui.ec91fdd9256cb7",
@@ -3744,7 +3843,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:464 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:486 (jsx-attribute:title)"
     },
     {
       "id": "ui.8f838ebe56bdd4",
@@ -3753,7 +3852,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:529 (jsx-text)"
+      "note": "src/ImportWizard.tsx:537 (jsx-text)"
     },
     {
       "id": "ui.6bc8faf9a5543e",
@@ -3762,7 +3861,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:349 (jsx-text)"
+      "note": "src/ImportWizard.tsx:357 (jsx-text)"
     },
     {
       "id": "ui.baa3a7526da1ce",
@@ -3792,13 +3891,22 @@
       "note": "src/ChatGPTScreen.tsx:517 (ui-call:toast)"
     },
     {
+      "id": "ui.efc6b5a427c3af",
+      "source": "other warning",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:380 (jsx-text)"
+    },
+    {
       "id": "ui.523839adf84c8e",
       "source": "Paste a public Google Sheets URL",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:353 (jsx-attribute:placeholder)"
+      "note": "src/ImportWizard.tsx:361 (jsx-attribute:placeholder)"
     },
     {
       "id": "ui.6ce21ccdb95b86",
@@ -3852,7 +3960,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:406 (jsx-attribute:aria-label)"
+      "note": "src/ImportWizard.tsx:414 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.aa9a890936f6fb",
@@ -3861,7 +3969,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:406 (jsx-attribute:title)"
+      "note": "src/ImportWizard.tsx:414 (jsx-attribute:title)"
     },
     {
       "id": "ui.43fd77d2ed8dcd",
@@ -3897,7 +4005,7 @@
       "final": "プロジェクトとファイル",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:299 (jsx-attribute:title); src/Sidebar.tsx:113 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:336 (jsx-attribute:title); src/Sidebar.tsx:113 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.cfbf99f17e86d8",
@@ -3906,7 +4014,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:291 (ui-call:toast)"
+      "note": "src/Reference.tsx:328 (ui-call:toast)"
     },
     {
       "id": "ui.25498193b89819",
@@ -3915,7 +4023,7 @@
       "final": "プロジェクト名",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:520 (jsx-text); src/Reference.tsx:336 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:528 (jsx-text); src/Reference.tsx:401 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.04e2a9728af758",
@@ -3933,7 +4041,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:354 (jsx-attribute:aria-label)"
+      "note": "src/ImportWizard.tsx:362 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.3447cb6338d786",
@@ -3942,7 +4050,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:361 (jsx-text)"
+      "note": "src/ImportWizard.tsx:369 (jsx-text)"
     },
     {
       "id": "ui.f8e40a3a13f15d",
@@ -3951,7 +4059,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:571 (jsx-text)"
+      "note": "src/ImportWizard.tsx:588 (jsx-text)"
     },
     {
       "id": "ui.64c43fef596245",
@@ -3969,7 +4077,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:499 (jsx-text)"
+      "note": "src/Reference.tsx:568 (jsx-text)"
+    },
+    {
+      "id": "ui.10072b997d12aa",
+      "source": "Quick export",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:355 (jsx-text); src/Reference.tsx:369 (jsx-text)"
     },
     {
       "id": "ui.848123d14f84fa",
@@ -3978,7 +4095,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:465 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:473 (jsx-expression)"
     },
     {
       "id": "ui.0eebb9d56ebfa2",
@@ -3987,7 +4104,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:427 (jsx-attribute:title)"
+      "note": "src/Reference.tsx:496 (jsx-attribute:title)"
     },
     {
       "id": "ui.617425d4f786d7",
@@ -4005,7 +4122,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:370 (jsx-text)"
+      "note": "src/Reference.tsx:435 (jsx-text)"
     },
     {
       "id": "ui.71bf90935fc231",
@@ -4035,13 +4152,22 @@
       "note": "src/ChatGPTScreen.tsx:570 (jsx-attribute:aria-label); localization/seed.ja.json:1 (seed)"
     },
     {
+      "id": "ui.79d8f4e57b1b0c",
+      "source": "Refresh snapshots",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:441 (jsx-text)"
+    },
+    {
       "id": "ui.bdc090ec61e3fc",
       "source": "Reload",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:429 (jsx-expression)"
+      "note": "src/Reference.tsx:498 (jsx-expression)"
     },
     {
       "id": "ui.b2de4a00130225",
@@ -4050,7 +4176,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:426 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:495 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f40c20a80c51cd",
@@ -4068,7 +4194,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:408 (ui-call:toast)"
+      "note": "src/Reference.tsx:477 (ui-call:toast)"
     },
     {
       "id": "ui.ea456dcf3d908b",
@@ -4077,7 +4203,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:429 (jsx-expression)"
+      "note": "src/Reference.tsx:498 (jsx-expression)"
     },
     {
       "id": "ui.c3812fc4acb861",
@@ -4086,7 +4212,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:409 (jsx-attribute:aria-label)"
+      "note": "src/ImportWizard.tsx:417 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.24d3bc83dd3f1c",
@@ -4095,7 +4221,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:409 (jsx-attribute:title)"
+      "note": "src/ImportWizard.tsx:417 (jsx-attribute:title)"
     },
     {
       "id": "ui.3064d79a295cef",
@@ -4158,7 +4284,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:163 (jsx-attribute:title)"
+      "note": "src/Reference.tsx:164 (jsx-attribute:title)"
     },
     {
       "id": "ui.99a38501936be0",
@@ -4212,7 +4338,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:170 (jsx-text); src/Reference.tsx:504 (jsx-text)"
+      "note": "src/Popovers.tsx:170 (jsx-text); src/Reference.tsx:573 (jsx-text)"
     },
     {
       "id": "ui.c0cfa9b2839fab",
@@ -4230,7 +4356,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:573 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:595 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.a76e13b9839270",
@@ -4239,7 +4365,7 @@
       "final": "復元",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:383 (jsx-text); src/WindowControls.tsx:31 (jsx-attribute:aria-label); src/WindowControls.tsx:31 (jsx-attribute:title); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:452 (jsx-text); src/WindowControls.tsx:31 (jsx-attribute:aria-label); src/WindowControls.tsx:31 (jsx-attribute:title); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.c998f96febc360",
@@ -4248,7 +4374,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:382 (ui-call:toast)"
+      "note": "src/Reference.tsx:451 (ui-call:toast)"
     },
     {
       "id": "ui.da55fcf48ba9c7",
@@ -4257,7 +4383,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:377 (ui-call:confirm)"
+      "note": "src/Reference.tsx:446 (ui-call:confirm)"
     },
     {
       "id": "ui.aff0766a5290e1",
@@ -4278,6 +4404,24 @@
       "note": "src/GoogleSyncPanel.tsx:71 (jsx-text)"
     },
     {
+      "id": "ui.c3e5afa7de72dc",
+      "source": "Review export quality",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:379 (jsx-attribute:aria-label)"
+    },
+    {
+      "id": "ui.df750ab9990f66",
+      "source": "Review import",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:627 (jsx-expression)"
+    },
+    {
       "id": "ui.a92546a1532cf3",
       "source": "Review suggested Japanese",
       "ai": "",
@@ -4287,13 +4431,31 @@
       "note": "src/CodexTranslationPanel.tsx:76 (jsx-text)"
     },
     {
+      "id": "ui.52a00d8853e1c5",
+      "source": "Review untranslated",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:386 (jsx-text)"
+    },
+    {
+      "id": "ui.ac5b1aa410054c",
+      "source": "Review warnings",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:392 (jsx-text)"
+    },
+    {
       "id": "ui.14736a2eb9f415",
       "source": "Role",
       "ai": "",
       "final": "役割",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:81 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:82 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.93a6a5e7e8bb5a",
@@ -4302,7 +4464,7 @@
       "final": "行の密度",
       "status": "translated",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:160 (jsx-text); src/Reference.tsx:434 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Popovers.tsx:160 (jsx-text); src/Reference.tsx:503 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.bc51e9e65d79e1",
@@ -4311,7 +4473,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:403 (jsx-text)"
+      "note": "src/ImportWizard.tsx:411 (jsx-text)"
     },
     {
       "id": "ui.b1e1bcd1d3c67c",
@@ -4320,7 +4482,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:202 (jsx-attribute:description)"
+      "note": "src/Reference.tsx:203 (jsx-attribute:description)"
     },
     {
       "id": "ui.3d1b466939ee09",
@@ -4338,7 +4500,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:165 (ui-branch)"
+      "note": "src/ImportWizard.tsx:153 (ui-branch)"
     },
     {
       "id": "ui.ccfab6c6d81cc8",
@@ -4347,7 +4509,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:173 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:174 (jsx-attribute:title)"
     },
     {
       "id": "ui.b4f9b3025c7d2c",
@@ -4383,7 +4545,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:142 (jsx-text); src/Reference.tsx:98 (jsx-text); src/Reference.tsx:134 (jsx-text); src/Reference.tsx:203 (jsx-text)"
+      "note": "src/Inspector.tsx:142 (jsx-text); src/Reference.tsx:99 (jsx-text); src/Reference.tsx:135 (jsx-text); src/Reference.tsx:204 (jsx-text)"
     },
     {
       "id": "ui.aa0e5922bb4aad",
@@ -4392,7 +4554,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:552 (jsx-text)"
+      "note": "src/ImportWizard.tsx:560 (jsx-text)"
     },
     {
       "id": "ui.431e4352cedef9",
@@ -4419,7 +4581,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:128 (ui-call:toast)"
+      "note": "src/Reference.tsx:129 (ui-call:toast)"
     },
     {
       "id": "ui.cff310129421eb",
@@ -4428,7 +4590,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:273 (ui-call:toast); src/Reference.tsx:53 (ui-call:toast); src/Reference.tsx:198 (ui-call:toast)"
+      "note": "src/Popovers.tsx:273 (ui-call:toast); src/Reference.tsx:54 (ui-call:toast); src/Reference.tsx:199 (ui-call:toast)"
     },
     {
       "id": "ui.c24133ec4fdccd",
@@ -4446,7 +4608,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:278 (ui-call:toast)"
+      "note": "src/Reference.tsx:315 (ui-call:toast)"
     },
     {
       "id": "ui.b32fac26844c0c",
@@ -4455,7 +4617,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:588 (jsx-text)"
+      "note": "src/ImportWizard.tsx:605 (jsx-text)"
     },
     {
       "id": "ui.23e39291d61358",
@@ -4464,7 +4626,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Chrome.tsx",
-      "note": "src/Chrome.tsx:80 (explicit-translation); src/ImportWizard.tsx:617 (jsx-expression)"
+      "note": "src/Chrome.tsx:80 (explicit-translation); src/ImportWizard.tsx:637 (jsx-expression)"
     },
     {
       "id": "ui.91a42dc8d385cf",
@@ -4473,7 +4635,7 @@
       "final": "マトリクスとエディター内の訳文の文字サイズを変更します。",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:444 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:513 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.415155739590b1",
@@ -4518,7 +4680,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:168 (jsx-attribute:title)"
+      "note": "src/Reference.tsx:169 (jsx-attribute:title)"
     },
     {
       "id": "ui.09aae0c716b3c5",
@@ -4545,7 +4707,7 @@
       "final": "すべて選択",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:460 (ui-option); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:529 (ui-option); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.dafa79fdef56bd",
@@ -4554,7 +4716,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:424 (jsx-text)"
+      "note": "src/MoriApp.tsx:483 (jsx-text)"
     },
     {
       "id": "ui.257ef4ccd82ffb",
@@ -4689,7 +4851,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:418 (jsx-attribute:title); src/Matrix.tsx:418 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:440 (jsx-attribute:title); src/Matrix.tsx:440 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.947f259f43574e",
@@ -4698,16 +4860,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:410 (jsx-attribute:title)"
-    },
-    {
-      "id": "ui.7438137873b17d",
-      "source": "Show available snapshots",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:372 (jsx-text)"
+      "note": "src/Matrix.tsx:432 (jsx-attribute:title)"
     },
     {
       "id": "ui.2daa234ebe967a",
@@ -4725,7 +4878,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:472 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:494 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.49f775fe066210",
@@ -4752,7 +4905,7 @@
       "final": "表示",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:490 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:559 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.2a84b34a233079",
@@ -4761,7 +4914,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:569 (jsx-text)"
+      "note": "src/ImportWizard.tsx:586 (jsx-text)"
     },
     {
       "id": "ui.1dbcee68244321",
@@ -4806,7 +4959,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:446 (ui-option)"
+      "note": "src/Reference.tsx:515 (ui-option)"
     },
     {
       "id": "ui.5b7e4e69b16061",
@@ -4860,7 +5013,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:378 (jsx-text); src/ImportWizard.tsx:563 (jsx-text)"
+      "note": "src/ImportWizard.tsx:386 (jsx-text); src/ImportWizard.tsx:580 (jsx-text)"
     },
     {
       "id": "ui.5bd638b645eb32",
@@ -4869,7 +5022,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:641 (jsx-text)"
+      "note": "src/ImportWizard.tsx:661 (jsx-text)"
     },
     {
       "id": "ui.fa125556f136a7",
@@ -4878,7 +5031,16 @@
       "final": "原文ファイル",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:354 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:419 (jsx-text); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.eda671fbae9d64",
+      "source": "source missing",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ImportWizard.tsx",
+      "note": "src/ImportWizard.tsx:572 (ui-branch)"
     },
     {
       "id": "ui.a155f1ea2dfd02",
@@ -4887,7 +5049,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:451 (ui-branch)"
+      "note": "src/ImportWizard.tsx:459 (ui-branch)"
     },
     {
       "id": "ui.a9e0c70585121f",
@@ -4896,7 +5058,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:641 (jsx-text); src/Inspector.tsx:107 (jsx-attribute:title); src/Matrix.tsx:30 (object-getter:label); src/Matrix.tsx:402 (ui-variable:speakerLabel); src/Popovers.tsx:137 (object-getter:label)"
+      "note": "src/ImportWizard.tsx:661 (jsx-text); src/Inspector.tsx:107 (jsx-attribute:title); src/Matrix.tsx:31 (object-getter:label); src/Matrix.tsx:424 (ui-variable:speakerLabel); src/Popovers.tsx:137 (object-getter:label)"
     },
     {
       "id": "ui.e4b4a287e93f68",
@@ -4905,7 +5067,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:565 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:582 (jsx-expression)"
     },
     {
       "id": "ui.b4e1e1050c09d5",
@@ -4914,7 +5076,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:539 (jsx-text)"
+      "note": "src/ImportWizard.tsx:547 (jsx-text)"
     },
     {
       "id": "ui.2a7ce2f0aa6c25",
@@ -4923,7 +5085,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:565 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:582 (jsx-expression)"
     },
     {
       "id": "ui.915c438b363bff",
@@ -4932,7 +5094,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:466 (jsx-text)"
+      "note": "src/Matrix.tsx:488 (jsx-text)"
     },
     {
       "id": "ui.9b66106890a843",
@@ -4941,7 +5103,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:96 (jsx-text)"
+      "note": "src/Reference.tsx:97 (jsx-text)"
     },
     {
       "id": "ui.daec459ab6cce9",
@@ -4950,7 +5112,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:367 (jsx-text)"
+      "note": "src/ImportWizard.tsx:375 (jsx-text)"
     },
     {
       "id": "ui.aa17b38f6c562d",
@@ -4959,7 +5121,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:597 (jsx-text)"
+      "note": "src/ImportWizard.tsx:614 (jsx-text)"
     },
     {
       "id": "ui.1c84f1c021fca1",
@@ -4968,7 +5130,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:529 (jsx-text)"
+      "note": "src/ImportWizard.tsx:537 (jsx-text)"
     },
     {
       "id": "ui.359d29d58b026f",
@@ -4977,7 +5139,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:617 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:637 (jsx-expression)"
     },
     {
       "id": "ui.920e413c7d411b",
@@ -4995,7 +5157,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:595 (jsx-text)"
+      "note": "src/ImportWizard.tsx:612 (jsx-text)"
     },
     {
       "id": "ui.a13bc11d1e8530",
@@ -5004,7 +5166,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:410 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:432 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.ccca93dfe16f4c",
@@ -5022,7 +5184,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:350 (jsx-expression)"
+      "note": "src/Reference.tsx:415 (jsx-expression)"
     },
     {
       "id": "ui.edb82c2b6cf7b2",
@@ -5040,7 +5202,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:350 (jsx-expression)"
+      "note": "src/Reference.tsx:415 (jsx-expression)"
     },
     {
       "id": "ui.876cb3d80e47da",
@@ -5049,7 +5211,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:494 (jsx-text)"
+      "note": "src/ImportWizard.tsx:502 (jsx-text)"
     },
     {
       "id": "ui.54582b5ca87883",
@@ -5139,7 +5301,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:133 (jsx-attribute:description)"
+      "note": "src/Reference.tsx:134 (jsx-attribute:description)"
     },
     {
       "id": "ui.9c84020d4f5105",
@@ -5148,7 +5310,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:641 (jsx-text)"
+      "note": "src/ImportWizard.tsx:661 (jsx-text)"
     },
     {
       "id": "ui.cb380dc8dd691a",
@@ -5157,7 +5319,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:327 (jsx-text)"
+      "note": "src/Reference.tsx:372 (jsx-text)"
     },
     {
       "id": "ui.55c27891775d62",
@@ -5175,7 +5337,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:325 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:378 (ui-call:toast)"
     },
     {
       "id": "ui.25287d45f5517e",
@@ -5184,7 +5346,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:192 (ui-branch)"
+      "note": "src/ImportWizard.tsx:200 (ui-branch)"
     },
     {
       "id": "ui.95d2eb4bc9e0fa",
@@ -5202,7 +5364,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:488 (jsx-text)"
+      "note": "src/Reference.tsx:557 (jsx-text)"
     },
     {
       "id": "ui.0b131f6ce45f50",
@@ -5211,7 +5373,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:334 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:388 (ui-call:toast)"
     },
     {
       "id": "ui.69dd1cc269496f",
@@ -5220,7 +5382,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:293 (ui-call:toast)"
+      "note": "src/Reference.tsx:330 (ui-call:toast)"
     },
     {
       "id": "ui.f220ed2735d31a",
@@ -5229,7 +5391,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:222 (ui-branch); src/ImportWizard.tsx:247 (ui-branch)"
+      "note": "src/ImportWizard.tsx:230 (ui-branch); src/ImportWizard.tsx:255 (ui-branch)"
     },
     {
       "id": "ui.82cd25d88f6174",
@@ -5238,7 +5400,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:314 (ui-branch)"
+      "note": "src/MoriApp.tsx:367 (ui-branch)"
     },
     {
       "id": "ui.738d2738d4853e",
@@ -5256,7 +5418,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:202 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:254 (ui-call:toast)"
     },
     {
       "id": "ui.f6311f413a6122",
@@ -5283,7 +5445,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:125 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:177 (ui-call:toast)"
     },
     {
       "id": "ui.d0f62545074d3f",
@@ -5292,7 +5454,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:212 (jsx-text)"
+      "note": "src/Reference.tsx:213 (jsx-text)"
     },
     {
       "id": "ui.dfccdf8e5a19a3",
@@ -5301,7 +5463,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:310 (jsx-expression)"
+      "note": "src/Reference.tsx:347 (jsx-expression)"
     },
     {
       "id": "ui.f4b06ef6d3c814",
@@ -5310,7 +5472,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:526 (jsx-text)"
+      "note": "src/ImportWizard.tsx:534 (jsx-text)"
     },
     {
       "id": "ui.f21bb6fa756196",
@@ -5319,7 +5481,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:478 (jsx-text)"
+      "note": "src/ImportWizard.tsx:486 (jsx-text)"
     },
     {
       "id": "ui.217655f48dde4e",
@@ -5337,7 +5499,7 @@
       "final": "未完了",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:43 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:44 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e8f585eec943d0",
@@ -5355,7 +5517,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:603 (jsx-text)"
+      "note": "src/Matrix.tsx:625 (jsx-text)"
     },
     {
       "id": "ui.9c46b38e241584",
@@ -5382,7 +5544,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:463 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:485 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.456a73bbcefb1d",
@@ -5400,7 +5562,7 @@
       "final": "口調",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:85 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:86 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.8fe147696fbf47",
@@ -5445,7 +5607,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:39 (label-map); src/Matrix.tsx:45 (object-getter:label); src/Reference.tsx:341 (jsx-text); src/Sidebar.tsx:80 (explicit-translation)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:40 (label-map); src/Matrix.tsx:46 (object-getter:label); src/Reference.tsx:406 (jsx-text); src/Sidebar.tsx:80 (explicit-translation)"
     },
     {
       "id": "ui.74841e5f8b07a2",
@@ -5481,7 +5643,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:329 (jsx-attribute:aria-label)"
+      "note": "src/Reference.tsx:374 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.da7c98b4e627e8",
@@ -5490,7 +5652,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:532 (jsx-text)"
+      "note": "src/Matrix.tsx:554 (jsx-text)"
     },
     {
       "id": "ui.5bc5c6a24e44c6",
@@ -5499,7 +5661,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:134 (jsx-attribute:placeholder)"
+      "note": "src/Matrix.tsx:135 (jsx-attribute:placeholder)"
     },
     {
       "id": "ui.14d33bd014e6b4",
@@ -5508,7 +5670,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:187 (jsx-expression); src/Matrix.tsx:401 (ui-variable:speakerLabel); src/Popovers.tsx:72 (jsx-text); src/Popovers.tsx:127 (jsx-text)"
+      "note": "src/Matrix.tsx:188 (jsx-expression); src/Matrix.tsx:423 (ui-variable:speakerLabel); src/Popovers.tsx:72 (jsx-text); src/Popovers.tsx:127 (jsx-text)"
     },
     {
       "id": "ui.d24c41ae530aa2",
@@ -5526,7 +5688,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:244 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:245 (jsx-attribute:title)"
     },
     {
       "id": "ui.94798842ac921e",
@@ -5562,7 +5724,25 @@
       "final": "未翻訳",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:39 (label-map); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:40 (label-map); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.c2bedec15fcdfe",
+      "source": "Untranslated entries are left blank in the exported table.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:383 (jsx-expression)"
+    },
+    {
+      "id": "ui.9b405d2b8c3ccd",
+      "source": "Untranslated entries keep their original file text.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:382 (jsx-expression)"
     },
     {
       "id": "ui.c1c1009d3f37ec",
@@ -5571,7 +5751,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:164 (jsx-text)"
+      "note": "src/Reference.tsx:165 (jsx-text)"
     },
     {
       "id": "ui.bf8720d4a73ab9",
@@ -5589,7 +5769,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:354 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:410 (ui-call:toast)"
     },
     {
       "id": "ui.c36d819e7bc6d2",
@@ -5616,7 +5796,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:330 (jsx-text)"
+      "note": "src/Reference.tsx:375 (jsx-text)"
     },
     {
       "id": "ui.a78355876da4ed",
@@ -5625,7 +5805,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:207 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:208 (jsx-attribute:title)"
     },
     {
       "id": "ui.651b3da9836889",
@@ -5670,7 +5850,7 @@
       "final": "日本語の表示に使うフォントです。多くの環境では BIZ UDPGothic が読みやすくなります。",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:452 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:521 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.d0cd6d57d9226f",
@@ -5706,7 +5886,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:127 (jsx-attribute:aria-label); src/Reference.tsx:88 (jsx-text)"
+      "note": "src/Inspector.tsx:127 (jsx-attribute:aria-label); src/Reference.tsx:89 (jsx-text)"
     },
     {
       "id": "ui.6ec69e8ca662ef",
@@ -5742,7 +5922,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:558 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:566 (jsx-expression)"
     },
     {
       "id": "ui.f2e54cc89201a1",
@@ -5751,7 +5931,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:558 (jsx-expression)"
+      "note": "src/ImportWizard.tsx:566 (jsx-expression)"
     },
     {
       "id": "ui.f221e4c9140411",
@@ -5760,7 +5940,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:299 (jsx-attribute:description)"
+      "note": "src/Reference.tsx:336 (jsx-attribute:description)"
     },
     {
       "id": "ui.df1af37e0d703b",
@@ -5778,7 +5958,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:458 (jsx-text)"
+      "note": "src/Reference.tsx:527 (jsx-text)"
     },
     {
       "id": "ui.c4dcd99ebee1ab",
@@ -5787,7 +5967,7 @@
       "final": "クリック位置",
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:460 (ui-option); localization/seed.ja.json:1 (seed)"
+      "note": "src/Reference.tsx:529 (ui-option); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.cc59bf326ab87e",
@@ -5796,7 +5976,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:503 (jsx-attribute:aria-label)"
+      "note": "src/ImportWizard.tsx:511 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.fc9c7f74dbbab3",
@@ -5805,7 +5985,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:393 (jsx-attribute:title)"
+      "note": "src/ImportWizard.tsx:401 (jsx-attribute:title)"
     },
     {
       "id": "ui.af7c3334b6c47b",
@@ -5814,7 +5994,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:58 (jsx-attribute:description)"
+      "note": "src/Reference.tsx:59 (jsx-attribute:description)"
     },
     {
       "id": "ui.19734a1b58cabc",
@@ -5842,6 +6022,15 @@
       "status": "pending",
       "sourceFile": "src/TermModal.tsx",
       "note": "src/TermModal.tsx:144 (jsx-text)"
+    },
+    {
+      "id": "ui.05388328b684dc",
+      "source": "without output text,",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:380 (jsx-text)"
     },
     {
       "id": "ui.a67b04cd5c491d",
@@ -5878,6 +6067,15 @@
       "status": "pending",
       "sourceFile": "src/GoogleSyncPanel.tsx",
       "note": "src/GoogleSyncPanel.tsx:22 (ui-call:confirm)"
+    },
+    {
+      "id": "ui.0f7432c6d89dc2",
+      "source": "You can fix these now or export anyway.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Reference.tsx",
+      "note": "src/Reference.tsx:383 (jsx-text)"
     },
     {
       "id": "ui.54b26f7d3d0ddc",
@@ -5972,6 +6170,7 @@
     "src/AIChatsSidebar.tsx",
     "src/ImportWizard.tsx",
     "src/TermModal.tsx",
+    "src/Reference.tsx",
     "src/Inspector.tsx",
     "src/MoriApp.tsx",
     "src/Popovers.tsx",
@@ -5979,7 +6178,6 @@
     "src/Sidebar.tsx",
     "src/Matrix.tsx",
     "src/CodexTranslationPanel.tsx",
-    "src/Reference.tsx",
     "src/useChatBatchWorker.ts",
     "src/Dialogs.tsx",
     "src/ChatGPTScreen.tsx",
@@ -5996,5 +6194,5 @@
     "src/main.tsx",
     "src/Overlays.tsx"
   ],
-  "lastModified": "2026-11-04T05:26:40.899Z"
+  "lastModified": "2026-11-04T13:34:14.552Z"
 }

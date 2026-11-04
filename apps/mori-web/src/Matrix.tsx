@@ -10,6 +10,7 @@ import { editFinalText, type MoriRow } from "./model.ts";
 import type { MoriPrefs, ResizableColumn } from "./prefs.ts";
 import { keyLabel } from "./shortcuts.ts";
 import { characterColor, cssVar } from "./theme.ts";
+import { readMatrixScroll, writeWorkspace } from "./workspace-state.ts";
 
 type ColumnKey = "id" | "speaker" | "src" | "dev" | "ai" | "tr" | "st";
 
@@ -278,6 +279,27 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
 export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: boolean; onToggleSideBySide: () => void }) {
   const { project, view, setView, visible, activeId, prefs, setColumn, setPrefs, bindings, openPop, openModal, folded, toggleFold } = useApp();
   const matrixRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollTimer = useRef<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const { top, left } = readMatrixScroll(project.id);
+    el.scrollTop = top;
+    el.scrollLeft = left;
+    return () => {
+      window.clearTimeout(scrollTimer.current);
+      writeWorkspace(project.id, { scrollTop: el.scrollTop, scrollLeft: el.scrollLeft });
+    };
+  }, [project.id]);
+  const saveScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    window.clearTimeout(scrollTimer.current);
+    scrollTimer.current = window.setTimeout(() => {
+      writeWorkspace(project.id, { scrollTop: el.scrollTop, scrollLeft: el.scrollLeft });
+    }, 150);
+  };
   const splitRef = useRef<HTMLDivElement>(null);
   const [browserWidth, setBrowserWidth] = useState(46);
   const columns = sideBySide ? COLUMN_DEFS.filter(def => ["id", "src", "tr", "st"].includes(def.key)) : shownColumns(prefs);
@@ -478,7 +500,7 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
 
       <div ref={splitRef} className={`matrix-content${sideBySide ? " side-by-side" : ""}`}
         style={{ gridTemplateColumns: sideBySide ? `minmax(0, ${100 - browserWidth}fr) 8px minmax(0, ${browserWidth}fr)` : "minmax(0, 1fr)" }}>
-      <div className="scroll" onMouseUp={onMouseUp} onScroll={() => capture && setCapture(null)}>
+      <div ref={scrollRef} className="scroll" onMouseUp={onMouseUp} onScroll={() => { if (capture) setCapture(null); saveScroll(); }}>
         <div
           ref={matrixRef}
           className={`matrix${prefs.density === "compact" ? " compact" : ""}`}

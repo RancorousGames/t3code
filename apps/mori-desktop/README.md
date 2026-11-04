@@ -5,6 +5,24 @@ has a distinct Windows application identity and an independent user-data directo
 It is NOT a second copy of the existing T3 installation, and it does not connect
 to the developer's T3 session database, OpenRig hierarchy, or credentials.
 
+## Translation workflow
+
+On first launch, choose a project from the top-left picker or drop supported
+files or folders anywhere onto the window. Dropping files while a project is
+open adds them to that project by default, with a mapping preview before saving.
+You can switch to creating a new project in the import wizard. The bundled
+**Monku no Mori · Interface** project is available in the picker without
+being opened automatically.
+
+Mori reopens the last project and its editing position, filters, Matrix scroll
+and column layout. Pending edits are journaled for crash recovery; save status
+stays in the footer, with older recovery snapshots in **Project & files**.
+
+Exports in **Project & files** review missing text and quality warnings without
+blocking export. Format and translation-source preferences are remembered per
+project; after choosing a desktop destination once, **Quick export** writes
+back to that location, so use it only when you want to replace that export.
+
 ## Development
 
 From the monorepo root, install workspace dependencies once:

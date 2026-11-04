@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("moriBackend", Object.freeze({
   openProjectBackup: () => call("file:open-project"),
   saveProjectBackup: project => call("file:save-project", project),
   exportInterchange: request => call("file:export-interchange", request),
+  exportOriginals: request => call("file:export-originals", request),
   readPublicSheet: (id, gid) => call("google:public-sheet", id, gid),
   googleStatus: () => call("google:status"),
   googleConfigure: () => call("google:configure"),

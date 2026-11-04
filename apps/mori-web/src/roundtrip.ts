@@ -220,11 +220,16 @@ export async function buildOriginalExport(project: MoriProject, mode: Translatio
   return { files, written, untranslated };
 }
 
-/** One file downloads as itself; several download as one zip that keeps their folders. */
-export function downloadOriginalExport(project: MoriProject, result: OriginalExport) {
+/** One file exports as itself; several as a zip that preserves their folders. */
+export function originalExportData(project: MoriProject, result: OriginalExport) {
   const single = result.files.length === 1 ? result.files[0]! : null;
   const data = single ? single.data : zipFiles(result.files);
   const filename = single ? single.path.split("/").pop()! : `${project.name.replace(/[^\p{L}\p{N}_-]+/gu, "_").slice(0, 80) || "translation"}-ja.zip`;
+  return { filename, data };
+}
+
+export function downloadOriginalExport(project: MoriProject, result: OriginalExport) {
+  const { filename, data } = originalExportData(project, result);
   const url = URL.createObjectURL(new Blob([data.slice()], { type: "application/octet-stream" }));
   const link = document.createElement("a");
   link.href = url;

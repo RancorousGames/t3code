@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useApp } from "./app-context.ts";
 import { reloadUiTranslations, tr, useUiLanguage } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
-import { statusOf, termImpact } from "./insights.ts";
+import { checkRow, statusOf, termImpact } from "./insights.ts";
 import { JA_FONTS, DEFAULT_COLUMN_PREFS, DRAFT_AHEAD_OPTIONS } from "./prefs.ts";
 import { newTemplateId, readTemplates, writeTemplates } from "./templates.ts";
 import { characterColor, cssVar } from "./theme.ts";
@@ -11,8 +11,9 @@ import { nativeMori } from "./backend.ts";
 import { listProjectRevisions, restoreProjectRevision } from "./library.ts";
 import { GoogleSyncPanel } from "./GoogleSyncPanel.tsx";
 import { GoogleConnect } from "./GoogleConnect.tsx";
-import { browserDownload, buildInterchangeExport, type ExportFormat, type TranslationMode } from "./exporters.ts";
-import { buildOriginalExport, canExportOriginals, downloadOriginalExport } from "./roundtrip.ts";
+import { browserDownload, buildInterchangeExport, chooseText, type ExportFormat, type TranslationMode } from "./exporters.ts";
+import { readExportPreferences, writeExportPreferences } from "./export-preferences.ts";
+import { buildOriginalExport, canExportOriginals, downloadOriginalExport, originalExportData } from "./roundtrip.ts";
 
 function ScreenHeader({ title, description, children }: { title: string; description: string; children?: ReactNode }) {
   return (
@@ -232,37 +233,73 @@ function downloadProject(project: MoriProject) {
 }
 
 export function ProjectScreen() {
-  const { project, actions, deleteProject, toast, save, setView, go } = useApp();
+  const { project, actions, deleteProject, toast, save, setView, go, select } = useApp();
   const rows = project.rows;
   const translated = rows.filter(row => statusOf(row) === "translated").length;
   const drafts = rows.filter(row => statusOf(row) === "draft").length;
   const locked = rows.filter(row => row.isLocked).length;
   const files = [...new Set([...project.sourceFiles ?? [], ...rows.map(row => row.sourceFile ?? "")])].filter(Boolean);
   const [revisions, setRevisions] = useState<{ id: string; at: number }[] | null>(null);
+  useEffect(() => {
+    if (!nativeMori()) return;
+    void listProjectRevisions(project.id).then(setRevisions).catch(() => {});
+  }, [project.id]);
   const [recovering, setRecovering] = useState(false);
-  const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
-  const [exportMode, setExportMode] = useState<TranslationMode>("curated");
-  const exportInterchange = async () => {
-    const report = buildInterchangeExport(project, exportFormat, exportMode);
-    if (report.empty || report.warnings.length) {
-      const reply = window.confirm(`${report.filled}/${report.total} lines have output text; ${report.empty} empty, ${report.warnings.length} quality warnings. Export anyway? This is a normalized table, not the original file structure.`);
-      if (!reply) return;
-    }
-    try {
-      const native = nativeMori();
-      if (native) {
-        const saved = await native.exportInterchange(report);
-        if (saved) toast(`Exported ${saved.filename}.`);
-      } else browserDownload(report);
-    } catch (cause) { toast(cause instanceof Error ? cause.message : "Export failed."); }
-  };
+  const [exportSettings, setExportSettings] = useState(() => readExportPreferences(project.id));
+  const exportFormat = exportSettings.format;
+  const exportMode = exportSettings.mode;
+  const [pendingExport, setPendingExport] = useState<{ kind: "table" | "original"; quick: boolean } | null>(null);
   const [exporting, setExporting] = useState(false);
-  const exportOriginals = async () => {
+  const updateExport = (patch: Partial<typeof exportSettings>) => {
+    setExportSettings(current => ({ ...current, ...patch }));
+    writeExportPreferences(project.id, patch);
+  };
+  const missingCount = project.rows.filter(row => !chooseText(row, exportMode).trim()).length;
+  const qualityIssues = project.rows.flatMap(row =>
+    checkRow({ ...row, final: chooseText(row, exportMode) }, project.glossary).map(warning => ({
+      id: row.id, message: warning.message,
+      critical: warning.kind === "missing-token" || warning.kind === "extra-token" || warning.kind === "locked-empty",
+    })));
+  const criticalCount = qualityIssues.filter(issue => issue.critical).length;
+  const requestExport = (kind: "table" | "original", quick = false) => {
+    if (exporting) return;
+    if (missingCount || qualityIssues.length) {
+      setPendingExport({ kind, quick });
+    } else {
+      void performExport(kind, quick);
+    }
+  };
+  const performExport = async (kind: "table" | "original", quick: boolean) => {
+    setPendingExport(null);
     setExporting(true);
     try {
-      const result = await buildOriginalExport(project, exportMode);
-      if (result.untranslated && !window.confirm(`${result.written} lines have text to write; ${result.untranslated} don’t, so those keep what the original file had. Export anyway?`)) return;
-      toast(`Exported ${downloadOriginalExport(project, result)}.`);
+      const native = nativeMori();
+      if (kind === "table") {
+        const report = buildInterchangeExport(project, exportFormat, exportMode);
+        if (native) {
+          const saved = await native.exportInterchange({ ...report, projectId: project.id, quick });
+          if (saved) {
+            updateExport({ lastTable: { ...exportSettings.lastTable, [exportFormat]: saved.filename } });
+            toast(`Exported ${saved.filename}.`);
+          }
+        } else {
+          browserDownload(report);
+          toast(`Exported ${report.filename}.`);
+        }
+      } else {
+        const result = await buildOriginalExport(project, exportMode);
+        if (!result.files.length) throw Error("No original files are available to export.");
+        if (native) {
+          const output = originalExportData(project, result);
+          const saved = await native.exportOriginals({ projectId: project.id, format: "original", ...output, quick });
+          if (saved) {
+            updateExport({ lastOriginal: saved.filename });
+            toast(`Exported ${saved.filename}.`);
+          }
+        } else {
+          toast(`Exported ${downloadOriginalExport(project, result)}.`);
+        }
+      }
     } catch (cause) {
       toast(cause instanceof Error ? cause.message : "Export failed.");
     } finally {
@@ -306,30 +343,58 @@ export function ProjectScreen() {
             <b>Back into the original files</b>
             <p className="muted">
               {canExportOriginals(project)
-                ? "Copies of the imported files in their own format, with your Japanese written in. A spreadsheet gets it in its translation column (or a new “Japanese” column); JSON, PO, scripts, text and Word files get it in place of the English. Several files download as one zip."
+                ? "Copies of the imported files in their own format, with your Japanese written in. A spreadsheet gets it in its translation column (or a new “Japanese” column); JSON, PO, scripts, text and Word files get it in place of the English. Several files export as one zip."
                 : "This project was imported before Monku kept the original files. Add the files again from the Files list (+) to enable this; your translations stay."}
             </p>
           </div>
-          <button type="button" className="btn primary sm" disabled={!canExportOriginals(project) || exporting} onClick={() => void exportOriginals()}>
-            <Icon name="download" size="sm" />{exporting ? "Exporting…" : "Export files"}
+          <button type="button" className="btn primary sm" disabled={!canExportOriginals(project) || exporting} onClick={() => requestExport("original")}>
+            <Icon name="download" size="sm" />{exporting ? "Exporting…" : "Export files…"}
           </button>
+          {nativeMori() && exportSettings.lastOriginal && (
+            <button type="button" className="btn outline sm" disabled={exporting} title={`Export again to ${exportSettings.lastOriginal}`}
+              onClick={() => requestExport("original", true)}>Quick export</button>
+          )}
         </div>
         <div className="export-row">
           <div>
             <b>One table of every line</b>
             <p className="muted">A normalized translation list, for handing over or reviewing elsewhere.</p>
           </div>
-          <select className="sel" aria-label="Export format" value={exportFormat} onChange={event => setExportFormat(event.target.value as ExportFormat)}>
+          <select className="sel" aria-label="Export format" value={exportFormat} onChange={event => updateExport({ format: event.target.value as ExportFormat })}>
             <option value="csv">CSV (Excel-friendly)</option><option value="json">JSON interchange</option><option value="po">Gettext PO</option>
           </select>
-          <button type="button" className="btn outline sm" onClick={() => void exportInterchange()}><Icon name="download" size="sm" />Export table…</button>
+          <button type="button" className="btn outline sm" disabled={exporting} onClick={() => requestExport("table")}><Icon name="download" size="sm" />Export table…</button>
+          {nativeMori() && exportSettings.lastTable?.[exportFormat] && (
+            <button type="button" className="btn outline sm" disabled={exporting} title={`Export again to ${exportSettings.lastTable[exportFormat]}`}
+              onClick={() => requestExport("table", true)}>Quick export</button>
+          )}
         </div>
         <label className="export-mode">
           Text to use
-          <select className="sel" aria-label="Translation source" value={exportMode} onChange={event => setExportMode(event.target.value as TranslationMode)}>
+          <select className="sel" aria-label="Translation source" value={exportMode} onChange={event => updateExport({ mode: event.target.value as TranslationMode })}>
             <option value="curated">Curated text only</option><option value="curated-or-draft">Use AI/dev draft when not curated (review carefully)</option>
           </select>
         </label>
+        {pendingExport && (
+          <div className="mori-export-check" role="region" aria-label="Review export quality">
+            <b>Before exporting: {missingCount} without output text, {criticalCount} critical issue{criticalCount === 1 ? "" : "s"}, {qualityIssues.length - criticalCount} other warning{qualityIssues.length - criticalCount === 1 ? "" : "s"}.</b>
+            <p className="muted">{pendingExport.kind === "original"
+              ? "Untranslated entries keep their original file text."
+              : "Untranslated entries are left blank in the exported table."} You can fix these now or export anyway.</p>
+            {qualityIssues.length > 0 && <p className="muted">{qualityIssues.slice(0, 3).map(issue => `${issue.id}: ${issue.message}`).join(" · ")}</p>}
+            <div className="mori-export-check-actions">
+              {missingCount > 0 && <button type="button" className="btn outline sm" onClick={() => { setPendingExport(null); setView({ filter: "todo", file: null, term: null, query: "" }); go("matrix"); }}>Review untranslated</button>}
+              {qualityIssues.length > 0 && <button type="button" className="btn outline sm" onClick={() => {
+                setPendingExport(null);
+                setView({ filter: exportMode === "curated" ? "warnings" : "all", file: null, term: null, query: "" });
+                if (exportMode !== "curated" && qualityIssues[0]) select(qualityIssues[0].id);
+                go("matrix");
+              }}>Review warnings</button>}
+              <button type="button" className="btn sm" onClick={() => setPendingExport(null)}>Cancel</button>
+              <button type="button" className="btn primary sm" onClick={() => void performExport(pendingExport.kind, pendingExport.quick)}>Export anyway</button>
+            </div>
+          </div>
+        )}
       </div>
       <div className="grid2" style={{ alignItems: "start" }}>
         <div className="panel">
@@ -369,7 +434,11 @@ export function ProjectScreen() {
       {nativeMori() && <div className="panel" style={{ marginTop: 18 }}>
         <h3>Recovery snapshots</h3>
         <p className="muted" style={{ fontSize: 12 }}>Monku keeps previous versions of local project files. Export independent .mori backups too.</p>
-        <button type="button" className="btn outline sm" onClick={() => void fetchRevisions()}>Show available snapshots</button>
+        <p className="muted" style={{ fontSize: 12 }}>
+          {revisions?.length ? `Latest recovery snapshot: ${new Date(revisions[0]!.at).toLocaleString()}` : "No previous recovery snapshot yet."}
+          {save.kind === "saved" ? ` · Current edits saved at ${new Date(save.at).toLocaleTimeString()}` : save.kind === "saving" ? " · Saving current edits…" : save.kind === "error" ? ` · Save failed: ${save.message}` : ""}
+        </p>
+        <button type="button" className="btn outline sm" onClick={() => void fetchRevisions()}>Refresh snapshots</button>
         {revisions !== null && (revisions.length ? revisions.map(revision => (
           <div className="set-row" key={revision.id}>
             <span>{new Date(revision.at).toLocaleString()}</span><span className="grow" />

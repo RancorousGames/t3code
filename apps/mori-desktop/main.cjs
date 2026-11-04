@@ -5,6 +5,7 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const crypto = require("node:crypto");
 const { createProjectStore, validateProject } = require("./project-store.cjs");
+const { createExportFiles } = require("./export-files.cjs");
 const { createPublicSheetReader } = require("./public-sheet.cjs");
 const { createGoogleWorkspace } = require("./google-workspace.cjs");
 const { createCodexTranslator } = require("./codex-translation.cjs");
@@ -19,6 +20,7 @@ app.setPath("userData", smokeProfile ? path.resolve(smokeProfile) : path.join(ap
 app.setAppUserModelId("games.rancorous.monkunomori");
 app.setName("Monku no Mori");
 const projectStore = createProjectStore(app.getPath("userData"));
+let exportFiles;
 const codexTranslator = createCodexTranslator({ userDataDir: app.getPath("userData") });
 const saveChatBatchFiles = createChatBatchFileStore(app.getPath("userData"));
 const googleWorkspace = createGoogleWorkspace({ userDataDir: app.getPath("userData"), safeStorage, openExternal: url => shell.openExternal(url) });
@@ -200,30 +202,18 @@ if (!acquiredLock) {
       return { filename: path.basename(output) };
     });
 
+    exportFiles = createExportFiles(app.getPath("userData"), async options => {
+      const selected = await dialog.showSaveDialog(mainWindow, options);
+      return selected.canceled ? null : selected.filePath;
+    });
+    secure("file:export-originals", request => exportFiles(request));
     secure("file:export-interchange", async request => {
       if (!request || !["json", "csv", "po"].includes(request.format) ||
           typeof request.data !== "string" || Buffer.byteLength(request.data) > 64 * 1024 * 1024 ||
           typeof request.filename !== "string") {
         throw Error("Invalid localized interchange export.");
       }
-      const filename = path.basename(request.filename)
-        .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
-        .slice(0, 110);
-      const chosen = await dialog.showSaveDialog(mainWindow, {
-        title: "Export localized interchange",
-        defaultPath: filename,
-        filters: [{ name: request.format.toUpperCase(), extensions: [request.format] }],
-      });
-      if (chosen.canceled || !chosen.filePath) return null;
-      const output = chosen.filePath;
-      const tmp = output + "." + crypto.randomUUID() + ".tmp";
-      try {
-        await fs.writeFile(tmp, request.data, { encoding: "utf8", flag: "wx" });
-        await fs.rename(tmp, output);
-      } finally {
-        await fs.rm(tmp, { force: true }).catch(() => {});
-      }
-      return { filename: path.basename(output) };
+      return exportFiles(request);
     });
 
     const devUrl = process.env.MORI_DEV_URL;

@@ -8,6 +8,7 @@ import type { MoriProject } from "./model.ts";
 import { GoogleConnect } from "./GoogleConnect.tsx";
 import { planSheetLinks, type GoogleStagedTable, type GoogleSyncMetadata } from "./google-sync.ts";
 import { readTemplates, useTemplates, type CharacterTemplate, type ContextTemplate, type GlossaryTemplate } from "./templates.ts";
+import { droppedSources, type DroppedSource } from "./drop-import.ts";
 
 // Three steps, as in the original import: stage sources, map their columns, then name and create
 // (or add them to the open project). Sources are grouped by their header row. Each group has its own
@@ -33,30 +34,16 @@ const SHOWN_EXTENSIONS = ["json", "xlsx", "csv", "po", "js", "txt", "docx"];
 
 const skippedTypes = () => formatUi("Only {0} files can be imported.", [ACCEPTED_EXTENSIONS.map(ext => ext.toUpperCase()).join(", ")]);
 
-const isFileEntry = (entry: FileSystemEntry): entry is FileSystemFileEntry => entry.isFile;
 
-/** Walks dropped folders. Entries are read synchronously by the caller before this runs. */
-async function collectEntry(entry: FileSystemEntry, prefix: string): Promise<{ file: File; path: string }[]> {
-  if (isFileEntry(entry)) {
-    const file = await new Promise<File>((resolve, reject) => entry.file(resolve, reject));
-    return [{ file, path: `${prefix}${entry.name}` }];
-  }
-  const reader = (entry as FileSystemDirectoryEntry).createReader();
-  const children: FileSystemEntry[] = [];
-  for (;;) {
-    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
-    if (!batch.length) break;
-    children.push(...batch);
-  }
-  const nested = await Promise.all(children.map(child => collectEntry(child, `${prefix}${entry.name}/`)));
-  return nested.flat();
-}
+
+
 
 const emptyPlan = { rows: [], characters: [], issues: [], warnings: [], sourceFiles: [], sources: [], originals: {}, relocated: {}, stats: { lines: 0, existing: 0, duplicateLines: 0, speakers: 0, sheets: 0, alreadyPresent: 0 } };
 
-export function ImportWizard({ initialStep, initialTables, current, onClose, onCreate, onAppend }: {
+export function ImportWizard({ initialStep, initialTables, initialFiles, current, onClose, onCreate, onAppend }: {
   initialStep: 1 | 2 | 3;
   initialTables?: GoogleStagedTable[] | undefined;
+  initialFiles?: DroppedSource[] | undefined;
   /** The open project, which staged files can be added to instead of starting a new one. */
   current?: MoriProject | null | undefined;
   onClose: () => void;
@@ -65,6 +52,7 @@ export function ImportWizard({ initialStep, initialTables, current, onClose, onC
 }) {
   const templates = useTemplates();
   const [step, setStep] = useState<1 | 2 | 3>(initialStep);
+  const [skippedMapping, setSkippedMapping] = useState(false);
   const [sources, setSources] = useState<StagedSource[]>(() => (initialTables ?? []).map((table, index) => ({
     ...table, id: index + 1, signature: signatureOf(table.headers),
   })));
@@ -168,16 +156,36 @@ export function ImportWizard({ initialStep, initialTables, current, onClose, onC
     setBusy(false);
   };
 
+  // The application-wide drop target passes its staged files here.
+  const initialFilesStaged = useRef(false);
+  useEffect(() => {
+    if (initialFiles?.length && !initialFilesStaged.current) {
+      initialFilesStaged.current = true;
+      void stage(initialFiles);
+    }
+    // The drop is owned by the lifetime of this wizard, not every re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Dropping elsewhere in the open wizard also adds sources instead of losing them.
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const files = (event as CustomEvent<DroppedSource[]>).detail;
+      if (files?.length) {
+        setStep(1);
+        void stage(files);
+      }
+    };
+    window.addEventListener("mori:import-files", receive);
+    return () => window.removeEventListener("mori:import-files", receive);
+  }, [stage]);
+
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    event.stopPropagation();
     setDragOver(false);
-    // Entries must be read before the first await, or the browser drops them.
-    const entries = [...event.dataTransfer.items].map(item => item.webkitGetAsEntry?.()).filter((e): e is FileSystemEntry => !!e);
-    if (entries.length) {
-      void Promise.all(entries.map(entry => collectEntry(entry, ""))).then(groups => stage(groups.flat()));
-    } else {
-      void stage([...event.dataTransfer.files].map(file => ({ file, path: file.name })));
-    }
+    void droppedSources(event.dataTransfer).then(files => stage(files))
+      .catch(error => setProblems(current => [...current, String(error)]));
   };
 
   const addSheet = async () => {
@@ -297,7 +305,7 @@ export function ImportWizard({ initialStep, initialTables, current, onClose, onC
             <div className="imp-top">
               <div
                 className={`drop${dragOver ? " over" : ""}`}
-                onDragOver={event => { event.preventDefault(); setDragOver(true); }}
+                onDragOver={event => { event.preventDefault(); event.stopPropagation(); setDragOver(true); }}
                 onDragLeave={event => { if (event.currentTarget === event.target) setDragOver(false); }}
                 onDrop={onDrop}
               >
@@ -560,6 +568,15 @@ export function ImportWizard({ initialStep, initialTables, current, onClose, onC
                 <p style={{ fontSize: 12.5, color: "var(--text-2)" }}>An empty project. Add sources later from Files.</p>
               ) : (
                 <>
+                  <p className="muted" style={{ fontSize: 12 }}>
+                    Detected columns: {groups.map(group => `Layout ${group.letter}: ${mappingFor(group.headers).src || "source missing"}`).join(" · ")}
+                    {" "}<button type="button" className="btn xs outline" onClick={() => { setSkippedMapping(false); setStep(2); }}>Edit mappings</button>
+                  </p>
+                  {plan.rows.slice(0, 3).map(row => (
+                    <p key={row.id} className="muted" style={{ fontSize: 11.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {row.id}: {row.source}
+                    </p>
+                  ))}
                   <div className="sr"><b>{plan.stats.lines}</b><p>lines from {sources.length} source{sources.length === 1 ? "" : "s"}</p></div>
                   <div className="sr"><b>{plan.stats.existing}</b><p>existing translations<small>Kept as dev drafts, never as your final text.</small></p></div>
                   <div className="sr"><b>{plan.stats.speakers}</b><p>{appending ? "new speakers → characters" : "speakers → characters"}<small>{appending ? "Speakers the project already has are reused." : "Lines without a speaker go to Narrator."}</small></p></div>
@@ -598,13 +615,16 @@ export function ImportWizard({ initialStep, initialTables, current, onClose, onC
         )}
         <span className="grow" />
         {step > 1 ? (
-          <button type="button" className="btn" onClick={() => setStep(step === 3 ? 2 : 1)}>Back</button>
+          <button type="button" className="btn" onClick={() => setStep(step === 3 && skippedMapping ? 1 : step === 3 ? 2 : 1)}>Back</button>
         ) : (
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
         )}
         {step === 1 && (
-          <button type="button" className="btn primary" disabled={!sources.length || busy} onClick={() => setStep(2)}>
-            Map fields <Icon name="arrow" size="sm" />
+          <button type="button" className="btn primary" disabled={!sources.length || busy} onClick={() => {
+            setSkippedMapping(mapsValid);
+            setStep(mapsValid ? 3 : 2);
+          }}>
+            {mapsValid ? "Review import" : "Map fields"} <Icon name="arrow" size="sm" />
           </button>
         )}
         {step === 2 && (

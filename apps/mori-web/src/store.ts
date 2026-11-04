@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MoriCharacter, MoriGlossaryEntry, MoriProject, MoriRow } from "./model.ts";
 import { withSpeaker } from "./insights.ts";
 import { saveProject } from "./library.ts";
+import { clearPendingEdits, recordPendingEdit } from "./recovery-journal.ts";
 
 export type SaveState =
   | { kind: "idle" }
@@ -41,6 +42,8 @@ export function useProjectStore() {
   const queue = useRef(new Map<string, MoriProject>());
   const timer = useRef<number | undefined>(undefined);
   const editGeneration = useRef(0);
+  const activeProjectId = useRef<string | null>(null);
+  const saveFailures = useRef(new Map<string, string>());
 
   const flush = useCallback(async () => {
     window.clearTimeout(timer.current);
@@ -48,22 +51,30 @@ export function useProjectStore() {
     const generationAtFlush = editGeneration.current;
     queue.current.clear();
     if (!batch.length) return;
-    setSave({ kind: "saving" });
+    if (batch.some(next => next.id === activeProjectId.current)) setSave({ kind: "saving" });
     for (const next of batch) {
       try {
         await saveProject(next);
+        clearPendingEdits(next.id, next.lastModified);
+        saveFailures.current.delete(next.id);
       } catch (cause) {
         // Keep the edit queued unless a newer version of the same project is already waiting.
         if (!queue.current.has(next.id)) queue.current.set(next.id, next);
-        setSave({ kind: "error", message: cause instanceof Error ? cause.message : "Unknown storage error." });
+        const message = cause instanceof Error ? cause.message : "Unknown storage error.";
+        saveFailures.current.set(next.id, message);
+        if (next.id === activeProjectId.current) setSave({ kind: "error", message });
         timer.current = window.setTimeout(() => void flush(), RETRY_DELAY_MS);
         return;
       }
     }
-    if (queue.current.size === 0 && generationAtFlush === editGeneration.current) {
-      setSave({ kind: "saved", at: Date.now() });
-    } else {
-      setSave({ kind: "saving" });
+    // Completion of a background save for a previously open project must not
+    // change the status displayed for the project the user is editing now.
+    if (batch.some(next => next.id === activeProjectId.current)) {
+      if (queue.current.size === 0 && generationAtFlush === editGeneration.current) {
+        setSave({ kind: "saved", at: Date.now() });
+      } else {
+        setSave({ kind: "saving" });
+      }
     }
   }, []);
 
@@ -90,13 +101,24 @@ export function useProjectStore() {
   /** Shows a project that is already saved, without writing it again. */
   const load = useCallback((next: MoriProject) => {
     loadedRef.current = next;
+    activeProjectId.current = next.id;
     setProject(next);
-    setSave({ kind: "idle" });
+    const failure = saveFailures.current.get(next.id);
+    setSave(failure ? { kind: "error", message: failure } : { kind: "idle" });
+  }, []);
+
+  /** A crash journal is newer than disk: queue it for autosave immediately. */
+  const restoreUnsaved = useCallback((next: MoriProject) => {
+    loadedRef.current = null;
+    activeProjectId.current = next.id;
+    setProject(next);
+    setSave({ kind: "saving" });
   }, []);
 
   /** Closes the open project, for example after it was deleted. */
   const unload = useCallback(() => {
     loadedRef.current = null;
+    activeProjectId.current = null;
     setProject(null);
     setSave({ kind: "idle" });
   }, []);
@@ -104,17 +126,24 @@ export function useProjectStore() {
   /** Drops any queued write for a project that is being deleted, so autosave can't bring it back. */
   const forget = useCallback((id: string) => {
     queue.current.delete(id);
+    clearPendingEdits(id);
   }, []);
 
   const actions = useMemo<MoriActions>(() => {
-    const change = (update: (current: MoriProject) => MoriProject) => {
+    const change = (update: (current: MoriProject) => MoriProject, rowId?: string) => {
       editGeneration.current += 1;
       setSave({ kind: "saving" });
-      setProject(current => current && { ...update(current), lastModified: new Date().toISOString() });
+      setProject(current => {
+        if (!current) return null;
+        const timestamp = Math.max(Date.now(), (Date.parse(current.lastModified) || 0) + 1);
+        const next = { ...update(current), lastModified: new Date(timestamp).toISOString() };
+        recordPendingEdit(current, next, rowId);
+        return next;
+      });
     };
     return {
       updateProject: change,
-      updateRow: (id, update) => change(p => ({ ...p, rows: p.rows.map(row => row.id === id ? update(row) : row) })),
+      updateRow: (id, update) => change(p => ({ ...p, rows: p.rows.map(row => row.id === id ? update(row) : row) }), id),
       renameProject: name => change(p => ({ ...p, name })),
       setContext: (field, text) => change(p => ({ ...p, context: { ...p.context, [field]: text } })),
       addCharacter: fields => {
@@ -145,5 +174,5 @@ export function useProjectStore() {
     };
   }, []);
 
-  return { project, save, actions, load, unload, forget };
+  return { project, save, actions, load, restoreUnsaved, unload, forget };
 }

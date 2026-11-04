@@ -4,6 +4,7 @@ import { nativeMori } from "./backend.ts";
 import bundledUiCatalog from "../localization/MonkuNoMoriUI.mori?raw";
 import { isLegacyDemo, mergeUiCatalog } from "./startup-projects.ts";
 import { MORI_UI_PROJECT_ID } from "./ui-project-id.ts";
+import { clearPendingEdits } from "./recovery-journal.ts";
 
 // In the packaged Windows app, native project files under Monku's *separate*
 // user-data directory are authoritative. IndexedDB is the web-preview fallback
@@ -204,6 +205,7 @@ export async function removeProject(id: string): Promise<void> {
     await withStore("readwrite", store => store.delete(id));
   }
   writeIndex(readIndex().filter(entry => entry.id !== id));
+  clearPendingEdits(id);
 }
 
 export async function listProjectRevisions(id: string) {
@@ -215,6 +217,7 @@ export async function restoreProjectRevision(id: string, revisionId: string): Pr
   const native = nativeMori();
   if (!native) throw new Error("Native revision recovery requires the desktop app.");
   const recovered = parseMoriProject(await native.restoreRevision(id, revisionId));
+  clearPendingEdits(id);
   writeIndex([entryOf(recovered), ...readIndex().filter(entry => entry.id !== id)]);
   return recovered;
 }

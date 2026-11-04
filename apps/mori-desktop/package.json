@@ -6,7 +6,7 @@
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test project-store.test.cjs public-sheet.test.cjs google-workspace.test.cjs codex-translation.test.cjs",
+    "test": "node --test project-store.test.cjs export-files.test.cjs public-sheet.test.cjs google-workspace.test.cjs codex-translation.test.cjs",
     "dist:win": "electron-builder --win nsis --x64"
   },
   "devDependencies": {
@@ -17,7 +17,7 @@
     "appId": "games.rancorous.monkunomori",
     "productName": "Monku no Mori",
     "directories": { "output": "../../release/mori" },
-    "files": ["main.cjs", "preload.cjs", "project-store.cjs", "public-sheet.cjs", "google-workspace.cjs", "codex-translation.cjs", "assets/monku.ico", "package.json"],
+    "files": ["main.cjs", "preload.cjs", "project-store.cjs", "export-files.cjs", "public-sheet.cjs", "google-workspace.cjs", "codex-translation.cjs", "ai-context-files.cjs", "assets/monku.ico", "package.json"],
     "extraResources": [
       { "from": "../mori-web/dist", "to": "renderer" },
       { "from": "private/google-oauth-client.json", "to": "google-oauth-client.json" }
