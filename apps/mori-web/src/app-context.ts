@@ -6,9 +6,10 @@ import type { MoriActions, SaveState } from "./store.ts";
 import type { ViewFilters } from "./insights.ts";
 import type { LibraryEntry } from "./library.ts";
 import type { PopAlign } from "./Overlays.tsx";
+import type { DraftAheadState } from "./drafter.ts";
 import type { GoogleStagedTable } from "./google-sync.ts";
 
-export type Screen = "matrix" | "focus" | "characters" | "glossary" | "context" | "project" | "settings" | "chatgpt";
+export type Screen = "matrix" | "characters" | "glossary" | "context" | "project" | "settings" | "chatgpt";
 export type EditorClickSelection = { kind: "position"; offset: number } | { kind: "selectAll" };
 
 export type PopState = {
@@ -23,8 +24,11 @@ export type PopState = {
 export type ModalState =
   | { kind: "shortcuts" }
   | { kind: "palette" }
-  | { kind: "import"; step: 1 | 2 | 3; /** Add files to open project. */ add?: boolean; tables?: GoogleStagedTable[] }
-  | { kind: "templates" };
+  | { kind: "import"; step: 1 | 2 | 3; /** Add files to the open project instead of starting a new one. */ add?: boolean; tables?: GoogleStagedTable[] }
+  | { kind: "templates" }
+  /** Add a glossary term (no termId) or show how an existing one is used. `previousJp` offers to
+   * replace the old Japanese in curated lines. `rowId` is the line the term was picked from. */
+  | { kind: "term"; termId?: string; en?: string; jp?: string; previousJp?: string; rowId?: string };
 
 export interface AppValue {
   project: MoriProject;
@@ -69,6 +73,8 @@ export interface AppValue {
   openProject: (id: string) => Promise<void>;
   createProject: (project: MoriProject) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
+  /** Background AI drafting of the lines ahead of the current one. */
+  drafter: DraftAheadState;
   /** Project-wide notice, for example when storage is unavailable. */
   notice: string | null;
 }

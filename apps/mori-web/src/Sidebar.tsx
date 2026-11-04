@@ -41,10 +41,10 @@ function Ring({ done, total }: { done: number; total: number }) {
   const fraction = total ? done / total : 0;
   return (
     <svg className="ring" viewBox="0 0 14 14" aria-hidden="true">
-      <circle cx="7" cy="7" r="5" fill="none" stroke="rgba(196,226,206,.12)" strokeWidth="2" />
+      <circle cx="7" cy="7" r="5" fill="none" stroke="rgba(214,220,240,.12)" strokeWidth="2" />
       <circle
         cx="7" cy="7" r="5" fill="none"
-        stroke={fraction === 1 ? "#8ccfa7" : "#62ad86"}
+        stroke={fraction === 1 ? "var(--moss)" : "var(--moss-2)"}
         strokeWidth="2"
         strokeDasharray={`${circumference * fraction} ${circumference}`}
         transform="rotate(-90 7 7)"
@@ -90,11 +90,8 @@ export function Sidebar() {
         <button type="button" className={navClass(onMatrix && view.filter !== "warnings")} onClick={() => { setView({ filter: "all", file: view.file }); showScreen("matrix"); }}>
           <Icon name="table" />{tr("Matrix")}<span className="count tabnum">{todo} to do</span>
         </button>
-        <button type="button" className={navClass(screen === "focus")} onClick={() => showScreen("focus")}>
-          <Icon name="target" />Focus
-        </button>
         <button type="button" className={navClass(onMatrix && view.filter === "warnings")} onClick={() => { setView({ filter: "warnings" }); showScreen("matrix"); }}>
-          <Icon name="review" />{tr("Review")}<span className={`count warn tabnum`}>{warnings || ""}</span>
+          <Icon name="review" />{tr("Checks")}<span className={`count warn tabnum`}>{warnings || ""}</span>
         </button>
 
         <div className="nav-label">{tr("AI assistance")}</div>
@@ -120,7 +117,7 @@ export function Sidebar() {
           <button type="button" className="files-toggle" aria-expanded={prefs.filesExpanded} aria-controls="mori-sidebar-files" onClick={() => setPrefs({ filesExpanded: !prefs.filesExpanded })}>
             <Icon name="chevron-down" size="xs" className="files-chev" />{tr("Files")}
           </button>
-          <button type="button" title="Import files into a new project" aria-label="Import files into a new project" onClick={() => { setPrefs({ filesExpanded: true }); openModal({ kind: "import", step: 1 }); }}>
+          <button type="button" title="Add files to this project" aria-label="Add files to this project" onClick={() => { setPrefs({ filesExpanded: true }); openModal({ kind: "import", step: 1, add: true }); }}>
             <Icon name="plus" size="xs" />
           </button>
         </div>

@@ -1,13 +1,22 @@
 import type { MoriProject, MoriRow } from "./model.ts";
+import { glossaryHits } from "./insights.ts";
 
-export const AI_BATCH_LIMIT = 8;
+/** Lines per Codex request. Matches MAX_LINES in mori-desktop/codex-translation.cjs. */
+export const AI_BATCH_LIMIT = 5;
+/** Longest English line sent for drafting; longer ones are left for the translator. */
+export const AI_MAX_SOURCE = 6000;
+
+/** Lines the AI may draft: unlocked, no curated text yet, with English to translate. */
+export const canDraft = (row: MoriRow): boolean =>
+  !row.isLocked && !row.final.trim() && !!row.source.trim() && row.source.length <= AI_MAX_SOURCE;
+
 export function nextDraftCandidates(project: MoriProject, limit = AI_BATCH_LIMIT): MoriRow[] {
-  return project.rows.filter(row => !row.isLocked && !row.final.trim() && !!row.source.trim())
+  return project.rows.filter(canDraft)
     .slice(0, Math.min(AI_BATCH_LIMIT, limit));
 }
 export function batchTranslationPrompt(project: MoriProject, rows: MoriRow[]): string {
-  if (!rows.length || rows.length > AI_BATCH_LIMIT) throw Error("Choose 1–8 untranslated, unlocked lines.");
-  if (rows.some(row => row.isLocked || row.final.trim() || !row.source.trim() || row.source.length > 6000)) {
+  if (!rows.length || rows.length > AI_BATCH_LIMIT) throw Error(`Choose 1–${AI_BATCH_LIMIT} untranslated, unlocked lines.`);
+  if (rows.some(row => row.isLocked || row.final.trim() || !row.source.trim() || row.source.length > AI_MAX_SOURCE)) {
     throw Error("The batch contains a protected, already translated, or unusually long line.");
   }
   const speakers = new Map(project.characters.map(character => [character.id, character]));
@@ -18,14 +27,14 @@ export function batchTranslationPrompt(project: MoriProject, rows: MoriRow[]): s
     speaker: row.characterId ? speakers.get(row.characterId) ?? null : null,
     translatorNote: row.note ?? "",
   }));
-  const terms = project.glossary
-    .filter(term => term.en && rows.some(row => row.source.toLowerCase().includes(term.en.toLowerCase())))
+  const used = new Set(rows.flatMap(row => glossaryHits(row.source, project.glossary)));
+  const terms = project.glossary.filter(term => used.has(term))
     .map(term => ({english:term.en,japanese:term.jp,note:term.explanation})).slice(0, 60);
   return [
     "Translate these game localization lines from English to Japanese. You are an assistant to a human game translator.",
     "Preserve all tokens/placeholders, line breaks and game-specific markup.",
     project.characters.length ? "Use any provided character voice, personality, tone and register." : "",
-    project.glossary.length ? "Respect the provided game terminology." : "",
+    project.glossary.length ? "When a line uses a game term below, use its Japanese exactly, even when the English is plural." : "",
     "Do not overwrite or modify existing curated text. Return proposals only.",
     "Output STRICT JSON and no prose or markdown, matching:",
     '{"translations":[{"id":"the exact string ID","japanese":"natural Japanese translation"}]}',
@@ -68,4 +77,14 @@ export function parseBatchReply(reply: string, expectedIds: readonly string[]): 
     results.push({ id: entry.id, japanese: entry.japanese });
   }
   return results;
+}
+
+/** Stores an AI proposal as the line's AI draft. Curated and locked lines are left alone,
+ * and the replaced draft goes into Versions. */
+export function withAIDraft(row: MoriRow, japanese: string): MoriRow {
+  if (row.isLocked || row.final.trim() || row.ai === japanese) return row;
+  return {
+    ...row, ai: japanese, status: "draft",
+    ...(row.ai ? { history: [...(row.history ?? []), { type: "ai" as const, text: row.ai, timestamp: Date.now() }] } : {}),
+  };
 }

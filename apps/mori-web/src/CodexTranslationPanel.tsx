@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useApp } from "./app-context.ts";
 import { nativeMori } from "./backend.ts";
-import { batchTranslationPrompt, nextDraftCandidates, parseBatchReply } from "./ai-batch.ts";
+import { batchTranslationPrompt, nextDraftCandidates, parseBatchReply, withAIDraft } from "./ai-batch.ts";
 import { checkRow } from "./insights.ts";
 import { projectForTranslation } from "./prefs.ts";
 
@@ -46,16 +46,7 @@ export function CodexTranslationPanel() {
     if (lockedNow) { setStatus(`The row ${lockedNow.id} was locked while translating. No drafts were changed.`); return; }
     if (!window.confirm(`Save ${preview.length} Codex Luna 6 (low) proposal(s) as AI drafts? Current human translations remain untouched.`)) return;
     for (const { id, japanese } of preview) {
-      actions.updateRow(id, row => {
-        if (row.isLocked) return row;
-        return {
-          ...row, ai: japanese,
-          status: row.final.trim() ? "translated" : "draft",
-          ...(row.ai && row.ai !== japanese ? {
-            history: [...(row.history ?? []), { type: "ai" as const, text: row.ai, timestamp: Date.now() }],
-          } : {}),
-        };
-      });
+      actions.updateRow(id, row => withAIDraft(row, japanese));
     }
     toast(`Saved ${preview.length} Codex Luna 6 (low) AI draft(s); no curated translation was overwritten.`);
     setPreview(null);

@@ -1,4 +1,5 @@
 import { useApp, type Screen } from "./app-context.ts";
+import monkuIcon from "./assets/monku-icon.png";
 import { useEffect, useState } from "react";
 import { Icon } from "./Icons.tsx";
 import { KeyCaps } from "./Overlays.tsx";
@@ -14,7 +15,6 @@ import { tr, formatUi } from "./ui-localization.ts";
 
 const VIEW_TITLES: Record<Screen, string> = {
   matrix: "Matrix",
-  focus: "Focus",
   characters: "Characters",
   glossary: "Glossary",
   context: "Context",
@@ -39,11 +39,11 @@ export function Titlebar() {
       window.removeEventListener("mori:google-state", refresh);
     };
   }, []);
-  const viewTitle = screen === "matrix" && view.filter === "warnings" ? "Review" : VIEW_TITLES[screen];
+  const viewTitle = screen === "matrix" && view.filter === "warnings" ? "Checks" : VIEW_TITLES[screen];
   return (
     <header className="titlebar">
       <div className="tb-left">
-        <div className="logo"><Icon name="tree" /></div>
+        <img className="logo" src={monkuIcon} alt="Monku no Mori" />
         <div className="crumb">
           <b>{project.name}</b>
           <Icon name="chevron-right" size="xs" />
@@ -101,6 +101,7 @@ export function StatusBar() {
         )}
         {warnings > 0 && <span className="sb warn"><Icon name="alert" size="xs" />{warnings} warning{warnings > 1 ? "s" : ""} on this line</span>}
         <span className="grow" />
+        <DraftAheadStatus />
         <span className="sb">{prefs.jaFont}</span>
         <button type="button" className="sbb" onClick={() => openModal({ kind: "shortcuts" })}>
           <Icon name="keyboard" size="sm" />
@@ -109,5 +110,22 @@ export function StatusBar() {
         </button>
       </footer>
     </>
+  );
+}
+
+/** Background AI drafting state. Click to pause or resume, or to retry after an error. */
+function DraftAheadStatus() {
+  const { drafter, prefs } = useApp();
+  if (drafter.phase === "off" || !drafter.wanted) return null;
+  const count = `${drafter.ready}/${drafter.wanted}`;
+  const [label, title, onClick] =
+    drafter.phase === "error" ? [`AI drafts stopped · retry`, drafter.error ?? "", drafter.retry]
+    : drafter.phase === "paused" ? [`AI drafts paused · ${count}`, "Click to resume drafting ahead.", () => drafter.setPaused(false)]
+    : [drafter.phase === "drafting" ? `Drafting ahead · ${count}` : `AI drafts ready · ${count}`,
+       `Keeps AI drafts ready for the next ${prefs.draftAhead} lines. Click to pause.`, () => drafter.setPaused(true)];
+  return (
+    <button type="button" className={`sbb draft-${drafter.phase}`} title={title} onClick={onClick}>
+      <Icon name="sparkle" size="sm" />{label}
+    </button>
   );
 }

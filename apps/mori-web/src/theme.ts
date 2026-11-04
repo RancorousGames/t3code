@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 
-// Muted tones that stay readable on the dark-forest background.
+// Muted tones that stay readable on the indigo background.
 const SPEAKER_TONES = ["#7fcdb8", "#d6a97c", "#df9fbe", "#a3b3a9", "#aaa7da", "#e3a5a5", "#c8b07a", "#9fd38a", "#8fb8e0"];
 
 /** A character keeps the same colour in every view, derived from its ID. */

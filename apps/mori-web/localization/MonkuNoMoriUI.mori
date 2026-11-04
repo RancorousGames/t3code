@@ -297,7 +297,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:65 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:72 (object-property:label)"
     },
     {
       "id": "ui.508fe49743f3b7",
@@ -306,7 +306,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:66 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:73 (object-property:label)"
     },
     {
       "id": "ui.b1670980fd628c",
@@ -513,7 +513,7 @@
       "final": "AIチャット",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:511 (jsx-attribute:aria-label); src/Sidebar.tsx:99 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:547 (jsx-attribute:aria-label); src/Sidebar.tsx:99 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.356716972ceae3",
@@ -801,7 +801,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:445 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:481 (ui-call:toast)"
     },
     {
       "id": "ui.8f60d3fc26a628",
@@ -909,7 +909,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:160 (jsx-text)"
+      "note": "src/AIChatsSidebar.tsx:160 (jsx-text); src/ChatGPTScreen.tsx:24 (object-getter:label)"
     },
     {
       "id": "ui.0e82374d0d2d3c",
@@ -936,7 +936,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:388 (ui-call:confirm)"
+      "note": "src/ChatGPTScreen.tsx:424 (ui-call:confirm)"
     },
     {
       "id": "ui.50184312565462",
@@ -945,7 +945,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:514 (jsx-attribute:aria-label)"
+      "note": "src/ChatGPTScreen.tsx:550 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f3e19cfec3c41a",
@@ -963,7 +963,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:554 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:613 (jsx-text)"
     },
     {
       "id": "ui.58d5d42460ebeb",
@@ -999,7 +999,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:515 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:551 (jsx-text)"
     },
     {
       "id": "ui.7b19645ad2b69e",
@@ -1125,7 +1125,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:374 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:410 (object-property:label)"
     },
     {
       "id": "ui.af53d419e54d90",
@@ -1323,7 +1323,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:372 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:408 (object-property:label)"
     },
     {
       "id": "ui.3ab7e46c2b553d",
@@ -1350,7 +1350,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:506 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:542 (ui-call:toast)"
     },
     {
       "id": "ui.79874911a25970",
@@ -1359,7 +1359,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:459 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:495 (ui-call:toast)"
     },
     {
       "id": "ui.4759498ac2a719",
@@ -1539,7 +1539,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:555 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:614 (jsx-text)"
     },
     {
       "id": "ui.da53d14d2018a0",
@@ -1809,7 +1809,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:67 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:74 (object-property:label)"
     },
     {
       "id": "ui.abaa6c6eecb051",
@@ -2070,7 +2070,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:521 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:557 (jsx-text)"
     },
     {
       "id": "ui.f6ece80b88d6df",
@@ -2727,7 +2727,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:362 (ui-branch)"
+      "note": "src/ChatGPTScreen.tsx:398 (ui-branch)"
     },
     {
       "id": "ui.198f0f7c0d5a1d",
@@ -3024,7 +3024,7 @@
       "final": "新規",
       "status": "translated",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:277 (jsx-text); src/ChatGPTScreen.tsx:520 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/AIChatsSidebar.tsx:277 (jsx-text); src/ChatGPTScreen.tsx:556 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.4708d98a07ebcf",
@@ -3060,7 +3060,7 @@
       "final": "新しいチャット",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:517 (jsx-expression); src/ChatGPTScreen.tsx:533 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:553 (jsx-expression); src/ChatGPTScreen.tsx:591 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.00f01db712bb3f",
@@ -3078,7 +3078,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:163 (jsx-attribute:title); src/AIChatsSidebar.tsx:163 (jsx-attribute:aria-label); src/ChatGPTScreen.tsx:520 (jsx-attribute:title)"
+      "note": "src/AIChatsSidebar.tsx:163 (jsx-attribute:title); src/AIChatsSidebar.tsx:163 (jsx-attribute:aria-label); src/ChatGPTScreen.tsx:556 (jsx-attribute:title)"
     },
     {
       "id": "ui.5d6167ef4766f7",
@@ -3114,7 +3114,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:403 (ui-call:prompt)"
+      "note": "src/ChatGPTScreen.tsx:439 (ui-call:prompt)"
     },
     {
       "id": "ui.374ebe96c9b16f",
@@ -3150,7 +3150,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:438 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:474 (ui-call:toast)"
     },
     {
       "id": "ui.d6a2ad7e85635f",
@@ -3159,7 +3159,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:532 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:590 (jsx-text)"
     },
     {
       "id": "ui.9dc15423f1e8ac",
@@ -3312,7 +3312,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:381 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:417 (ui-call:toast)"
     },
     {
       "id": "ui.31366b3b2c60c3",
@@ -3681,7 +3681,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:553 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:612 (jsx-text)"
     },
     {
       "id": "ui.7bbcc271052055",
@@ -3690,7 +3690,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:521 (jsx-attribute:title)"
+      "note": "src/ChatGPTScreen.tsx:557 (jsx-attribute:title)"
     },
     {
       "id": "ui.b205bb47f81a30",
@@ -3699,7 +3699,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:370 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:406 (object-property:label)"
     },
     {
       "id": "ui.6d444a3b7ba681",
@@ -3780,7 +3780,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:481 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:517 (ui-call:toast)"
     },
     {
       "id": "ui.523839adf84c8e",
@@ -4050,7 +4050,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:371 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:407 (object-property:label)"
     },
     {
       "id": "ui.6e3f216dd39de6",
@@ -4131,7 +4131,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:479 (ui-call:prompt)"
+      "note": "src/ChatGPTScreen.tsx:515 (ui-call:prompt)"
     },
     {
       "id": "ui.95e154398a4bc0",
@@ -4581,7 +4581,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:450 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:486 (ui-call:toast)"
     },
     {
       "id": "ui.742ab447c91df1",
@@ -4797,7 +4797,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:420 (ui-call:prompt)"
+      "note": "src/ChatGPTScreen.tsx:456 (ui-call:prompt)"
     },
     {
       "id": "ui.748abe03ef42c2",
@@ -4806,7 +4806,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:492 (ui-call:prompt)"
+      "note": "src/ChatGPTScreen.tsx:528 (ui-call:prompt)"
     },
     {
       "id": "ui.88096584e4a882",
@@ -5184,7 +5184,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:291 (ui-call:confirm)"
+      "note": "src/ChatGPTScreen.tsx:327 (ui-call:confirm)"
     },
     {
       "id": "ui.2221524edb7d5e",
@@ -5382,7 +5382,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:68 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:75 (object-property:label)"
     },
     {
       "id": "ui.c2c8b72e302ec7",
@@ -5987,5 +5987,5 @@
     "src/main.tsx",
     "src/Overlays.tsx"
   ],
-  "lastModified": "2026-11-04T01:38:50.966Z"
+  "lastModified": "2026-11-04T02:39:42.091Z"
 }

@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useApp } from "./app-context.ts";
 import { tr } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { KeyCaps } from "./Overlays.tsx";
 import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
 import { Marked } from "./Marked.tsx";
-import { checkRow, matchesFilter, statusOf, type RowFilter } from "./insights.ts";
+import { checkRow, matchesFilter, statusOf, termPattern, type RowFilter } from "./insights.ts";
 import { editFinalText, type MoriRow } from "./model.ts";
 import type { MoriPrefs, ResizableColumn } from "./prefs.ts";
 import { keyLabel } from "./shortcuts.ts";
@@ -28,10 +28,10 @@ interface ColumnDef {
 const COLUMN_DEFS: ColumnDef[] = [
   { key: "id", label: "Line", fixed: 96, min: 64, collapsible: true, resizable: true },
   { key: "speaker", label: "Speaker", fixed: 136, min: 96, collapsible: true, resizable: true },
-  { key: "src", label: "Source · EN", fr: 1.1, min: 220, collapsible: true, resizable: true, color: "#a6b6ac" },
+  { key: "src", label: "English", fr: 1.1, min: 220, collapsible: true, resizable: true, color: "#a6b6ac" },
   { key: "dev", label: "Dev draft", fr: 0.8, min: 160, collapsible: true, resizable: true, color: "#c2b18e" },
   { key: "ai", label: "AI draft", fr: 0.9, min: 180, collapsible: true, resizable: true, color: "#9cbbe0" },
-  { key: "tr", label: "Translation · JA", fr: 1.2, min: 240, resizable: true, color: "#8ccfa7" },
+  { key: "tr", label: "Japanese", fr: 1.2, min: 240, resizable: true, color: "#a6d785" },
   { key: "st", label: "", fixed: 66 },
 ];
 
@@ -53,6 +53,30 @@ const shownColumns = (prefs: MoriPrefs) => COLUMN_DEFS.filter(def => prefs.chara
 /** Map the position clicked in the rendered (glossary-marked) text to a textarea offset.
  * Marked renders each newline as one ↵ character plus a br, so the selected text's
  * UTF-16 length matches the raw translation string, including multiline values. */
+/** A phrase picked in the Matrix for the glossary. English and Japanese picked in the same line combine. */
+interface TermCapture { rowId: string; en: string; jp: string; x: number }
+
+const MAX_TERM_LENGTH = 80;
+
+/** Reads the text selected inside one cell of a line, from the page selection or the line editor. */
+function selectedPhrase(target: HTMLElement): { rowId: string; english: boolean; text: string } | null {
+  const rowId = target.closest<HTMLElement>("[data-row-id]")?.dataset.rowId;
+  const cell = target.closest<HTMLElement>(".c-src, .c-tr, .c-ai, .c-dev");
+  if (!rowId || !cell) return null;
+  let text = "";
+  if (target instanceof HTMLTextAreaElement) {
+    text = target.value.slice(target.selectionStart, target.selectionEnd);
+  } else {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !cell.contains(selection.anchorNode) || !cell.contains(selection.focusNode)) return null;
+    text = selection.toString();
+  }
+  // Marked shows line breaks as a visible return sign.
+  text = text.replace(/↵/g, " ").replace(/\s+/g, " ").trim();
+  if (!text || text.length > MAX_TERM_LENGTH) return null;
+  return { rowId, english: cell.classList.contains("c-src"), text };
+}
+
 function clickedTextOffset(cell: HTMLElement, value: string, x: number, y: number): number {
   const position = document.caretPositionFromPoint?.(x, y);
   const range = position ? null : document.caretRangeFromPoint?.(x, y);
@@ -172,7 +196,7 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
         const text = def.key === "ai" ? row.ai : row.legacy;
         const shortcut = keyLabel(bindings[def.key === "ai" ? "useAI" : "useDev"]);
         return (
-          <div key={def.key} className={`c c-${def.key} ja`}>
+          <div key={def.key} className={`c c-${def.key} ja`} lang="ja">
             {text ? (
               <>
                 <Marked text={text} glossary={glossary} />
@@ -202,7 +226,7 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
           );
         }
         return (
-          <div key="tr" className="c c-tr ja">
+          <div key="tr" className="c c-tr ja" lang="ja">
             {row.final ? <Marked text={row.final} glossary={glossary} /> : <span className="empty">{row.isLocked ? "Locked · empty" : "—"}</span>}
           </div>
         );
@@ -252,18 +276,63 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
 }
 
 export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: boolean; onToggleSideBySide: () => void }) {
-  const { project, view, setView, visible, activeId, prefs, setColumn, setPrefs, bindings, openPop, folded, toggleFold, go } = useApp();
+  const { project, view, setView, visible, activeId, prefs, setColumn, setPrefs, bindings, openPop, openModal, folded, toggleFold } = useApp();
   const matrixRef = useRef<HTMLDivElement>(null);
   const splitRef = useRef<HTMLDivElement>(null);
   const [browserWidth, setBrowserWidth] = useState(46);
   const columns = sideBySide ? COLUMN_DEFS.filter(def => ["id", "src", "tr", "st"].includes(def.key)) : shownColumns(prefs);
+  const captureRef = useRef<HTMLButtonElement>(null);
+  const [capture, setCapture] = useState<TermCapture | null>(null);
   const glossary = prefs.glossaryEnabled ? project.glossary : [];
   const activeRow = project.rows.find(row => row.id === activeId);
+  const scopedTerm = view.term ? glossary.find(term => term.id === view.term && term.en.trim()) : undefined;
 
-  const scope = useMemo(
-    () => (view.file ? project.rows.filter(row => row.sourceFile === view.file) : project.rows),
-    [project.rows, view.file],
-  );
+  const scope = useMemo(() => {
+    const termTest = scopedTerm ? termPattern(scopedTerm.en.trim()) : null;
+    return project.rows.filter(row => (!view.file || row.sourceFile === view.file) && (!termTest || termTest.test(row.source)));
+  }, [project.rows, view.file, scopedTerm]);
+
+  useLayoutEffect(() => {
+    if (!capture) return;
+    const button = captureRef.current;
+    const row = matrixRef.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(capture.rowId)}"]`);
+    if (!button || !row) return;
+    const bounds = row.getBoundingClientRect();
+    const { offsetWidth: width, offsetHeight: height } = button;
+    const gap = 8;
+    const margin = 8;
+    const aboveSpace = bounds.top - gap - margin;
+    const belowSpace = window.innerHeight - bounds.bottom - gap - margin;
+    const above = aboveSpace >= height || (belowSpace < height && aboveSpace >= belowSpace);
+    const top = above ? bounds.top - height - gap : bounds.bottom + gap;
+    button.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - height - margin))}px`;
+    button.style.left = `${Math.max(margin, Math.min(capture.x - width / 2, window.innerWidth - width - margin))}px`;
+  }, [capture]);
+
+  // Selecting a word offers "Add to glossary"; selecting its Japanese in the same line fills both sides.
+  const onMouseUp = (event: ReactMouseEvent) => {
+    if (!prefs.glossaryEnabled) return;
+    const picked = selectedPhrase(event.target as HTMLElement);
+    if (!picked) {
+      setCapture(null);
+      return;
+    }
+    setCapture(current => {
+      const kept = current?.rowId === picked.rowId ? current : { en: "", jp: "" };
+      return {
+        rowId: picked.rowId,
+        en: picked.english ? picked.text : kept.en,
+        jp: picked.english ? kept.jp : picked.text,
+        x: event.clientX,
+      };
+    });
+  };
+  const addCaptured = () => {
+    if (!capture) return;
+    openModal({ kind: "term", en: capture.en, jp: capture.jp, rowId: capture.rowId });
+    setCapture(null);
+    window.getSelection()?.removeAllRanges();
+  };
   const counts = useMemo(() => {
     const result = {} as Record<RowFilter, number>;
     for (const filter of FILTERS) result[filter.id] = scope.filter(row => matchesFilter(row, filter.id, glossary)).length;
@@ -335,6 +404,14 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
   return (
     <>
       <div className="toolbar">
+        {scopedTerm && (
+          <span className="scope" title="Only lines whose English uses this glossary term">
+            <Icon name="book" size="xs" />{scopedTerm.en}{scopedTerm.jp && <span className="ja" lang="ja"> · {scopedTerm.jp}</span>}
+            <button type="button" title="Show all lines" aria-label="Stop filtering by term" onClick={() => setView({ term: null })}>
+              <Icon name="x" size="xs" />
+            </button>
+          </span>
+        )}
         {view.file && (
           <span className="scope">
             <Icon name="file" size="xs" />{view.file}
@@ -401,7 +478,7 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
 
       <div ref={splitRef} className={`matrix-content${sideBySide ? " side-by-side" : ""}`}
         style={{ gridTemplateColumns: sideBySide ? `minmax(0, ${100 - browserWidth}fr) 8px minmax(0, ${browserWidth}fr)` : "minmax(0, 1fr)" }}>
-      <div className="scroll">
+      <div className="scroll" onMouseUp={onMouseUp} onScroll={() => capture && setCapture(null)}>
         <div
           ref={matrixRef}
           className={`matrix${prefs.density === "compact" ? " compact" : ""}`}
@@ -423,7 +500,7 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
                 );
               }
               return (
-                <div key={def.key} className="hc">
+                <div key={def.key} className={`hc hc-${def.key}`}>
                   {def.color && <span className="sw" style={cssVar("--c", def.color)} />}
                   <span className="lbl">{def.label}</span>
                   {def.collapsible && isResizable(def.key) && (
@@ -511,6 +588,21 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
         <div className="matrix-chat-pane"><ChatGPTScreen compact /></div>
       </>}
       </div>
+      {capture && (
+        <button
+          type="button"
+          ref={captureRef}
+          className="glossary-capture"
+          title="Also select the Japanese in this line to fill in both sides"
+          onMouseDown={event => event.preventDefault()}
+          onClick={addCaptured}
+        >
+          <Icon name="plus" size="xs" />
+          Add {capture.en ? `“${capture.en}”` : <span className="ja" lang="ja">{capture.jp}</span>}
+          {capture.en && capture.jp && <><Icon name="arrow" size="xs" /><span className="ja" lang="ja">{capture.jp}</span></>}
+          {" "}to glossary
+        </button>
+      )}
     </>
   );
 }

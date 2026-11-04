@@ -11,7 +11,7 @@ const project = (): MoriProject => ({
 });
 test("Google import link respects filtered worksheet row numbers and mapped column", () => {
   const sources = [{
-    headers:["ID","English","Japanese"], rows:[["r1","Hello","古い"],["r2","Bye",""]],
+    headers:["ID","English","Japanese"], rows:[["r1","Hello","古い"],["r2","Bye",""]], locs:[],
     name:"A / Dialogue", path:"Google Drive/A/Dialogue",kind:"sheet" as const,
     google:{sourceId:"original",copyId:"copy",sourceName:"A",sheetName:"Dialogue",rowNumbers:[4,9],headerRow:2},
   }];
@@ -24,7 +24,7 @@ test("Google import link respects filtered worksheet row numbers and mapped colu
 });
 test("no translation column means read-only import without fabricated writable cells", () => {
   const noTranslation = planSheetLinks([{
-    headers:["key","source"],rows:[["r1","Hello"]], name:"foo",path:"foo",kind:"sheet",
+    headers:["key","source"],rows:[["r1","Hello"]], locs:[], name:"foo",path:"foo",kind:"sheet",
     google:{sourceId:"original",copyId:"copy",sourceName:"foo",sheetName:"UI",rowNumbers:[2],headerRow:1},
   }],()=>({id:"key",src:"source",tr:"",spk:"",note:""}));
   assert.equal(noTranslation.sheets.length,0);

@@ -2,14 +2,14 @@ import type { MoriProject, MoriRow } from "./model.ts";
 import { checkRow } from "./insights.ts";
 
 /**
- * Normalized interchange exports. These do NOT reconstruct original DOCX,
- * XLSX, scripts or nested JSON: the imported source structure isn't yet
- * retained faithfully enough for that. Never label these as a round-trip.
+ * Normalized interchange exports: one flat table of every line. Exporting back into the
+ * original files is in roundtrip.ts.
  */
 export type ExportFormat = "csv" | "json" | "po";
 export type TranslationMode = "curated" | "curated-or-draft";
 
-const chooseText = (row: MoriRow, mode: TranslationMode) =>
+/** The text a line exports with: the curated translation, or optionally the best draft. */
+export const chooseText = (row: MoriRow, mode: TranslationMode) =>
   row.final || (mode === "curated-or-draft" ? row.ai || row.legacy || "" : "");
 
 const csvQuote = (value: string) => `"${value.replace(/"/g, '""')}"`;

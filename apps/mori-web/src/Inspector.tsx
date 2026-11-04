@@ -39,7 +39,7 @@ function Section({ id, title, badge, children }: { id: string; title: string; ba
 }
 
 function InspectorBody({ row }: { row: MoriRow }) {
-  const { project, actions, visible, bindings, openPop, adopt, insertToken, toast, step, prefs } = useApp();
+  const { project, actions, visible, bindings, openPop, openModal, adopt, insertToken, toast, step, prefs } = useApp();
   const [editingVoice, setEditingVoice] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState("");
   const glossary = prefs.glossaryEnabled ? project.glossary : [];
@@ -251,6 +251,10 @@ function InspectorBody({ row }: { row: MoriRow }) {
         ) : (
           <p className="muted" style={{ fontSize: 12.5 }}>No glossary terms in this line.</p>
         )}
+        <button type="button" className="btn xs outline" style={{ marginTop: 8 }} title="Or select a word in the Matrix"
+          onClick={() => openModal({ kind: "term", rowId: row.id })}>
+          <Icon name="plus" size="xs" />Add term
+        </button>
       </Section>}
 
       {duplicates.length > 0 && (

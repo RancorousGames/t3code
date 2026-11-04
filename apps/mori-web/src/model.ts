@@ -1,3 +1,6 @@
+import type { RowLoc } from "./importers.ts";
+import type { Originals, SourceRecord } from "./importPlan.ts";
+
 // Compatibility shape for existing .mori project files; not a new persistence format.
 export interface VersionEntry {
   text: string;
@@ -17,6 +20,8 @@ export interface MoriRow {
   isLocked?: boolean;
   history?: VersionEntry[];
   note?: string;
+  /** Position in the imported file, used to export back to the original format. */
+  loc?: RowLoc;
 }
 
 export interface MoriCharacter {
@@ -43,6 +48,9 @@ export interface MoriProject {
   context: { global: string; project: string };
   lastModified: string;
   sourceFiles?: string[];
+  /** Imported files that can be exported back to their own format, and their untouched contents. */
+  sources?: SourceRecord[];
+  originals?: Originals;
   [additionalField: string]: unknown;
 }
 

@@ -67,10 +67,7 @@ export function GoogleConnect({ onImport, showImportDestinations = false }: Prop
         const safeTitle = "'" + sheet.title.replace(/'/g, "''") + "'";
         const range = `${safeTitle}!A1:AZ${Math.max(2, sheet.rowCount)}`;
         const data = await api.googleReadValues(copy.id, range);
-        const indexed = data.values.map((row, index) => ({ cells: row.map(String), rowNumber: index + 1 }))
-          .filter(x => x.cells.some(cell => cell.trim()));
-        if (indexed.length < 2) continue;
-        const table = tableFromRows(indexed.map(x => x.cells));
+        const table = tableFromRows(data.values.map(row => row.map(String)));
         if (!table.headers.length || !table.rows.length) continue;
         tables.push({
           ...table,
@@ -79,8 +76,8 @@ export function GoogleConnect({ onImport, showImportDestinations = false }: Prop
           kind: "sheet",
           google: {
             sourceId: source.id, copyId: copy.id, sourceName: source.name, sheetName: sheet.title,
-            headerRow: indexed[0]!.rowNumber,
-            rowNumbers: indexed.slice(1).map(x => x.rowNumber),
+            headerRow: table.headerRow! + 1,
+            rowNumbers: table.locs.map(loc => loc.r! + 1),
           },
         });
       }

@@ -78,7 +78,7 @@ function SpeakerPopover({ rowId }: { rowId: string }) {
         const name = query.trim() || "New character";
         createFrom(row.id, { name, role: "", tone: "", description: "" }, name);
       }}>
-        <span className="avl" style={cssVar("--c", "#8ccfa7")}><Icon name="plus" size="xs" /></span>
+        <span className="avl" style={cssVar("--c", "var(--moss)")}><Icon name="plus" size="xs" /></span>
         <span className="opt-t"><span>{needle ? `New character “${query.trim()}”` : "New character…"}</span></span>
       </Opt>
       {examples.length > 0 && <PopLabel>From templates</PopLabel>}
@@ -135,7 +135,7 @@ function SpeakerFilterPopover() {
 const COLLAPSIBLE: { key: ResizableColumn; label: string; color: string }[] = [
   { key: "id", label: "Line", color: "var(--text-3)" },
   { key: "speaker", label: "Speaker", color: "var(--text-3)" },
-  { key: "src", label: "Source · EN", color: "#a6b6ac" },
+  { key: "src", label: "English", color: "#a6b6ac" },
   { key: "dev", label: "Dev draft", color: "#c2b18e" },
   { key: "ai", label: "AI draft", color: "#9cbbe0" },
 ];

@@ -64,7 +64,7 @@ export function planSheetLinks(sources: GoogleStagedTable[], mappingFor: (header
       });
       return [{
         sourceId: google.sourceId, copyId: google.copyId, sourceName: google.sourceName,
-        sheetName: google.sheetName, translationColumn: spreadsheetColumn(translationIndex),
+        sheetName: google.sheetName, translationColumn: spreadsheetColumn(source.colIndex?.[translationIndex] ?? translationIndex),
         cells,
       }];
     }),

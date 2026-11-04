@@ -4,7 +4,6 @@ import { StatusBar, Titlebar } from "./Chrome.tsx";
 import { WindowControls } from "./WindowControls.tsx";
 import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
 import { ShortcutsModal, PaletteModal, TemplatesModal } from "./Dialogs.tsx";
-import { FocusScreen } from "./Focus.tsx";
 import { ImportWizard } from "./ImportWizard.tsx";
 import { IconSprite } from "./Icons.tsx";
 import { Inspector } from "./Inspector.tsx";
@@ -19,13 +18,14 @@ import { adoptText, checkRow, statusOf, toggleLock as toggleRowLock, visibleRows
 import { clearActiveId, hasSeededDemo, initializeLibrary, loadProject, markSeededDemo, readActiveId, readIndex, removeProject, saveProject, writeActiveId, type LibraryEntry } from "./library.ts";
 import { editFinalText, recordFinalVersion, type MoriProject } from "./model.ts";
 import { usePrefs } from "./prefs.ts";
+import { useDraftAhead } from "./drafter.ts";
+import { TermModal } from "./TermModal.tsx";
 import { createSampleProject } from "./sampleProject.ts";
 import { keyString, loadBindings, matchAction, saveBindings, type ActionId, type Bindings } from "./shortcuts.ts";
 import { useProjectStore, type SaveState } from "./store.ts";
 import { useUiLocalization } from "./ui-localization.ts";
 
-const DEFAULT_VIEW: ViewFilters = { filter: "all", query: "", speaker: "any", file: null };
-
+const DEFAULT_VIEW: ViewFilters = { filter: "all", query: "", speaker: "any", file: null, term: null };
 const NO_ROWS: MoriProject["rows"] = [];
 const NO_GLOSSARY: MoriProject["glossary"] = [];
 
@@ -64,6 +64,7 @@ export function MoriApp() {
     [project, view, names, activeId, glossary, prefs.charactersEnabled],
   );
   const activeRow = rows.find(row => row.id === activeId) ?? null;
+  const drafter = useDraftAhead(project, activeId, prefs, actions);
 
   const toast = useCallback((text: string) => { notify(text); }, []);
 
@@ -235,7 +236,6 @@ export function MoriApp() {
       }
       return;
     }
-
     if (event.key === "Escape") {
       if (pop) {
         event.preventDefault();
@@ -353,6 +353,14 @@ export function MoriApp() {
     toast(`“${next.name}” created. Opening the Matrix.`);
   };
 
+  /** Files added to the open project go through the normal autosave queue, so no pending edit can overwrite them. */
+  const appendToProject = async (next: MoriProject) => {
+    const added = next.rows.length - (project?.rows.length ?? 0);
+    actions.updateProject(() => next);
+    setModal(null);
+    toast(added ? `Added ${added} line${added === 1 ? "" : "s"} to “${next.name}”.` : `Updated the saved files of “${next.name}”.`);
+  };
+
   const deleteProject = async (id: string) => {
     forget(id);
     await removeProject(id);
@@ -409,6 +417,7 @@ export function MoriApp() {
     openProject,
     createProject,
     deleteProject,
+    drafter,
     notice: noticeFor(save),
   } : null;
 
@@ -434,13 +443,12 @@ export function MoriApp() {
             )}
           </div>
         </div>
-        {modal?.kind === "import" && <ImportModal step={modal.step} tables={modal.tables} onClose={closeModal} onCreate={createProject} />}
+        {modal?.kind === "import" && <ImportModal step={modal.step} tables={modal.tables} onClose={closeModal} onCreate={createProject} onAppend={appendToProject} />}
       </>
     );
   }
 
   const workspace = screen === "matrix" ? <MatrixScreen sideBySide={matrixSplit} onToggleSideBySide={() => setMatrixSplit(value => !value)} />
-    : screen === "focus" ? <FocusScreen />
     : screen === "characters" && prefs.charactersEnabled ? <CharactersScreen />
     : screen === "glossary" && prefs.glossaryEnabled ? <GlossaryScreen />
     : screen === "context" ? <ContextScreen />
@@ -471,21 +479,24 @@ export function MoriApp() {
       {modal && modal.kind === "shortcuts" && <Modal onClose={closeModal} className="narrow"><ShortcutsModal /></Modal>}
       {modal && modal.kind === "palette" && <Modal onClose={closeModal} className="pal"><PaletteModal /></Modal>}
       {modal && modal.kind === "templates" && <Modal onClose={closeModal} className="narrow"><TemplatesModal /></Modal>}
-      {modal && modal.kind === "import" && <ImportModal step={modal.step} tables={modal.tables} onClose={closeModal} onCreate={createProject} />}
+      {modal && modal.kind === "term" && <Modal onClose={closeModal} className="term-modal"><TermModal {...modal} /></Modal>}
+      {modal && modal.kind === "import" && <ImportModal step={modal.step} tables={modal.tables} current={modal.add ? project : null} onClose={closeModal} onCreate={createProject} onAppend={appendToProject} />}
       <NotificationViewport />
     </AppContext.Provider>
   );
 }
 
-function ImportModal({ step, tables, onClose, onCreate }: {
+function ImportModal({ step, tables, current, onClose, onCreate, onAppend }: {
   step: 1 | 2 | 3;
   tables?: GoogleStagedTable[] | undefined;
+  current?: MoriProject | null | undefined;
   onClose: () => void;
   onCreate: (project: MoriProject) => Promise<void>;
+  onAppend: (project: MoriProject) => Promise<void>;
 }) {
   return (
     <Modal onClose={onClose} className="wide">
-      <ImportWizard initialStep={step} initialTables={tables} onClose={onClose} onCreate={onCreate} />
+      <ImportWizard initialStep={step} initialTables={tables} current={current} onClose={onClose} onCreate={onCreate} onAppend={onAppend} />
     </Modal>
   );
 }

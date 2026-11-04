@@ -2,16 +2,17 @@ import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent } from "
 import { Icon } from "./Icons.tsx";
 import { formatUi } from "./ui-localization.ts";
 import { DocMark, GoogleMark, SheetMark } from "./Icons.tsx";
-import { ACCEPTED_EXTENSIONS, fetchPublicSheet, kindOf, readFile, type SourceKind, type StagedTable } from "./importers.ts";
-import { guessMapping, planImport, processedPreview, signatureOf, type Mapping } from "./importPlan.ts";
+import { ACCEPTED_EXTENSIONS, fetchPublicSheet, kindOf, readFile, tableFromRows, type SourceKind, type StagedTable } from "./importers.ts";
+import { appendPlan, initialMapping, planImport, processedPreview, signatureOf, type Mapping } from "./importPlan.ts";
 import type { MoriProject } from "./model.ts";
 import { GoogleConnect } from "./GoogleConnect.tsx";
-import { planSheetLinks, type GoogleStagedTable } from "./google-sync.ts";
+import { planSheetLinks, type GoogleStagedTable, type GoogleSyncMetadata } from "./google-sync.ts";
 import { readTemplates, useTemplates, type CharacterTemplate, type ContextTemplate, type GlossaryTemplate } from "./templates.ts";
 
-// Three steps, as in the original import: stage sources, map their columns, then name and create.
-// Sources are grouped by their header row. Each group has its own mapping, so one mapping can't
-// silently apply to layouts it doesn't fit.
+// Three steps, as in the original import: stage sources, map their columns, then name and create
+// (or add them to the open project). Sources are grouped by their header row. Each group has its own
+// mapping, guessed from its headers and content, so one mapping can't silently apply to layouts it
+// doesn't fit. Only the source text column is required; lines without an ID get "file:row" IDs.
 
 interface StagedSource extends GoogleStagedTable {
   id: number;
@@ -28,6 +29,7 @@ interface Group {
 const KIND_LABEL: Record<SourceKind, string> = {
   json: "JSON", csv: "CSV", txt: "TXT", po: "PO", js: "JS", xlsx: "XLSX", docx: "DOCX", sheet: "SHEETS",
 };
+const SHOWN_EXTENSIONS = ["json", "xlsx", "csv", "po", "js", "txt", "docx"];
 
 const skippedTypes = () => formatUi("Only {0} files can be imported.", [ACCEPTED_EXTENSIONS.map(ext => ext.toUpperCase()).join(", ")]);
 
@@ -50,13 +52,16 @@ async function collectEntry(entry: FileSystemEntry, prefix: string): Promise<{ f
   return nested.flat();
 }
 
-const emptyPlan = { rows: [], characters: [], issues: [], warnings: [], sourceFiles: [], stats: { lines: 0, existing: 0, duplicateLines: 0, speakers: 0, sheets: 0 } };
+const emptyPlan = { rows: [], characters: [], issues: [], warnings: [], sourceFiles: [], sources: [], originals: {}, relocated: {}, stats: { lines: 0, existing: 0, duplicateLines: 0, speakers: 0, sheets: 0, alreadyPresent: 0 } };
 
-export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: {
+export function ImportWizard({ initialStep, initialTables, current, onClose, onCreate, onAppend }: {
   initialStep: 1 | 2 | 3;
   initialTables?: GoogleStagedTable[] | undefined;
+  /** The open project, which staged files can be added to instead of starting a new one. */
+  current?: MoriProject | null | undefined;
   onClose: () => void;
   onCreate: (project: MoriProject) => Promise<void>;
+  onAppend: (project: MoriProject) => Promise<void>;
 }) {
   const templates = useTemplates();
   const [step, setStep] = useState<1 | 2 | 3>(initialStep);
@@ -75,6 +80,8 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
   const [glossaryId, setGlossaryId] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [target, setTarget] = useState<"new" | "current">(current ? "current" : "new");
+  const appending = target === "current" && !!current;
   const nextId = useRef((initialTables?.length ?? 0) + 1);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -95,13 +102,22 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
     }));
   }, [sources]);
 
-  const mappingFor = (headers: string[]): Mapping => mappings[signatureOf(headers)] ?? guessMapping(headers);
+  // A layout's mapping is the user's choice, or else guessed from its first source.
+  const guessed = useMemo(() => new Map(groups.map(group => [group.signature, initialMapping(group.files[0]!)])), [groups]);
+  const mappingFor = (headers: string[]): Mapping => {
+    const signature = signatureOf(headers);
+    return mappings[signature] ?? guessed.get(signature) ?? initialMapping({ headers, rows: [] });
+  };
   const setMapping = (group: Group, patch: Partial<Mapping>) =>
-    setMappings(current => ({ ...current, [group.signature]: { ...mappingFor(group.headers), ...patch } }));
-  const mapsValid = groups.every(group => {
-    const mapping = mappingFor(group.headers);
-    return !!mapping.id && !!mapping.src;
-  });
+    setMappings(chosen => ({ ...chosen, [group.signature]: { ...mappingFor(group.headers), ...patch } }));
+  const mapsValid = groups.every(group => !!mappingFor(group.headers).src);
+
+  /** Moves a tabular source's header row (title rows above the header are common in spreadsheets). */
+  const setHeaderRow = (id: number, headerRow: number) => setSources(staged => staged.map(source => {
+    if (source.id !== id || !source.grid) return source;
+    const table = tableFromRows(source.grid, headerRow);
+    return { ...source, ...table, signature: signatureOf(table.headers) };
+  }));
 
   const contextTemplates = templates.filter((t): t is ContextTemplate => t.kind === "context");
   const glossaryTemplates = templates.filter((t): t is GlossaryTemplate => t.kind === "glossary");
@@ -110,10 +126,13 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
     if (!sources.length) return emptyPlan;
     return planImport({
       sources,
-      mappingFor: headers => mappings[signatureOf(headers)] ?? guessMapping(headers),
+      mappingFor,
       characterTemplates: templates.filter((t): t is CharacterTemplate => t.kind === "character"),
+      ...(appending && current ? { existing: current } : {}),
     });
-  }, [sources, mappings, templates]);
+    // mappingFor only reads mappings and guessed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sources, mappings, guessed, templates, appending, current]);
 
   // Suggest a name the first time the Create step opens. A name the user typed is never replaced.
   useEffect(() => {
@@ -188,6 +207,23 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
   };
 
   const create = async () => {
+    if (appending && current) {
+      setCreating(true);
+      setCreateError(null);
+      try {
+        const updated = appendPlan(current, plan);
+        const newSheets = planSheetLinks(sources, mappingFor).sheets;
+        if (newSheets.length) {
+          const existing = current.googleSync as GoogleSyncMetadata | undefined;
+          updated.googleSync = { version: 1, sheets: [...(existing?.version === 1 ? existing.sheets : []), ...newSheets] };
+        }
+        await onAppend(updated);
+      } catch (cause) {
+        setCreateError(cause instanceof Error ? cause.message : "The project couldn’t be saved.");
+        setCreating(false);
+      }
+      return;
+    }
     const context = contextTemplates.find(t => t.id === contextId);
     const glossary = glossaryTemplates.find(t => t.id === glossaryId);
     const project: MoriProject = {
@@ -198,6 +234,8 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
       glossary: glossary ? glossary.terms.map(term => ({ id: crypto.randomUUID(), en: term.en, jp: term.jp, explanation: term.explanation })) : [],
       context: { global: context?.global ?? "", project: context?.project ?? "" },
       rows: plan.rows,
+      sources: plan.sources,
+      originals: plan.originals,
       lastModified: new Date().toISOString(),
       ...(sources.some(source => source.google) ? { googleSync: planSheetLinks(sources, mappingFor) } : {}),
     };
@@ -211,7 +249,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
     }
   };
 
-  const canStart = !creating && (sources.length === 0 || !plan.issues.length) && !!name.trim();
+  const canStart = !creating && (sources.length === 0 ? !appending : !plan.issues.length) && (appending || !!name.trim());
 
   const stepButton = (target: 1 | 2 | 3, label: string, index: number) => {
     const reachable = target === 1 || (target === 2 && sources.length > 0) || (target === 3 && sources.length > 0 && mapsValid);
@@ -235,11 +273,11 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
     <>
       <div className="m-head">
         <Icon name="plus" />
-        <h2>New project</h2>
+        <h2>{appending ? "Add files" : "New project"}</h2>
         <div className="steps">
           {stepButton(1, "Sources", 0)}
           {stepButton(2, "Map fields", 1)}
-          {stepButton(3, "Create", 2)}
+          {stepButton(3, appending ? "Add" : "Create", 2)}
         </div>
         <span className="grow" />
         <button type="button" className="ib" aria-label="Close" onClick={onClose}><Icon name="x" size="sm" /></button>
@@ -265,7 +303,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
               >
                 <div className="drop-ic"><Icon name="upload" /></div>
                 <div className="drop-t">Drop files or folders here</div>
-                <div className="drop-s">Folders are scanned recursively. Your original files are never changed.</div>
+                <div className="drop-s">Folders are scanned recursively. Your original files are never changed; export writes translated copies.</div>
                 <div className="drop-btns">
                   <button type="button" className="btn outline" disabled={busy} onClick={() => fileInput.current?.click()}>
                     <Icon name="file" size="sm" />Choose files…
@@ -275,7 +313,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
                   </button>
                 </div>
                 <div className="fmts">
-                  {ACCEPTED_EXTENSIONS.map(ext => <span key={ext}>{ext.toUpperCase()}</span>)}
+                  {SHOWN_EXTENSIONS.map(ext => <span key={ext}>{ext.toUpperCase()}</span>)}
                 </div>
                 <input
                   ref={fileInput}
@@ -349,6 +387,19 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
                           <span className="p">{source.path.includes("/") ? `${source.path.slice(0, source.path.lastIndexOf("/") + 1)}` : ""}</span>
                           {source.name}
                         </span>
+                        {source.grid && (
+                          <select
+                            className="sel hdr-sel"
+                            title="Which row holds the column names"
+                            aria-label={`Header row of ${source.name}`}
+                            value={source.headerRow ?? 0}
+                            onChange={event => setHeaderRow(source.id, Number(event.target.value))}
+                          >
+                            {source.grid.slice(0, 10).map((row, index) => row.some(cell => cell.trim()) && (
+                              <option key={index} value={index}>Header: row {index + 1}</option>
+                            ))}
+                          </select>
+                        )}
                         <span className="r tabnum">{source.rows.length} rows</span>
                         <span className="kind">{KIND_LABEL[source.kind]}</span>
                         <span className="acts">
@@ -397,7 +448,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
                   </label>
                 );
               };
-              const missing = [!mapping.id && "Text ID", !mapping.src && "Source text"].filter(Boolean);
+              const missing = [!mapping.src && "Source text"].filter(Boolean);
               return (
                 <div key={group.signature} className="map-card">
                   <div className="map-h">
@@ -417,7 +468,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
                     </div>
                   </div>
                   <div className="map-fields">
-                    {field("id", "Text ID", true)}
+                    {field("id", "Text ID", false)}
                     {field("src", "Source text (EN)", true)}
                     {field("tr", "Existing translation", false)}
                     {field("spk", "Speaker", false)}
@@ -425,6 +476,8 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
                   </div>
                   {missing.length > 0 ? (
                     <p className="map-hint warn"><Icon name="alert" size="xs" />Choose {missing.join(" and ")} to continue.</p>
+                  ) : !mapping.id ? (
+                    <p className="map-hint"><Icon name="file" size="xs" />No ID column, so lines get IDs from their file and row, like “chapter1:12”.</p>
                   ) : !mapping.spk ? (
                     <p className="map-hint"><Icon name="users" size="xs" />No speaker column, so lines go to Narrator. You can reassign them later.</p>
                   ) : null}
@@ -446,6 +499,23 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
         {step === 3 && (
           <div className="create">
             <div>
+              {current && (
+                <div className="seg target-seg" role="radiogroup" aria-label="Where the lines go">
+                  <button type="button" className={appending ? "on" : ""} onClick={() => setTarget("current")}>
+                    <Icon name="plus" size="sm" />Add to “{current.name}”
+                  </button>
+                  <button type="button" className={appending ? "" : "on"} onClick={() => setTarget("new")}>
+                    <Icon name="layers" size="sm" />New project
+                  </button>
+                </div>
+              )}
+              {appending ? (
+                <p className="append-note">
+                  New lines join the project with their own file group. Speakers it already knows keep their voice notes;
+                  new speakers become characters. Lines the project already has from the same file are skipped, so
+                  adding an updated file only brings in what changed.
+                </p>
+              ) : <>
               <label className="mf">
                 <span>Project name</span>
                 <input className="inp lg" value={name} onChange={event => setName(event.target.value)} />
@@ -481,17 +551,21 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
               {!readTemplates().length && (
                 <p className="fine" style={{ marginTop: 12 }}>Save templates from the Templates menu, the Glossary screen or a speaker card.</p>
               )}
+              </>}
             </div>
 
             <div className="summary">
-              <h3>What gets created</h3>
+              <h3>{appending ? "What gets added" : "What gets created"}</h3>
               {sources.length === 0 ? (
                 <p style={{ fontSize: 12.5, color: "var(--text-2)" }}>An empty project. Add sources later from Files.</p>
               ) : (
                 <>
                   <div className="sr"><b>{plan.stats.lines}</b><p>lines from {sources.length} source{sources.length === 1 ? "" : "s"}</p></div>
                   <div className="sr"><b>{plan.stats.existing}</b><p>existing translations<small>Kept as dev drafts, never as your final text.</small></p></div>
-                  <div className="sr"><b>{plan.stats.speakers}</b><p>speakers → characters<small>Lines without a speaker go to Narrator.</small></p></div>
+                  <div className="sr"><b>{plan.stats.speakers}</b><p>{appending ? "new speakers → characters" : "speakers → characters"}<small>{appending ? "Speakers the project already has are reused." : "Lines without a speaker go to Narrator."}</small></p></div>
+                  {plan.stats.alreadyPresent > 0 && (
+                    <div className="sr"><b>{plan.stats.alreadyPresent}</b><p>lines already in the project<small>Not added again; their translations stay. The project keeps this newer copy of the file for export.</small></p></div>
+                  )}
                   <div className="sr"><b>{plan.stats.duplicateLines}</b><p>lines with duplicate English<small>Shown side by side so you can reuse a translation.</small></p></div>
                   {plan.stats.sheets > 0 && (
                     <div className="sr"><b>{plan.stats.sheets}</b><p>Google worksheet{plan.stats.sheets === 1 ? "" : "s"}<small>Public links are read-only; signed-in Drive imports can sync curated text to their Monku-created copies.</small></p></div>
@@ -499,7 +573,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
                 </>
               )}
               {plan.warnings.length > 0 && (
-                <p className="fine" style={{ marginTop: 10 }}>{plan.warnings.length} line{plan.warnings.length === 1 ? "" : "s"} skipped: {plan.warnings.slice(0, 2).join(" ")}</p>
+                <p className="fine" style={{ marginTop: 10 }}>{plan.warnings.length} note{plan.warnings.length === 1 ? "" : "s"}: {plan.warnings.slice(0, 2).join(" ")}</p>
               )}
               {sources.length > 0 && plan.issues.length > 0 && (
                 <div className="imp-err" role="alert">
@@ -520,7 +594,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
       <div className="m-foot">
         <span className="muted" style={{ fontSize: 12 }}>Step {step} of 3</span>
         {step === 1 && (
-          <button type="button" className="btn sm" onClick={() => setStep(3)}>Start empty project</button>
+          <button type="button" className="btn sm" onClick={() => { setTarget("new"); setStep(3); }}>Start empty project</button>
         )}
         <span className="grow" />
         {step > 1 ? (
@@ -540,7 +614,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
         )}
         {step === 3 && (
           <button type="button" className="btn primary" disabled={!canStart} onClick={() => void create()}>
-            <Icon name="check" size="sm" />{creating ? "Creating…" : "Start project"}
+            <Icon name="check" size="sm" />{creating ? "Saving…" : appending ? "Add to project" : "Start project"}
           </button>
         )}
       </div>

@@ -2,8 +2,8 @@ import { useState, type ReactNode } from "react";
 import { useApp } from "./app-context.ts";
 import { reloadUiTranslations, tr, useUiLanguage } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
-import { findUsages, statusOf } from "./insights.ts";
-import { JA_FONTS, DEFAULT_COLUMN_PREFS } from "./prefs.ts";
+import { statusOf, termImpact } from "./insights.ts";
+import { JA_FONTS, DEFAULT_COLUMN_PREFS, DRAFT_AHEAD_OPTIONS } from "./prefs.ts";
 import { newTemplateId, readTemplates, writeTemplates } from "./templates.ts";
 import { characterColor, cssVar } from "./theme.ts";
 import type { MoriProject } from "./model.ts";
@@ -12,6 +12,7 @@ import { listProjectRevisions, restoreProjectRevision } from "./library.ts";
 import { GoogleSyncPanel } from "./GoogleSyncPanel.tsx";
 import { GoogleConnect } from "./GoogleConnect.tsx";
 import { browserDownload, buildInterchangeExport, type ExportFormat, type TranslationMode } from "./exporters.ts";
+import { buildOriginalExport, canExportOriginals, downloadOriginalExport } from "./roundtrip.ts";
 
 function ScreenHeader({ title, description, children }: { title: string; description: string; children?: ReactNode }) {
   return (
@@ -108,8 +109,10 @@ export function CharactersScreen() {
 }
 
 export function GlossaryScreen() {
-  const { project, actions, toast } = useApp();
-  const addTerm = () => actions.addGlossary({ en: "", jp: "", explanation: "" });
+  const { project, actions, toast, openModal } = useApp();
+  // Japanese each term had when the translator started editing it, so a change can be carried into her lines.
+  const [startJp, setStartJp] = useState<Record<string, string>>({});
+  const addTerm = () => openModal({ kind: "term" });
   const saveTemplate = () => {
     const terms = project.glossary.filter(term => term.en.trim());
     if (!terms.length) {
@@ -127,23 +130,47 @@ export function GlossaryScreen() {
 
   return (
     <div className="screen">
-      <ScreenHeader title="Glossary" description="Terms that must stay consistent. Lines that use a term are underlined in the Matrix and checked.">
+      <ScreenHeader title="Glossary" description="Terms that must stay consistent. Lines that use a term are underlined in the Matrix and checked. Tip: select a word in the Matrix to add it.">
         <button type="button" className="btn outline sm" onClick={saveTemplate}><Icon name="layers" size="sm" />Save as template</button>
         <button type="button" className="btn outline sm" onClick={addTerm}><Icon name="plus" size="sm" />Add term</button>
       </ScreenHeader>
       <table className="gl-table">
         <thead>
-          <tr><th style={{ width: "24%" }}>English</th><th style={{ width: "24%" }}>Japanese</th><th>Note</th><th style={{ width: 80 }}>Lines</th><th style={{ width: 40 }} /></tr>
+          <tr><th style={{ width: "24%" }}>English</th><th style={{ width: "24%" }}>Japanese</th><th>Note</th><th style={{ width: 150 }}>Lines</th><th style={{ width: 40 }} /></tr>
         </thead>
         <tbody>
           {project.glossary.map(term => {
-            const usage = findUsages(project.rows, term.en).total;
+            const previous = startJp[term.id] ?? "";
+            const impact = termImpact(project.rows, term, previous);
             return (
               <tr key={term.id}>
                 <td><input value={term.en} aria-label="English term" onChange={event => actions.updateGlossary(term.id, { en: event.target.value })} /></td>
-                <td><input className="ja" value={term.jp} aria-label="Japanese term" onChange={event => actions.updateGlossary(term.id, { jp: event.target.value })} /></td>
+                <td>
+                  <input
+                    className="ja"
+                    lang="ja"
+                    value={term.jp}
+                    aria-label="Japanese term"
+                    onChange={event => {
+                      setStartJp(current => term.id in current ? current : { ...current, [term.id]: term.jp.trim() });
+                      actions.updateGlossary(term.id, { jp: event.target.value });
+                    }}
+                  />
+                </td>
                 <td><input value={term.explanation} aria-label="Note" onChange={event => actions.updateGlossary(term.id, { explanation: event.target.value })} /></td>
-                <td className="tabnum muted">{usage}</td>
+                <td className="gl-use">
+                  {impact.replaceable.length > 0 && term.jp.trim() ? (
+                    <button type="button" className="btn xs primary" title={`Replace ${previous} with ${term.jp.trim()} in your translations`}
+                      onClick={() => openModal({ kind: "term", termId: term.id, previousJp: previous })}>
+                      Update {impact.replaceable.length} line{impact.replaceable.length === 1 ? "" : "s"}
+                    </button>
+                  ) : (
+                    <button type="button" className="gl-lines" title="See how this term is used" onClick={() => openModal({ kind: "term", termId: term.id })}>
+                      <span className="tabnum">{impact.lines.length}</span>
+                      {impact.mismatched.length > 0 && <span className="warn tabnum">· {impact.mismatched.length} differ</span>}
+                    </button>
+                  )}
+                </td>
                 <td>
                   <button type="button" className="ib" aria-label="Delete term" onClick={() => actions.removeGlossary(term.id)}>
                     <Icon name="x" size="sm" />
@@ -229,6 +256,19 @@ export function ProjectScreen() {
       } else browserDownload(report);
     } catch (cause) { toast(cause instanceof Error ? cause.message : "Export failed."); }
   };
+  const [exporting, setExporting] = useState(false);
+  const exportOriginals = async () => {
+    setExporting(true);
+    try {
+      const result = await buildOriginalExport(project, exportMode);
+      if (result.untranslated && !window.confirm(`${result.written} lines have text to write; ${result.untranslated} don’t, so those keep what the original file had. Export anyway?`)) return;
+      toast(`Exported ${downloadOriginalExport(project, result)}.`);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "Export failed.");
+    } finally {
+      setExporting(false);
+    }
+  };
   const exportBackup = async () => {
     try {
       const native = nativeMori();
@@ -259,18 +299,37 @@ export function ProjectScreen() {
       <ScreenHeader title="Project & files" description="What this project holds and where it is kept.">
         <button type="button" className="btn outline sm" onClick={() => void exportBackup()}><Icon name="download" size="sm" />Export .mori backup</button>
       </ScreenHeader>
-      <div className="panel" style={{ marginBottom: 18 }}>
-        <h3>Localized interchange export</h3>
-        <p className="muted" style={{ fontSize: 12 }}>Exports a normalized EN→JA table. It does not recreate the original spreadsheet, DOCX, code file or nested JSON. Source files are never modified.</p>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <div className="panel export-panel" style={{ marginBottom: 18 }}>
+        <h3>Export translations</h3>
+        <div className="export-row">
+          <div>
+            <b>Back into the original files</b>
+            <p className="muted">
+              {canExportOriginals(project)
+                ? "Copies of the imported files in their own format, with your Japanese written in. A spreadsheet gets it in its translation column (or a new “Japanese” column); JSON, PO, scripts, text and Word files get it in place of the English. Several files download as one zip."
+                : "This project was imported before Monku kept the original files. Add the files again from the Files list (+) to enable this; your translations stay."}
+            </p>
+          </div>
+          <button type="button" className="btn primary sm" disabled={!canExportOriginals(project) || exporting} onClick={() => void exportOriginals()}>
+            <Icon name="download" size="sm" />{exporting ? "Exporting…" : "Export files"}
+          </button>
+        </div>
+        <div className="export-row">
+          <div>
+            <b>One table of every line</b>
+            <p className="muted">A normalized translation list, for handing over or reviewing elsewhere.</p>
+          </div>
           <select className="sel" aria-label="Export format" value={exportFormat} onChange={event => setExportFormat(event.target.value as ExportFormat)}>
             <option value="csv">CSV (Excel-friendly)</option><option value="json">JSON interchange</option><option value="po">Gettext PO</option>
           </select>
+          <button type="button" className="btn outline sm" onClick={() => void exportInterchange()}><Icon name="download" size="sm" />Export table…</button>
+        </div>
+        <label className="export-mode">
+          Text to use
           <select className="sel" aria-label="Translation source" value={exportMode} onChange={event => setExportMode(event.target.value as TranslationMode)}>
             <option value="curated">Curated text only</option><option value="curated-or-draft">Use AI/dev draft when not curated (review carefully)</option>
           </select>
-          <button type="button" className="btn outline sm" onClick={() => void exportInterchange()}><Icon name="download" size="sm" />Export localized file…</button>
-        </div>
+        </label>
       </div>
       <div className="grid2" style={{ alignItems: "start" }}>
         <div className="panel">
@@ -415,6 +474,14 @@ export function SettingsScreen() {
           <div className="seg wide" role="group" aria-label="Enable glossary">
             <button type="button" className={prefs.glossaryEnabled ? "on" : ""} onClick={() => setPrefs({ glossaryEnabled: true })}>On</button>
             <button type="button" className={!prefs.glossaryEnabled ? "on" : ""} onClick={() => setPrefs({ glossaryEnabled: false })}>Off</button>
+          </div>
+        </div>
+        <div className="set-row">
+          <div><b>AI drafts ahead</b><span>Desktop app. Mori keeps AI drafts ready for this many lines after the one you are on, using Codex Luna 6 (low). Drafts never replace your text, and a draft that misses a glossary term is redone.</span></div>
+          <div className="seg wide" role="group" aria-label="AI drafts ahead">
+            {DRAFT_AHEAD_OPTIONS.map(count => (
+              <button key={count} type="button" className={prefs.draftAhead === count ? "on" : ""} onClick={() => setPrefs({ draftAhead: count })}>{count || "Off"}</button>
+            ))}
           </div>
         </div>
         <div className="set-row">

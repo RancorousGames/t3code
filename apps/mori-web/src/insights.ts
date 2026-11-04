@@ -7,7 +7,21 @@ export const extractTokens = (text: string): string[] => text.match(TOKEN_PATTER
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const termPattern = (term: string) => new RegExp(`(^|[^\\p{L}])(${escapeRegExp(term)})(?=$|[^\\p{L}])`, "iu");
+// English endings a glossary term still matches with: "lantern" finds "lanterns" and "lantern's".
+const TERM_SUFFIX = "(?:'s|’s|s|es)?";
+const termSource = (term: string) => `${escapeRegExp(term)}${TERM_SUFFIX}`;
+
+/** Whole-word match for a glossary term, ignoring case and allowing plural or possessive endings. */
+export const termPattern = (term: string): RegExp => {
+  let pattern = termPatterns.get(term);
+  if (!pattern) {
+    pattern = new RegExp(`(^|[^\\p{L}])(${termSource(term)})(?=$|[^\\p{L}])`, "iu");
+    termPatterns.set(term, pattern);
+  }
+  return pattern;
+};
+// Non-global patterns keep no state between tests, so one compiled copy per term is shared.
+const termPatterns = new Map<string, RegExp>();
 
 export type RowStatus = "pending" | "draft" | "translated";
 
@@ -19,7 +33,7 @@ export const glossaryHits = (source: string, glossary: MoriGlossaryEntry[]): Mor
   glossary.filter(entry => entry.en.trim() && termPattern(entry.en.trim()).test(source));
 
 export interface RowWarning {
-  kind: "missing-token" | "extra-token" | "linebreaks" | "glossary" | "length" | "locked-empty";
+  kind: "missing-token" | "extra-token" | "linebreaks" | "glossary" | "locked-empty";
   message: string;
   token?: string;
   term?: MoriGlossaryEntry;
@@ -56,10 +70,6 @@ export function checkRow(row: MoriRow, glossary: MoriGlossaryEntry[]): RowWarnin
       warnings.push({ kind: "glossary", term, message: `“${term.en}” is usually ${term.jp}` });
     }
   }
-
-  if (final.length > 12 && final.length > row.source.length * 1.1) {
-    warnings.push({ kind: "length", message: `Longer than the source (${final.length} vs ${row.source.length} chars)` });
-  }
   return warnings;
 }
 
@@ -76,6 +86,51 @@ export const findUsages = (rows: MoriRow[], phrase: string, limit = 8): { total:
   return { total: matches.length, rows: matches.slice(0, limit) };
 };
 
+/** True when an AI draft exists but skips the Japanese of a glossary term its English uses. */
+export const draftMissesGlossary = (row: MoriRow, glossary: MoriGlossaryEntry[]): boolean =>
+  !!row.ai?.trim() && glossaryHits(row.source, glossary).some(term => term.jp.trim() && !row.ai?.includes(term.jp.trim()));
+
+export interface TermImpact {
+  /** Every line whose English uses the term. */
+  lines: MoriRow[];
+  /** Curated text already uses the term's Japanese. */
+  consistent: MoriRow[];
+  /** Unlocked curated text that doesn't. These are the translator's own lines to review. */
+  mismatched: MoriRow[];
+  /** Locked lines that don't use it. Mori never changes these. */
+  locked: MoriRow[];
+  /** Lines with only an AI draft that misses the term. The drafter redoes them. */
+  drafts: MoriRow[];
+  /** Lines with no translation yet. */
+  untranslated: MoriRow[];
+  /** With a previous Japanese: unlocked curated lines that contain it, with the text after replacing it. */
+  replaceable: { row: MoriRow; after: string }[];
+}
+
+/** How a glossary term is used across the project, for the summary shown after adding or changing it. */
+export function termImpact(rows: MoriRow[], term: Pick<MoriGlossaryEntry, "en" | "jp">, previousJp = ""): TermImpact {
+  const en = term.en.trim();
+  const jp = term.jp.trim();
+  const previous = previousJp.trim();
+  const impact: TermImpact = { lines: [], consistent: [], mismatched: [], locked: [], drafts: [], untranslated: [], replaceable: [] };
+  if (!en) return impact;
+  const pattern = termPattern(en);
+  for (const row of rows) {
+    if (!pattern.test(row.source)) continue;
+    impact.lines.push(row);
+    const final = row.final.trim();
+    if (final && previous && previous !== jp && !row.isLocked && row.final.includes(previous)) {
+      impact.replaceable.push({ row, after: row.final.split(previous).join(jp) });
+    }
+    if (final && (!jp || row.final.includes(jp))) impact.consistent.push(row);
+    else if (final && row.isLocked) impact.locked.push(row);
+    else if (final) impact.mismatched.push(row);
+    else if (row.ai?.trim() && jp && !row.ai.includes(jp)) impact.drafts.push(row);
+    else impact.untranslated.push(row);
+  }
+  return impact;
+}
+
 /** Replaces the curated text with another version, keeping the previous curated text in history. */
 export const adoptText = (row: MoriRow, text: string): MoriRow =>
   row.isLocked ? row : recordFinalVersion(editFinalText(recordFinalVersion(row), text));
@@ -85,14 +140,15 @@ export type TextPart = { kind: "plain" | "token" | "term"; text: string; term?: 
 /** Splits text into plain runs, placeholder tokens and glossary terms for highlighting. */
 export function markText(text: string, glossary: MoriGlossaryEntry[]): TextPart[] {
   const terms = glossary.filter(entry => entry.en.trim()).sort((a, b) => b.en.length - a.en.length);
-  const alternatives = [TOKEN_PATTERN.source, ...terms.map(entry => escapeRegExp(entry.en.trim()))];
+  const alternatives = [TOKEN_PATTERN.source, ...terms.map(entry => termSource(entry.en.trim()))];
   const pattern = new RegExp(alternatives.join("|"), "giu");
+  const exact = terms.map(entry => ({ entry, test: new RegExp(`^${termSource(entry.en.trim())}$`, "iu") }));
   const parts: TextPart[] = [];
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0;
     const value = match[0];
-    const term = terms.find(entry => entry.en.trim().toLowerCase() === value.toLowerCase());
+    const term = exact.find(({ test }) => test.test(value))?.entry;
     if (term) {
       const before = text[start - 1];
       const after = text[start + value.length];
@@ -127,14 +183,19 @@ export interface ViewFilters {
   speaker: string;
   /** Source file path; null shows every file. */
   file: string | null;
+  /** Glossary term ID; shows only lines whose English uses that term. */
+  term?: string | null;
 }
 
 /** Lines the Matrix shows. The active line stays visible even when it stops matching the filters. */
 export function visibleRows(rows: MoriRow[], view: ViewFilters, names: Map<string, string>, activeId: string | null, glossary: MoriGlossaryEntry[]): MoriRow[] {
   const query = view.query.trim().toLowerCase();
+  const term = view.term ? glossary.find(entry => entry.id === view.term) : undefined;
+  const termTest = term?.en.trim() ? termPattern(term.en.trim()) : null;
   return rows.filter(row => {
     if (row.id === activeId) return true;
     if (view.file && row.sourceFile !== view.file) return false;
+    if (termTest && !termTest.test(row.source)) return false;
     if (view.speaker === "none" ? row.characterId : view.speaker !== "any" && row.characterId !== view.speaker) return false;
     if (!matchesFilter(row, view.filter, glossary)) return false;
     if (!query) return true;

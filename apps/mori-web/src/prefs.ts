@@ -20,6 +20,8 @@ export interface MoriPrefs {
   /** Optional reference features. Disabling them preserves all project data. */
   charactersEnabled: boolean;
   glossaryEnabled: boolean;
+  /** How many lines past the current one the desktop app keeps AI-drafted. 0 turns it off. */
+  draftAhead: number;
   filesExpanded: boolean;
   inspectorOpen: boolean;
   columns: Record<ResizableColumn, ColumnPref>;
@@ -32,6 +34,8 @@ export const JA_FONTS = [
   { value: "Noto Sans JP", label: "Noto Sans JP" },
   { value: "Yu Mincho", label: "Yu Mincho (serif)" },
 ];
+
+export const DRAFT_AHEAD_OPTIONS = [0, 25, 50, 100, 200];
 
 const TEXT_SCALES = { sm: "0.9", md: "1", lg: "1.12" } as const;
 
@@ -51,6 +55,7 @@ const defaults: MoriPrefs = {
   japaneseClickMode: "position",
   charactersEnabled: true,
   glossaryEnabled: true,
+  draftAhead: 100,
   filesExpanded: true,
   inspectorOpen: true,
   // The dev draft column starts collapsed: it is reference material, not the working text.
@@ -79,6 +84,7 @@ const load = (): MoriPrefs => {
         ? stored.japaneseClickMode : "position",
       charactersEnabled: stored.charactersEnabled !== false,
       glossaryEnabled: stored.glossaryEnabled !== false,
+      draftAhead: DRAFT_AHEAD_OPTIONS.includes(stored.draftAhead as number) ? stored.draftAhead as number : defaults.draftAhead,
       filesExpanded: stored.filesExpanded !== false,
       columns: { ...defaults.columns, ...stored.columns },
     };
