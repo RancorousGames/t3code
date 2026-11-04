@@ -523,6 +523,30 @@ export function ChatGPTBrowserSidebarEntry({
   }, [activeSessionId, markDirectInteraction]);
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [resettingWebviews, setResettingWebviews] = useState(false);
+  const resetWebviews = async () => {
+    const bridge = window.desktopBridge?.persistentChatGPTRequest;
+    if (!bridge || resettingWebviews) return;
+    const message =
+      "Reset all ChatGPT webviews? This terminates every live Chromium page and starts a fresh browser host. " +
+      "Saved conversations and sign-ins remain, but unsent drafts, uploads, and in-progress replies may be lost.";
+    const approved = await (
+      readLocalApi()?.dialogs.confirm(message, { variant: "destructive" }) ??
+      Promise.resolve(window.confirm(message))
+    );
+    if (!approved) return;
+    setResettingWebviews(true);
+    try {
+      await bridge({ operation: "reset_host" });
+      window.dispatchEvent(new Event("t3:chatgpt-webviews-reset"));
+      setMenuFeedback("ChatGPT webviews reset. The selected page is reconnecting.");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      setMenuFeedback(`Reset webviews failed: ${reason}`);
+    } finally {
+      setResettingWebviews(false);
+    }
+  };
   const [clockNow, setClockNow] = useState(() => Date.now());
   const caffyOverview = useT3CaffyOverview();
   const activeCaffyMonitors = useMemo(() => {
@@ -1951,6 +1975,15 @@ export function ChatGPTBrowserSidebarEntry({
                   )}
                 </MenuGroup>
                 <MenuSeparator />
+                <MenuItem
+                  inset
+                  disabled={resettingWebviews}
+                  aria-label="Reset all ChatGPT webviews and restart the persistent Chromium browser host"
+                  title="Kills live ChatGPT pages and starts fresh without restarting T3. Unsent drafts and in-progress replies may be lost."
+                  onClick={() => void resetWebviews()}
+                >
+                  <MenuItemLabel>{resettingWebviews ? "Resetting webviews…" : "Reset webviews"}</MenuItemLabel>
+                </MenuItem>
                 <MenuItem
                   inset
                   aria-label="Worker auto-cleanup settings and dry-run preview"

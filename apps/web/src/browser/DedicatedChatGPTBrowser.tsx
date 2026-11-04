@@ -297,6 +297,7 @@ export function DedicatedChatGPTBrowser({
           standalone
           onUrlChange={browserUrlChanged}
           onAttachFailure={setNotice}
+          onAttachSuccess={() => setNotice(null)}
         />
       </div>
       <span className="sr-only">Current ChatGPT page: {displayUrl}</span>

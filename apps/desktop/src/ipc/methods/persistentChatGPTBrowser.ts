@@ -12,17 +12,20 @@ import {
 import * as DesktopIpc from "../DesktopIpc.ts";
 import { PERSISTENT_CHATGPT_REQUEST_CHANNEL } from "../channels.ts";
 
-const Request = Schema.Struct({
-  operation: Schema.Literals(["attach", "input", "evaluate", "status"]),
-  sessionId: Schema.String,
-  environmentId: Schema.optional(Schema.String),
-  profileId: Schema.optional(Schema.String),
-  url: Schema.optional(Schema.String),
-  width: Schema.optional(Schema.Number),
-  height: Schema.optional(Schema.Number),
-  expression: Schema.optional(Schema.String),
-  input: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-});
+const Request = Schema.Union([
+  Schema.Struct({ operation: Schema.Literal("reset_host") }),
+  Schema.Struct({
+    operation: Schema.Literals(["attach", "input", "evaluate", "status"]),
+    sessionId: Schema.String,
+    environmentId: Schema.optional(Schema.String),
+    profileId: Schema.optional(Schema.String),
+    url: Schema.optional(Schema.String),
+    width: Schema.optional(Schema.Number),
+    height: Schema.optional(Schema.Number),
+    expression: Schema.optional(Schema.String),
+    input: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
+]);
 
 export const persistentChatGPTRequestIpc = DesktopIpc.makeIpcMethod({
   channel: PERSISTENT_CHATGPT_REQUEST_CHANNEL,
@@ -34,7 +37,13 @@ export const persistentChatGPTRequestIpc = DesktopIpc.makeIpcMethod({
     if (
       !event ||
       !BrowserWindow.getAllWindows().some(
-        (window) => !window.isDestroyed() && window.webContents.id === event.sender.id,
+        (window) => {
+          if (window.isDestroyed() || window.webContents.id !== event.sender.id) return false;
+          try {
+            const url = new URL(window.webContents.getURL());
+            return ["t3code:", "t3code-dev:"].includes(url.protocol) && url.hostname === "app";
+          } catch { return false; }
+        },
       )
     )
       throw new Error("Persistent browser IPC requires the T3 application window.");

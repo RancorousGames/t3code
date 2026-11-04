@@ -343,6 +343,7 @@ const allowedUrl = (value: string) => {
 };
 
 export type PersistentChatGPTRequest =
+  | { operation: "reset_host" }
   | {
       operation: "attach";
       sessionId: string;
@@ -471,7 +472,39 @@ export async function persistentChatGPTViewRequest(
   }
 }
 
+let resetHostInFlight: Promise<{ reset: true }> | null = null;
+/** Explicit user action: discard all live pages, keep account partitions and
+ * persisted session URLs, then start a clean Chromium owner. No T3 restart. */
+function resetPersistentChatGPTHost(): Promise<{ reset: true }> {
+  if (resetHostInFlight) return resetHostInFlight;
+  const resetting = (async (): Promise<{ reset: true }> => {
+    const pipe = socketFor(dataDir());
+    let pid: number | undefined;
+    try {
+      const health = (await request(pipe, "GET", "/health")) as { pid?: number };
+      pid = health.pid;
+    } catch (error) {
+      if (!["ENOENT", "ECONNREFUSED"].includes((error as NodeJS.ErrnoException)?.code ?? ""))
+        throw error;
+    }
+    if (eventStream) {
+      eventStream.destroy();
+      eventStream = null;
+    }
+    if (pid) await retireOutdatedHost(pipe, pid);
+    launching = null;
+    await ensure();
+    return { reset: true };
+  })();
+  resetHostInFlight = resetting;
+  void resetting.finally(() => { if (resetHostInFlight === resetting) resetHostInFlight = null; })
+    .catch(() => undefined);
+  return resetting;
+}
+
 export async function persistentChatGPTRequest(input: PersistentChatGPTRequest): Promise<unknown> {
+  if (input.operation === "reset_host") return resetPersistentChatGPTHost();
+  if (resetHostInFlight) await resetHostInFlight;
   if (!allowedSession(input.sessionId)) throw new Error("Invalid exact ChatGPT browser session ID");
   if (input.operation === "attach" && !allowedUrl(input.url))
     throw new Error("Only ChatGPT URLs are allowed in the persistent browser host");

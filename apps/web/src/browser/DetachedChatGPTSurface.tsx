@@ -38,6 +38,7 @@ export function DetachedChatGPTSurface({
   standalone = false,
   onUrlChange,
   onAttachFailure,
+  onAttachSuccess,
 }: {
   readonly sessionId: string;
   readonly runtimeTabId: string;
@@ -48,6 +49,7 @@ export function DetachedChatGPTSurface({
   readonly standalone?: boolean;
   readonly onUrlChange?: (url: string) => void;
   readonly onAttachFailure?: (reason: string) => void;
+  readonly onAttachSuccess?: () => void;
 }) {
   const authorized = useEnvironmentScope(threadRef.environmentId, AuthPreviewOperateScope);
   const bridge = authorized ? window.desktopBridge?.stableChatGPTViewRequest : undefined;
@@ -63,7 +65,10 @@ export function DetachedChatGPTSurface({
   onUrlChangeRef.current = onUrlChange;
   const onFailureRef = useRef(onAttachFailure);
   onFailureRef.current = onAttachFailure;
+  const onSuccessRef = useRef(onAttachSuccess);
+  onSuccessRef.current = onAttachSuccess;
   const [ready, setReady] = useState(false);
+  const [attachmentEpoch, setAttachmentEpoch] = useState(0);
   const [presented, setPresented] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
@@ -112,6 +117,7 @@ export function DetachedChatGPTSurface({
         }
         setReady(true);
         setError(null);
+        onSuccessRef.current?.();
       })
       .catch((failure) => {
         if (disposed) return;
@@ -124,6 +130,72 @@ export function DetachedChatGPTSurface({
       // Only stop presenting; never close the host's live WebContentsView.
     };
   }, [bridge, sessionId, threadRef.environmentId, profileId]);
+
+  // A detached Chromium host can restart while this React surface stays mounted.
+  // Only a verified missing page may be reopened; a resident page (or an
+  // unknown/mismatched probe) must never be navigated or replaced.
+  useEffect(() => {
+    if (!bridge || !visible || (!ready && !error)) return;
+    let disposed = false;
+    let inFlight = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const identity: Identity = {
+      sessionId,
+      environmentId: threadRef.environmentId,
+      profileId: profileId ?? "default",
+    };
+    const inspect = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      let confirmedMissing = false;
+      try {
+        const state = (await bridge({ operation: "probe", identity })) as { residency?: string; url?: string };
+        if (disposed) return;
+        if (state.residency === "resident" && state.url && state.url !== currentUrl.current) {
+          currentUrl.current = state.url;
+          onUrlChangeRef.current?.(state.url);
+        }
+        if (state.residency !== "missing") return;
+        confirmedMissing = true;
+        const response = (await bridge({
+          operation: "attach", identity, url: currentUrl.current,
+        })) as BrowserReply;
+        if (disposed) return;
+        if (response.display !== "native")
+          throw new Error("The recovered Chromium page has no native window.");
+        if (response.url) {
+          currentUrl.current = response.url;
+          onUrlChangeRef.current?.(response.url);
+        }
+        setReady(true);
+        setError(null);
+        onSuccessRef.current?.();
+        // The previous presentation's cached bounds are stale after host loss.
+        // Re-run it to adopt the new native HWND even if the pane did not move.
+        setAttachmentEpoch((epoch) => epoch + 1);
+      } catch (failure) {
+        if (!disposed && confirmedMissing) {
+          const reason = failure instanceof Error ? failure.message : String(failure);
+          setError(reason);
+          onFailureRef.current?.(reason);
+        }
+      } finally {
+        inFlight = false;
+        if (!disposed) timer = setTimeout(() => void inspect(), 3_000);
+      }
+    };
+    const onReset = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      void inspect();
+    };
+    window.addEventListener("t3:chatgpt-webviews-reset", onReset);
+    timer = setTimeout(() => void inspect(), 750);
+    return () => {
+      disposed = true;
+      if (timer !== undefined) clearTimeout(timer);
+      window.removeEventListener("t3:chatgpt-webviews-reset", onReset);
+    };
+  }, [bridge, ready, error, visible, sessionId, threadRef.environmentId, profileId]);
 
   useEffect(() => {
     if (!bridge || !ready) return;
@@ -228,7 +300,7 @@ export function DetachedChatGPTSurface({
         .then(() => bridge({ operation: "present", identity, bounds: null }))
         .catch(() => undefined);
     };
-  }, [bridge, ready, visible, sessionId, threadRef.environmentId, profileId]);
+  }, [bridge, ready, visible, sessionId, threadRef.environmentId, profileId, attachmentEpoch]);
 
   useEffect(() => {
     if (!bridge || !ready || !visible || !node.current) return;

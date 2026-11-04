@@ -1888,6 +1888,8 @@ export interface DesktopBridge {
   ) => () => void;
   /** Only T3's native renderer may control offscreen persistent ChatGPT sessions. */
   persistentChatGPTRequest?: (input: {
+    operation: "reset_host";
+  } | {
     operation: "attach" | "input" | "evaluate" | "status";
     sessionId: string;
     environmentId?: string;
