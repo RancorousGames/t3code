@@ -1,6 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
-import { collectLimitAccounts, elapsedShare, paceOf } from "@t3tools/shared/usageLimits";
+import {
+  collectLimitAccounts,
+  elapsedShare,
+  formatDuration,
+  paceOf,
+} from "@t3tools/shared/usageLimits";
 import { GaugeIcon, RotateCcwIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
@@ -286,15 +291,28 @@ export function QuotaPacingWidget({
   const viewportHasRoom = useMediaQuery("(min-width: 1024px) and (min-height: 480px)");
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const providersByEnvironment = useEnvironmentProviders();
-  const limitPresentations = useMemo(() => new Map(
-    [...presentations].map(([environmentId, presentation]) => [environmentId, {
-      entry: presentation.entry,
-      serverConfig: presentation.serverConfig === null ? null : {
-        ...presentation.serverConfig,
-        providers: providersByEnvironment.get(environmentId) ?? [],
-      },
-    }] as const),
-  ), [presentations, providersByEnvironment]);
+  const limitPresentations = useMemo(
+    () =>
+      new Map(
+        [...presentations].map(
+          ([environmentId, presentation]) =>
+            [
+              environmentId,
+              {
+                entry: presentation.entry,
+                serverConfig:
+                  presentation.serverConfig === null
+                    ? null
+                    : {
+                        ...presentation.serverConfig,
+                        providers: providersByEnvironment.get(environmentId) ?? [],
+                      },
+              },
+            ] as const,
+        ),
+      ),
+    [presentations, providersByEnvironment],
+  );
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const activeSamples = useChatGPTActiveHistory(primaryEnvironmentId, isElectron);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
@@ -318,18 +336,26 @@ export function QuotaPacingWidget({
   const resets = useMemo(() => bankedResets(accounts), [accounts]);
   const weeklyRisks = useMemo(() => {
     const weekly = rows.find((row) => row.label === "week");
-    return weekly?.series.map((series) => {
-      if (!series || series.account.limits.unavailable) return null;
-      // The displayed 5h and week curves may use different subscriptions.
-      // Only pair observations belonging to the weekly account.
-      const short = quotaWindows([series.account], observedNow)
-        .find((row) => row.label === "5h")?.series.find(Boolean);
-      return short ? estimateWeeklyQuotaRisk(short, series, history, observedNow) : null;
-    }) ?? [];
+    return (
+      weekly?.series.map((series) => {
+        if (!series || series.account.limits.unavailable) return null;
+        // The displayed 5h and week curves may use different subscriptions.
+        // Only pair observations belonging to the weekly account.
+        const short = quotaWindows([series.account], observedNow)
+          .find((row) => row.label === "5h")
+          ?.series.find(Boolean);
+        return short ? estimateWeeklyQuotaRisk(short, series, history, observedNow) : null;
+      }) ?? []
+    );
   }, [rows, history, observedNow]);
-  const weeklyWarning = weeklyRisks.map((risk, index) => risk?.atRisk
-    ? `${NAMES[index]}: Need ${risk.equivalents.toFixed(1)} full 5h quota equivalents within ${risk.hoursLeft.toFixed(1)}h to reach 98% weekly usage (about ${risk.totalWindows} current/future windows). At least ${risk.minimumActiveHours.toFixed(1)}h of active use and ${risk.minimumElapsedHours.toFixed(1)}h with reset waits; roughly ${risk.awakeHours.toFixed(1)}h awake with 8h/day sleep. Observed correlation: +${risk.sampleSessionGain.toFixed(1)}% of 5h usage to +${risk.sampleWeeklyGain.toFixed(1)}% weekly usage. Timing and conversion are estimates.`
-    : null).filter((line): line is string => line !== null).join("\n");
+  const weeklyWarning = weeklyRisks
+    .map((risk, index) =>
+      risk?.atRisk
+        ? `${NAMES[index]}: Need ${risk.equivalents.toFixed(1)} full 5h quota equivalents within ${risk.hoursLeft.toFixed(1)}h to reach 98% weekly usage (about ${risk.totalWindows} current/future windows). At least ${risk.minimumActiveHours.toFixed(1)}h of active use and ${risk.minimumElapsedHours.toFixed(1)}h with reset waits; roughly ${risk.awakeHours.toFixed(1)}h awake with 8h/day sleep. Observed correlation: +${risk.sampleSessionGain.toFixed(1)}% of 5h usage to +${risk.sampleWeeklyGain.toFixed(1)}% weekly usage. Timing and conversion are estimates.`
+        : null,
+    )
+    .filter((line): line is string => line !== null)
+    .join("\n");
   const connectedKey = Array.from(presentations)
     .filter(
       ([, presentation]) =>
@@ -350,6 +376,12 @@ export function QuotaPacingWidget({
     }
   });
   useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "hidden") setNow(Date.now());
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
     if (!connectedKey) return;
     refresh();
     const onVisible = () => {
@@ -366,12 +398,10 @@ export function QuotaPacingWidget({
   }, [connectedKey]);
   const cacheExpiresAt = promptCache?.expiresAt;
   useEffect(() => {
-    // Tick once a minute while the cache countdown is visible, then once more at expiry.
-    if (cacheExpiresAt === undefined || cacheExpiresAt <= now) return;
-    const timer = window.setTimeout(
-      () => setNow(Date.now()),
-      Math.min(60_000, cacheExpiresAt - now),
-    );
+    // The shared minute tick covers the countdown; wake separately only near cache expiry.
+    if (cacheExpiresAt === undefined || cacheExpiresAt <= now || cacheExpiresAt - now > 60_000)
+      return;
+    const timer = window.setTimeout(() => setNow(Date.now()), cacheExpiresAt - now);
     return () => window.clearTimeout(timer);
   }, [cacheExpiresAt, now]);
   useEffect(() => {
@@ -472,30 +502,64 @@ export function QuotaPacingWidget({
             </div>
             {rows.map((row) => (
               <div key={row.label}>
-                <div className="mb-1 flex items-baseline justify-between px-1">
+                <div className="mb-1 flex items-start justify-between px-1">
                   <span className="text-xs font-semibold">{row.label}</span>
-                  <div className="flex gap-3 text-xl leading-none font-bold tracking-tight tabular-nums">
-                    {row.series.map((series, index) => (
-                      <Tooltip key={NAMES[index]}>
-                        <TooltipTrigger
-                          render={
-                            <span
-                              key={NAMES[index]}
-                              style={{ color: COLORS[index] }}
-                              aria-label={`${NAMES[index]} ${row.label}: ${series ? `${Math.round(series.window.usedPercent)}% used` : "unavailable"}`}
-                              tabIndex={0}
-                            />
-                          }
-                        >
-                          {series ? `${Math.round(series.window.usedPercent)}%` : "—"}
-                        </TooltipTrigger>
-                        <TooltipPopup>
-                          {series
-                            ? `${NAMES[index]} · ${series.account.displayName ?? series.account.email ?? "Account"} · ${paceOf(series.window, now)} pace · resets ${new Date(series.window.resetsAt!).toLocaleString()}${series.account.limits.unavailable ? " · Last available reading" : ""}`
-                            : `${NAMES[index]} quota unavailable`}
-                        </TooltipPopup>
-                      </Tooltip>
-                    ))}
+                  <div className="flex gap-2 tabular-nums">
+                    {row.series.map((series, index) => {
+                      const resetMs = series ? Date.parse(series.window.resetsAt!) - now : null;
+                      const resetIn =
+                        resetMs === null
+                          ? null
+                          : resetMs < 60_000
+                            ? "<1m"
+                            : formatDuration(resetMs);
+                      return (
+                        <div key={NAMES[index]} className="flex w-[72px] flex-col items-end gap-1">
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <span
+                                  style={{ color: COLORS[index] }}
+                                  className="text-xl leading-none font-bold tracking-tight"
+                                  aria-label={`${NAMES[index]} ${row.label}: ${series ? `${Math.round(series.window.usedPercent)}% used` : "unavailable"}`}
+                                  tabIndex={0}
+                                />
+                              }
+                            >
+                              {series ? `${Math.round(series.window.usedPercent)}%` : "—"}
+                            </TooltipTrigger>
+                            <TooltipPopup>
+                              {series
+                                ? `${NAMES[index]} · ${series.account.displayName ?? series.account.email ?? "Account"} · ${paceOf(series.window, now)} pace · resets ${new Date(series.window.resetsAt!).toLocaleString()}${series.account.limits.unavailable ? " · Last available reading" : ""}`
+                                : `${NAMES[index]} quota unavailable`}
+                            </TooltipPopup>
+                          </Tooltip>
+                          {series && resetIn ? (
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <span
+                                    tabIndex={0}
+                                    className="inline-flex items-center gap-0.5 text-2xs text-muted-foreground"
+                                    aria-label={`${NAMES[index]} ${row.label} resets in ${resetIn}`}
+                                  />
+                                }
+                              >
+                                <RotateCcwIcon className="size-2.5" aria-hidden />
+                                {resetIn}
+                              </TooltipTrigger>
+                              <TooltipPopup>
+                                {NAMES[index]} {row.label} resets{" "}
+                                {new Date(series.window.resetsAt!).toLocaleString()}
+                                {series.account.limits.unavailable
+                                  ? " · Last available reading"
+                                  : ""}
+                              </TooltipPopup>
+                            </Tooltip>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
                 <div className="mb-1 flex justify-between px-1 text-2xs tabular-nums text-muted-foreground">
