@@ -25,6 +25,7 @@ from compile_t3 import staged_build_is_current, resolve_node
 EXE_NAME = "T3 Code (Custom).exe"
 GRACE_SECONDS = 20
 WM_CLOSE = 0x0010
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def load_private_openrig_human_answer_token() -> None:
@@ -55,6 +56,7 @@ def running_custom_processes(root: Path) -> list[dict]:
         capture_output=True,
         text=True,
         check=True,
+        creationflags=CREATE_NO_WINDOW,
     )
     data = json.loads(result.stdout) if result.stdout.strip() else []
     if isinstance(data, dict):
@@ -137,13 +139,15 @@ def stop_custom_app(root: Path) -> bool:
         pid = int(item["ProcessId"])
         if pid in roots:
             subprocess.run(["taskkill.exe", "/PID", str(pid), "/T", "/F"],
-                           capture_output=True, text=True, check=False)
+                           capture_output=True, text=True, check=False,
+                           creationflags=CREATE_NO_WINDOW)
 
     # An orphaned renderer may outlive the Electron root.
     for item in running_custom_processes(root):
         pid = int(item["ProcessId"])
         subprocess.run(["taskkill.exe", "/PID", str(pid), "/F"],
-                       capture_output=True, text=True, check=False)
+                       capture_output=True, text=True, check=False,
+                       creationflags=CREATE_NO_WINDOW)
 
     if running_custom_processes(root):
         raise RuntimeError("Could not close the custom T3 Code app; not rebuilding over a live executable.")
@@ -390,7 +394,7 @@ def build_and_reload_ui(root: Path, *, rebuild: bool = True) -> bool:
     if rebuild:
         subprocess.run(
             [str(runner), "run", "--filter", "@t3tools/desktop", "--filter", "t3", "build"],
-            cwd=root, env=env, check=True,
+            cwd=root, env=env, check=True, creationflags=CREATE_NO_WINDOW,
         )
     elif not build_is_current(root):
         raise RuntimeError("Compiled outputs missing; refusing a no-build reload.")
@@ -430,7 +434,7 @@ def main(*, force_build: bool = False, restart_only: bool = False) -> None:
         if force_build or not staged_build_is_current(root):
             subprocess.run(
                 [sys.executable, str(root / "compile_t3.py"), "--stage-only"],
-                cwd=root, check=True,
+                cwd=root, check=True, creationflags=CREATE_NO_WINDOW,
             )
         else:
             print("Previously staged build still matches compiled outputs; reusing it.", flush=True)
@@ -459,7 +463,7 @@ def main(*, force_build: bool = False, restart_only: bool = False) -> None:
         if needs_build:
             subprocess.run(
                 [sys.executable, str(root / "compile_t3.py"), "--activate-staged"],
-                cwd=root, check=True,
+                cwd=root, check=True, creationflags=CREATE_NO_WINDOW,
             )
     except (OSError, RuntimeError, subprocess.CalledProcessError):
         # If backup or compilation fails, keep the session profile and bring
@@ -471,10 +475,10 @@ def main(*, force_build: bool = False, restart_only: bool = False) -> None:
             )
             subprocess.run(
                 [sys.executable, str(root / "launch_t3.py")],
-                cwd=root, check=False,
+                cwd=root, check=False, creationflags=CREATE_NO_WINDOW,
             )
         raise
-    subprocess.run([sys.executable, str(root / "launch_t3.py")], cwd=root, check=True)
+    subprocess.run([sys.executable, str(root / "launch_t3.py")], cwd=root, check=True, creationflags=CREATE_NO_WINDOW)
     print("T3 Code (Custom) launched with verified compiled artifacts; session profile untouched.", flush=True)
     return True
 
@@ -498,7 +502,7 @@ def _taskboard_release_run(root: Path, manifest: Path | None, *, force_build: bo
     log.parent.mkdir(parents=True, exist_ok=True)
 
     def bookkeep(*args: str) -> None:
-        subprocess.run([sys.executable, str(bridge), *args], cwd=root, check=True)
+        subprocess.run([sys.executable, str(bridge), *args], cwd=root, check=True, creationflags=CREATE_NO_WINDOW)
 
     # The bridge rejects detached revisions and freezes only source-proven members.
     # Neither it nor this option authorizes a restart independently.

@@ -344,6 +344,7 @@ def main(*, artifacts_only: bool = False, stage_only: bool = False) -> None:
         cwd=root,
         env=env,
         check=True,
+        creationflags=CREATE_NO_WINDOW,
     )
 
     if stage_only:
