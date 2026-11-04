@@ -4,7 +4,7 @@ import { Icon } from "./Icons.tsx";
 import { AIChatsSidebar } from "./AIChatsSidebar.tsx";
 import { nativeMori, type MoriMenuItem } from "./backend.ts";
 import {
-  createChatSession, loadChatSessions, normalizedChatGPTUrl, saveChatSessions,
+  createChatSession, loadChatSessions, normalizedChatGPTUrl, normalizedMoriBrowserUrl, saveChatSessions,
   type MoriChatSession, type MoriChatActivity,
 } from "./chatgpt-sessions.ts";
 import { chatGPTConversationIdFromUrl } from "../../web/src/chatGPTConversationIdentity.ts";
@@ -20,6 +20,13 @@ type Guest = HTMLElement & {
 };
 
 const HOME = "https://chatgpt.com/";
+const AI_SITES = [
+  { label: "ChatGPT", url: HOME },
+  { label: "Google AI Studio", url: "https://aistudio.google.com/prompts/new_chat" },
+  { label: "Gemini", url: "https://gemini.google.com/" },
+  { label: "Claude", url: "https://claude.ai/" },
+  { label: "Grok", url: "https://grok.com/" },
+] as const;
 const INSPECT = `(() => ({page: (${inspectChatGPTPage.toString()})({from:"end",count:0,includeMessages:false,maxMessageChars:1}), status: ${CHATGPT_ACTIVITY_EXPRESSION}}))()`;
 const RECOVERY_PER_SESSION_MS = 2 * 60_000;
 const RED_GRACE_MS = 10_000;
@@ -119,6 +126,8 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
   });
   const [clock, setClock] = useState(Date.now());
   const [fallbackMenu, setFallbackMenu] = useState<FallbackMenuState | null>(null);
+  const [addressDraft, setAddressDraft] = useState("");
+  const [addressEditing, setAddressEditing] = useState(false);
   const view = useRef<Guest | null>(null);
   const loadedRef = useRef<string | null>(null);
   const recoveryInFlight = useRef(false);
@@ -168,7 +177,7 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
   }, []);
 
   const changeUrl = useCallback((id: string, href: string) => {
-    const url = normalizedChatGPTUrl(href);
+    const url = normalizedMoriBrowserUrl(href);
     if (!url) return;
     patchOne(id, s => s.url === url ? s : { ...s, url, changedAt: Date.now() });
   }, [patchOne]);
@@ -176,6 +185,11 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
   const inspect = useCallback(async (id: string) => {
     const guest = view.current;
     if (!guest || loadedRef.current !== id) return;
+    if (!normalizedChatGPTUrl(guest.getURL())) {
+      patchOne(id, s => s.activity === "idle" && !s.activityReason ? s :
+        { ...s, activity: "idle", activityReason: undefined, problemSince: undefined, lastSeenAt: Date.now() });
+      return;
+    }
     try {
       const { page, status } = await guest.executeJavaScript(INSPECT) as { page: PageInspection; status: string };
       if (loadedRef.current !== id) return;
@@ -276,6 +290,28 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
     const next = createChatSession(project.id);
     patchSessions(old => [...old, next]);
     setSelectedId(next.id);
+  };
+  const navigateTo = (input: string) => {
+    const url = normalizedMoriBrowserUrl(input);
+    if (!url) { toast("Enter a valid HTTP or HTTPS URL."); return; }
+    setAddressEditing(false);
+    setAddressDraft(url);
+    if (!activeId) {
+      const next = { ...createChatSession(project.id), url };
+      patchSessions(old => [...old, next]);
+      setSelectedId(next.id);
+    } else if (active?.url === url) {
+      view.current?.reload();
+    } else {
+      patchOne(activeId, session => ({ ...session, url, activity: "loading", activityReason: undefined, problemSince: undefined, changedAt: Date.now() }));
+    }
+  };
+  const reloadActive = () => {
+    if (!active || !view.current) return;
+    if (active.activity === "working" && normalizedChatGPTUrl(active.url) &&
+        !window.confirm("ChatGPT is still generating. Reload this page anyway?")) return;
+    view.current.reload();
+    patchOne(active.id, s => ({ ...s, activity: "loading" }));
   };
   const nextUsable = (ignoreId: string) => sessionsRef.current.find(s =>
     s.projectId === project.id && s.id !== ignoreId && !s.hidden && (s.snoozedUntil ?? 0) <= Date.now())?.id ?? null;
@@ -520,6 +556,28 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
         <button type="button" title="New ChatGPT session" onClick={add}><Icon name="plus" size="sm" />New</button>
         <button type="button" title="Open full AI Chats view" onClick={() => go("chatgpt")}><Icon name="expand" size="sm" />Full</button>
       </div>}
+      <div className="mori-ai-main">
+        <div className="mori-ai-nav">
+          <form className="mori-ai-address" onSubmit={event => { event.preventDefault(); navigateTo(addressEditing ? addressDraft : active?.url ?? ""); }}>
+            <Icon name="link" size="xs" />
+            <input aria-label="AI browser URL" type="text" autoComplete="off" spellCheck={false}
+              placeholder="Enter URL..." value={addressEditing ? addressDraft : active?.url ?? ""}
+              onFocus={() => { setAddressDraft(active?.url ?? ""); setAddressEditing(true); }}
+              onChange={event => setAddressDraft(event.target.value)}
+              onBlur={() => setAddressEditing(false)}
+              onKeyDown={event => { if (event.key === "Escape") { setAddressEditing(false); event.currentTarget.blur(); } }} />
+          </form>
+          <button type="button" className="mori-ai-nav-button" aria-label="Refresh AI browser" title="Refresh" disabled={!active} onClick={reloadActive}>
+            <Icon name="reset" size="sm" />
+          </button>
+          <details className="mori-ai-sites">
+            <summary title="Open AI website"><Icon name="sparkle" size="sm" /><span>Sites</span><Icon name="chevron-down" size="xs" /></summary>
+            <div className="mori-ai-site-menu">
+              {AI_SITES.map(site => <button type="button" key={site.url} title={site.url}
+                onClick={event => { event.currentTarget.closest("details")!.open = false; navigateTo(site.url); }}>{site.label}</button>)}
+            </div>
+          </details>
+        </div>
       <div className="mori-ai-browser">
         {active ? <webview
           key={active.id}
@@ -532,6 +590,7 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
             <span>No AI chat selected</span>
             <button type="button" onClick={add}>New chat</button>
           </div>}
+      </div>
       </div>
       {!compact && <AIChatsSidebar sessions={projectSessions} activeId={activeId}
         collapsed={!sidebarOpen} now={clock}

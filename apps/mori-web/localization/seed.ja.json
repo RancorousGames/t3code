@@ -64,5 +64,17 @@
   "All": "すべて",
   "Untranslated": "未翻訳",
   "To do": "未完了",
-  "Draft only": "下書きのみ"
+  "Draft only": "下書きのみ",
+  "Google AI Studio": "Google AI Studio",
+  "Gemini": "Gemini",
+  "Claude": "Claude",
+  "Grok": "Grok",
+  "Sites": "サイト",
+  "Open AI website": "AIサイトを開く",
+  "AI browser URL": "AIブラウザーのURL",
+  "Enter URL...": "URLを入力...",
+  "Refresh": "再読み込み",
+  "Refresh AI browser": "AIブラウザーを再読み込み",
+  "Enter a valid HTTP or HTTPS URL.": "有効なHTTPまたはHTTPSのURLを入力してください。",
+  "ChatGPT is still generating. Reload this page anyway?": "ChatGPTは応答を生成中です。それでも再読み込みしますか？"
 }

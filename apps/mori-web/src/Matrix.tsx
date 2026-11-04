@@ -143,7 +143,7 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
     switch (def.key) {
       case "id":
         return (
-          <div key="id" className="c c-id">
+          <div key="id" className="c c-id" title={row.id}>
             <span className={`sdot ${status}`} title={tr(STATUS_LABEL[status])} />
             <span>{row.id}</span>
             {dupes.length > 0 && <span className="dup" title={`Same English as ${dupes.join(", ")}`}>={dupes.length}</span>}

@@ -46,6 +46,19 @@ export function normalizedChatGPTUrl(url: string): string | null {
   }
 }
 
+/** AI browser tabs can visit other providers and arbitrary HTTP(S) pages. */
+export function normalizedMoriBrowserUrl(input: string): string | null {
+  const value = input.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(value) ? value : `https://${value}`);
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
+    return normalizedChatGPTUrl(url.href) ?? url.href;
+  } catch {
+    return null;
+  }
+}
+
 export function createChatSession(projectId: string): MoriChatSession {
   const now = Date.now();
   return {
@@ -68,7 +81,7 @@ export function deserializeChatSessions(raw: unknown): MoriChatSession[] {
     if (!item || typeof item !== "object" || typeof item.id !== "string" ||
         typeof item.title !== "string" || typeof item.projectId !== "string" ||
         typeof item.url !== "string" || seen.has(item.id)) continue;
-    const url = normalizedChatGPTUrl(item.url);
+    const url = normalizedMoriBrowserUrl(item.url);
     if (!url) continue;
     seen.add(item.id);
     const num = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;

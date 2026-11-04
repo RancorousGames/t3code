@@ -489,6 +489,15 @@
       "note": "src/Sidebar.tsx:97 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
+      "id": "ui.eff32ceedc018c",
+      "source": "AI browser URL",
+      "ai": "",
+      "final": "AIブラウザーのURL",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:563 (jsx-attribute:aria-label); localization/seed.ja.json:1 (seed)"
+    },
+    {
       "id": "ui.4b62311150d1c9",
       "source": "AI can suggest these mappings once an AI provider is connected in Settings.",
       "ai": "",
@@ -912,6 +921,15 @@
       "note": "src/useChatBatchWorker.ts:148 (ui-variable:message)"
     },
     {
+      "id": "ui.9656c950b53b38",
+      "source": "ChatGPT is still generating. Reload this page anyway?",
+      "ai": "",
+      "final": "ChatGPTは応答を生成中です。それでも再読み込みしますか？",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:312 (ui-call:confirm); localization/seed.ja.json:1 (seed)"
+    },
+    {
       "id": "ui.9a66349131370d",
       "source": "ChatGPT is still generating. Reload this session anyway?",
       "ai": "",
@@ -1027,6 +1045,15 @@
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
       "note": "src/Reference.tsx:420 (jsx-text)"
+    },
+    {
+      "id": "ui.0615570f9ea136",
+      "source": "Claude",
+      "ai": "",
+      "final": "Claude",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:27 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.3b7ea51793e9d9",
@@ -1758,6 +1785,24 @@
       "note": "src/Reference.tsx:147 (jsx-attribute:aria-label)"
     },
     {
+      "id": "ui.acfc438f1aa99b",
+      "source": "Enter a valid HTTP or HTTPS URL.",
+      "ai": "",
+      "final": "有効なHTTPまたはHTTPSのURLを入力してください。",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:296 (ui-call:toast); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.48ac254ed2a2c3",
+      "source": "Enter URL...",
+      "ai": "",
+      "final": "URLを入力...",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:564 (jsx-attribute:placeholder); localization/seed.ja.json:1 (seed)"
+    },
+    {
       "id": "ui.458c1fed574354",
       "source": "Evening",
       "ai": "",
@@ -2028,6 +2073,15 @@
       "note": "src/ChatGPTScreen.tsx:521 (jsx-text)"
     },
     {
+      "id": "ui.f6ece80b88d6df",
+      "source": "Gemini",
+      "ai": "",
+      "final": "Gemini",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:26 (object-getter:label); localization/seed.ja.json:1 (seed)"
+    },
+    {
       "id": "ui.5201a39b08bfe6",
       "source": "Gettext PO",
       "ai": "",
@@ -2109,6 +2163,15 @@
       "note": "src/Marked.tsx:14 (jsx-attribute:title)"
     },
     {
+      "id": "ui.ad3cef61d37f5f",
+      "source": "Google AI Studio",
+      "ai": "",
+      "final": "Google AI Studio",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:25 (object-getter:label); localization/seed.ja.json:1 (seed)"
+    },
+    {
       "id": "ui.3b65573942ac93",
       "source": "Google authentication is available in the installed Monku Windows app.",
       "ai": "",
@@ -2188,6 +2251,15 @@
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
       "note": "src/GoogleConnect.tsx:13 (ui-branch)"
+    },
+    {
+      "id": "ui.dca61d32363b09",
+      "source": "Grok",
+      "ai": "",
+      "final": "Grok",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:28 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.6e567a29800219",
@@ -3594,6 +3666,15 @@
       "note": "src/useChatBatchWorker.ts:95 (ui-call:toast)"
     },
     {
+      "id": "ui.3c05a6e868666d",
+      "source": "Open AI website",
+      "ai": "",
+      "final": "AIサイトを開く",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:574 (jsx-attribute:title); localization/seed.ja.json:1 (seed)"
+    },
+    {
       "id": "ui.0f488b78644538",
       "source": "Open batch session",
       "ai": "",
@@ -3925,6 +4006,24 @@
       "status": "translated",
       "sourceFile": "src/Sidebar.tsx",
       "note": "src/Sidebar.tsx:102 (explicit-translation); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.0e91610117029a",
+      "source": "Refresh",
+      "ai": "",
+      "final": "再読み込み",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:570 (jsx-attribute:title); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.0a5439ac4f4ad2",
+      "source": "Refresh AI browser",
+      "ai": "",
+      "final": "AIブラウザーを再読み込み",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:570 (jsx-attribute:aria-label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.bdc090ec61e3fc",
@@ -4672,6 +4771,15 @@
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
       "note": "src/GoogleConnect.tsx:108 (jsx-text)"
+    },
+    {
+      "id": "ui.9d7690937436d9",
+      "source": "Sites",
+      "ai": "",
+      "final": "サイト",
+      "status": "translated",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:574 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.5263293fc20264",
