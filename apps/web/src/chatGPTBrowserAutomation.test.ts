@@ -3,13 +3,12 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("./chatGPTBrowserSessions", () => ({
+  CHATGPT_DEFAULT_URL: "https://chatgpt.com/",
   chatGPTBrowserThreadRef: () => ({ threadId: "session" }),
-  readChatGPTBrowserSessions: () => [{ id: "session", title: "Worker" }],
+  readChatGPTBrowserSessions: () => [],
 }));
 vi.mock("./browser/previewRuntimeTabId", () => ({ previewRuntimeTabId: () => "runtime" }));
-vi.mock("./browser/browserSurfaceStore", () => ({
-  acquireBrowserSurfaceActivity: () => () => {},
-}));
+vi.mock("./browser/browserSurfaceStore", () => ({ acquireBrowserSurfaceActivity: () => () => {} }));
 vi.mock("./browser/chatGPTGuestHibernation", () => ({ wakeChatGPTGuest: () => {} }));
 vi.mock("./components/preview/previewBridge", () => ({ previewBridge: null }));
 vi.mock("./chatGPTWebviewAutomation", () => ({ chatGPTWebviewAutomation: {} }));
@@ -19,190 +18,122 @@ import { sendInitialChatGPTPrompt } from "./chatGPTBrowserAutomation";
 
 function fixture() {
   let clock = 0;
+  let delivered = false;
   const automation = {
     status: vi.fn(async () => ({
-      url: "https://chatgpt.com/",
-      available: true,
-      loading: false,
+      url: "https://chatgpt.com/", available: true, loading: false,
     })),
     waitFor: vi.fn(async () => undefined),
-    type: vi.fn(async (_runtime: string, _payload: { text: string }) => undefined),
-    press: vi.fn(async (_runtime: string, _payload: { expectedComposerText: string }) => undefined),
-    evaluate: vi.fn(async (_runtime: string, { expression }: { expression: string }): Promise<boolean | { ok: boolean; reason?: string }> =>
-      expression.includes("const draftEditor =") || expression.includes("const expectedDraft =")
-        ? { ok: true }
-        : expression.includes("const el = document.querySelector")
-          ? true
-          : false,
-    ),
+    type: vi.fn(),
+    press: vi.fn(),
+    evaluate: vi.fn(async (_runtime: string, { expression }: { expression: string }) => {
+      if (expression.includes("const fresh = true")) return { submitted: true };
+      if (expression.includes("data-message-author-role")) return delivered;
+      return null;
+    }),
   };
+  const session = { id: "session", title: "Worker", spawnRequestId: "backend-spawn" };
   const input = {
     environmentId: EnvironmentId.make("local"),
-    sessionId: "session",
-    requestId: "backend-spawn",
+    sessionId: session.id,
+    requestId: session.spawnRequestId,
     prompt: "Do exactly one job",
     automation: automation as never,
-    readSessions: (() => [
-      { id: "session", title: "Worker", spawnRequestId: "backend-spawn" },
-    ]) as never,
+    readSessions: (() => [session]) as never,
     readState: (() => ({ activeTabId: "tab", serverEpoch: "epoch" })) as never,
     now: () => clock,
-    pause: async (ms: number) => {
-      clock += ms;
-    },
+    pause: async (ms: number) => { clock += ms; },
     timeoutMs: 700,
     acquireActivity: () => () => {},
   };
-  return { input, automation };
+  return { input, automation, session, setDelivered: (value: boolean) => { delivered = value; } };
 }
 
-describe("initial ChatGPT prompt delivery receipt", () => {
-  it("does not interpret an empty composer or lack of rendered user turn as delivery or retry Enter", async () => {
+describe("fresh ChatGPT session direct-submit delivery", () => {
+  it("uses only React's explicit-text callback; never edits a restored draft", async () => {
     const { input, automation } = fixture();
     const result = await sendInitialChatGPTPrompt(input);
     expect(result).toMatchObject({ delivery: "unknown", sendAttempted: true });
-    expect(automation.press).toHaveBeenCalledTimes(1);
-    expect(automation.evaluate).toHaveBeenCalled();
+    expect(automation.type).not.toHaveBeenCalled();
+    expect(automation.press).not.toHaveBeenCalled();
+    const expressions = automation.evaluate.mock.calls.map(([, arg]) => arg.expression);
+    const submitted = expressions.filter((x) => x.includes("const fresh = true"));
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toContain("Do exactly one job");
+    expect(submitted[0]).toContain("preserveDraft: true");
+    expect(submitted[0]).not.toContain("execCommand");
+    expect(submitted[0]).not.toContain("editor.focus");
   });
 
-  it("preserves UNKNOWN when Enter rejects after it may have been accepted", async () => {
+  it("keeps UNKNOWN and does not resubmit after IPC failure at callback invocation", async () => {
     const { input, automation } = fixture();
-    automation.press.mockRejectedValueOnce(new Error("renderer detached"));
+    automation.evaluate.mockRejectedValueOnce(new Error("bridge disconnected"));
     const result = await sendInitialChatGPTPrompt(input);
-    expect(result).toEqual({
-      delivery: "unknown",
-      sendAttempted: true,
-      reason: "renderer detached",
+    expect(result).toMatchObject({
+      delivery: "unknown", sendAttempted: true, reason: "bridge disconnected",
     });
-    expect(automation.press).toHaveBeenCalledTimes(1);
+    expect(automation.evaluate).toHaveBeenCalledTimes(1);
   });
 
-  it("returns not_sent before any send attempt and keeps the session addressable", async () => {
+  it("returns not_sent when the composer never becomes ready", async () => {
     const { input, automation } = fixture();
     automation.waitFor.mockRejectedValue(new Error("composer unavailable"));
     const result = await sendInitialChatGPTPrompt(input);
-    expect(result.delivery).toBe("not_sent");
-    expect(result.sendAttempted).toBe(false);
-    expect(automation.press).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
+    expect(automation.evaluate).not.toHaveBeenCalled();
   });
 
-  it("will not type or send into a manual guest lacking the matching spawn reservation", async () => {
+  it("never touches a manual session without an exact spawn reservation", async () => {
     const { input, automation } = fixture();
-    input.readSessions = (() => [{ id: "session", title: "User's manual new chat" }]) as never;
+    input.readSessions = (() => [{ id: "session", title: "Manual" }]) as never;
     const result = await sendInitialChatGPTPrompt(input);
     expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
-    expect(automation.type).not.toHaveBeenCalled();
-    expect(automation.press).not.toHaveBeenCalled();
+    expect(automation.evaluate).not.toHaveBeenCalled();
   });
 
-  it("replaces a restored draft when starting an automated worker or reboot", async () => {
-    for (const newManagedWorker of [true, false]) {
-      const { input, automation } = fixture();
-      const result = await sendInitialChatGPTPrompt({ ...input, newManagedWorker });
-      // No user turn is rendered in this fixture, so the submission is UNKNOWN.
-      expect(result).toMatchObject({ delivery: "unknown", sendAttempted: true });
-      expect(automation.evaluate).toHaveBeenCalledWith(
-        "runtime",
-        expect.objectContaining({
-          expression: expect.stringContaining("document.execCommand('delete', false)"),
-        }),
-      );
-      const clearedAt = automation.evaluate.mock.invocationCallOrder[0];
-      const typedAt = automation.type.mock.invocationCallOrder[0];
-      const verifiedAt = automation.evaluate.mock.invocationCallOrder[1];
-      const pressedAt = automation.press.mock.invocationCallOrder[0];
-      expect(clearedAt).toBeLessThan(typedAt!);
-      expect(typedAt).toBeLessThan(verifiedAt!);
-      expect(verifiedAt).toBeLessThan(pressedAt!);
-      expect(automation.type).toHaveBeenCalledWith(
-        "runtime",
-        expect.objectContaining({
-          clear: true,
-          text: expect.stringContaining("Do exactly one job"),
-        }),
-      );
-      expect(automation.press).toHaveBeenCalledWith(
-        "runtime",
-        expect.objectContaining({
-          key: "Enter",
-          expectedComposerText: expect.stringContaining("Do exactly one job"),
-        }),
-      );
-    }
-  });
-  it("types the final execution instruction after routing on a continuous worker reboot", async () => {
-    const { input, automation } = fixture();
-    await sendInitialChatGPTPrompt({
-      ...input,
-      newManagedWorker: false,
-      resumeWorkAfterReboot: true,
+  it("waits for React callback readiness but submits exactly once", async () => {
+    const { input, automation, setDelivered } = fixture();
+    let attempts = 0;
+    automation.evaluate.mockImplementation(async (_runtime, { expression }) => {
+      if (expression.includes("const fresh = true")) {
+        attempts++;
+        return { submitted: attempts > 1 };
+      }
+      if (expression.includes("data-message-author-role")) return true;
+      return null;
     });
-    const typed = automation.type.mock.calls[0]?.[1] as { text: string };
-    const submitted = automation.press.mock.calls[0]?.[1] as { expectedComposerText: string };
-    expect(typed.text).toBe(submitted.expectedComposerText);
-    expect(typed.text).toContain("not authority to access other sessions.");
-    expect(typed.text.trimEnd().endsWith("Begin doing actual work now!")).toBe(true);
-  });
-
-  it("never types or sends when an inherited draft could not be cleared", async () => {
-    const { input, automation } = fixture();
-    automation.evaluate.mockResolvedValueOnce({
-      ok: false,
-      reason: "Could not clear restored ChatGPT draft.",
-    });
-    const result = await sendInitialChatGPTPrompt(input);
-    expect(result.delivery).toBe("not_sent");
-    expect(result.reason).toContain("Could not clear restored ChatGPT draft");
-    expect(automation.type).not.toHaveBeenCalled();
-    expect(automation.press).not.toHaveBeenCalled();
-  });
-
-  it("never sends if stale text reappears after typing the startup prompt", async () => {
-    const { input, automation } = fixture();
-    automation.evaluate.mockImplementation(
-      async (_runtime: string, { expression }: { expression: string }) =>
-        expression.includes("const draftEditor =")
-          ? { ok: true }
-          : expression.includes("const expectedDraft =")
-            ? { ok: false, reason: "Automatic startup composer differs from intended prompt." }
-            : false,
-    );
-    const result = await sendInitialChatGPTPrompt(input);
-    expect(result.delivery).toBe("not_sent");
-    expect(result.reason).toContain("composer differs from intended prompt");
-    expect(automation.type).toHaveBeenCalledTimes(1);
-    expect(automation.press).not.toHaveBeenCalled();
-  });
-
-  it("refuses to type into an already opened conversation instead of assuming it is fresh", async () => {
-    const { input, automation } = fixture();
-    automation.status.mockResolvedValue({
-      url: "https://chatgpt.com/c/existing",
-      available: true,
-      loading: false,
-    });
-    const result = await sendInitialChatGPTPrompt(input);
-    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
-    expect(automation.type).not.toHaveBeenCalled();
-    expect(automation.press).not.toHaveBeenCalled();
-  });
-
-  it("delivers only after exact user-turn verification responds true", async () => {
-    const { input, automation } = fixture();
-    automation.evaluate.mockImplementation(
-      async (_runtime: string, { expression }: { expression: string }) =>
-        expression.includes("const draftEditor =") || expression.includes("const expectedDraft =")
-          ? { ok: true }
-          : expression.includes("const el = document.querySelector") ||
-            expression.includes("data-message-author-role"),
-    );
+    setDelivered(true);
     const result = await sendInitialChatGPTPrompt(input);
     expect(result).toEqual({ delivery: "user_turn_observed", sendAttempted: true });
-    expect(automation.press).toHaveBeenCalledTimes(1);
-    const expression = (
-      automation.evaluate.mock.calls as unknown as Array<[string, { expression: string }]>
-    ).find(([, args]) => args.expression.includes("data-message-author-role"))?.[1]?.expression;
-    expect(expression).toContain("data-message-author-role");
-    expect(expression).not.toContain("window.location.pathname");
+    expect(attempts).toBe(2);
+  });
+
+  it("does not send into a previous conversation and reports not_sent", async () => {
+    const { input, automation } = fixture();
+    automation.status.mockResolvedValue({
+      url: "https://chatgpt.com/c/01234567-1111-4111-8111-0123456789ab",
+      available: true, loading: false,
+    });
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
+    expect(automation.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("guards against a replaced reservation just before dispatch", async () => {
+    const { input, automation, session } = fixture();
+    let reads = 0;
+    input.readSessions = (() => ++reads <= 1 ? [session] : []) as never;
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result).toMatchObject({ delivery: "not_sent", sendAttempted: false });
+    expect(automation.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("confirms only an actual rendered user turn, never a bare callback acknowledgement", async () => {
+    const { input, automation, setDelivered } = fixture();
+    setDelivered(true);
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result).toEqual({ delivery: "user_turn_observed", sendAttempted: true });
+    expect(automation.evaluate.mock.calls.filter(([, arg]) =>
+      arg.expression.includes("const fresh = true"))).toHaveLength(1);
   });
 });

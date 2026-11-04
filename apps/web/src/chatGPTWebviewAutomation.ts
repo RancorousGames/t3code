@@ -8,6 +8,7 @@
 import { findMountedChatGPTGuest } from "./browser/mountedChatGPTGuest";
 import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
+import { chatGPTDirectSubmitExpression, directSubmitOutcome } from "./chatGPTDirectSubmit";
 
 type ChatGPTWebview = HTMLElementTagNameMap["webview"] & {
   getURL?: () => string;
@@ -374,9 +375,7 @@ export const chatGPTWebviewAutomation = {
     await webview.sendInputEvent({ type: "keyUp", keyCode: key });
   },
 
-  /** Submit text through ChatGPT's currently mounted React callback without touching the human editor.
-   * A false result proves no callback invocation; transport failures after invocation stay UNKNOWN.
-   */
+  /** Composer-free submit; never accepts a fallback that edits a human draft. */
   async directSubmit(
     runtimeId: string,
     options: {
@@ -385,59 +384,11 @@ export const chatGPTWebviewAutomation = {
       sendExpiresAt?: number | undefined;
     },
   ): Promise<"submitted" | "not_submitted"> {
-    const webview = findWebview(runtimeId);
     const result = await executeWithoutStealingHostFocus(
-      webview,
-      `(() => {
-      const expected = ${JSON.stringify(options.expectedConversationId)};
-      const expiresAt = ${JSON.stringify(options.sendExpiresAt ?? null)};
-      const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
-      if (actual !== expected || (expiresAt !== null && Date.now() >= expiresAt))
-        return { submitted: false, reason: 'identity_or_expiry' };
-      const editor = document.querySelector('[data-composer-markdown][contenteditable="true"]');
-      if (!(editor instanceof HTMLElement)) return { submitted: false, reason: 'editor_missing' };
-      const stop = document.querySelector('[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"]');
-      if (stop instanceof HTMLButtonElement && stop.getClientRects().length && !stop.disabled)
-        return { submitted: false, reason: 'generation_active' };
-      const parent = editor.parentElement;
-      const key = parent && Object.keys(parent).find(k => k.startsWith('__reactFiber'));
-      let fiber = key && parent[key], callback = null;
-      for (let depth = 0; fiber && depth < 90; depth++, fiber = fiber.return) {
-        const props = fiber.memoizedProps;
-        const candidate = props?.onSubmit;
-        // ChatGPT minifies callback bodies on every deploy. Identify the
-        // composer submit handler by its component props and serialization
-        // behavior, never an unstable minified function name such as i6().
-        if (typeof candidate === 'function' &&
-            Object.prototype.hasOwnProperty.call(props, 'submitDisabled') &&
-            Object.prototype.hasOwnProperty.call(props, 'allowBackgroundSubmit') &&
-            String(candidate).includes('serialization_metadata')) {
-          callback = candidate;
-          break;
-        }
-      }
-      if (!callback) return { submitted: false, reason: 'callback_unavailable' };
-      if ((${chatGPTConversationIdFromUrl.toString()})(location.href) !== expected ||
-          (expiresAt !== null && Date.now() >= expiresAt))
-        return { submitted: false, reason: 'identity_or_expiry' };
-      // No DOM writes or editor focus. Any callback exception after invocation is ambiguous.
-      callback(${JSON.stringify(options.text)}, performance.now(), { preserveDraft: true }, true);
-      return { submitted: true };
-    })()`,
+      findWebview(runtimeId),
+      chatGPTDirectSubmitExpression(options),
     );
-    if (
-      result &&
-      typeof result === "object" &&
-      (result as { submitted?: boolean }).submitted === true
-    )
-      return "submitted";
-    if (
-      result &&
-      typeof result === "object" &&
-      (result as { submitted?: boolean }).submitted === false
-    )
-      return "not_submitted";
-    throw new Error("Direct submit outcome unknown.");
+    return directSubmitOutcome(result);
   },
 
   async evaluate(runtimeId: string, { expression }: { expression: string }): Promise<unknown> {
