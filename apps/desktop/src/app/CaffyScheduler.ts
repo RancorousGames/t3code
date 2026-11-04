@@ -6,6 +6,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
 import type { ChatGPTDeliveryQueue, DeliveryRecord } from "./ChatGPTDeliveryQueue.ts";
+import { sessionWorkCapacityIdentityResolver, type WorkCapacitySessionIdentity } from "./sessionWorkCapacityIdentity.ts";
 import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 
 type Mode = "idle" | "periodic" | "queued" | "startup";
@@ -790,10 +791,11 @@ export class CaffyScheduler {
     const reply = await this.request({
       version: 1, requestId: NodeCrypto.randomUUID(),
       type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
-    });
-    if (!reply.ok || !("data" in reply) || !reply.data || typeof reply.data !== "object") return unavailable("T3 inventory unavailable");
-    const data = reply.data as { sessions?: Array<{
-      id?: string; activity?: string; status?: string; statusObservedAt?: string;
+    }).catch(() => null);
+    if (!reply?.ok || !("data" in reply) || !reply.data || typeof reply.data !== "object")
+      return unavailable("T3 inventory unavailable");
+    const data = reply.data as { sessions?: Array<WorkCapacitySessionIdentity & {
+      activity?: string; status?: string; statusObservedAt?: string;
     }>; total?: number; hasMore?: boolean; incomplete?: boolean };
     if (!Array.isArray(data.sessions) || data.hasMore || data.incomplete ||
         (data.total !== undefined && data.total !== data.sessions.length)) return unavailable("T3 inventory incomplete");
@@ -802,18 +804,20 @@ export class CaffyScheduler {
       if (now - state.observedAt > 25_000) this.workingReports.delete(reporter);
     if (this.workingReports.size === 0)
       return unavailable("Live ChatGPT working-session count unavailable");
+    const canonical = sessionWorkCapacityIdentityResolver(data.sessions);
     const workingIds = new Set(data.sessions.filter(s => {
       const observed = Date.parse(s.statusObservedAt ?? "");
       return Number.isFinite(observed) && observed <= now + 1000 && now - observed <= 15_000 &&
         (s.activity === "working" || s.status === "working");
-    }).map(s => s.id).filter((id): id is string => !!id));
+    }).map(s => s.id).filter((id): id is string => !!id).map(canonical));
     for (const report of this.workingReports.values())
-      for (const id of report.ids) workingIds.add(id);
+      for (const id of report.ids) workingIds.add(canonical(id));
     // A newly queued message may not yet be reflected as 'working' by T3.
     // Count it as a provisional slot, or one pump could enqueue 6+ wakes.
     const reserved = [...this.entries.values()].filter(row =>
       row.mode === "queued" &&
-      !workingIds.has(row.sessionId) && !workingIds.has(row.browserSessionId ?? row.sessionId) &&
+      ![row.sessionId, row.browserSessionId, row.publicSessionId]
+        .some(id => !!id && workingIds.has(canonical(id))) &&
       (row.pendingMessageId !== null ||
         (row.lastWakeAt !== null && now - row.lastWakeAt < 120_000))).length;
     const totalReserved = reserved + extraReserved + this.taskReservations;

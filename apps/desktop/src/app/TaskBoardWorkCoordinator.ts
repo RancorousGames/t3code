@@ -268,6 +268,11 @@ export class TaskBoardWorkCoordinator {
         const liveLease = Number.isFinite(expiry) && expiry > Date.now();
         if (liveLease) {
           this.syncReservations();
+          // A reservation already occupies one slot, so admissible=false
+          // at exactly 3/3 is expected. But a user may have started more
+          // workers since the reservation was made; never oversubscribe.
+          const capacity = await this.caffy.capacity().catch(() => null);
+          if (!capacity || capacity.unknown > 0 || capacity.used > capacity.limit) return;
           await this.startReserved(next.boardRoot, next.item, next.item.reservationId!);
           return;
         }
