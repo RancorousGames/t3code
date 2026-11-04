@@ -2826,11 +2826,17 @@ export const layerWsRpc = (
                     "Expected browser environment does not match.",
                   );
                 const expected = input.expectedConversation;
-                const capacitySubmit =
+                // Queued delivery can target a newly created blank ChatGPT tab:
+                // its canonical /c/ UUID does not exist until the first send.
+                // Steer and history still require a verified conversation.
+                const queuedSubmitWithoutConversation =
                   isSubmit &&
-                  (input as typeof AgentProviderV1Submit.Type).delivery === "WaitForSlot";
+                  ["WhenIdle", "WaitForSlot"].includes(
+                    (input as typeof AgentProviderV1Submit.Type).delivery,
+                  ) &&
+                  expected == null;
                 if (
-                  !(capacitySubmit && expected == null) &&
+                  !queuedSubmitWithoutConversation &&
                   (typeof expected !== "string" ||
                     !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expected))
                 )

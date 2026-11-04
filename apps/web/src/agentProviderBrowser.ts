@@ -26,7 +26,7 @@ export async function executeAgentProviderBrowserWork(
   if (work.environmentId !== environmentId)
     return { ok: false, code: "Unavailable", message: "Desktop environment changed." };
   if (work.action === "create" || !work.browserSessionId ||
-      (work.action !== "submit" || work.delivery !== "WaitForSlot") && !work.expectedConversationId)
+      (work.action !== "submit" || !["WhenIdle", "WaitForSlot"].includes(work.delivery ?? "")) && !work.expectedConversationId)
     return { ok: false, code: "InvalidInput", message: "Browser history/submit requires exact session and conversation." };
   const sessions = readChatGPTBrowserSessions(environmentId);
   // Only exact original T3 browser session UUIDs resolve here. Never create,
