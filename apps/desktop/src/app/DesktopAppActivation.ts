@@ -387,6 +387,10 @@ export const make = Effect.gen(function* () {
       const action = request.action;
       return (async () => {
         try {
+          // Bootstrap can rename a browser UUID to a public T3_ID between
+          // context-menu registration and the agent calling caffy.stop().
+          if (action === "list" || (request.sessionId && !caffy.status(request.sessionId)))
+            await caffy.reconcileIdentityAliases(true);
           let conversationId = request.conversationId;
           if (action === "set" && !conversationId && request.sessionId) {
             const inventory = await broker.request({

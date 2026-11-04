@@ -13,6 +13,8 @@ type Request = (request: DesktopAppActivationRequest) => Promise<DesktopAppActiv
 export interface CaffyConfig {
   sessionId: string;
   browserSessionId?: string | undefined;
+  /** Public Bootstrap / T3_ID alias; never use as the delivery target unless it is the browser ID. */
+  publicSessionId?: string | undefined;
   conversationId: string;
   mode: Mode;
   intervalMinutes: number;
@@ -53,6 +55,7 @@ export class CaffyScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private pumping = false;
   private pumpRequested = false;
+  private lastIdentityReconcileAt = 0;
   private blockerId: number | null = null;
   private readonly deliveries: ChatGPTDeliveryQueue;
   private readonly request: Request;
@@ -174,7 +177,43 @@ export class CaffyScheduler {
 
   private lookup(sessionId: string): CaffyConfig | undefined {
     return this.entries.get(sessionId) ??
-      [...this.entries.values()].find(row => row.browserSessionId === sessionId);
+      [...this.entries.values()].find(row =>
+        row.browserSessionId === sessionId || row.publicSessionId === sessionId);
+  }
+
+  /**
+   * T3's session roster may switch from the original browser UUID to the
+   * Bootstrap public T3_ID after a chat initializes. Keep the original
+   * browser ID as delivery identity, while accepting either ID for control.
+   *
+   * Never infer an alias from the conversation alone: registered() requires
+   * the exact ID or the verified idle event's original browser-ID prefix.
+   */
+  async reconcileIdentityAliases(force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - this.lastIdentityReconcileAt < 30_000) return;
+    this.lastIdentityReconcileAt = now;
+    let changed = false;
+    for (const row of [...this.entries.values()]) {
+      const binding = await this.registered(row.sessionId, row.conversationId).catch(() => null);
+      if (!binding) continue;
+      if (row.publicSessionId !== binding.id) {
+        row.publicSessionId = binding.id;
+        changed = true;
+      }
+      if (row.browserSessionId !== binding.browserSessionId &&
+          UUID.test(binding.browserSessionId) && !row.pendingMessageId &&
+          !this.entries.has(binding.browserSessionId)) {
+        // A not-yet-enqueued monitor can safely adopt the verified recipient.
+        // In-flight UNKNOWN deliveries must retain their exact old identity.
+        this.entries.delete(row.sessionId);
+        row.sessionId = binding.browserSessionId;
+        row.browserSessionId = binding.browserSessionId;
+        this.entries.set(row.sessionId, row);
+        changed = true;
+      }
+    }
+    if (changed) this.save();
   }
 
   status(sessionId?: string) {
@@ -227,18 +266,21 @@ export class CaffyScheduler {
             observed.verifiedConversationId === input.conversationId))
         throw new Error("T3 could not confirm the session/conversation binding. No schedule created.");
     }
-    const canonicalId = identity?.id ?? input.sessionId;
     const browserSessionId = identity?.browserSessionId ?? input.sessionId;
+    const canonicalId = browserSessionId;
     if ([...this.entries.values()].some(row => row.conversationId === input.conversationId &&
-        row.sessionId !== canonicalId && row.browserSessionId !== input.sessionId))
+        row.sessionId !== canonicalId && row.browserSessionId !== input.sessionId &&
+        row.publicSessionId !== input.sessionId))
       throw new Error("Another T3 Caffy monitor already owns this ChatGPT conversation.");
     if (this.legacyConflict(canonicalId, input.conversationId) ||
         this.legacyConflict(input.sessionId, input.conversationId))
       throw new Error("Legacy OmniHub Caffy monitor still owns this session; cancel it before scheduling T3 Caffy.");
     const now = Date.now();
-    const prior = this.lookup(input.sessionId);
-    if (prior?.pendingMessageId && prior.conversationId !== input.conversationId)
-      throw new Error("Existing wake delivery needs reconciliation before changing conversations.");
+    const prior = this.lookup(input.sessionId) ??
+      [...this.entries.values()].find(row => row.conversationId === input.conversationId);
+    if (prior?.pendingMessageId &&
+        (prior.conversationId !== input.conversationId || prior.sessionId !== canonicalId))
+      throw new Error("Existing wake delivery needs reconciliation before changing its recipient identity.");
     const same = !!prior && prior.conversationId === input.conversationId &&
       prior.mode === input.mode && prior.expiresAt ===
         (input.durationMinutes === undefined ? null : prior.createdAt + input.durationMinutes * 60_000) &&
@@ -251,7 +293,9 @@ export class CaffyScheduler {
       return prior;
     }
     const row: CaffyConfig = {
-      sessionId: canonicalId, browserSessionId, conversationId: input.conversationId,
+      sessionId: canonicalId, browserSessionId,
+      publicSessionId: identity?.id ?? prior?.publicSessionId,
+      conversationId: input.conversationId,
       mode: input.mode, intervalMinutes,
       startup: input.mode === "startup" ? true : input.startup ?? false, onceOnly: input.onceOnly ?? false,
       keepAwake: input.keepAwake ?? true, paused: false, createdAt: now,
@@ -316,7 +360,12 @@ export class CaffyScheduler {
   }
 
   onIdle(event: VerifiedChatGPTIdleTransition) {
-    const row = this.lookup(event.sessionId);
+    const row = this.lookup(event.sessionId) ??
+      [...this.entries.values()].find(item =>
+        item.conversationId === event.conversationId &&
+        (event.eventId.startsWith(`${item.sessionId}:${event.conversationId}:`) ||
+          (item.browserSessionId &&
+            event.eventId.startsWith(`${item.browserSessionId}:${event.conversationId}:`))));
     if (!row || row.paused || row.conversationId !== event.conversationId ||
         event.sequence <= row.lastIdleSequence) return;
     row.lastIdleSequence = event.sequence;
@@ -329,7 +378,7 @@ export class CaffyScheduler {
   }
 
   private onDelivery(record: Omit<DeliveryRecord, "body">) {
-    const row = this.entries.get(record.sessionId);
+    const row = this.lookup(record.sessionId);
     if (!row || row.pendingMessageId !== record.messageId) return;
     if (record.status === "delivered") {
       row.pendingMessageId = null;
@@ -354,19 +403,35 @@ export class CaffyScheduler {
       id?: string; publicSessionId?: string; browserSessionId?: string;
       conversationId?: string; bootstrapIdentity?: {conversationId?:string; publicId?:string};
       activity?: string; status?: string; statusObservedAt?: string;
-      lastIdleTransition?: {conversationId?: string; sequence?: number};
+      lastIdleTransition?: {conversationId?: string; sequence?: number; eventId?: string};
       closedAt?: unknown;
     }> }).sessions;
     if (!Array.isArray(entries)) return null;
-    const matches = entries.filter(entry => entry.id === sessionId ||
-      entry.browserSessionId === sessionId || entry.publicSessionId === sessionId ||
-      entry.bootstrapIdentity?.publicId === sessionId);
+    const known = this.lookup(sessionId);
+    const matches = entries.filter(entry => {
+      const idle = entry.lastIdleTransition;
+      const observedBrowserId = idle?.conversationId === conversationId &&
+        typeof idle.eventId === "string" && idle.eventId.includes(":")
+          ? idle.eventId.split(":")[0] : null;
+      return entry.id === sessionId || entry.browserSessionId === sessionId ||
+        entry.publicSessionId === sessionId || entry.bootstrapIdentity?.publicId === sessionId ||
+        observedBrowserId === sessionId ||
+        (known?.publicSessionId !== undefined &&
+          (entry.id === known.publicSessionId || entry.bootstrapIdentity?.publicId === known.publicSessionId));
+    });
     const entry = matches.length === 1 ? matches[0] : null;
     return entry?.id && entry.closedAt == null &&
       (entry.conversationId === conversationId ||
         entry.bootstrapIdentity?.conversationId === conversationId)
       ? {
-          id: entry.bootstrapIdentity?.publicId ?? entry.id, browserSessionId: entry.browserSessionId ?? entry.id,
+          id: entry.bootstrapIdentity?.publicId ?? entry.publicSessionId ?? entry.id,
+          // Bootstrap replaces the public ID; the renderer still mounts using
+          // its original browser UUID embedded in the verified idle event.
+          browserSessionId: entry.browserSessionId ??
+            (entry.lastIdleTransition?.conversationId === conversationId &&
+              UUID.test(entry.lastIdleTransition.eventId?.split(":")[0] ?? "")
+              ? entry.lastIdleTransition.eventId!.split(":")[0]! :
+                known?.browserSessionId ?? known?.sessionId ?? entry.id),
           idleSequence: entry.lastIdleTransition?.conversationId === conversationId &&
             Number.isSafeInteger(entry.lastIdleTransition.sequence)
             ? Math.max(0, entry.lastIdleTransition.sequence ?? 0) : 0,
@@ -449,6 +514,7 @@ export class CaffyScheduler {
     if (this.pumping) { this.pumpRequested = true; return; }
     this.pumping = true;
     try {
+      await this.reconcileIdentityAliases().catch(() => {});
       const now = Date.now();
       for (const row of [...this.entries.values()]) {
         if (row.expiresAt !== null && row.expiresAt <= now && !row.pendingMessageId) {

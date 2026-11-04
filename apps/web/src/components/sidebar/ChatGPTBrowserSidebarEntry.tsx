@@ -18,7 +18,6 @@ import {
   SearchIcon,
   SparklesIcon,
   SlidersHorizontalIcon,
-  TimerResetIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -154,6 +153,7 @@ import { ChatGPTAIInterfaceCleanup } from "./ChatGPTAIInterfaceCleanup";
 import { isAIInterfaceSession } from "../../chatGPTAIInterfaceSessions";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import { useT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "../../hooks/useT3CaffyOverview";
+import { CaffyCoffeePotIcon } from "./CaffyCoffeePotIcon";
 import {
   updateChatGPTRecoverySettings,
   useChatGPTRecoverySettings,
@@ -531,6 +531,7 @@ export function ChatGPTBrowserSidebarEntry({
       if (monitor.paused || (monitor.expiresAt !== null && monitor.expiresAt <= clockNow)) continue;
       entries.set(monitor.sessionId, monitor);
       if (monitor.browserSessionId) entries.set(monitor.browserSessionId, monitor);
+      if (monitor.publicSessionId) entries.set(monitor.publicSessionId, monitor);
     }
     return entries;
   }, [caffyOverview, clockNow]);
@@ -2934,7 +2935,7 @@ export function ChatGPTBrowserSidebarEntry({
                                                 </span>
                                               )}
                                               {caffyLabel && (
-                                                <TimerResetIcon
+                                                <CaffyCoffeePotIcon
                                                   aria-label={caffyLabel}
                                                   className={`size-3.5 shrink-0 ${caffyMonitor?.mode === "queued" &&
                                                     !caffyOverview?.keepT3Busy
@@ -2942,7 +2943,7 @@ export function ChatGPTBrowserSidebarEntry({
                                                       : "text-sky-400"}`}
                                                 >
                                                   <title>{caffyLabel}</title>
-                                                </TimerResetIcon>
+                                                </CaffyCoffeePotIcon>
                                               )}
                                               {Number.isFinite(session.snoozedUntil) &&
                                                 session.snoozedUntil! <= clockNow && (

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 export interface T3CaffyEntry {
   sessionId: string;
   browserSessionId?: string | undefined;
+  publicSessionId?: string | undefined;
   mode: "idle" | "periodic" | "queued" | "startup";
   paused: boolean;
   onceOnly: boolean;
