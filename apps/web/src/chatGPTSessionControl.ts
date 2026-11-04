@@ -878,7 +878,7 @@ export async function runChatGPTSessionControl(input: {
   const entry = findChatGPTSessionByAnyId(sessions, input.sessionId);
   if (!entry)
     throw new Error(
-      "Unknown T3 session ID. A Bootstrap ID becomes routable once T3 sees it as [T3_ID:uuid] in that conversation's assistant reply; until then use the ID from the sidebar's Copy T3 session ID.",
+      "Unknown T3 session ID. T3 links Bootstrap IDs using the exact guest's tool result or assistant [T3_ID:uuid] confirmation; until registration use the sidebar's Copy T3 session ID.",
     );
   if (action === "experimental_evaluate") {
     // Explicit developer experiment, never a send or queue fallback. Reject

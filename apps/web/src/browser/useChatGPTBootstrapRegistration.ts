@@ -10,6 +10,7 @@ import {
 } from "../chatGPTBrowserSessions";
 import {
   inspectChatGPTBootstrapMarker,
+  inspectChatGPTBootstrapToolResult,
   inspectChatGPTBootstrapMarkerViaApi,
   needsChatGPTBootstrapMarker,
   type ChatGPTBootstrapObservation,
@@ -42,11 +43,11 @@ export function readChatGPTBootstrapProbe(sessionId: string) {
   return lastProbe.get(sessionId) ?? null;
 }
 
-/** Scans the session's ChatGPT page for its first assistant [T3_ID:uuid]
- * marker until one registers. Uses native Chromium evaluation for Chrome
+/** Registers a session from its completed Bootstrap tool result, falling back
+ * to the first assistant [T3_ID:uuid] confirmation. Uses native Chromium evaluation for Chrome
  * views and mounted webview evaluation for legacy sessions. A slow heartbeat
  * covers native pages that do not emit webview push events. The DOM is checked
- * first; the conversation API handles collapsed markers at most every 30s. */
+ * first; the conversation API handles non-rendered tool results or markers. */
 export function useChatGPTBootstrapRegistration(environmentId: EnvironmentId, sessionId: string) {
   const { sessions, registerBootstrapMarker, resolveBootstrapTitle } =
     useChatGPTBrowserSessions(environmentId);
@@ -112,12 +113,14 @@ export function useChatGPTBootstrapRegistration(environmentId: EnvironmentId, se
           }
           return guest!.executeJavaScript(expression);
         };
-        let result: unknown = await evaluate(`(${inspectChatGPTBootstrapMarker.toString()})()`);
+        let result: unknown = await evaluate(`(${inspectChatGPTBootstrapToolResult.toString()})()`);
+        if (!isObservation(result))
+          result = await evaluate(`(${inspectChatGPTBootstrapMarker.toString()})()`);
         if (disposed) return;
         if (!isObservation(result)) {
           const now = Date.now();
           if (now < Math.max(globalApiRetryAfter, apiRetryAfterBySession.get(sessionId) ?? 0) ||
-              now - globalLastApiAt < 60_000) return note("dom_no_marker_api_cooldown");
+              now - globalLastApiAt < 12_000) return note("dom_no_marker_api_cooldown");
           globalLastApiAt = now;
           result = await evaluate(`(${inspectChatGPTBootstrapMarkerViaApi.toString()})()`);
           if (disposed) return;
@@ -126,7 +129,7 @@ export function useChatGPTBootstrapRegistration(environmentId: EnvironmentId, se
             if (stage === "api_http_429") globalApiRetryAfter = Date.now() + 10 * 60_000;
             else if (/^api_http_(?:403|5\d\d)$|^api_no_token$/.test(stage))
               apiRetryAfterBySession.set(sessionId, Date.now() + 5 * 60_000);
-            else apiRetryAfterBySession.set(sessionId, Date.now() + 60_000);
+            else apiRetryAfterBySession.set(sessionId, Date.now() + 12_000);
             return note(stage);
           }
         }
@@ -158,9 +161,8 @@ export function useChatGPTBootstrapRegistration(environmentId: EnvironmentId, se
           markerId: observation.markerId,
           proposedTitle: observation.proposedTitle,
         });
-        // The assistant marker is the only browser ownership evidence needed
-        // to resolve Bootstrap's separately persisted UUID -> title association.
-        // The existing streamed-title and spawned-session paths remain intact.
+        // The exact guest's tool result or assistant marker ties the ID to
+        // this conversation; the durable title lookup cannot claim a guest.
         const lookup = window.desktopBridge?.readChatGPTBootstrapTitle;
         if (lookup) {
           void lookup(observation.markerId)

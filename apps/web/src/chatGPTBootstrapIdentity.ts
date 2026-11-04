@@ -2,8 +2,8 @@
  *
  * Every browser session keeps its internal `id` (storage, preview owner and
  * Electron guest are keyed by it). `publicId` is the ID agents and users see:
- * T3-preassigned for spawned children, or the first assistant `[T3_ID:uuid]`
- * marker for manual and legacy sessions. External IDs are translated at the
+ * T3-preassigned for spawned children, or the first Bootstrap tool result
+ * (assistant `[T3_ID:uuid]` fallback) for manual and legacy sessions. External IDs are translated at the
  * desktop pipe boundary, so nothing else needs to be renamed. */
 export interface ChatGPTBootstrapIdentity {
   readonly state: "awaiting_marker" | "registered" | "mismatch";
@@ -102,6 +102,34 @@ export function nextChatGPTBootstrapGeneration(
     : { state: "awaiting_marker" };
 }
 
+/** Read a completed Bootstrap tool response from this conversation before the
+ * assistant has echoed its ID. A user message cannot claim a tool result. */
+export function inspectChatGPTBootstrapToolResult(): ChatGPTBootstrapObservation | null {
+  if (!["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(location.hostname))
+    return null;
+  const conversationId = location.pathname.match(
+    /^(?:\/g\/[^/]+)?\/c\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\/?$/i,
+  )?.[1];
+  if (!conversationId) return null;
+  const uuid = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
+  const claim = new RegExp(`T3 session ID:\\s*(${uuid})\\s+ID marker:\\s*\\[T3_ID:\\s*\\1\\s*\\]`, "i");
+  const cards = document.querySelectorAll('[data-testid*="tool-result"],[data-testid*="tool-output"]');
+  for (const card of cards) {
+    if (card.closest('[data-message-author-role="user"],[data-content-search-unit-key$=":user"]'))
+      continue;
+    const value = card.textContent ?? "";
+    if (!/Role:\s*(personal|worker|manager)/i.test(value)) continue;
+    const match = value.match(claim);
+    if (!match) continue;
+    const title = value.match(/Proposed title:\s*([^\r\n]{3,80})/i)?.[1]?.trim();
+    return {
+      conversationId: conversationId.toLowerCase(), markerId: match[1]!.toLowerCase(),
+      ...(title && title !== "(not proposed)" ? { proposedTitle: title } : {}),
+    };
+  }
+  return null;
+}
+
 /** Find the earliest explicit Bootstrap marker in any rendered assistant reply.
  * This supports chats that bootstrap after an earlier conversation turn.
  * Never read user messages, tool output, code, quotations or React state.
@@ -189,12 +217,61 @@ export async function inspectChatGPTBootstrapMarkerViaApi(): Promise<
   const data = await response.json();
   type Node = {
     message?: {
-      author?: { role?: string };
+      author?: { role?: string; name?: string };
+      metadata?: { tool_name?: string };
       recipient?: string;
       create_time?: number | null;
       content?: { content_type?: string; parts?: unknown[] };
     } | null;
   };
+  // Tool results are tied to the guest's conversation even while the
+  // assistant is still working. Prefer their exact Bootstrap receipt.
+  const toolUuid = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
+  const toolClaim = new RegExp(`T3 session ID:\\s*(${toolUuid})\\s+ID marker:\\s*\\[T3_ID:\\s*\\1\\s*\\]`, "i");
+  const toolMessages = Object.values((data?.mapping ?? {}) as Record<string, Node>)
+    .map((node) => node.message)
+    .filter((message) => message?.author?.role === "tool" ||
+      message?.author?.role === "function" || message?.content?.content_type === "tool_result")
+    .sort((a, b) => (a!.create_time ?? 0) - (b!.create_time ?? 0));
+  for (const message of toolMessages) {
+    const name = message?.author?.name ?? message?.metadata?.tool_name;
+    if (typeof name === "string" && name &&
+        !/(?:^|[_.-])Bootstrap$/i.test(name) && name !== "functions.exec") continue;
+    const toolText = (message?.content?.parts ?? [])
+      .map((part) => typeof part === "string" ? part :
+        part && typeof part === "object" && "text" in part && typeof part.text === "string"
+          ? part.text : "")
+      .join("\n");
+    // Some clients wrap Bootstrap in a functions.exec result. Require the
+    // structured receipt's ID, marker and role to agree.
+    if (name === "functions.exec" && toolText.trimStart().startsWith("{")) {
+      try {
+        const data = JSON.parse(toolText) as {
+          structuredContent?: { id?: string; marker?: string; role?: string; title?: string };
+        };
+        const record = data.structuredContent;
+        const id = record?.id?.toLowerCase();
+        if (id && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id) &&
+            record?.marker?.toLowerCase() === "[t3_id:" + id + "]" &&
+            ["personal", "worker", "manager"].includes(record?.role ?? "")) {
+          return {
+            conversationId: conversationId.toLowerCase(), markerId: id,
+            ...(record?.title ? { proposedTitle: record.title } : {}),
+          };
+        }
+      } catch {
+        // A non-JSON tool result can still carry the plain-text receipt.
+      }
+    }
+    if (!/Role:\s*(personal|worker|manager)/i.test(toolText)) continue;
+    const claim = toolText.match(toolClaim);
+    if (!claim) continue;
+    const title = toolText.match(/Proposed title:\s*([^\r\n]{3,80})/i)?.[1]?.trim();
+    return {
+      conversationId: conversationId.toLowerCase(), markerId: claim[1]!.toLowerCase(),
+      ...(title && title !== "(not proposed)" ? { proposedTitle: title } : {}),
+    };
+  }
   const messages = Object.values((data?.mapping ?? {}) as Record<string, Node>)
     .map((node) => node.message)
     .filter((message) =>

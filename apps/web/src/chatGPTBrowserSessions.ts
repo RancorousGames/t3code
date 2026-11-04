@@ -124,7 +124,7 @@ export const chatGPTBrowserSessionsKey = (environmentId: EnvironmentId | null) =
   `t3code:chatgpt-browser:sessions:${environmentId ?? "unconnected"}`;
 
 /** Only when a different ChatGPT conversation has replaced the current guest:
- * preserve the permanent T3 ID, then require its first assistant marker again.
+ * preserve the permanent T3 ID, then require its Bootstrap receipt again.
  * No effect on legacy sessions, and no new messages are injected. */
 export function beginChatGPTBootstrapReboot(environmentId: EnvironmentId, sessionId: string): void {
   const store = getChatGPTSessionPersistedStore(environmentId);

@@ -118,6 +118,7 @@ export function DesktopAppActivationCoordinator() {
     setSessionSnooze,
     finalizeRollover,
     suggestBootstrapTitle,
+    registerBootstrapMarker,
   } = useChatGPTBrowserSessions(primaryEnvironment?.environmentId ?? null);
   const closeChatGPTPreview = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const publishAgentProvider = useAtomCommand(agentProviderCall, {
@@ -831,6 +832,37 @@ export function DesktopAppActivationCoordinator() {
               normalized.length <= 80 &&
               !/[\[\]\x00-\x1f\x7f]/u.test(normalized);
             if (accepted) suggestBootstrapTitle(id, normalized);
+            // For a preassigned T3 seat, Bootstrap itself is the first
+            // registration receipt. Its native guest already owns the live
+            // conversation, so no assistant echo is needed.
+            if (accepted && target?.bootstrapIdentity?.state === "awaiting_marker" &&
+                !target.hidden && isPersistentChatGPTSessionOptedIn(id)) {
+              const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+              if (bridge) {
+                const identity = {
+                  sessionId: id, environmentId, profileId: chatGPTSessionProfileId(target),
+                };
+                try {
+                  const before = (await bridge({ operation: "snapshot", identity })) as {
+                    url?: string; destroyed?: boolean;
+                  };
+                  const conversationId = !before.destroyed && before.url
+                    ? chatGPTConversationIdFromUrl(before.url) : null;
+                  if (conversationId) {
+                    const after = (await bridge({ operation: "snapshot", identity })) as {
+                      url?: string; destroyed?: boolean;
+                    };
+                    if (!after.destroyed && before.url === after.url) {
+                      registerBootstrapMarker(id, {
+                        conversationId, markerId: id, proposedTitle: normalized,
+                      });
+                    }
+                  }
+                } catch {
+                  // If the guest is not ready, the tool-result/assistant probe remains.
+                }
+              }
+            }
             return {
               version: 1,
               requestId: request.requestId,

@@ -6,6 +6,8 @@ import {
   findChatGPTSessionByAnyId,
   type IdentifiedSession,
   inspectChatGPTBootstrapMarker,
+  inspectChatGPTBootstrapToolResult,
+  inspectChatGPTBootstrapMarkerViaApi,
   nextChatGPTBootstrapGeneration,
   registerChatGPTBootstrapMarker,
   toInternalChatGPTIds,
@@ -161,6 +163,75 @@ describe("first explicit rendered assistant bootstrap identity", () => {
     expect(inspectChatGPTBootstrapMarker()).toBeNull();
   });
 
+});
+
+describe("Bootstrap tool-result registration", () => {
+
+  it("registers directly from a completed Bootstrap tool card before an assistant reply", () => {
+    document.body.innerHTML =
+      '<div data-testid="tool-result">T3 session ID: ' + id +
+      '\nID marker: ' + marker +
+      '\nProposed title: Repair T3 registration\nRole: worker</div>';
+    expect(inspectChatGPTBootstrapToolResult()).toEqual({
+      conversationId, markerId: id, proposedTitle: "Repair T3 registration",
+    });
+    document.body.innerHTML = '<div data-message-author-role="user"><div data-testid="tool-result">' +
+      'T3 session ID: ' + id + '\nID marker: ' + marker + '\nRole: worker</div></div>';
+    expect(inspectChatGPTBootstrapToolResult()).toBeNull();
+  });
+
+  it("registers a Bootstrap tool response from the conversation API before assistant output", async () => {
+    const toolText = "T3 session ID: " + id + "\nID marker: " + marker +
+      "\nProposed title: Repair T3 registration\nRole: worker\nComplete: true";
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ accessToken: "test-token" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({
+        mapping: {
+          user: { message: { author: { role: "user" }, content: { parts: [toolText] } } },
+          tool: { message: { author: { role: "tool", name: "mcp__OMCP_Tools__Bootstrap" },
+            content: { content_type: "text", parts: [toolText] } } },
+        },
+      }) });
+    vi.stubGlobal("fetch", fetch);
+    await expect(inspectChatGPTBootstrapMarkerViaApi()).resolves.toEqual({
+      conversationId, markerId: id, proposedTitle: "Repair T3 registration",
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+
+  it("recognizes a Bootstrap receipt wrapped by functions.exec", async () => {
+    const receipt = JSON.stringify({ structuredContent: {
+      id, marker, role: "worker", title: "Repair T3 registration", complete: true,
+    } });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ accessToken: "test-token" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({
+        mapping: {
+          tool: { message: { author: { role: "tool", name: "functions.exec" },
+            content: { content_type: "text", parts: [receipt] } } },
+        },
+      }) });
+    vi.stubGlobal("fetch", fetch);
+    await expect(inspectChatGPTBootstrapMarkerViaApi()).resolves.toEqual({
+      conversationId, markerId: id, proposedTitle: "Repair T3 registration",
+    });
+  });
+
+  it("does not associate a copied Bootstrap result from a user or unrelated tool", async () => {
+    const toolText = "T3 session ID: " + id + "\nID marker: " + marker + "\nRole: worker";
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ accessToken: "test-token" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({
+        mapping: {
+          user: { message: { author: { role: "user" }, content: { parts: [toolText] } } },
+          unrelated: { message: { author: { role: "tool", name: "unrelated_tool" },
+            content: { content_type: "text", parts: [toolText] } } },
+        },
+      }) });
+    vi.stubGlobal("fetch", fetch);
+    await expect(inspectChatGPTBootstrapMarkerViaApi()).resolves.toBe("api_no_marker");
+  });
 });
 
 describe("public Bootstrap IDs", () => {
