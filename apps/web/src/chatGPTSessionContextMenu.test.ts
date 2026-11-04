@@ -28,7 +28,29 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu.find((item) => item.id === "stop")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "task:open")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "reboot")).toBeDefined();
-    expect(menu.find((item) => item.id === "awake")?.children?.length).toBe(4);
+    expect(menu.find((item) => item.id === "caffy")?.children?.length).toBeGreaterThan(4);
+  });
+  it("offers idle duration presets and nested periodic intervals including custom", () => {
+    const menu = buildChatGPTSessionContextMenu({ ...state, caffy: {
+      mode: "periodic", startup: false, onceOnly: false, paused: false,
+      createdAt: 1000, expiresAt: 1000 + 3 * 60 * 60_000, intervalMinutes: 10,
+    } });
+    const caffy = menu.find((item) => item.id === "caffy");
+    const idle = caffy?.children?.find((item) => item.id === "caffy:idle");
+    expect(idle?.children?.map((item) => item.label)).toEqual([
+      "1h", "2h", "4h", "8h", "Infinite", "Custom…", "Once only",
+    ]);
+    const periodic = caffy?.children?.find((item) => item.id === "caffy:periodic");
+    expect(periodic?.children?.map((item) => item.label)).toEqual([
+      "Every 5m", "Every 10m", "Every 20m", "Every 30m", "Every 60m", "Custom interval…",
+    ]);
+    const every10 = periodic?.children?.find((item) => item.id === "caffy:periodic:10");
+    expect(every10?.checked).toBe(true);
+    expect(every10?.children?.map((item) => item.id)).toEqual([
+      "caffy:periodic:10:1", "caffy:periodic:10:2", "caffy:periodic:10:4",
+      "caffy:periodic:10:8", "caffy:periodic:10:infinite",
+      "caffy:periodic:10:custom", "caffy:periodic:10:once",
+    ]);
   });
   it("respects the authoritative manager role and snooze state", () => {
     const menu = buildChatGPTSessionContextMenu({

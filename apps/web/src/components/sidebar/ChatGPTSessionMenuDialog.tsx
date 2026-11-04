@@ -14,7 +14,8 @@ export type ChatGPTSessionMenuDialogState =
       task: string;
     }
   | { kind: "reboot"; sessionId: string; prompt: string }
-  | { kind: "caffy-custom"; sessionId: string; mode: "idle" | "periodic" };
+  | { kind: "caffy-custom"; sessionId: string; mode: "idle" | "periodic";
+      intervalMinutes?: number; customInterval?: boolean };
 
 export function ChatGPTSessionMenuDialog({
   dialog,
@@ -30,6 +31,8 @@ export function ChatGPTSessionMenuDialog({
     task: string;
     prompt: string;
     durationHours: number;
+    intervalMinutes: number;
+    indefinite: boolean;
   }) => void;
 }) {
   const [title, setTitle] = useState(dialog.kind === "rename-group" ? dialog.title : "");
@@ -40,6 +43,10 @@ export function ChatGPTSessionMenuDialog({
   const [task, setTask] = useState(dialog.kind === "binding" ? dialog.task : "");
   const [prompt, setPrompt] = useState(dialog.kind === "reboot" ? dialog.prompt : "");
   const [duration, setDuration] = useState("3");
+  const [interval, setIntervalMinutes] = useState(
+    String(dialog.kind === "caffy-custom" ? dialog.intervalMinutes ?? 20 : 20),
+  );
+  const [indefinite, setIndefinite] = useState(false);
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     submit({
@@ -49,6 +56,8 @@ export function ChatGPTSessionMenuDialog({
       task: task.trim(),
       prompt: prompt.trim(),
       durationHours: Number(duration),
+      intervalMinutes: Number(interval),
+      indefinite,
     });
   };
   return (
@@ -68,7 +77,7 @@ export function ChatGPTSessionMenuDialog({
                 : dialog.kind === "reboot"
                   ? "Reboot agent"
                   : dialog.kind === "caffy-custom"
-                    ? "Custom Caffy duration"
+                    ? dialog.customInterval ? "Custom periodic wake" : "Custom Caffy duration"
                     : "Edit Omniwork binding"}
           </DialogTitle>
         </DialogHeader>
@@ -125,25 +134,49 @@ export function ChatGPTSessionMenuDialog({
               </>
             )}
             {dialog.kind === "caffy-custom" && (
-              <label className="block text-sm">
-                Duration (hours)
-                <Input
-                  autoFocus
-                  type="number"
-                  min="0.0167"
-                  max="168"
-                  step="any"
-                  aria-label="Caffy duration in hours"
-                  value={duration}
-                  onChange={(event) => setDuration(event.target.value)}
-                  required
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
+              <>
+                {dialog.customInterval && (
+                  <label className="block text-sm">
+                    Wake every (minutes)
+                    <Input
+                      autoFocus
+                      type="number"
+                      min="1"
+                      max="60"
+                      step="1"
+                      aria-label="Caffy wake interval in minutes"
+                      value={interval}
+                      onChange={(event) => setIntervalMinutes(event.target.value)}
+                      required
+                    />
+                  </label>
+                )}
+                <label className="block text-sm">
+                  Duration (hours)
+                  <Input
+                    autoFocus={!dialog.customInterval}
+                    type="number"
+                    min="0.01"
+                    max="168"
+                    step="any"
+                    aria-label="Caffy duration in hours"
+                    value={duration}
+                    onChange={(event) => setDuration(event.target.value)}
+                    disabled={indefinite}
+                    required={!indefinite}
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={indefinite}
+                    onChange={(event) => setIndefinite(event.target.checked)} />
+                  Infinite (until stopped)
+                </label>
+                <p className="text-xs text-muted-foreground">
                   {dialog.mode === "periodic"
-                    ? "Wake every 20 minutes for this duration."
-                    : "Wake after verified idle transitions for this duration."}
+                    ? `Wake every ${interval || "?"} minutes${indefinite ? " indefinitely" : " for the chosen duration"}.`
+                    : "Wake after verified idle transitions for the chosen duration."}
                 </p>
-              </label>
+              </>
             )}
             {dialog.kind === "reboot" && (
               <>
@@ -176,7 +209,9 @@ export function ChatGPTSessionMenuDialog({
                   : dialog.kind === "reboot"
                     ? !prompt.trim()
                     : dialog.kind === "caffy-custom"
-                      ? !Number.isFinite(Number(duration)) || Number(duration) <= 0 || Number(duration) > 168
+                      ? (!indefinite && (!Number.isFinite(Number(duration)) ||
+                          Math.round(Number(duration) * 60) < 1 || Number(duration) > 168)) ||
+                        !Number.isInteger(Number(interval)) || Number(interval) < 1 || Number(interval) > 60
                       : false
               }
             >

@@ -23,6 +23,8 @@ import { chatGPTSessionDisplayRole } from "./components/sidebar/chatGPTSidebarVi
 export type ChatGPTContextAction = string;
 type MenuItem = ContextMenuItem<ChatGPTContextAction>;
 type SnoozePreset = { id: string; label: string; whenLabel: string };
+export const CAFFY_DURATION_HOURS = [1, 2, 4, 8] as const;
+export const CAFFY_INTERVAL_MINUTES = [5, 10, 20, 30, 60] as const;
 const item = (id: string, label: string, extra: Partial<MenuItem> = {}): MenuItem => ({
   id,
   label,
@@ -40,7 +42,8 @@ export function buildChatGPTSessionContextMenu(input: {
   working: boolean;
   hasTask: boolean;
   caffy?: { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
-    onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null } | null;
+    onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
+    intervalMinutes: number } | null;
   keepT3Busy?: boolean;
 }): MenuItem[] {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
@@ -52,6 +55,23 @@ export function buildChatGPTSessionContextMenu(input: {
     activeCaffy?.mode === "periodic" ? "Periodic" :
     activeCaffy?.mode === "queued" ? "Queued idle" :
     activeCaffy?.mode === "startup" ? "Startup only" : null;
+  const caffyDurations = (mode: "idle" | "periodic", prefix: string, intervalMinutes = 20) => {
+    const current = activeCaffy?.mode === mode &&
+      (mode === "idle" || activeCaffy.intervalMinutes === intervalMinutes);
+    return [
+      ...CAFFY_DURATION_HOURS.map((hours) => item(`${prefix}:${hours}`, `${hours}h`, {
+        checked: current && !activeCaffy?.onceOnly && durationMinutes === hours * 60,
+      })),
+      item(`${prefix}:infinite`, "Infinite", {
+        checked: current && !activeCaffy?.onceOnly && durationMinutes === null,
+      }),
+      item(`${prefix}:custom`, "Custom…"),
+      item(`${prefix}:once`, "Once only", {
+        separatorBefore: true,
+        checked: current && activeCaffy?.onceOnly,
+      }),
+    ];
+  };
   const snoozed = (session.snoozedUntil ?? 0) > now;
   const ancestors = new Set([session.id]);
   const walk = (id: string) => {
@@ -135,25 +155,27 @@ export function buildChatGPTSessionContextMenu(input: {
         ]),
     item("caffy", wakeMode ? `Caffy · ${wakeMode}${activeCaffy?.paused ? " (paused)" : ""}` : "Caffy", {
       children: [
-        item("caffy:idle", "Wake on Idle", { checked: activeCaffy?.mode === "idle",
-          children: [
-            ...([1, 2, 4, 6, 10] as const).map(hours =>
-              item(`caffy:idle:${hours}`, `${hours}h`, { checked: activeCaffy?.mode === "idle" && durationMinutes === hours * 60 })),
-            item("caffy:idle:infinite", "Infinite", { checked: activeCaffy?.mode === "idle" && durationMinutes === null && !activeCaffy?.onceOnly }),
-            item("caffy:idle:custom", "Custom…"),
-            item("caffy:idle:once", "Once only", { separatorBefore: true, checked: activeCaffy?.mode === "idle" && activeCaffy.onceOnly }),
-          ],
+        item("caffy:idle", "Wake on Idle", {
+          checked: activeCaffy?.mode === "idle",
+          children: caffyDurations("idle", "caffy:idle"),
         }),
         item("caffy:queued", "Wake on Idle (Queued) · Infinite", {
-          checked: input.caffy?.mode === "queued",
+          checked: activeCaffy?.mode === "queued",
         }),
-        item("caffy:periodic", "Periodic Wake · every 20 minutes", { checked: activeCaffy?.mode === "periodic",
+        item("caffy:periodic", "Periodic Wake", {
+          checked: activeCaffy?.mode === "periodic",
           children: [
-            ...([1, 2, 4, 6, 10] as const).map(hours =>
-              item(`caffy:periodic:${hours}`, `Every 20m for ${hours}h`, { checked: activeCaffy?.mode === "periodic" && durationMinutes === hours * 60 })),
-            item("caffy:periodic:infinite", "Every 20m · Infinite", { checked: activeCaffy?.mode === "periodic" && durationMinutes === null && !activeCaffy.onceOnly }),
-            item("caffy:periodic:custom", "Every 20m · Custom…"),
-            item("caffy:periodic:once", "One wake after 20m", { separatorBefore: true, checked: activeCaffy?.mode === "periodic" && activeCaffy.onceOnly }),
+            ...CAFFY_INTERVAL_MINUTES.map((minutes) => item(
+              `caffy:periodic:${minutes}`, `Every ${minutes}m`, {
+                checked: activeCaffy?.mode === "periodic" && activeCaffy.intervalMinutes === minutes,
+                children: caffyDurations("periodic", `caffy:periodic:${minutes}`, minutes),
+              },
+            )),
+            item("caffy:periodic:custom", "Custom interval…", {
+              separatorBefore: true,
+              checked: activeCaffy?.mode === "periodic" &&
+                !CAFFY_INTERVAL_MINUTES.some((minutes) => minutes === activeCaffy.intervalMinutes),
+            }),
           ],
         }),
         item("caffy:pause", activeCaffy?.paused ? "Resume Caffy" : "Pause Caffy", { disabled: !activeCaffy, separatorBefore: true }),

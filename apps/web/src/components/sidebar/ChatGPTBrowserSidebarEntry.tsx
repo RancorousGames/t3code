@@ -88,6 +88,8 @@ import { readLocalApi } from "../../localApi";
 import {
   buildChatGPTSessionContextMenu,
   buildChatGPTProjectContextMenu,
+  CAFFY_DURATION_HOURS,
+  CAFFY_INTERVAL_MINUTES,
 } from "../../chatGPTSessionContextMenu";
 import {
   chatGPTNativeActionMenu,
@@ -554,7 +556,7 @@ export function ChatGPTBrowserSidebarEntry({
 
   const configureCaffy = async (
     sessionId: string, mode: "idle" | "periodic" | "queued",
-    durationMinutes?: number, onceOnly = false,
+    durationMinutes?: number, onceOnly = false, intervalMinutes = 20,
   ) => {
     const control = window.desktopBridge?.caffyControl;
     if (!control) throw new Error("T3 Caffy v2 is not available in this desktop build.");
@@ -568,10 +570,10 @@ export function ChatGPTBrowserSidebarEntry({
       action: "set", sessionId, mode,
       ...(conversationId ? { conversationId } : {}),
       ...(durationMinutes !== undefined ? { durationMinutes } : {}),
-      intervalMinutes: 20, startup: false, onceOnly, keepAwake: true,
+      intervalMinutes, startup: false, onceOnly, keepAwake: true,
     });
     setKeepAwakeFeedback(
-      `Caffy scheduled: ${mode === "queued" ? "Queued idle" : mode === "periodic" ? "Every 20 minutes" : "Idle"} · ${onceOnly ? "once" : durationMinutes === undefined ? "infinite" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
+      `Caffy scheduled: ${mode === "queued" ? "Queued idle" : mode === "periodic" ? `Every ${intervalMinutes} minutes` : "Idle"} · ${onceOnly ? "once" : durationMinutes === undefined ? "infinite" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
     );
     window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
   };
@@ -1235,7 +1237,8 @@ export function ChatGPTBrowserSidebarEntry({
       "mode" in caffyState && "startup" in caffyState &&
       ["idle", "periodic", "queued", "startup"].includes(String(caffyState.mode))
         ? caffyState as { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
-            onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null }
+            onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
+            intervalMinutes: number }
         : null;
     const keepT3Busy = caffyPolicy && typeof caffyPolicy === "object" &&
       "keepT3Busy" in caffyPolicy && caffyPolicy.keepT3Busy === true;
@@ -1438,20 +1441,29 @@ export function ChatGPTBrowserSidebarEntry({
         } else {
           const parts = action.split(":");
           const mode = parts[1];
-          const preset = parts[2];
-          if ((mode !== "idle" && mode !== "periodic") || !preset)
-            throw new Error("Select a Caffy duration from the submenu.");
-          if (preset === "custom") {
-            setMenuDialog({ kind: "caffy-custom", sessionId, mode });
-          } else if (preset === "once") {
-            await configureCaffy(sessionId, mode, undefined, true);
-          } else if (preset === "infinite") {
-            await configureCaffy(sessionId, mode);
+          if (mode === "periodic" && parts[2] === "custom" && parts.length === 3) {
+            setMenuDialog({ kind: "caffy-custom", sessionId, mode, customInterval: true,
+              intervalMinutes: activeCaffy?.mode === "periodic" ? activeCaffy.intervalMinutes : 20 });
           } else {
-            const hours = Number(preset);
-            if (![1, 2, 4, 6, 10].includes(hours))
-              throw new Error("Unknown Caffy preset.");
-            await configureCaffy(sessionId, mode, hours * 60);
+            if (mode !== "idle" && mode !== "periodic")
+              throw new Error("Select a Caffy wake mode.");
+            const intervalMinutes = mode === "periodic" ? Number(parts[2]) : 20;
+            const preset = mode === "periodic" ? parts[3] : parts[2];
+            if (!preset || (mode === "periodic" &&
+                !CAFFY_INTERVAL_MINUTES.some((minutes) => minutes === intervalMinutes)))
+              throw new Error("Select an interval and duration from the Caffy submenus.");
+            if (preset === "custom") {
+              setMenuDialog({ kind: "caffy-custom", sessionId, mode, intervalMinutes });
+            } else if (preset === "once") {
+              await configureCaffy(sessionId, mode, undefined, true, intervalMinutes);
+            } else if (preset === "infinite") {
+              await configureCaffy(sessionId, mode, undefined, false, intervalMinutes);
+            } else {
+              const hours = Number(preset);
+              if (!CAFFY_DURATION_HOURS.some((duration) => duration === hours))
+                throw new Error("Unknown Caffy duration.");
+              await configureCaffy(sessionId, mode, hours * 60, false, intervalMinutes);
+            }
           }
         }
         window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
@@ -1614,6 +1626,8 @@ export function ChatGPTBrowserSidebarEntry({
       task: string;
       prompt: string;
       durationHours: number;
+      intervalMinutes: number;
+      indefinite: boolean;
     },
   ) => {
     if (!environmentId) return;
@@ -1667,12 +1681,15 @@ export function ChatGPTBrowserSidebarEntry({
       setMenuDialog(null);
     } else if (dialog.kind === "caffy-custom") {
       const minutes = Math.round(values.durationHours * 60);
-      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) {
+      if (!values.indefinite && (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080)) {
         setMenuFeedback("Custom Caffy duration must be between 1 minute and 168 hours.");
         return;
       }
       try {
-        await configureCaffy(dialog.sessionId, dialog.mode, minutes);
+        if (!Number.isInteger(values.intervalMinutes) || values.intervalMinutes < 1 || values.intervalMinutes > 60)
+          throw new Error("Interval must be between 1 and 60 minutes.");
+        await configureCaffy(dialog.sessionId, dialog.mode,
+          values.indefinite ? undefined : minutes, false, values.intervalMinutes);
         setMenuDialog(null);
       } catch (error) {
         setMenuFeedback(`Caffy failed: ${error instanceof Error ? error.message : String(error)}`);
