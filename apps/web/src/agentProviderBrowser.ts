@@ -1,6 +1,8 @@
 import type { AgentProviderV1DesktopWork, AgentProviderV1HistoryPage } from "@t3tools/contracts";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
+import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
+import { nativeChatGPTPageStatus } from "./browser/nativeChatGPTWarmSession";
 import { readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
 import { queueChatGPTSessionMessage } from "./chatGPTSessionMessageQueue";
 import {
@@ -32,8 +34,21 @@ export async function executeAgentProviderBrowserWork(
   const entry = sessions.find((session) => session.id === work.browserSessionId);
   const queuedSubmit = work.action === "submit" &&
     (work.delivery === "WaitForSlot" || work.delivery === "WhenIdle");
-  if (!entry || (!queuedSubmit &&
-      !isLoadedChatGPTBrowserGuest(environmentId, entry)))
+  if (!entry)
+    return { ok: false, code: "Unavailable", message: "Unknown browser session." };
+  // Native Chromium has no DOM webview. Query its exact Electron owner rather
+  // than the legacy preview guest predicate (which always returns false).
+  const isNative = isPersistentChatGPTSessionOptedIn(entry.id);
+  const native = isNative && !queuedSubmit
+    ? await (async () => {
+        const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+        return bridge ? nativeChatGPTPageStatus(bridge, environmentId, entry.id) : null;
+      })()
+    : null;
+  const awake = isNative
+    ? native?.residency === "resident" && native.loading === false
+    : isLoadedChatGPTBrowserGuest(environmentId, entry);
+  if (!queuedSubmit && !awake)
     return {
       ok: false,
       code: "Unavailable",

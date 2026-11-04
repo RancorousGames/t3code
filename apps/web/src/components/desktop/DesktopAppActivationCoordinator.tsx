@@ -1902,6 +1902,7 @@ export function DesktopAppActivationCoordinator() {
                     conversationId: liveConversationId,
                   },
                   title: entry.title,
+                  ...(entry.project ? { workspace: entry.project } : {}),
                   conversation: liveConversationId,
                   visibility: {
                     hidden: entry.hidden === true,
@@ -1968,11 +1969,14 @@ export function DesktopAppActivationCoordinator() {
         }, 200);
       },
     );
+    const onPhoneWake = () => { if (!stopped) void publish(); };
+    window.addEventListener("t3:agent-provider-refresh", onPhoneWake);
     const interval = window.setInterval(() => void publish(), 30_000);
     return () => {
       stopped = true;
       unsubscribe();
       if (refreshId !== null) window.clearTimeout(refreshId);
+      window.removeEventListener("t3:agent-provider-refresh", onPhoneWake);
       window.clearInterval(interval);
     };
   }, [activation, ready, primaryEnvironment?.environmentId, publishAgentProvider]);
@@ -2006,10 +2010,11 @@ export function DesktopAppActivationCoordinator() {
               work.action === "create"
                 ? await executeProviderBrowserCreate(environmentId, work, createSession)
                 : work.action === "visibility"
-                  ? (() => {
+                  ? await (async () => {
                       const id = work.browserSessionId;
-                      if (!id || !work.visibility ||
-                          !readChatGPTBrowserSessions(environmentId).some((entry) => entry.id === id)) {
+                      const entry = readChatGPTBrowserSessions(environmentId)
+                        .find((candidate) => candidate.id === id);
+                      if (!id || !work.visibility || !entry) {
                         return { ok: false as const, code: "InvalidInput" as const,
                           message: "Session or visibility patch unavailable" };
                       }
@@ -2017,9 +2022,33 @@ export function DesktopAppActivationCoordinator() {
                         setSessionHidden(id, work.visibility.hidden);
                       if (work.visibility.snoozedUntil !== undefined)
                         setSessionSnooze([id], work.visibility.snoozedUntil);
+                      // The phone's explicit Unhide means its user opened this guest.
+                      // Wake only that session, without switching the desktop tab.
+                      if (work.visibility.hidden === false) {
+                        requestChatGPTDeliveryMount(environmentId, id);
+                        try {
+                          if (isPersistentChatGPTSessionOptedIn(id)) {
+                            const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+                            if (!bridge) throw new Error("Native ChatGPT bridge unavailable");
+                            const saved = getLocalStorageItem(
+                              chatGPTBrowserLastUrlKey(environmentId, id), Schema.String);
+                            const recovered = resolveWarmChatGPTConversationUrl(entry, saved);
+                            const url = recovered ?? (/^https:\/\/chatgpt\.com(?:[/?#]|$)/i.test(saved ?? "")
+                              ? saved! : "https://chatgpt.com/");
+                            await warmMissingNativeChatGPT(bridge, environmentId, id, url);
+                          }
+                        } catch (cause) {
+                          releaseChatGPTDeliveryMount(environmentId, id);
+                          return { ok: false as const, code: "Unavailable" as const,
+                            message: cause instanceof Error ? cause.message : "Failed to wake browser" };
+                        }
+                        for (const delay of [500, 2_000, 5_000, 10_000])
+                          window.setTimeout(() => window.dispatchEvent(new Event("t3:agent-provider-refresh")), delay);
+                        window.setTimeout(() => releaseChatGPTDeliveryMount(environmentId, id), 90_000);
+                      }
                       return { ok: true as const, data: { applied: true } };
                     })()
-                  : await executeAgentProviderBrowserWork(environmentId, work);
+                : await executeAgentProviderBrowserWork(environmentId, work);
             // Never re-execute a work item following failed acknowledgement.
             await publishAgentProvider({
               environmentId,
