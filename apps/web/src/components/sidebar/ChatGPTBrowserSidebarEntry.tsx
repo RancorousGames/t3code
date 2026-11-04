@@ -100,6 +100,7 @@ import {
 } from "../../chatGPTSessionActions";
 import { deriveChatGPTSession } from "../../chatGPTSessionModel";
 import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
+import { scheduleCaffyBegin } from "../../omniwork/chatGPTCaffyPauseResume";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
 import {
   hibernateChatGPTGuest,
@@ -1318,6 +1319,32 @@ export function ChatGPTBrowserSidebarEntry({
             onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
             intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null }
         : null;
+    // Use the actual ChatGPT stop control for manual Stop and Caffy's pause.
+    // A failed/ambiguous stop must not arm a deferred wake.
+    const stopGeneration = async () => {
+      const expression = `(() => {
+        const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+        if (!(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return false;
+        stop.click();
+        return true;
+      })()`;
+      if (isPersistentChatGPTSessionOptedIn(sessionId)) {
+        const stopped = await inspectPersistentChatGPTPage<boolean>(
+          environmentId, sessionId, expression,
+        );
+        if (stopped !== true) throw new Error("No active native ChatGPT generation control.");
+      } else {
+        const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
+        const state = readThreadPreviewState(thread);
+        const tabId = state.activeTabId;
+        const runtimeId =
+          tabId && state.serverEpoch ? previewRuntimeTabId(thread, state.serverEpoch, tabId) : null;
+        if (!runtimeId || isChatGPTGuestHibernated(runtimeId))
+          throw new Error("Session is unloaded.");
+        const stopped = await chatGPTWebviewAutomation.evaluate(runtimeId, { expression });
+        if (stopped !== true) throw new Error("No active Stop generation control was found.");
+      }
+    };
     const action = await api.contextMenu.show(
       [
         ...chatGPTNativeActionMenu(registryContext),
@@ -1433,37 +1460,7 @@ export function ChatGPTBrowserSidebarEntry({
           `Agent Reboot: ${receipt.status}; request ${receipt.operationId}. The same T3 session is retained.`,
         );
       } else if (action === "stop") {
-        if (isPersistentChatGPTSessionOptedIn(sessionId)) {
-          const expression = `(() => {
-            const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
-            if (!(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return false;
-            stop.click();
-            return true;
-          })()`;
-          const stopped = await inspectPersistentChatGPTPage<boolean>(
-            environmentId,
-            sessionId,
-            expression,
-          );
-          if (stopped !== true) throw new Error("No active native ChatGPT generation control.");
-          return;
-        }
-        const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
-        const state = readThreadPreviewState(thread);
-        const tabId = state.activeTabId;
-        const runtimeId =
-          tabId && state.serverEpoch ? previewRuntimeTabId(thread, state.serverEpoch, tabId) : null;
-        if (!runtimeId || isChatGPTGuestHibernated(runtimeId))
-          throw new Error("Session is unloaded.");
-        const stopped = await chatGPTWebviewAutomation.evaluate(runtimeId, {
-          expression: `(() => {
-            const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
-            if (!(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return false;
-            stop.click();
-            return true;
-          })()`,
-        });
-        if (stopped !== true) throw new Error("No active Stop generation control was found.");
+        await stopGeneration();
       } else if (action === "verification:toggle") {
         preserveSidebarScroll();
         setSessionVerification(sessionId, !session.verificationPending);
@@ -1498,10 +1495,25 @@ export function ChatGPTBrowserSidebarEntry({
         } else if (action.startsWith("caffy:begin:")) {
           const preset = action.slice("caffy:begin:".length);
           const beginAt = resolveCaffyBeginAt(preset);
-          await control({ action: "begin_in", sessionId, beginAt });
+          const wasWorking = await scheduleCaffyBegin(
+            beginAt,
+            activities[sessionId]?.age === "working",
+            stopGeneration,
+            (at) => control({ action: "begin_in", sessionId, beginAt: at }),
+            activeCaffy ? {
+              // Prevent the Stop-induced idle event from immediately waking
+              // a live idle/queued monitor before we save the future deadline.
+              ...(activeCaffy.paused ? {} : {
+                suspendWake: () => control({ action: "pause", sessionId }),
+              }),
+              resumeWake: () => control({ action: "resume", sessionId }),
+            } : undefined,
+          );
           setKeepAwakeFeedback(beginAt === null
             ? "Caffy delayed start cleared."
-            : `Caffy begins working ${new Date(beginAt).toLocaleString()}.`);
+            : wasWorking
+              ? `Generation stopped; Caffy resumes ${new Date(beginAt).toLocaleString()}.`
+              : `Caffy begins working ${new Date(beginAt).toLocaleString()}.`);
         } else if (action.startsWith("caffy:auto-reboot:")) {
           if (!activeCaffy || !["idle", "queued"].includes(activeCaffy.mode))
             throw new Error("Auto-reboot requires Wake on Idle or Wake on Idle (Queued).");

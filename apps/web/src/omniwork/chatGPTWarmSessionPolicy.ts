@@ -65,6 +65,8 @@ export interface WarmCandidate {
   readonly highlighted: boolean;
   readonly selected: boolean;
   readonly deliveryPending?: boolean;
+  /** A durable Caffy wake is due now or within the 30-minute prewarm window. */
+  readonly caffyDueSoon?: boolean;
   readonly activeBeforeFailure: boolean;
   /** A verified recovery target gets the next free automatic warm slot. */
   readonly recoveryQueued?: boolean;
@@ -85,7 +87,9 @@ export interface WarmSelection {
 
 /** Only planned residents are marked queued. Never mark every dormant session as waiting. */
 export function plannedWarmChatGPTSessions(input: WarmSelection): string[] {
-  if (input.targetCount <= 0) return [];
+  // A Caffy wake can require its guest even if other residents consume the
+  // entire ordinary warm budget. The caller still owns the global "off" gate.
+  if (input.targetCount <= 0 && !input.candidates.some(c => c.exceedTarget)) return [];
   const occupied = new Set(input.loadedIds);
   const planned: string[] = [];
   while (true) {
@@ -99,20 +103,21 @@ export function plannedWarmChatGPTSessions(input: WarmSelection): string[] {
 
 /** Selection is only additive. A higher priority candidate never evicts a loaded guest. */
 export function nextWarmChatGPTSession(input: WarmSelection): string | null {
-  if (input.targetCount <= 0) return null;
+  if (input.targetCount <= 0 && !input.candidates.some(c => c.exceedTarget)) return null;
   const atCapacity = input.loadedIds.size >= input.targetCount;
   const RECENT_MS = 2 * 60 * 60_000;
   const priority = (c: WarmCandidate): number => {
     if (c.selected) return 0;
     if (c.deliveryPending) return 1;
-    if (c.recoveryQueued) return 2;
-    if (c.activeBeforeFailure) return 3;
-    if (c.recentlyClicked >= 0) return 4;
-    if (c.highlighted) return 5;
-    if (c.lastActiveAt > 0 && c.lastActiveAt >= input.now - RECENT_MS) return 6;
-    if (c.manager) return 7;
-    if (c.lastActivityAt > 0) return 8;
-    return 9;
+    if (c.caffyDueSoon) return 2;
+    if (c.recoveryQueued) return 3;
+    if (c.activeBeforeFailure) return 4;
+    if (c.recentlyClicked >= 0) return 5;
+    if (c.highlighted) return 6;
+    if (c.lastActiveAt > 0 && c.lastActiveAt >= input.now - RECENT_MS) return 7;
+    if (c.manager) return 8;
+    if (c.lastActivityAt > 0) return 9;
+    return 10;
   };
   const choice = input.candidates
     .filter((candidate) =>

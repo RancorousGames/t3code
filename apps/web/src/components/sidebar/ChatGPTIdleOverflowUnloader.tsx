@@ -53,12 +53,14 @@ export function ChatGPTIdleOverflowUnloader({
   selectedId,
   maxCount,
   deliveryRequests,
+  imminentCaffyIds,
 }: {
   environmentId: EnvironmentId;
   sessions: readonly BrowserSession[];
   selectedId: string | undefined;
   maxCount: number;
   deliveryRequests: Readonly<Record<string, boolean>>;
+  imminentCaffyIds: ReadonlySet<string>;
 }) {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- synchronizes native/legacy guest capacity with actual Chromium residency.
   useEffect(() => {
@@ -95,6 +97,7 @@ export function ChatGPTIdleOverflowUnloader({
             chatGPTBrowserLastWorkingKey(environmentId, session.id), Schema.Number,
           ) ?? 0;
           return session.id !== selectedId &&
+            !imminentCaffyIds.has(session.id) &&
             !deliveryRequests[`${environmentId}:${session.id}`] &&
             !hasUncertainChatGPTSend(environmentId, session.id) &&
             (session.snoozedUntil ?? 0) <= now &&
@@ -122,7 +125,8 @@ export function ChatGPTIdleOverflowUnloader({
             }) as { result?: Observed };
             if (!safeToUnload(evaluated.result ?? null, probe.url)) continue;
             // Do not use an earlier React selection snapshot if the route changed.
-            if (disposed || window.location.pathname.endsWith(`/${session.id}`)) continue;
+            if (disposed || imminentCaffyIds.has(session.id) ||
+                window.location.pathname.endsWith(`/${session.id}`)) continue;
             await bridge({ operation: "close", identity: nativeIdentity });
             clearChatGPTGuestUserOpened(session.id);
             clearChatGPTGuestUserOpened(JSON.stringify([
@@ -148,7 +152,8 @@ export function ChatGPTIdleOverflowUnloader({
               : null;
             const expectedUrl = nav?._tag === "Success" ? nav.url : null;
             if (!safeToUnload(observation, expectedUrl)) continue;
-            if (disposed || window.location.pathname.endsWith(`/${session.id}`)) continue;
+            if (disposed || imminentCaffyIds.has(session.id) ||
+                window.location.pathname.endsWith(`/${session.id}`)) continue;
             evictVerifiedIdleChatGPTGuest(stableKey);
             overflow--;
           }
@@ -166,6 +171,6 @@ export function ChatGPTIdleOverflowUnloader({
       clearTimeout(initial);
       clearInterval(timer);
     };
-  }, [environmentId, sessions, selectedId, maxCount, deliveryRequests]);
+  }, [environmentId, sessions, selectedId, maxCount, deliveryRequests, imminentCaffyIds]);
   return null;
 }

@@ -912,6 +912,9 @@ export class CaffyScheduler {
     return this.keepT3Busy && [...this.entries.values()].some(row =>
       row.mode === "queued" && row.pendingWake && !row.paused &&
       !row.pendingMessageId && row.lastError === null &&
+      // A queued wake intentionally delayed by the user does not reserve
+      // priority/capacity until its activation deadline.
+      (row.beginAt == null || row.beginAt <= now) &&
       (row.expiresAt === null || row.expiresAt > now));
   }
 

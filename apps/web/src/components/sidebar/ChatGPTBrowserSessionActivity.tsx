@@ -37,6 +37,8 @@ import {
   useChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
+import { readVerifiedT3CaffyOverview } from "../../hooks/useT3CaffyOverview";
+import { imminentCaffySessionIds } from "../../omniwork/chatGPTCaffyWarmPolicy";
 import { readThreadPreviewState, useThreadPreviewState } from "../../previewStateStore";
 import {
   recordWarmActivityObservation,
@@ -385,11 +387,15 @@ export function useChatGPTBrowserSessionActivity(
               sessions.some((entry) => entry.parentSessionId === sessionId) ||
               !session.parentSessionId)));
       const touchedAt = chatGPTGuestTouchedAt(runtimeTabId);
+      const caffyImminent = !!session && imminentCaffySessionIds(
+        [session], readVerifiedT3CaffyOverview(), observedAt,
+      ).has(sessionId);
       if (visible) touchChatGPTGuest(runtimeTabId, observedAt);
       else if (
         !hibernated &&
         shouldHibernateChatGPTGuest({
           visible,
+          protected: caffyImminent,
           longIdle,
           onConversation: isOnConversation(),
           activity: next,
@@ -437,6 +443,9 @@ export function useChatGPTBrowserSessionActivity(
           provenEmpty &&
           stillIdle &&
           !hasUncertainChatGPTSend(environmentId, sessionId) &&
+          !imminentCaffySessionIds(
+            session ? [session] : [], readVerifiedT3CaffyOverview(), Date.now(),
+          ).has(sessionId) &&
           useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible !== true
         ) {
           hibernateChatGPTGuest(runtimeTabId);

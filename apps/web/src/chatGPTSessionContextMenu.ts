@@ -197,14 +197,14 @@ export function buildChatGPTSessionContextMenu(input: {
           ],
         }),
         item("caffy:begin", activeCaffy?.beginAt && activeCaffy.beginAt > now
-          ? `Begin working in · ${new Date(activeCaffy.beginAt).toLocaleString()}`
-          : "Begin working in", {
+          ? `Resume scheduled · ${new Date(activeCaffy.beginAt).toLocaleString()}`
+          : working ? "Pause work and resume in" : "Begin working in", {
           separatorBefore: true,
           children: [
-            item("caffy:begin:30", "30 minutes"),
-            item("caffy:begin:60", "1 hour"),
-            item("caffy:begin:120", "2 hours"),
-            item("caffy:begin:240", "4 hours"),
+            item("caffy:begin:30", working ? "Resume in 30 minutes" : "30 minutes"),
+            item("caffy:begin:60", working ? "Resume in 1 hour" : "1 hour"),
+            item("caffy:begin:120", working ? "Resume in 2 hours" : "2 hours"),
+            item("caffy:begin:240", working ? "Resume in 4 hours" : "4 hours"),
             item("caffy:begin:tomorrow-morning", "Tomorrow at 09:00", { separatorBefore: true }),
             item("caffy:begin:tomorrow-afternoon", "Tomorrow at 13:00"),
             item("caffy:begin:tomorrow-evening", "Tomorrow at 18:00"),

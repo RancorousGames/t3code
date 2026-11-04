@@ -47,6 +47,8 @@ import { getChatGPTStartupLoadPlan } from "../../omniwork/chatGPTStartupLoadPoli
 import { chatGPTRestartWorkingSessions } from "../../omniwork/chatGPTRestartWorkingSessions";
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { useWarmChatGPTSessionIds } from "../../omniwork/chatGPTWarmSessionPolicy";
+import { useT3CaffyOverview } from "../../hooks/useT3CaffyOverview";
+import { imminentCaffySessionIds } from "../../omniwork/chatGPTCaffyWarmPolicy";
 
 /** Bootstrap identity belongs to the persistent session, not a transient
  * sidebar/preview runtime. Keep monitoring native Chrome pages even when the
@@ -196,6 +198,11 @@ export function ChatGPTGuestRetention({
     for (const id of restartWorkingOwners) plan.activatedIds.add(id);
   }
   const [now, setNow] = useState(Date.now);
+  const caffyOverview = useT3CaffyOverview();
+  const imminentCaffyIds = useMemo(
+    () => imminentCaffySessionIds(sessions, caffyOverview, now),
+    [sessions, caffyOverview, now],
+  );
 
   useEffect(() => {
     if (!isElectron || !environmentId || !activeSessionId) return;
@@ -244,7 +251,8 @@ export function ChatGPTGuestRetention({
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
       if (autoEvicted?.[key] && activeSessionId !== session.id &&
-          !deliveryRequests[`${environmentId}:${session.id}`]) return [];
+          !deliveryRequests[`${environmentId}:${session.id}`] &&
+          !imminentCaffyIds.has(session.id)) return [];
       const recentUseAt = Math.max(
         touchedAt[key] ?? 0,
         session.lastDirectInteractionAt ?? 0,
@@ -261,6 +269,7 @@ export function ChatGPTGuestRetention({
             !session.parentSessionId));
       const withinLongIdle = recentUseAt > now - 4 * 60 * 60_000;
       const important =
+        imminentCaffyIds.has(session.id) ||
         deliveryRequests[`${environmentId}:${session.id}`] === true ||
         (warmedIds.includes(session.id) &&
           !manuallyUnloaded[key] &&
@@ -337,6 +346,7 @@ export function ChatGPTGuestRetention({
     userOpened,
     deliveryRequests,
     warmedIds,
+    imminentCaffyIds,
     manuallyUnloaded,
     autoEvicted,
   ]);
@@ -353,8 +363,9 @@ export function ChatGPTGuestRetention({
           sessionId={session.id}
         />
       ))}
-      <ChatGPTWarmScheduler />
+      <ChatGPTWarmScheduler imminentCaffyIds={imminentCaffyIds} />
       <ChatGPTIdleOverflowUnloader
+        imminentCaffyIds={imminentCaffyIds}
         environmentId={environmentId}
         sessions={sessions}
         selectedId={activeSessionId}
@@ -379,15 +390,15 @@ export function ChatGPTGuestRetention({
             uncertainOwners.has(session.id) ||
             (!sidebarRuntimesAvailable && restartWorkingOwners.has(session.id)) ||
             (!sidebarRuntimesAvailable &&
-              warmedIds.includes(session.id) &&
+              (warmedIds.includes(session.id) || imminentCaffyIds.has(session.id)) &&
               !session.hidden &&
               !(session.snoozedUntil && session.snoozedUntil > now) &&
-              !manuallyUnloaded[
+              (imminentCaffyIds.has(session.id) || !manuallyUnloaded[
                 JSON.stringify([
                   environmentId,
                   chatGPTBrowserThreadRef(environmentId, session.id).threadId,
                 ])
-              ]),
+              ])),
         )
         .map((session) => (
           <ChatGPTBrowserSessionRuntime

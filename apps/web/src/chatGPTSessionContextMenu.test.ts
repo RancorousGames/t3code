@@ -81,3 +81,21 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu[2]?.children?.map((item) => item.id)).toEqual(["snooze:one", "snooze:custom"]);
   });
 });
+
+it("labels a working Caffy session as a pause and a deferred session as scheduled resume", () => {
+  const active = buildChatGPTSessionContextMenu({ ...state, working: true });
+  const pause = active.find(item => item.id === "caffy")?.children
+    ?.find(item => item.id === "caffy:begin");
+  expect(pause?.label).toBe("Pause work and resume in");
+  expect(pause?.children?.find(item => item.id === "caffy:begin:60")?.label)
+    .toBe("Resume in 1 hour");
+
+  const scheduled = buildChatGPTSessionContextMenu({
+    ...state, working: false, caffy: {
+      mode: "idle", startup: false, onceOnly: false, paused: false,
+      createdAt: 1000, expiresAt: null, intervalMinutes: 20, beginAt: 3601000,
+    },
+  });
+  expect(scheduled.find(item => item.id === "caffy")?.children
+    ?.find(item => item.id === "caffy:begin")?.label).toContain("Resume scheduled");
+});

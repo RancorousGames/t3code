@@ -13,6 +13,9 @@ export interface T3CaffyEntry {
   beginAt?: number | null;
   autoRebootMinutes?: number | null;
   rebootOperationId?: string | null;
+  nextDueAt?: number | null;
+  pendingWake?: boolean;
+  pendingMessageId?: string | null;
 }
 
 export interface T3CaffyOverview {
@@ -23,6 +26,14 @@ export interface T3CaffyOverview {
 }
 
 export const T3_CAFFY_UPDATED_EVENT = "t3:caffy-updated";
+
+/** Last verified scheduler snapshot, also used by non-React DOM idle eviction
+ * probes. Keep the last known protection during short bridge outages.
+ */
+let lastVerifiedOverview: T3CaffyOverview | null = null;
+export function readVerifiedT3CaffyOverview(): T3CaffyOverview | null {
+  return lastVerifiedOverview;
+}
 
 /** Polling also notices schedules changed by agents, not only right-click UI. */
 export function useT3CaffyOverview(): T3CaffyOverview | null {
@@ -56,12 +67,13 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
           typeof entry.paused === "boolean" &&
           (entry.expiresAt === null || typeof entry.expiresAt === "number"),
         );
-        setOverview({
+        lastVerifiedOverview = {
           maxWorking: data.maxWorking,
           keepT3Busy: data.keepT3Busy,
           shutdownWhenIdle: data.shutdownWhenIdle,
           entries,
-        });
+        };
+        setOverview(lastVerifiedOverview);
       } catch {
         if (mounted) setOverview(null);
       } finally {
@@ -70,9 +82,8 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
     };
     const onUpdated = () => { void refresh(); };
     void refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
-    }, 10_000);
+    // Background Caffy prewarming needs fresh schedules while T3 is minimized.
+    const timer = window.setInterval(() => { void refresh(); }, 10_000);
     window.addEventListener(T3_CAFFY_UPDATED_EVENT, onUpdated);
     return () => {
       mounted = false;

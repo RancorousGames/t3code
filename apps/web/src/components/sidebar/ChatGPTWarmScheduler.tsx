@@ -24,8 +24,8 @@ import { snapshotWarmSessionOccupancy } from "../../omniwork/chatGPTWarmOccupanc
 import { activateWarmChatGPTSession, finishWarmChatGPTSessionLoad, nextWarmChatGPTSession, plannedWarmChatGPTSessions, publishWarmChatGPTForecast, useChatGPTWarmSessions } from "../../omniwork/chatGPTWarmSessionPolicy";
 import { useOpenRigManagerChatGPTSessions } from "./useOpenRigManagerChatGPTSessions";
 
-const warmPriorityReason = (c: { selected: boolean; activeBeforeFailure: boolean; recoveryQueued?: boolean; deliveryPending?: boolean; recentlyClicked: number; highlighted: boolean; lastActiveAt: number; manager: boolean; lastActivityAt: number }, now: number) =>
-  c.selected ? "selected by user" : c.deliveryPending ? "pending message delivery" : c.recoveryQueued ? "verified recovery waiting for resident browser" : c.activeBeforeFailure ? "working before failure" :
+const warmPriorityReason = (c: { selected: boolean; activeBeforeFailure: boolean; recoveryQueued?: boolean; deliveryPending?: boolean; caffyDueSoon?: boolean; recentlyClicked: number; highlighted: boolean; lastActiveAt: number; manager: boolean; lastActivityAt: number }, now: number) =>
+  c.selected ? "selected by user" : c.deliveryPending ? "pending message delivery" : c.caffyDueSoon ? "Caffy wake due within 30 minutes" : c.recoveryQueued ? "verified recovery waiting for resident browser" : c.activeBeforeFailure ? "working before failure" :
   c.recentlyClicked >= 0 ? "recent click #" + (c.recentlyClicked + 1) :
   c.highlighted ? "highlighted" : c.lastActiveAt >= now - 2 * 60 * 60_000 && c.lastActiveAt > 0 ? "active within 2 hours" :
   c.manager ? "manager" : c.lastActivityAt > 0 ? "recent activity" : "creation time";
@@ -35,7 +35,9 @@ const warmPriorityReason = (c: { selected: boolean; activeBeforeFailure: boolean
  * an additive working set. Only attached webviews and in-flight requests occupy
  * warm slots; merely being eligible to mount is not physical residency.
  */
-export function ChatGPTWarmScheduler() {
+export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
+  readonly imminentCaffyIds: ReadonlySet<string>;
+}) {
   const environmentId = usePrimaryEnvironmentId();
   const selectedId = useParams({ strict: false, select: (params) => params.browserSessionId });
   const { sessions } = useChatGPTBrowserSessions(environmentId);
@@ -158,8 +160,9 @@ export function ChatGPTWarmScheduler() {
             id: session.id,
             selected: session.id === selectedId,
             deliveryPending: pendingGuestIds.current.has(session.id),
+            caffyDueSoon: imminentCaffyIds.has(session.id),
             recoveryQueued: queuedRecovery.has(session.id),
-            exceedTarget: false,
+            exceedTarget: imminentCaffyIds.has(session.id),
             activeBeforeFailure: wasWarmSessionActiveBeforeFailure(environmentId, session.id),
             recentlyClicked: warmRecentClickRanks(environmentId, selectedId ?? null).get(session.id) ?? -1,
             highlighted: Boolean(session.borderColor),
@@ -231,6 +234,7 @@ export function ChatGPTWarmScheduler() {
       ).filter((id): id is string => typeof id === "string" && id.length > 0);
       let eligible = sessions.filter((session) => {
         const deliveryPending = pendingGuestIds.current.has(session.id);
+        const caffySoon = imminentCaffyIds.has(session.id);
         if (session.hidden || (!deliveryPending && session.snoozedUntil && session.snoozedUntil > now) ||
           (!deliveryPending && (retryAfter.get(retryKey(session.id)) ?? 0) > now)) return false;
         const thread = chatGPTBrowserThreadRef(environmentId, session.id);
@@ -240,7 +244,8 @@ export function ChatGPTWarmScheduler() {
           ? session.id
           : JSON.stringify([environmentId, thread.threadId]);
         if ((isChatGPTGuestManuallyUnloaded(unloadKey) ||
-          useChatGPTGuestHibernation.getState().autoEvicted?.[unloadKey]) && !deliveryPending)
+          useChatGPTGuestHibernation.getState().autoEvicted?.[unloadKey]) &&
+          !deliveryPending && !caffySoon)
           return false;
         let savedUrl: string | null = null;
         try {
@@ -315,7 +320,8 @@ export function ChatGPTWarmScheduler() {
           id: session.id,
           selected: session.id === selectedId,
           deliveryPending: pendingGuestIds.current.has(session.id),
-          exceedTarget: false,
+          caffyDueSoon: imminentCaffyIds.has(session.id),
+          exceedTarget: imminentCaffyIds.has(session.id),
           activeBeforeFailure: wasWarmSessionActiveBeforeFailure(environmentId, session.id),
           recentlyClicked: clickRanks.get(session.id) ?? -1,
           highlighted: Boolean(session.borderColor),
@@ -373,6 +379,6 @@ export function ChatGPTWarmScheduler() {
       clearTimeout(initial);
       clearInterval(interval);
     };
-  }, [environmentId, selectedId, sessions, managers, plan, warmCount, autoMaintenancePaused]);
+  }, [environmentId, selectedId, sessions, managers, plan, warmCount, autoMaintenancePaused, imminentCaffyIds]);
   return null;
 }
