@@ -121,6 +121,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     heading: null,
     paths: [
       "/settings/general",
+      "/settings/omniwork",
       "/settings/appearance",
       "/settings/chat",
       "/settings/diffs",
