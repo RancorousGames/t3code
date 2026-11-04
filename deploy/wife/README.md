@@ -25,8 +25,10 @@ git clone https://github.com/RancorousGames/t3code.git "$env:USERPROFILE\t3code"
 
 If the repository is private, GitHub may request authorization on the first
 clone/pull. Give her account read access rather than copying your own GitHub
-credentials. The `main` branch must be pushed with the changes you want her
-to receive; your uncommitted changes never travel through Git.
+credentials. Deployments use the `wife-deploy` branch because the fork's GitHub `main`
+has diverged from the developer's local `main`. Push the local main commits
+with `git push origin main:wife-deploy` (fast-forward only); uncommitted changes
+are not included. The updater switches an initial `main` clone to `wife-deploy`.
 
 The first successful update creates three Desktop shortcuts: **T3 Code
 (Custom)**, **Monku no Mori**, and **Update T3 + Mori**. Future updates:
@@ -61,7 +63,7 @@ periodically.
 ## Update behavior
 
 Close **Monku no Mori** before clicking Update; T3 can be running. The update
-downloads the latest main branch, installs changed dependencies, builds both
+downloads the latest wife-deploy branch, installs changed dependencies, builds both
 apps, safely restarts T3, and opens Mori. On a first install with no browser
 sessions, T3 uses its fresh-profile launch path. The log is at
 `%LOCALAPPDATA%\T3MoriDeployment\update.log`.

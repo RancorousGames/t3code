@@ -39,8 +39,8 @@ try {
     }
 
     $branch = (& git branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') {
-        throw "Expected checkout on branch main; found '$branch'. No changes made."
+    if ($LASTEXITCODE -ne 0 -or $branch -notin @('main', 'wife-deploy')) {
+        throw "Expected checkout on main or wife-deploy; found '$branch'. No changes made."
     }
     & git diff --quiet
     if ($LASTEXITCODE -ne 0) { throw 'Tracked local edits exist. Refusing to overwrite them with a pull.' }
@@ -48,8 +48,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Staged local edits exist. Refusing to pull.' }
 
     Write-Host '1/4  Getting the latest committed source...' -ForegroundColor Green
-    Run git @('fetch', 'origin', 'main')
-    Run git @('merge', '--ff-only', 'FETCH_HEAD')
+    Run git @('fetch', 'origin', 'wife-deploy')
+    if ($branch -eq 'main') {
+        Run git @('switch', '-c', 'wife-deploy', '--track', 'origin/wife-deploy')
+    } else {
+        Run git @('merge', '--ff-only', 'FETCH_HEAD')
+    }
 
     Write-Host '2/4  Installing/updating dependencies...' -ForegroundColor Green
     Run pnpm @('install', '--frozen-lockfile')
