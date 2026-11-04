@@ -68,7 +68,7 @@ export const DesktopAppActivationRequest = Schema.Union([
   Schema.Struct({
     ...DesktopAppActivationBase,
     type: Schema.Literal("caffy"),
-    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "working_snapshot", "retire"]),
+    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "working_snapshot", "retire", "begin_in", "auto_reboot"]),
     sessionId: Schema.optional(Schema.String),
     conversationId: Schema.optional(ChatGPTConversationId),
     mode: Schema.optional(Schema.Literals(["idle", "periodic", "queued", "startup"])),
@@ -83,6 +83,8 @@ export const DesktopAppActivationRequest = Schema.Union([
     workingSessionIds: Schema.optional(Schema.Array(Schema.String)),
     workingReporterId: Schema.optional(Schema.String),
     lifecycleReason: Schema.optional(Schema.Literals(["closed", "hidden", "snoozed", "missing"])),
+    beginAt: Schema.optional(Schema.NullOr(Schema.Number)),
+    rebootMinutes: Schema.optional(Schema.NullOr(Schema.Number)),
   }),
   Schema.Struct({
     ...DesktopAppActivationBase,

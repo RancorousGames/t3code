@@ -90,6 +90,8 @@ import {
   buildChatGPTProjectContextMenu,
   CAFFY_DURATION_HOURS,
   CAFFY_INTERVAL_MINUTES,
+  CAFFY_REBOOT_MINUTES,
+  resolveCaffyBeginAt,
 } from "../../chatGPTSessionContextMenu";
 import {
   chatGPTNativeActionMenu,
@@ -1314,7 +1316,7 @@ export function ChatGPTBrowserSidebarEntry({
       ["idle", "periodic", "queued", "startup"].includes(String(caffyState.mode))
         ? caffyState as { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
             onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
-            intervalMinutes: number }
+            intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null }
         : null;
     const action = await api.contextMenu.show(
       [
@@ -1493,6 +1495,25 @@ export function ChatGPTBrowserSidebarEntry({
           setKeepAwakeFeedback("Caffy stopped for this session.");
         } else if (action === "caffy:queued") {
           await configureCaffy(sessionId, "queued");
+        } else if (action.startsWith("caffy:begin:")) {
+          const preset = action.slice("caffy:begin:".length);
+          const beginAt = resolveCaffyBeginAt(preset);
+          await control({ action: "begin_in", sessionId, beginAt });
+          setKeepAwakeFeedback(beginAt === null
+            ? "Caffy delayed start cleared."
+            : `Caffy begins working ${new Date(beginAt).toLocaleString()}.`);
+        } else if (action.startsWith("caffy:auto-reboot:")) {
+          if (!activeCaffy || !["idle", "queued"].includes(activeCaffy.mode))
+            throw new Error("Auto-reboot requires Wake on Idle or Wake on Idle (Queued).");
+          const raw = action.slice("caffy:auto-reboot:".length);
+          const rebootMinutes = raw === "off" ? null : Number(raw);
+          if (rebootMinutes !== null &&
+              !CAFFY_REBOOT_MINUTES.some(m => m === rebootMinutes))
+            throw new Error("Unknown auto-reboot frequency.");
+          await control({ action: "auto_reboot", sessionId, rebootMinutes });
+          setKeepAwakeFeedback(rebootMinutes === null
+            ? "Auto-reboot disabled."
+            : `Auto-reboot enabled every ${rebootMinutes} minutes, only when idle.`);
         } else if (action === "caffy:pause") {
           if (!activeCaffy) throw new Error("No active Caffy monitor.");
           await control({ action: activeCaffy.paused ? "resume" : "pause", sessionId });
@@ -2688,7 +2709,11 @@ export function ChatGPTBrowserSidebarEntry({
                                     "Wake on startup"}${caffyMonitor.onceOnly ? " (once)" : ""}${
                                     caffyMonitor.mode === "queued" && !caffyOverview?.keepT3Busy
                                       ? " — waiting for Keep T3 Busy"
-                                      : ""}`
+                                      : ""}${caffyMonitor.beginAt && caffyMonitor.beginAt > clockNow
+                                        ? ` — starts ${new Date(caffyMonitor.beginAt).toLocaleString()}` : ""}${
+                                          caffyMonitor.autoRebootMinutes
+                                            ? ` — auto-reboot every ${caffyMonitor.autoRebootMinutes}m when idle`
+                                            : ""}${caffyMonitor.rebootOperationId ? " — reboot pending reconciliation" : ""}`
                                 : null;
                               const isVerifiedManager = managerIds.has(session.id);
                               const displayRole = chatGPTSessionDisplayRole(

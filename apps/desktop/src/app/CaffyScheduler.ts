@@ -32,6 +32,16 @@ export interface CaffyConfig {
   lastIdleSequence: number;
   lastWakeAt: number | null;
   lastError: string | null;
+  /** Absolute future start, persisted through full desktop restarts. */
+  beginAt?: number | null;
+  /** Only idle and queued modes support automated context reboot. */
+  autoRebootMinutes?: number | null;
+  /** First verified working observation or completed Caffy wake. */
+  lastActivatedAt?: number | null;
+  lastRebootAt?: number | null;
+  /** Durable reboot operation ID; never allocate a second if outcome is UNKNOWN. */
+  rebootOperationId?: string | null;
+  rebootOldConversationId?: string | null;
 }
 interface CaffyStore { version: 2; entries: CaffyConfig[]; keepT3Busy: boolean; maxWorking: number; shutdownWhenIdle?: boolean }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -218,8 +228,16 @@ export class CaffyScheduler {
     this.lastIdentityReconcileAt = now;
     let changed = false;
     for (const row of [...this.entries.values()]) {
+      if (row.rebootOperationId) {
+        await this.reconcileReboot(row).catch(() => {});
+        continue;
+      }
       const binding = await this.registered(row.sessionId, row.conversationId).catch(() => null);
       if (!binding) continue;
+      if (binding.working && !row.lastActivatedAt) {
+        row.lastActivatedAt = Date.now();
+        changed = true;
+      }
       if (row.publicSessionId !== binding.id) {
         row.publicSessionId = binding.id;
         changed = true;
@@ -267,7 +285,8 @@ export class CaffyScheduler {
       const ids = [row.sessionId, row.browserSessionId, row.publicSessionId]
         .filter((id): id is string => !!id);
       const matches = entries.filter(entry =>
-        (entry.conversationId === row.conversationId ||
+        (row.rebootOperationId ||
+          entry.conversationId === row.conversationId ||
           entry.bootstrapIdentity?.conversationId === row.conversationId) &&
         [entry.id, entry.browserSessionId, entry.publicSessionId,
           entry.bootstrapIdentity?.publicId,
@@ -350,6 +369,7 @@ export class CaffyScheduler {
     sessionId: string; conversationId: string; mode: Mode;
     durationMinutes?: number | undefined; onceOnly?: boolean | undefined; startup?: boolean | undefined;
     intervalMinutes?: number | undefined; keepAwake?: boolean | undefined;
+    beginAt?: number | null | undefined;
   }) {
     if (!UUID.test(input.sessionId) || !UUID.test(input.conversationId))
       throw new Error("Exact sessionId and conversationId UUIDs required.");
@@ -384,6 +404,10 @@ export class CaffyScheduler {
         this.legacyConflict(input.sessionId, input.conversationId))
       throw new Error("Legacy OmniHub Caffy monitor still owns this session; cancel it before scheduling T3 Caffy.");
     const now = Date.now();
+    if (input.beginAt !== undefined && input.beginAt !== null &&
+        (!Number.isSafeInteger(input.beginAt) || input.beginAt <= now ||
+          input.beginAt > now + 90 * 24 * 60 * 60_000))
+      throw new Error("Scheduled start must be in the next 90 days.");
     const prior = this.lookup(input.sessionId) ??
       [...this.entries.values()].find(row => row.conversationId === input.conversationId);
     if (prior?.pendingMessageId &&
@@ -397,6 +421,12 @@ export class CaffyScheduler {
       prior.keepAwake === (input.keepAwake ?? true) &&
       prior.intervalMinutes === intervalMinutes;
     if (same) {
+      if (input.beginAt !== undefined && input.beginAt !== prior.beginAt) {
+        prior.beginAt = input.beginAt;
+        prior.pendingWake = true;
+        prior.pendingReason = "manual";
+        this.save();
+      }
       if (prior.paused) { prior.paused = false; prior.lastError = null; this.save(); void this.pump(); }
       return prior;
     }
@@ -407,13 +437,20 @@ export class CaffyScheduler {
       mode: input.mode, intervalMinutes,
       startup: input.mode === "startup" ? true : input.startup ?? false, onceOnly: input.onceOnly ?? false,
       keepAwake: input.keepAwake ?? true, paused: false, createdAt: now,
-      expiresAt: input.durationMinutes === undefined ? null : now + input.durationMinutes * 60_000,
+      expiresAt: input.durationMinutes === undefined ? null :
+        Math.max(now, input.beginAt ?? prior?.beginAt ?? now) + input.durationMinutes * 60_000,
       nextDueAt: input.mode === "periodic" ? now + intervalMinutes * 60_000 : null,
       pendingWake: prior?.conversationId === input.conversationId ? prior.pendingWake : input.mode === "idle" || input.mode === "queued",
       pendingReason: prior?.conversationId === input.conversationId ? prior.pendingReason : input.mode === "idle" || input.mode === "queued" ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
       lastIdleSequence: Math.max(prior?.lastIdleSequence ?? 0, identity?.idleSequence ?? 0),
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
+      beginAt: input.beginAt !== undefined ? input.beginAt : prior?.beginAt ?? null,
+      autoRebootMinutes: ["idle", "queued"].includes(input.mode) ? prior?.autoRebootMinutes ?? null : null,
+      lastActivatedAt: prior?.lastActivatedAt ?? null,
+      lastRebootAt: prior?.lastRebootAt ?? null,
+      rebootOperationId: prior?.rebootOperationId ?? null,
+      rebootOldConversationId: prior?.rebootOldConversationId ?? null,
     };
     if (prior && prior.sessionId !== row.sessionId) this.entries.delete(prior.sessionId);
     this.entries.set(row.sessionId, row);
@@ -445,6 +482,160 @@ export class CaffyScheduler {
   stop(sessionId: string) {
     const { stopped } = this.retire(sessionId, "stopped");
     return { stopped };
+  }
+
+  async beginAt(sessionId: string, conversationId: string, at: number | null) {
+    if (at !== null && (!Number.isSafeInteger(at) || at <= Date.now() ||
+        at > Date.now() + 90 * 24 * 60 * 60_000))
+      throw new Error("Begin working must be within the next 90 days.");
+    let row = this.lookup(sessionId);
+    if (!row) {
+      if (at === null) return { cleared: true };
+      row = await this.set({ sessionId, conversationId, mode: "idle",
+        onceOnly: true, keepAwake: false, beginAt: at });
+      return row;
+    }
+    if (row.conversationId !== conversationId)
+      throw new Error("Delayed start requires the same registered conversation.");
+    if (row.rebootOperationId) throw new Error("A reboot is awaiting reconciliation.");
+    if (at === null && row.onceOnly && row.mode === "idle" &&
+        row.beginAt !== null && row.beginAt !== undefined && row.lastWakeAt === null) {
+      return { cleared: true, stopped: this.stop(sessionId).stopped };
+    }
+    if (row.pendingMessageId) {
+      // Delay cannot retract an UNKNOWN or already submitted wake.
+      const previous = this.deliveries.status(row.pendingMessageId);
+      if (previous.status !== "queued")
+        throw new Error("Cannot delay a wake that has already been attempted.");
+      const messageId = row.pendingMessageId;
+      row.pendingMessageId = null;
+      this.deliveries.cancel(messageId);
+    }
+    if (row.expiresAt !== null) {
+      const base = row.beginAt ?? row.createdAt;
+      const duration = Math.max(60_000, row.expiresAt - base);
+      row.expiresAt = (at ?? Date.now()) + duration;
+    }
+    row.beginAt = at;
+    row.pendingWake = true;
+    row.pendingReason = "manual";
+    this.save();
+    if (at === null) void this.pump();
+    return row;
+  }
+
+  autoReboot(sessionId: string, minutes: number | null) {
+    const row = this.lookup(sessionId);
+    if (!row) throw new Error("Configure Wake on Idle before enabling auto-reboot.");
+    if (row.mode !== "idle" && row.mode !== "queued")
+      throw new Error("Auto-reboot only supports Wake on Idle and Wake on Idle (Queued).");
+    if (minutes !== null && row.onceOnly)
+      throw new Error("Auto-reboot requires continuous idle waking, not Once only.");
+    if (minutes !== null && ![30, 60, 120].includes(minutes))
+      throw new Error("Auto-reboot frequency must be 30, 60 or 120 minutes.");
+    row.autoRebootMinutes = minutes;
+    this.save();
+    return row;
+  }
+
+  /** Reboot replaces the ChatGPT conversation inside the SAME T3 browser slot.
+   * No second begin is authorized while the existing operation is UNKNOWN.
+   * Only a new registered bootstrap binding can switch Caffy to that conversation. */
+  private async reconcileReboot(row: CaffyConfig): Promise<void> {
+    if (!row.rebootOperationId) return;
+    const reply = await this.request({
+      version: 1, requestId: NodeCrypto.randomUUID(),
+      type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
+    }).catch(() => null);
+    if (!reply?.ok || !("data" in reply) || !reply.data ||
+        typeof reply.data !== "object") return;
+    const data = reply.data as {sessions?: Array<{
+      id?: string; browserSessionId?: string; publicSessionId?: string;
+      conversationId?: string; bootstrapIdentity?: {
+        state?: string; publicId?: string; conversationId?: string;
+      }; lastIdleTransition?: {conversationId?: string; sequence?: number};
+    }>};
+    const matches = (data.sessions ?? []).filter(entry =>
+      entry.id === row.sessionId || entry.browserSessionId === row.browserSessionId ||
+      entry.publicSessionId === row.publicSessionId ||
+      entry.bootstrapIdentity?.publicId === row.publicSessionId);
+    if (matches.length !== 1) return;
+    const entry = matches[0]!;
+    const nextId = entry.conversationId;
+    if (!nextId || !UUID.test(nextId) || nextId === row.rebootOldConversationId ||
+        entry.bootstrapIdentity?.conversationId !== nextId ||
+        entry.bootstrapIdentity?.state !== "registered") return;
+    row.conversationId = nextId;
+    row.publicSessionId = entry.bootstrapIdentity.publicId ?? row.publicSessionId;
+    row.lastIdleSequence = entry.lastIdleTransition?.conversationId === nextId
+      ? entry.lastIdleTransition.sequence ?? 0 : 0;
+    row.lastActivatedAt = Date.now();
+    row.lastRebootAt ??= Date.now();
+    row.rebootOperationId = null;
+    row.rebootOldConversationId = null;
+    row.pendingWake = false;
+    row.pendingReason = null;
+    row.lastError = null;
+    this.save();
+  }
+
+  private async beginAutoReboot(row: CaffyConfig): Promise<void> {
+    if (row.rebootOperationId || row.pendingMessageId) return;
+    // Prefer the exact original human assignment, if this still-mounted
+    // predecessor can provide a guarded read. Never allow a missing/ambiguous
+    // read to block the scheduler: the continuation prompt remains sufficient.
+    const original = await this.request({
+      version: 1, requestId: NodeCrypto.randomUUID(),
+      type: "chatgpt.sessions", action: "read",
+      sessionId: row.sessionId, expectedConversationId: row.conversationId,
+      from: "start", count: 1, maxMessageChars: 20_000,
+    }).catch(() => null);
+    if (this.entries.get(row.sessionId) !== row || row.pendingMessageId ||
+        row.paused || row.rebootOperationId) return;
+    const bound = await this.registered(row.sessionId, row.conversationId).catch(() => null);
+    if (!bound || bound.working || this.entries.get(row.sessionId) !== row ||
+        (row.mode === "queued" && !(await this.hasCapacity().catch(() => false)))) return;
+    const evidence = original?.ok && "data" in original && original.data &&
+      typeof original.data === "object" ? original.data as {
+        conversationGuardValidated?: boolean; verifiedConversationId?: string;
+        session?: {messages?: Array<{role?: string; text?: string}>};
+      } : null;
+    const originalText = evidence?.conversationGuardValidated === true &&
+      evidence.verifiedConversationId === row.conversationId
+        ? evidence.session?.messages?.find(m => m.role === "user")?.text?.trim() : null;
+    const prompt = "Resume your previous assignment in this same T3 browser session. " +
+      "This is a continuation, not a fresh task: inspect project files and TaskBoard " +
+      "progress before changing anything, and do not repeat finished work. " +
+      "Continue working until genuinely finished.\n" +
+      (originalText && originalText.length <= 20_000
+        ? "\nOriginal user assignment (for context, not a request to redo completed steps):\n" +
+          originalText : "\nReview your original assignment and project instructions.");
+    const operationId = NodeCrypto.randomUUID();
+    row.rebootOperationId = operationId;
+    row.rebootOldConversationId = row.conversationId;
+    row.pendingWake = false;
+    row.pendingReason = null;
+    this.save(); // durable before potentially changing any browser state
+    const reply = await this.request({
+      version: 1, requestId: operationId,
+      type: "chatgpt.reboot", sessionId: row.sessionId,
+      priorConversationId: row.conversationId,
+      prompt, phase: "begin",
+    }).catch(() => null);
+    if (this.entries.get(row.sessionId) !== row) return;
+    const data = reply?.ok && "data" in reply && reply.data &&
+      typeof reply.data === "object" ? reply.data as {status?: string} : null;
+    if (!data || !["submitted", "committed", "restored"].includes(data.status ?? "")) {
+      row.lastError = "Auto-reboot outcome unconfirmed. Operation " + operationId +
+        " retained for read-only reconciliation; no duplicate reboot will start.";
+      this.save();
+      return;
+    }
+    row.lastRebootAt = Date.now();
+    row.lastActivatedAt = row.lastRebootAt;
+    row.lastError = null;
+    this.save();
+    await this.reconcileReboot(row);
   }
 
   pause(sessionId: string, paused: boolean) {
@@ -489,7 +680,9 @@ export class CaffyScheduler {
     if (!row || row.paused || row.conversationId !== event.conversationId ||
         event.sequence <= row.lastIdleSequence) return;
     row.lastIdleSequence = event.sequence;
-    if ((row.mode === "idle" || row.mode === "queued") && !row.pendingMessageId) {
+    if ((row.mode === "idle" || row.mode === "queued") &&
+        !row.pendingMessageId && !row.rebootOperationId &&
+        (row.beginAt === null || row.beginAt === undefined || row.beginAt <= Date.now())) {
       row.pendingWake = true;
       row.pendingReason = "idle";
     }
@@ -503,6 +696,7 @@ export class CaffyScheduler {
     if (record.status === "delivered") {
       row.pendingMessageId = null;
       row.lastWakeAt = Date.now();
+      row.lastActivatedAt ??= row.lastWakeAt;
       row.lastError = null;
       if (row.onceOnly) { this.entries.delete(row.sessionId); }
     } else if (record.status === "cancelled") {
@@ -710,6 +904,18 @@ export class CaffyScheduler {
         Number(b.mode === "queued" && b.pendingWake && !b.paused) -
         Number(a.mode === "queued" && a.pendingWake && !a.paused));
       for (const row of rows) {
+        if (this.entries.get(row.sessionId) !== row) continue;
+        if (row.rebootOperationId) {
+          await this.reconcileReboot(row).catch(() => {});
+          continue;
+        }
+        if (row.beginAt !== undefined && row.beginAt !== null) {
+          if (now < row.beginAt) continue;
+          row.beginAt = null;
+          row.pendingWake = true;
+          row.pendingReason = "manual";
+          this.save();
+        }
         if (row.expiresAt !== null && row.expiresAt <= now && !row.pendingMessageId) {
           if (row.mode === "periodic" && !row.onceOnly && !row.paused &&
               (row.lastWakeAt === null || row.lastWakeAt < row.expiresAt)) {
@@ -768,7 +974,19 @@ export class CaffyScheduler {
           if (row.lastError !== reason) { row.lastError = reason; this.save(); }
           continue;
         }
-        if (bound.working) continue;
+        if (bound.working) {
+          if (!row.lastActivatedAt) { row.lastActivatedAt = Date.now(); this.save(); }
+          continue;
+        }
+        const rebootAnchor = row.lastRebootAt ??
+          row.lastActivatedAt ?? row.lastWakeAt ??
+          (row.mode === "idle" ? row.createdAt : null);
+        if ((row.mode === "idle" || row.mode === "queued") &&
+            row.autoRebootMinutes && rebootAnchor !== null &&
+            now - rebootAnchor >= row.autoRebootMinutes * 60_000) {
+          await this.beginAutoReboot(row);
+          continue;
+        }
         if (row.lastError) { row.lastError = null; this.save(); }
         // Persist the exact stable message ID before enqueue; an ambiguous
         // result is reconciled by this ID rather than generating another wake.

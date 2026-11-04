@@ -22,7 +22,7 @@ export const setReady = DesktopIpc.makeIpcMethod({
 export const caffyControl = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.DESKTOP_CAFFY_CONTROL_CHANNEL,
   payload: Schema.Struct({
-    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "working_snapshot", "retire"]),
+    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "working_snapshot", "retire", "begin_in", "auto_reboot"]),
     sessionId: Schema.optional(Schema.String),
     conversationId: Schema.optional(Schema.String),
     mode: Schema.optional(Schema.Literals(["idle", "periodic", "queued", "startup"])),
@@ -37,6 +37,8 @@ export const caffyControl = DesktopIpc.makeIpcMethod({
     workingSessionIds: Schema.optional(Schema.Array(Schema.String)),
     workingReporterId: Schema.optional(Schema.String),
     lifecycleReason: Schema.optional(Schema.Literals(["closed", "hidden", "snoozed", "missing"])),
+    beginAt: Schema.optional(Schema.NullOr(Schema.Number)),
+    rebootMinutes: Schema.optional(Schema.NullOr(Schema.Number)),
   }),
   result: Schema.Unknown,
   handler: Effect.fn("desktop.ipc.appActivation.caffy")(function* (input) {

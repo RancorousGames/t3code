@@ -10,6 +10,9 @@ export interface T3CaffyEntry {
   onceOnly: boolean;
   expiresAt: number | null;
   intervalMinutes: number;
+  beginAt?: number | null;
+  autoRebootMinutes?: number | null;
+  rebootOperationId?: string | null;
 }
 
 export interface T3CaffyOverview {

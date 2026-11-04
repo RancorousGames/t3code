@@ -392,7 +392,11 @@ export const make = Effect.gen(function* () {
           if (action === "list" || (request.sessionId && !caffy.status(request.sessionId)))
             await caffy.reconcileIdentityAliases(true);
           let conversationId = request.conversationId;
-          if (action === "set" && !conversationId && request.sessionId) {
+          if (action === "begin_in" && !conversationId && request.sessionId) {
+            const prior = caffy.status(request.sessionId);
+            if (prior && "conversationId" in prior) conversationId = prior.conversationId;
+          }
+          if ((action === "set" || action === "begin_in") && !conversationId && request.sessionId) {
             const inventory = await broker.request({
               version: 1, requestId: NodeCrypto.randomUUID(), type: "chatgpt.sessions",
               action: "list", which: "all", includeHidden: true,
@@ -427,12 +431,17 @@ export const make = Effect.gen(function* () {
                 onceOnly: request.onceOnly,
                 startup: request.startup,
                 keepAwake: request.keepAwake,
+                beginAt: request.beginAt,
               })
             : action === "list" || action === "status"
               ? caffy.status(action === "status" ? request.sessionId : undefined)
             : action === "policy"
               ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking,
                   shutdownWhenIdle: request.shutdownWhenIdle })
+            : action === "begin_in"
+              ? await caffy.beginAt(request.sessionId ?? "", conversationId ?? "", request.beginAt ?? null)
+            : action === "auto_reboot"
+              ? caffy.autoReboot(request.sessionId ?? "", request.rebootMinutes ?? null)
             : action === "retire"
               ? caffy.retire(request.sessionId ?? "", request.lifecycleReason ?? "closed")
             : action === "stop"

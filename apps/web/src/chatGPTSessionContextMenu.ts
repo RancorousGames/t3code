@@ -25,6 +25,22 @@ type MenuItem = ContextMenuItem<ChatGPTContextAction>;
 type SnoozePreset = { id: string; label: string; whenLabel: string };
 export const CAFFY_DURATION_HOURS = [1, 2, 4, 8] as const;
 export const CAFFY_INTERVAL_MINUTES = [5, 10, 20, 30, 60] as const;
+export const CAFFY_REBOOT_MINUTES = [30, 60, 120] as const;
+export function resolveCaffyBeginAt(preset: string, now = new Date()): number | null {
+  if (preset === "clear") return null;
+  const durations: Record<string, number> = { "30": 30, "60": 60, "120": 120, "240": 240 };
+  if (durations[preset]) return now.getTime() + durations[preset] * 60_000;
+  const hours: Record<string, number> = {
+    "tomorrow-morning": 9, "tomorrow-afternoon": 13, "tomorrow-evening": 18,
+  };
+  if (hours[preset] !== undefined) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(now.getDate() + 1);
+    tomorrow.setHours(hours[preset], 0, 0, 0);
+    return tomorrow.getTime();
+  }
+  throw new Error("Unknown Caffy start preset.");
+}
 const item = (id: string, label: string, extra: Partial<MenuItem> = {}): MenuItem => ({
   id,
   label,
@@ -44,13 +60,13 @@ export function buildChatGPTSessionContextMenu(input: {
   hasConversationUrl?: boolean;
   caffy?: { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
     onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
-    intervalMinutes: number } | null;
+    intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null } | null;
 }): MenuItem[] {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
   const activeCaffy = input.caffy;
   const durationMinutes = activeCaffy?.expiresAt !== null && activeCaffy?.expiresAt !== undefined
-    ? Math.round((activeCaffy.expiresAt - activeCaffy.createdAt) / 60_000) : null;
+    ? Math.round((activeCaffy.expiresAt - (activeCaffy.beginAt ?? activeCaffy.createdAt)) / 60_000) : null;
   const wakeMode = activeCaffy?.mode === "idle" ? "Idle" :
     activeCaffy?.mode === "periodic" ? "Periodic" :
     activeCaffy?.mode === "queued" ? "Queued idle" :
@@ -153,7 +169,9 @@ export function buildChatGPTSessionContextMenu(input: {
             ],
           }),
         ]),
-    item("caffy", wakeMode ? `Caffy · ${wakeMode}${activeCaffy?.paused ? " (paused)" : ""}` : "Caffy", {
+    item("caffy", wakeMode
+      ? `Caffy · ${wakeMode}${activeCaffy?.beginAt && activeCaffy.beginAt > now ? " (scheduled)" : ""}${activeCaffy?.paused ? " (paused)" : ""}`
+      : "Caffy", {
       children: [
         item("caffy:idle", "Wake on Idle", {
           checked: activeCaffy?.mode === "idle",
@@ -175,6 +193,41 @@ export function buildChatGPTSessionContextMenu(input: {
               separatorBefore: true,
               checked: activeCaffy?.mode === "periodic" &&
                 !CAFFY_INTERVAL_MINUTES.some((minutes) => minutes === activeCaffy.intervalMinutes),
+            }),
+          ],
+        }),
+        item("caffy:begin", activeCaffy?.beginAt && activeCaffy.beginAt > now
+          ? `Begin working in · ${new Date(activeCaffy.beginAt).toLocaleString()}`
+          : "Begin working in", {
+          separatorBefore: true,
+          children: [
+            item("caffy:begin:30", "30 minutes"),
+            item("caffy:begin:60", "1 hour"),
+            item("caffy:begin:120", "2 hours"),
+            item("caffy:begin:240", "4 hours"),
+            item("caffy:begin:tomorrow-morning", "Tomorrow at 09:00", { separatorBefore: true }),
+            item("caffy:begin:tomorrow-afternoon", "Tomorrow at 13:00"),
+            item("caffy:begin:tomorrow-evening", "Tomorrow at 18:00"),
+            item("caffy:begin:clear", "Cancel delayed start", {
+              separatorBefore: true, disabled: !activeCaffy?.beginAt,
+            }),
+          ],
+        }),
+        item("caffy:auto-reboot", activeCaffy?.autoRebootMinutes
+          ? `Auto-reboot · Every ${activeCaffy.autoRebootMinutes}m` : "Auto-reboot", {
+          disabled: !activeCaffy || activeCaffy.onceOnly || !["idle", "queued"].includes(activeCaffy.mode),
+          children: [
+            item("caffy:auto-reboot:30", "Every 30 minutes", {
+              checked: activeCaffy?.autoRebootMinutes === 30,
+            }),
+            item("caffy:auto-reboot:60", "Every 1 hour", {
+              checked: activeCaffy?.autoRebootMinutes === 60,
+            }),
+            item("caffy:auto-reboot:120", "Every 2 hours", {
+              checked: activeCaffy?.autoRebootMinutes === 120,
+            }),
+            item("caffy:auto-reboot:off", "Off", {
+              separatorBefore: true, checked: !activeCaffy?.autoRebootMinutes,
             }),
           ],
         }),
