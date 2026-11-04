@@ -3,6 +3,7 @@ import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
 
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
+import { startRemoteWifeUpdate, remoteWifeUpdateStatus } from "../../../peer/RemoteWifeUpdate.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
 import { readCaller } from "../../threadAccess.ts";
@@ -183,6 +184,19 @@ const handlers = {
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.waitForThread(scope, input);
     }),
+  ),
+  t3_environment_update_wife: McpToolAccess.writesEnvironment(
+    () => Effect.try({
+      try: startRemoteWifeUpdate,
+      catch: (error) => new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        message: String(error),
+      }),
+    }),
+    { linkedCallers: "allowed" },
+  ),
+  t3_environment_update_wife_status: McpToolAccess.reads(() =>
+    Effect.sync(remoteWifeUpdateStatus),
   ),
   t3_environment_links: McpToolAccess.reads(() =>
     Effect.gen(function* () {

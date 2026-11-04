@@ -305,6 +305,38 @@ const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
   .annotate(Tool.Title, "Interrupt a T3 thread")
   .annotate(Tool.Destructive, true);
 
+const RemoteWifeUpdateResult = Schema.Struct({
+  state: Schema.Literals(["queued", "running", "succeeded", "failed"]),
+  startedAt: Schema.String,
+  finishedAt: Schema.optional(Schema.String),
+  message: Schema.String,
+  logPath: Schema.String,
+});
+
+const RemoteWifeUpdateTool = Tool.make("t3_environment_update_wife", {
+  description:
+    "Explicitly start the installed T3 Code + Monku no Mori updater on a linked Windows environment. Updates both apps, may restart T3 and briefly disconnect. Only call on user request, never automatically. Use t3_environment_update_wife_status to check the durable result after reconnecting.",
+  parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
+  success: RemoteWifeUpdateResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+}).annotate(Tool.Title, "Update T3 and Mori on linked PC")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
+
+const RemoteWifeUpdateStatusTool = Tool.make("t3_environment_update_wife_status", {
+  description: "Check the last T3 Code + Monku no Mori update on this or a linked PC, including success/failure and log location.",
+  parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
+  success: RemoteWifeUpdateResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+}).annotate(Tool.Title, "Check remote T3 and Mori update")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
+
 const EnvironmentLinksTool = Tool.make("t3_environment_links", {
   description:
     "List linked environments (the user's other machines) and whether each answers now. Pass one's `environmentId` to a tool to act there; `delegate_task` takes `target.environmentId`. Expired: link it again with `t3_environment_link`.",
@@ -366,6 +398,8 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadWaitTool,
   ThreadInterruptTool,
   EnvironmentLinksTool,
+  RemoteWifeUpdateTool,
+  RemoteWifeUpdateStatusTool,
   EnvironmentLinkTool,
   EnvironmentUnlinkTool,
 );
