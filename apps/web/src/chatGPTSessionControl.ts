@@ -1896,8 +1896,10 @@ export async function runChatGPTSessionControl(input: {
     if (input.expectedConversationId !== undefined) {
       requireExpectedChatGPTConversation(input.expectedConversationId, before.observedGuestUrl);
     }
-    if (input.expectedNewChat && (before.status !== "new" || before.conversationId))
-      throw new Error("New-chat target changed before typing; no message sent.");
+    if (input.expectedNewChat &&
+        (before.status !== "new" || before.conversationId ||
+         !allowsChatGPTExperimentalNewChat(entry, before.observedGuestUrl ?? "")))
+      throw new Error("New-chat target is not an exact backend-owned fresh guest; no message sent.");
     const receiptKey = sendReceiptKey(environmentId, entry.id);
     // A successful DOM observation can outlive a lost IPC reply and the original
     // click fence. Never resend a previously confirmed stable message ID.
@@ -2143,13 +2145,13 @@ export async function runChatGPTSessionControl(input: {
           );
           uncertainChatGPTSends.set(receiptKey, unresolved);
           try {
-            await chatGPTWebviewAutomation.press(runtimeId, {
-              key: "Enter",
+            const submitted = await chatGPTWebviewAutomation.directSubmit(runtimeId, {
+              text: unresolved.text,
               expectedConversationId: input.expectedConversationId,
-              expectedComposerText: unresolved.text,
               sendExpiresAt: input.sendExpiresAt,
-              recoverStagedComposer: true,
             });
+            if (submitted === "not_submitted")
+              throw new Error("Direct callback unavailable before submitting; no click issued.");
           } catch (error) {
             if (wasStaged && isUnsubmittedPress(error)) {
               unresolved = { ...unresolved, staged: true };
@@ -2258,48 +2260,19 @@ export async function runChatGPTSessionControl(input: {
         "Unrelated or unverifiable UNKNOWN send remains; manual reconciliation required.",
       );
     if (!acceptsSend(before))
-      throw new Error("ChatGPT page is unavailable before typing; no message sent.");
+      throw new Error("ChatGPT page is unavailable before direct submission; no message sent.");
     const { runtimeId } = guestFor(environmentId, entry.id);
     if (!runtimeId) throw new Error("ChatGPT guest is not attached.");
-    const inputExpression = `(() => {const el=document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
-      return el instanceof HTMLTextAreaElement ? el.value :
-        el instanceof HTMLElement ? (el.innerText||el.textContent||"") : null;})()`;
-    const draft = await chatGPTWebviewAutomation.evaluate(runtimeId, {
-      expression: inputExpression,
-    });
-    const previous = input.previousDeliveredMessage;
-    const previousText =
-      previous &&
-      wasDurableChatGPTSendConfirmed(
-        environmentId,
-        entry.id,
-        before.observedGuestUrl ?? "",
-        previous,
-      )
-        ? (confirmedChatGPTSendText(
-            environmentId,
-            entry.id,
-            before.observedGuestUrl ?? "",
-            previous,
-          ) ?? previous)
-        : undefined;
-    const exactText = (text: string) => text.replace(/\r\n/g, "\n");
-    const replaceOwnedComposerText =
-      typeof draft === "string" &&
-      previousText !== undefined &&
-      exactText(draft) === exactText(previousText)
-        ? previousText
-        : undefined;
-    const directQueueSend = !!input.expectedConversationId && !!input.sendExpiresAt;
-    if (
-      !directQueueSend &&
-      typeof draft === "string" &&
-      draft.trim() &&
-      replaceOwnedComposerText === undefined
-    )
-      throw new Error("Composer contains an existing draft; refusing to overwrite it.");
-    if (legacyUnknown && typeof draft !== "string")
-      throw new Error("Cannot prove an empty composer; legacy UNKNOWN remains held.");
+    // Direct submission never reads, focuses, or replaces the human editor.
+    // A historical v1 UNKNOWN still needs its original empty-draft recovery
+    // prerequisite before its evidence can be archived.
+    if (legacyUnknown) {
+      const draft = (await chatGPTWebviewAutomation.evaluate(runtimeId, {
+        expression: CHATGPT_COMPOSER_PROBE_EXPRESSION,
+      })) as ComposerProbe;
+      if (draft.status !== "empty" || draft.url !== before.observedGuestUrl)
+        throw new Error("Legacy UNKNOWN requires a verified empty composer.");
+    }
     // Optional C05 applies only to an already authorized guarded send to an existing
     // guest. Never scans idle browsers or wakes guests solely to fetch policy.
     let policyEnrichment: {
@@ -2394,29 +2367,32 @@ export async function runChatGPTSessionControl(input: {
     if (guardedConversation) {
       requireExpectedChatGPTConversation(guardedConversation, refreshed.observedGuestUrl);
     }
-    if (input.expectedNewChat && (refreshed.status !== "new" || refreshed.conversationId))
-      throw new Error("New-chat target changed before typing; no message sent.");
+    if (input.expectedNewChat &&
+        (refreshed.status !== "new" || refreshed.conversationId ||
+         !allowsChatGPTExperimentalNewChat(entry, refreshed.observedGuestUrl ?? "")))
+      throw new Error("New-chat target changed before direct submission; no message sent.");
     if (
       refreshed.observedGuestUrl !== before.observedGuestUrl ||
       !acceptsSend(refreshed) ||
       guestFor(environmentId, entry.id).runtimeId !== runtimeId
     ) {
-      throw new Error("Session URL, generation or guest changed before typing; refusing send.");
+      throw new Error("Session URL, generation or guest changed before direct submission; refusing send.");
     }
     if ((uncertainChatGPTSends.get(receiptKey) ?? null) !== (unresolved ?? null))
-      throw new Error("Unknown-send ledger changed before typing; aborting.");
+      throw new Error("Unknown-send ledger changed before direct submission; aborting.");
     if (
       legacyUnknown &&
       !archiveLegacyUnknownChatGPTSend(environmentId, entry.id, before.observedGuestUrl ?? "")
     )
       throw new Error("Legacy UNKNOWN evidence could not be archived; send remains blocked.");
-    await chatGPTWebviewAutomation.waitFor(runtimeId, {
-      selector: COMPOSER_SELECTOR,
-      timeoutMs: 3000,
-    });
-    if (expired()) throw new Error("Queued attempt expired before typing; no message sent.");
-    // Persist ownership before typing: expiry, transport loss or renderer death
-    // can leave an exact automation draft even though Send was never invoked.
+    // The callback resolves its own React fiber. Do not edit, focus, or clear
+    // the composer: a human draft is unrelated to this automated message.
+    const observedConversation = chatGPTConversationIdFromUrl(refreshed.observedGuestUrl);
+    if (!input.expectedNewChat && !observedConversation)
+      throw new Error("No verified ChatGPT conversation for direct submission.");
+    if (expired()) throw new Error("Queued attempt expired before direct submission; no message sent.");
+    // Persist the target and the original message before attempting any IPC.
+    // A lost callback acknowledgement must remain UNKNOWN, never blind-retried.
     let attempt: PendingChatGPTSend = {
       staged: true,
       original: prepared.text,
@@ -2433,69 +2409,27 @@ export async function runChatGPTSessionControl(input: {
       attempt,
     );
     uncertainChatGPTSends.set(receiptKey, attempt);
-    try {
-      if (!directQueueSend) {
-        await chatGPTWebviewAutomation.type(runtimeId, {
-          selector: COMPOSER_SELECTOR,
-          text: message,
-          clear: true,
-          requireEmptyComposer: true,
-          replaceOwnedComposerText,
-          expectedConversationId: input.expectedConversationId,
-        });
-      }
-    } catch (error) {
-      // No press can run after this rejection. Retain only an exact automation
-      // draft; an empty or human-owned composer must not acquire an UNKNOWN fence.
-      const draft = (await chatGPTWebviewAutomation
-        .evaluate(runtimeId, {
-          expression: CHATGPT_COMPOSER_PROBE_EXPRESSION,
-        })
-        .catch(() => null)) as ComposerProbe | null;
-      if (draft && draft.status === "empty" && draft.url === attempt.url) {
-        discardDurableUnsubmittedChatGPTSend(environmentId, entry.id);
-        uncertainChatGPTSends.delete(receiptKey);
-      }
-      throw error;
-    }
-    if (expired())
-      throw new Error("Queued attempt expired before submitting; composer may contain a draft.");
-    // Upgrade before the irreversible click; a transport error then stays UNKNOWN.
     attempt = { ...attempt, staged: false };
     reserveDurableUnknownChatGPTSend(environmentId, entry.id, attempt.url, true, attempt);
     uncertainChatGPTSends.set(receiptKey, attempt);
     try {
-      if (directQueueSend) {
-        const submitted = await chatGPTWebviewAutomation.directSubmit(runtimeId, {
-          text: message,
-          expectedConversationId: input.expectedConversationId!,
-          sendExpiresAt: input.sendExpiresAt,
-        });
-        if (submitted === "not_submitted")
-          throw new Error("Direct callback unavailable before submitting; no click issued.");
-      } else {
-        await chatGPTWebviewAutomation.press(runtimeId, {
-          key: "Enter",
-          expectedConversationId: input.expectedConversationId,
-          expectedComposerText: message,
-          sendExpiresAt: input.sendExpiresAt,
-        });
-      }
+      const submitted = await chatGPTWebviewAutomation.directSubmit(runtimeId, {
+        text: message,
+        ...(input.expectedNewChat
+          ? { expectedNewChat: true }
+          : { expectedConversationId: input.expectedConversationId ?? observedConversation! }),
+        sendExpiresAt: input.sendExpiresAt,
+      });
+      if (submitted === "not_submitted")
+        throw new Error("Direct callback unavailable before submitting; no click issued.");
     } catch (error) {
       if (isUnsubmittedPress(error)) {
-        if (directQueueSend) {
-          // The direct callback was never invoked, and this path never typed
-          // into the composer. Remove its fence rather than creating an UNKNOWN
-          // draft that would prevent recovery and later messages.
-          attempt = { ...attempt, staged: true };
-          reserveDurableUnknownChatGPTSend(environmentId, entry.id, attempt.url, true, attempt);
-          discardDurableUnsubmittedChatGPTSend(environmentId, entry.id);
-          uncertainChatGPTSends.delete(receiptKey);
-        } else {
-          attempt = { ...attempt, staged: true };
-          reserveDurableUnknownChatGPTSend(environmentId, entry.id, attempt.url, true, attempt);
-          uncertainChatGPTSends.set(receiptKey, attempt);
-        }
+        // The callback was positively NOT called. Downgrade the durable
+        // attempt before discarding; arbitrary IPC errors must never do this.
+        attempt = { ...attempt, staged: true };
+        reserveDurableUnknownChatGPTSend(environmentId, entry.id, attempt.url, true, attempt);
+        discardDurableUnsubmittedChatGPTSend(environmentId, entry.id);
+        uncertainChatGPTSends.delete(receiptKey);
         return {
           sessionId: entry.id,
           delivery: "pre_submit_aborted",
@@ -2523,7 +2457,7 @@ export async function runChatGPTSessionControl(input: {
             }
           : {}),
         reason:
-          "Send was invoked but the guest bridge did not confirm the click. Outcome unknown; never retry blindly.",
+          "Direct submission may have occurred, but the guest bridge did not confirm it. Outcome unknown; never retry blindly.",
       };
     }
     const deadline = Date.now() + 15_000;
@@ -2552,7 +2486,7 @@ export async function runChatGPTSessionControl(input: {
           };
         }
       } catch {
-        /* guest inspection can fail after the click; receipt remains unknown */
+        /* guest inspection can fail after direct submission; receipt remains unknown */
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 250));
     }

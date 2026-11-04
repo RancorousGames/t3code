@@ -9,6 +9,7 @@ import { findMountedChatGPTGuest } from "./browser/mountedChatGPTGuest";
 import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { chatGPTDirectSubmitExpression, directSubmitOutcome } from "./chatGPTDirectSubmit";
+import { readChatGPTSessionProfileId } from "./chatGPTAccountProfiles";
 
 type ChatGPTWebview = HTMLElementTagNameMap["webview"] & {
   getURL?: () => string;
@@ -18,10 +19,13 @@ type ChatGPTWebview = HTMLElementTagNameMap["webview"] & {
 
 // A native Chromium page has no DOM <webview>; its exact Electron owner is
 // addressed by UUID and environment. Never infer this from the selected tab.
-const nativeSessionEnvironments = new Map<string, string>();
+const nativeSessionEnvironments = new Map<string, { environmentId: string; profileId: string }>();
 export function registerNativeChatGPTAutomationSession(environmentId: string, sessionId: string) {
   if (isPersistentChatGPTSessionOptedIn(sessionId))
-    nativeSessionEnvironments.set(sessionId, environmentId);
+    nativeSessionEnvironments.set(sessionId, {
+      environmentId,
+      profileId: readChatGPTSessionProfileId(environmentId, sessionId),
+    });
 }
 function findWebview(runtimeTabId: string): ChatGPTWebview {
   // Prefer an explicitly mounted guest over the T3-native engine preference.
@@ -30,12 +34,12 @@ function findWebview(runtimeTabId: string): ChatGPTWebview {
   const mounted = findMountedChatGPTGuest(runtimeTabId);
   if (mounted) return mounted as ChatGPTWebview;
   if (isPersistentChatGPTSessionOptedIn(runtimeTabId)) {
-    const environmentId = nativeSessionEnvironments.get(runtimeTabId);
+    const target = nativeSessionEnvironments.get(runtimeTabId);
     const bridge =
       typeof window !== "undefined" ? window.desktopBridge?.stableChatGPTViewRequest : undefined;
-    if (!environmentId || !bridge)
+    if (!target || !bridge)
       throw new Error("Native ChatGPT session is not registered or its bridge is unavailable.");
-    const identity = { sessionId: runtimeTabId, environmentId, profileId: "default" };
+    const identity = { sessionId: runtimeTabId, ...target };
     return {
       executeJavaScript: async (expression: string) => {
         const response = (await bridge({ operation: "evaluate", identity, expression })) as {
@@ -380,7 +384,8 @@ export const chatGPTWebviewAutomation = {
     runtimeId: string,
     options: {
       text: string;
-      expectedConversationId: string;
+      expectedConversationId?: string | undefined;
+      expectedNewChat?: boolean | undefined;
       sendExpiresAt?: number | undefined;
     },
   ): Promise<"submitted" | "not_submitted"> {

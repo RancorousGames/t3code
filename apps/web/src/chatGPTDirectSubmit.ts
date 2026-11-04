@@ -10,8 +10,8 @@ export type DirectSubmitResult = { submitted: boolean; reason?: string };
  */
 export function chatGPTDirectSubmitExpression(input: {
   text: string;
-  expectedConversationId?: string;
-  expectedNewChat?: boolean;
+  expectedConversationId?: string | undefined;
+  expectedNewChat?: boolean | undefined;
   sendExpiresAt?: number | undefined;
 }): string {
   if (!input.text.trim() || Boolean(input.expectedConversationId) === Boolean(input.expectedNewChat))

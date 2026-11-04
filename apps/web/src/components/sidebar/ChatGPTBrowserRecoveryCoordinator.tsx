@@ -22,6 +22,7 @@ import {
   isChatGPTConversationUrl,
 } from "../../chatGPTBrowserSessions";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
+import { chatGPTDirectSubmitExpression } from "../../chatGPTDirectSubmit";
 import { recordChatGPTRecoveryEvent } from "../../chatGPTRecoveryDiagnostics";
 import { recordChatGPTRecoveryAttemptLog } from "../../chatGPTRecoveryAttemptLog";
 import {
@@ -344,15 +345,17 @@ function safeIdleForContinue(snapshot: RecoverySnapshot, episode: OrangeEpisode)
     snapshot.permanentReason == null
   );
 }
-// The STOP click is scoped to a still-interrupted response, same user turn and exact URL.
-// Persist the stop attempt BEFORE this command; ambiguous results must not be replayed.
-// Type only into a provably empty editor for the exact orphaned turn.
-// This guest-side check and the mutation run in one JS evaluation, avoiding
-// a user draft arriving between the passive probe and editing.
-function guardedRecoveryContinueTypeExpression(
+// STOP is scoped to an unchanged orphaned turn. Continue is passed to
+// ChatGPT's React submit handler without ever typing into the user editor.
+// Persist the episode before this call; an ambiguous callback is never replayed.
+function guardedRecoveryContinueDirectExpression(
   conversationId: string,
   episode: OrangeEpisode,
 ): string {
+  const submit = chatGPTDirectSubmitExpression({
+    text: "Continue.",
+    expectedConversationId: conversationId,
+  });
   return `(() => {
     const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
     if (actual !== ${JSON.stringify(conversationId)}) return {result:"identity_changed"};
@@ -360,52 +363,13 @@ function guardedRecoveryContinueTypeExpression(
     if (page.lastUserTurnKey !== ${JSON.stringify(episode.userTurnKey)} ||
         page.lastUserTurn !== ${episode.userTurn}) return {result:"turn_changed"};
     if (${CHATGPT_ACTIVITY_EXPRESSION} !== "idle") return {result:"not_idle"};
-    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]');
-    if (!(editor instanceof HTMLElement)) return {result:"editor_missing"};
-    const before = editor instanceof HTMLTextAreaElement ? editor.value : (editor.innerText || editor.textContent || "");
-    if (before.trim()) return {result:"existing_draft"};
-    editor.focus();
-    if (editor.isContentEditable) {
-      const range = document.createRange();
-      range.selectNodeContents(editor);
-      const selection = document.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    } else if (editor instanceof HTMLTextAreaElement) {
-      editor.select();
-    } else return {result:"not_editable"};
-    const inserted = document.execCommand("insertText", false, "Continue.");
-    const after = editor instanceof HTMLTextAreaElement ? editor.value : (editor.innerText || editor.textContent || "");
-    return {result: inserted && after.trim() === "Continue." ? "continue_typed" : "type_uncertain"};
+    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+    if (stop && stop.getClientRects().length && !stop.hasAttribute("disabled")) return {result:"still_generating"};
+    const result = ${submit};
+    return {result: result.submitted ? "continue_submitted" : result.reason ?? "direct_unavailable"};
   })()`;
 }
 
-function guardedRecoveryContinueSendExpression(
-  conversationId: string,
-  episode: OrangeEpisode,
-): string {
-  return `(() => {
-    const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
-    if (actual !== ${JSON.stringify(conversationId)}) return {result:"identity_changed"};
-    const page = (${inspectChatGPTPage.toString()})({from:"end",count:1,includeMessages:false});
-    if (page.lastUserTurnKey !== ${JSON.stringify(episode.userTurnKey)} ||
-        page.lastUserTurn !== ${episode.userTurn}) return {result:"turn_changed"};
-    const status = ${CHATGPT_ACTIVITY_EXPRESSION};
-    if (status !== "idle") return {result:"not_idle"};
-    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
-    if (stop && stop.getClientRects().length && !stop.hasAttribute("disabled")) return {result:"still_generating"};
-    const editor = document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],[data-testid="composer-input"],form textarea,[contenteditable="true"][role="textbox"]');
-    const draft = editor instanceof HTMLTextAreaElement ? editor.value : editor instanceof HTMLElement ? (editor.innerText || editor.textContent || "") : null;
-    if (draft?.trim() !== "Continue.") return {result:"draft_changed"};
-    const buttons = ['[data-testid="send-button"]','[data-testid="composer-submit-button"]','button[aria-label="Send prompt"]','button[aria-label="Send message"]','button[aria-label="Send"]','button[type="submit"]']
-      .flatMap(selector => [...document.querySelectorAll(selector)]);
-    const send = buttons.find(node => node instanceof HTMLButtonElement &&
-      !node.disabled && node.getAttribute("aria-disabled") !== "true");
-    if (!(send instanceof HTMLButtonElement)) return {result:"send_control_unavailable"};
-    send.click();
-    return {result:"continue_clicked"};
-  })()`;
-}
 function stopOrphanExpression(conversationId: string, episode: OrangeEpisode): string {
   return `(() => {
     const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
@@ -1194,7 +1158,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 safeIdleForContinue(snapshot, episode)
               ) {
                 // The STOP click from the previous scan has visibly reached idle.
-                // One durable marker must precede ANY typing or Send operation.
+                // One durable marker must precede the direct callback.
                 const latest = readThreadPreviewState(threadRef);
                 if (latest.activeTabId !== tabId || latest.serverEpoch !== state.serverEpoch)
                   continue;
@@ -1240,45 +1204,11 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   detail: "orange Continue (guarded)",
                 });
                 try {
-                  const typed = await executeGuestRecoveryActionWithDeadline(
-                    webview,
-                    guardedRecoveryContinueTypeExpression(conversationId, stamped),
-                    retainBridge(sessionId),
-                  );
-                  if (typed?.result !== "continue_typed") {
-                    noteRecoveryConcern(
-                      envId,
-                      persistent,
-                      sessionId,
-                      conversationId,
-                      "continue_type_not_confirmed",
-                      Date.now(),
-                    );
-                    continue;
-                  }
-                  const beforePress = await inspectFailure(webview, expectedUrl, envId);
-                  if (
-                    !beforePress ||
-                    beforePress.problem !== "healthy" ||
-                    !sameEpisode(beforePress.snapshot, stamped) ||
-                    beforePress.snapshot.stopVisible !== false ||
-                    beforePress.snapshot.permanentReason
-                  ) {
-                    noteRecoveryConcern(
-                      envId,
-                      persistent,
-                      sessionId,
-                      conversationId,
-                      "continue_typed_but_pre_send_identity_or_health_changed",
-                      Date.now(),
-                    );
-                    continue; // Leave the typed draft for a human; never retry.
-                  }
-                  // Same guest JS turn checks URL, the exact user turn, idle state
-                  // and that the editor is *exactly* our Continue. before clicking.
+                  // Identity, orphan turn and idle state are checked atomically
+                  // with the direct React callback. No intermediate typed draft.
                   const dispatched = await executeGuestRecoveryActionWithDeadline(
                     webview,
-                    guardedRecoveryContinueSendExpression(conversationId, stamped),
+                    guardedRecoveryContinueDirectExpression(conversationId, stamped),
                     retainBridge(sessionId),
                   );
                   recoveryMetric(
@@ -1288,9 +1218,9 @@ export function ChatGPTBrowserRecoveryCoordinator({
                     conversationId,
                     snapshot,
                     episode.problem,
-                    dispatched?.result === "continue_clicked" ? "continue" : "uncertain",
+                    dispatched?.result === "continue_submitted" ? "continue" : "uncertain",
                   );
-                  if (dispatched?.result !== "continue_clicked")
+                  if (dispatched?.result !== "continue_submitted")
                     noteRecoveryConcern(
                       envId,
                       persistent,
@@ -1319,7 +1249,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   );
                   console.warn("[ChatGPT recovery] Continue left for human reconciliation:", error);
                 }
-                // Even a successful click is NOT proof of delivery or completion.
+                // Even a successful callback is NOT proof of delivery or completion.
                 phase(sessionId, null);
                 continue;
               }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chatGPTConversationIdFromUrl } from "../../web/src/chatGPTConversationIdentity.ts";
+import { isChatGPTHomeUrl } from "../../web/src/chatGPTBrowserPrewarm.ts";
 import { inspectChatGPTPage, type PageInspection } from "../../web/src/chatGPTSessionDom.ts";
 import { chatGPTWebviewAutomation } from "../../web/src/chatGPTWebviewAutomation.ts";
 import { CHAT_BATCH_SIZE, chooseChatBatch, makeChatBatch, mergeChatBatchDrafts, parseChatBatchAnswer, type ChatBatchRequest } from "./chat-batches.ts";
@@ -27,11 +28,6 @@ type PendingJob = {
 
 const storageKey = (id: string) => `mori.ai-chat.batch:${id}`;
 const VIEW = (id: string) => `mori-chatgpt:${id}`;
-const COMPOSER = [
-  "#prompt-textarea", '[data-testid="prompt-textarea"]', '[data-testid="composer-input"]',
-  '[contenteditable="true"][role="textbox"]', "div[contenteditable=true]", "textarea",
-].join(", ");
-
 function restore(projectId: string): PendingJob | null {
   try {
     const data: unknown = JSON.parse(localStorage.getItem(storageKey(projectId)) ?? "null");
@@ -106,7 +102,7 @@ export function useChatBatchWorker(input: {
           !["idle"].includes(current.activity) || current.connectionInterrupted ||
           current.conversationFull) throw Error("ChatGPT must be idle, connected, and ready before translating.");
       const expected = chatGPTConversationIdFromUrl(current.url);
-      if (expected === null && !/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\/?(?:\?.*)?$/.test(current.url)) {
+      if (expected === null && !isChatGPTHomeUrl(current.url)) {
         throw Error("Open a ChatGPT conversation before starting this batch.");
       }
       const request = makeChatBatch(project, prefs, draftable, sessionId, crypto.randomUUID());
@@ -124,25 +120,56 @@ export function useChatBatchWorker(input: {
       prepared = { request, conversationId: expected, folder: fileReceipt.folder, stage: "staged" };
       updateJob(prepared);
       const runtimeId = VIEW(sessionId);
-      await chatGPTWebviewAutomation.waitFor(runtimeId, { selector: COMPOSER, timeoutMs: 7000 });
-      await chatGPTWebviewAutomation.type(runtimeId, {
-        selector: COMPOSER, text: request.message, requireEmptyComposer: true,
-        expectedConversationId: expected ?? undefined,
-      });
-      if (guest.getURL() !== current.url && expected && !sameConversation(expected, guest.getURL())) {
-        throw Error("Conversation changed during preparation. The staged text was not submitted.");
+      const expiresAt = Date.now() + 8_000;
+      const sameGuest = () => readyIdRef.current === sessionId && guestRef.current === guest;
+      const stillAtTarget = () => sameGuest() &&
+        (expected ? sameConversation(expected, guest.getURL()) : isChatGPTHomeUrl(guest.getURL()));
+      let submitted = false;
+      // The mounted ChatGPT React callback may appear after the basic editor
+      // readiness probe. Only a definite no-callback result permits waiting.
+      while (Date.now() < expiresAt) {
+        if (!stillAtTarget())
+          throw Error("ChatGPT session changed before batch dispatch; no message sent.");
+        // Persist before every potentially irreversible callback. A lost IPC
+        // response is UNKNOWN and must never cause a second batch submission.
+        prepared = { ...prepared, stage: "unknown" };
+        updateJob(prepared);
+        const outcome = await chatGPTWebviewAutomation.directSubmit(runtimeId, {
+          text: request.message,
+          ...(expected ? { expectedConversationId: expected } : { expectedNewChat: true }),
+          sendExpiresAt: expiresAt,
+        });
+        if (outcome === "submitted") {
+          submitted = true;
+          break;
+        }
+        prepared = { ...prepared, stage: "staged" };
+        updateJob(prepared);
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
       }
-      // Once we start the send operation, failures are UNKNOWN, never a reason
-      // to retry a potentially delivered ChatGPT user turn.
-      prepared = { ...prepared, stage: "unknown" };
-      updateJob(prepared);
-      await chatGPTWebviewAutomation.press(runtimeId, {
-        key: "Enter", expectedConversationId: expected ?? undefined,
-        expectedComposerText: request.message,
-        sendExpiresAt: Date.now() + 8000,
-      });
-      prepared = { ...prepared, stage: "sent" };
-      updateJob(prepared);
+      if (!submitted)
+        throw Error("ChatGPT's direct-submit callback did not become ready; no message was sent.");
+
+      // A callback return is NOT a delivery receipt. Require the exact batch
+      // marker to appear in a rendered user turn, even across first-chat navigation.
+      const marker = `MONKU_TRANSLATION_BATCH_ID: ${request.requestId}`;
+      const verificationDeadline = Date.now() + 10_000;
+      while (Date.now() < verificationDeadline && sameGuest()) {
+        const page = await guest.executeJavaScript(inspectExpression(12)) as PageInspection;
+        const observedConversation = chatGPTConversationIdFromUrl(page.url);
+        if (expected ? observedConversation !== expected : !observedConversation) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        if (page.messages.some((entry) => entry.role === "user" && entry.text.includes(marker))) {
+          prepared = { ...prepared, stage: "sent", conversationId: observedConversation };
+          updateJob(prepared);
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+      if (prepared.stage !== "sent")
+        throw Error("ChatGPT direct submit was invoked but its user turn is unconfirmed; check this conversation, do not resend.");
       toast(`Sent ${request.ids.length} ${request.ids.length === 1 ? "line" : "lines"} to ChatGPT. Waiting for JSON proposals.`);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "ChatGPT batch submission failed.";

@@ -6,6 +6,7 @@ import { guardedNativeChatGPTReload } from "../../browser/guardedNativeChatGPTRe
 import { chatGPTBrowserLastUrlKey, readChatGPTBrowserSessions } from "../../chatGPTBrowserSessions";
 import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
+import { chatGPTDirectSubmitExpression } from "../../chatGPTDirectSubmit";
 import {
   hasChatGPTLoadFailure,
   cooldownElapsed,
@@ -129,8 +130,13 @@ function clearDurableFailureAge(env: string, id: string): void {
   try { localStorage.removeItem(failureAgeKey(env, id)); }
   catch { /* best effort */ }
 }
-/** Every action checks the exact route, turn, editor and status inside its own guest JS turn. */
-function nativeOrangeExpression(url: string, episode: NativeOrangeEpisode, action: "stop" | "type" | "send"): string {
+/** Recovery checks URL, last human turn, and generation atomically with the
+ * direct callback. No synthetic typing or Send click is performed. */
+function nativeOrangeExpression(url: string, episode: NativeOrangeEpisode, action: "stop" | "send"): string {
+  const submit = chatGPTDirectSubmitExpression({
+    text: "Continue.",
+    expectedConversationId: episode.conversationId,
+  });
   return `(() => {
     if (location.href !== ${JSON.stringify(url)}) return "route-changed";
     const page = (${inspectChatGPTPage.toString()})({from:"end",count:1,includeMessages:false});
@@ -149,26 +155,13 @@ function nativeOrangeExpression(url: string, episode: NativeOrangeEpisode, actio
       stop.click(); return "stop-clicked";
     }
     if (activity !== "idle" || (stop && stop.getClientRects().length && !stop.hasAttribute("disabled"))) return "not-idle";
-    if (${JSON.stringify(action)} === "type") {
-      if (draft.trim()) return "draft-present";
-      editor.focus();
-      if (editor.isContentEditable) {
-        const selection = document.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(editor);
-        selection?.removeAllRanges(); selection?.addRange(range);
-      } else if (editor instanceof HTMLTextAreaElement) editor.select();
-      else return "editor-unsupported";
-      const inserted = document.execCommand("insertText",false,"Continue.");
-      const after = editor instanceof HTMLTextAreaElement ? editor.value : (editor.innerText || editor.textContent || "");
-      return inserted && after.trim() === "Continue." ? "continue-typed" : "type-unconfirmed";
-    }
-    if (draft.trim() !== "Continue.") return "draft-changed";
-    const buttons = ['[data-testid="send-button"]','[data-testid="composer-submit-button"]','button[aria-label="Send prompt"]','button[aria-label="Send message"]','button[aria-label="Send"]','button[type="submit"]'];
-    const send = buttons.flatMap(selector => [...document.querySelectorAll(selector)])
-      .find(el => el instanceof HTMLButtonElement && !el.disabled && el.getAttribute("aria-disabled") !== "true");
-    if (!(send instanceof HTMLButtonElement)) return "send-unavailable";
-    send.click(); return "continue-clicked";
+    // Preserve the old automatic-recovery policy: a human draft blocks
+    // unsolicited Continue. A legacy staged "Continue." may still complete
+    // without modifying that old draft.
+    if (draft.trim() && !(${JSON.stringify(episode.stage)} === "typed" && draft.trim() === "Continue."))
+      return "draft-present";
+    const result = ${submit};
+    return result.submitted ? "continue-submitted" : result.reason ?? "direct-unavailable";
   })()`;
 }
 /** A missing composer must stay broken across two observations and a full grace period.
@@ -412,8 +405,8 @@ export function ChatGPTNativeRecoveryCoordinator({
               }
               if (readChatGPTRecoverySettings().paused || hasUncertainChatGPTSend(env, id))
                 continue;
-              const next = existingEpisode.stage === "stop" ? "type" : "send";
-              if (next === "send" && !allowsChatGPTOrangeRecoveryAction(
+              const next = "send";
+              if (!allowsChatGPTOrangeRecoveryAction(
                 readChatGPTRecoverySettings().orangeStrategy, "continue")) {
                 decision(id, "continue-disabled", "Orange recovery settings prohibit sending Continue.");
                 continue;
@@ -426,12 +419,12 @@ export function ChatGPTNativeRecoveryCoordinator({
               try {
                 // Persist an at-most-once marker before invoking the guest. A lost
                 // IPC reply must not cause a duplicate Continue on the next scan.
-                const updated = { ...existingEpisode, stage: next === "type" ? "type-pending" as const : "send-pending" as const };
+                const updated = { ...existingEpisode, stage: "send-pending" as const };
                 if (!saveNativeOrangeEpisode(env, id, updated)) continue;
                 recordChatGPTRecoveryAttemptLog(env, {
                   at: Date.now(), kind: "attempt", sessionId: id,
                   attemptNumber: readRecoveryQueue(env).failures[id]?.attempts ?? 0,
-                  detail: next === "type" ? "native orange Continue typing" : "native orange Continue send",
+                  detail: "native orange Continue direct submission",
                 });
                 logChatGPTRecoveryTimeline(env, "native", "attempt", `Guarded orange ${next} on exact stalled user turn.`, { sessionId: id });
                 const identity = { environmentId: env, sessionId: id,
@@ -440,10 +433,8 @@ export function ChatGPTNativeRecoveryCoordinator({
                   operation: "evaluate", identity,
                   expression: nativeOrangeExpression(first.url, existingEpisode, next),
                 }) as { result?: string };
-                if (response.result === (next === "type" ? "continue-typed" : "continue-clicked"))
-                  saveNativeOrangeEpisode(env, id, {
-                    ...updated, stage: next === "type" ? "typed" : "sent",
-                  });
+                if (response.result === "continue-submitted")
+                  saveNativeOrangeEpisode(env, id, { ...updated, stage: "sent" });
                 recordChatGPTRecoveryEvent(env, id, "native-orange-action",
                   `${next}:${response.result ?? "unconfirmed"}`);
                 logChatGPTRecoveryTimeline(env, "native", "outcome",

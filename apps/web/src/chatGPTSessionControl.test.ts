@@ -209,6 +209,16 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
           const marker = /^\[T3-MSG:[a-f0-9-]{36}\]/i.exec(typed)?.[0];
           return visible && !!marker && script.includes(marker);
         }
+        if (script.includes("serialization_metadata") && script.includes("callback(")) {
+          const match = script.match(/callback\(("(?:\\.|[^"\\])*"), performance/);
+          if (!match) throw new Error("Direct submit text not found");
+          typed = JSON.parse(match[1]!);
+          presses++;
+          sent = true;
+          if (!options.delayed) visible = true;
+          if (options.pressThrows) throw new Error("bridge detached after callback");
+          return { submitted: true };
+        }
         if (script.includes("const selectors = [")) {
           if (options.composerTampered) {
             expect(script).toContain("composerMismatch");
@@ -250,6 +260,9 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
       setObservedTurn: () => { visible = true; },
       get typed() {
         return typed;
+      },
+      get draft() {
+        return composerDraft;
       },
       get presses() {
         return presses;
@@ -429,7 +442,7 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     }
   });
 
-  it("preserves empty-composer guards both before and after optional policy intake", async () => {
+  it("preserves unsent drafts both before and after optional policy intake", async () => {
     const message = "Original work";
     const policy = {
       qitemId: "qitem-draft",
@@ -453,10 +466,12 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     });
     try {
       existing.setComposerDraft("Unsent human draft");
-      await expect(runChatGPTSessionControl(input)).rejects.toThrow(/existing draft/);
-      expect(existing.read).not.toHaveBeenCalled();
-      expect(existing.typed).toBe("");
-      expect(existing.presses).toBe(0);
+      expect(await runChatGPTSessionControl(input)).toMatchObject({
+        delivery: "user_turn_observed", messageSent: true,
+      });
+      expect(existing.draft).toBe("Unsent human draft");
+      expect(existing.typed).toBe(message);
+      expect(existing.presses).toBe(1);
     } finally {
       existing.guest.remove();
     }
@@ -473,10 +488,13 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
       };
     });
     try {
-      await expect(runChatGPTSessionControl(input)).rejects.toThrow(/existing draft/);
+      expect(await runChatGPTSessionControl(input)).toMatchObject({
+        delivery: "user_turn_observed", messageSent: true,
+      });
       expect(racing.read).toHaveBeenCalledOnce();
-      expect(racing.typed).toBe("");
-      expect(racing.presses).toBe(0);
+      expect(racing.draft).toBe("Typed during optional intake");
+      expect(racing.typed).toContain(message);
+      expect(racing.presses).toBe(1);
     } finally {
       racing.guest.remove();
     }
@@ -654,10 +672,10 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     }
   });
 
-  it("does not click Send when human typing changes the composer after automation filled it", async () => {
-    const fixture = guestFixture(async () => { throw Error("offline"); },
-      { composerTampered: true });
+  it("direct submission never edits a human composer during guarded delivery", async () => {
+    const fixture = guestFixture(async () => { throw Error("offline"); });
     try {
+      fixture.setComposerDraft("A human is typing a separate thought.");
       const result = await runChatGPTSessionControl({
         environmentId: "local" as never,
         sessions: [{ id: browserId, title: "M3" }] as never,
@@ -666,12 +684,13 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
         sendExpiresAt: Date.now() + 70_000,
         message: "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\\nTest",
       });
-      expect(result).toMatchObject({ delivery: "pre_submit_aborted", sendAttempted: false });
-      expect(fixture.presses).toBe(0);
+      expect(result).toMatchObject({ delivery: "user_turn_observed", messageSent: true });
+      expect(fixture.presses).toBe(1);
+      expect(fixture.draft).toBe("A human is typing a separate thought.");
     } finally { fixture.guest.remove(); }
   });
 
-  it("replaces confirmed previous residue for the next queued send but preserves edits", async () => {
+  it("preserves confirmed prior residue while directly submitting the next queued message", async () => {
     const previous = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\nPrevious";
     const enriched = previous + "\npolicy context";
     const next = "[T3-MSG:bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb]\nNext";
@@ -683,9 +702,8 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
       recordDurableChatGPTSendConfirmed(input.environmentId, browserId,
         `https://chatgpt.com/c/${conversationId}`, previous, enriched);
       fixture.setComposerDraft(enriched + " edited");
-      await expect(runChatGPTSessionControl(input)).rejects.toThrow("existing draft");
-      fixture.setComposerDraft(enriched);
       expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "user_turn_observed" });
+      expect(fixture.draft).toBe(enriched + " edited");
       expect(fixture.typed).toBe(next);
       expect(fixture.presses).toBe(1);
     } finally { fixture.guest.remove(); }
