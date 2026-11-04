@@ -272,6 +272,8 @@ export class TaskBoardWorkCoordinator {
           return;
         }
         // The previous lease never reached Starting, so no spawn was authorized.
+        // Give unloaded queued-Caffy recipients first use of a newly free slot.
+        if (this.caffy.hasPendingQueuedWakes) return;
         // A fresh CAS reservation is safe and replaces the expired request ID.
         const capacity = await this.caffy.capacity().catch(() => ({ admissible: false }));
         if (!capacity.admissible) return;
@@ -295,7 +297,7 @@ export class TaskBoardWorkCoordinator {
         a.item.created.localeCompare(b.item.created) ||
         a.boardRoot.localeCompare(b.boardRoot) || a.item.taskId.localeCompare(b.item.taskId));
       for (const candidate of queued.slice(0, 20)) {
-        if (!this.running || !this.caffy.policyEnabled) return;
+        if (!this.running || !this.caffy.policyEnabled || this.caffy.hasPendingQueuedWakes) return;
         const capacity = await this.caffy.capacity().catch(() => ({ admissible: false }));
         if (!capacity.admissible) return;
         const requestId = NodeCrypto.randomUUID();
