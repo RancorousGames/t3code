@@ -169,11 +169,22 @@ export function DesktopAppActivationCoordinator() {
         const desired = new Set<string>();
         for (const item of snapshot.messages) {
           if (item.status !== "queued" || item.reason !== "guest_unmounted") continue;
-          // Durable outbox uses the public Bootstrap ID, while local native
-          // Chromium pages and the renderer session store use the internal ID.
-          const session = sessions.find(s =>
-            s.id === item.sessionId || s.bootstrapIdentity?.publicId === item.sessionId,
+          // The durable outbox may retain the original browser UUID even
+          // after Bootstrap promotes the session to a public T3_ID. Resolve
+          // the former through an exact verified idle event or, when none is
+          // retained after restart, a *unique* Bootstrap conversation binding.
+          // Never pick an arbitrary duplicate conversation/session.
+          const direct = sessions.filter(s =>
+            s.id === item.sessionId || s.bootstrapIdentity?.publicId === item.sessionId ||
+            (s.bootstrapIdentity?.conversationId === item.conversationId &&
+              readChatGPTIdleTransition(idleEnvironmentId, s.id)?.eventId.startsWith(
+                `${item.sessionId}:${item.conversationId}:`,
+              )),
           );
+          const candidates = direct.length ? direct : sessions.filter(s =>
+            s.bootstrapIdentity?.conversationId === item.conversationId,
+          );
+          const session = candidates.length === 1 ? candidates[0] : null;
           if (!session || session.hidden ||
               (session.bootstrapIdentity?.conversationId) !== item.conversationId)
             continue;
