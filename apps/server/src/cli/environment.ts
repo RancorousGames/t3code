@@ -15,6 +15,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -161,11 +162,67 @@ const environmentUnlinkCommand = Command.make("unlink", {
   ),
 );
 
+const remoteUpdateResult = Schema.Struct({
+  state: Schema.Literals(["queued", "running", "succeeded", "failed"]),
+  startedAt: Schema.String,
+  finishedAt: Schema.optional(Schema.String),
+  message: Schema.String,
+  logPath: Schema.String,
+});
+
+const remoteUpdate = (tool: "t3_environment_update_wife" | "t3_environment_update_wife_status") =>
+  Command.make(tool === "t3_environment_update_wife" ? "update-wife" : "update-wife-status", {
+    ...authLocationFlags,
+    environmentId: Argument.String("environment-id"),
+    json: jsonFlag,
+  }).pipe(
+    Command.withDescription(
+      tool === "t3_environment_update_wife"
+        ? "Explicitly start T3 + Mori update on a linked Windows PC."
+        : "Get durable T3 + Mori remote update status.",
+    ),
+    Command.withHandler((flags) =>
+      runWithPeerLinks(
+        flags,
+        (links) =>
+          Effect.gen(function* () {
+            const client = yield* PeerMcpClient.PeerMcpClient;
+            const result = yield* client.call({
+              environmentId: EnvironmentId.make(flags.environmentId),
+              tool,
+              arguments: {},
+              limits: { runtimeMode: "full-access", interactionMode: "default" },
+              success: remoteUpdateResult,
+            });
+            yield* Console.log(
+              flags.json
+                ? `${yield* Schema.encodeEffect(Schema.fromJsonString(remoteUpdateResult))(result)}\n`
+                : `${result.state}: ${result.message} (log: ${result.logPath})\n`,
+            );
+          }).pipe(
+            Effect.provide(
+              PeerMcpClient.layer.pipe(
+                Layer.provide(
+                  Layer.mergeAll(
+                    Layer.succeed(PeerLinks.PeerLinks, links),
+                    FetchHttpClient.layer,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        { quietLogs: flags.json },
+      ),
+    ),
+  );
+
 export const environmentCommand = Command.make("environment").pipe(
   Command.withDescription("Link other T3 Code environments, so agents here can work there."),
   Command.withSubcommands([
     environmentLinkCommand,
     environmentListCommand,
     environmentUnlinkCommand,
+    remoteUpdate("t3_environment_update_wife"),
+    remoteUpdate("t3_environment_update_wife_status"),
   ]),
 );
