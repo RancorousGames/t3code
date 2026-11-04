@@ -7,7 +7,6 @@ import { ShortcutsModal, PaletteModal, TemplatesModal } from "./Dialogs.tsx";
 import { ImportWizard } from "./ImportWizard.tsx";
 import { droppedSources, type DroppedSource } from "./drop-import.ts";
 import { Icon, IconSprite } from "./Icons.tsx";
-import { Inspector } from "./Inspector.tsx";
 import { MatrixScreen } from "./Matrix.tsx";
 import { Modal, PopoverFrame } from "./Overlays.tsx";
 import { NotificationViewport, notify } from "./Notifications.tsx";
@@ -528,7 +527,6 @@ export function MoriApp() {
             {value.notice && <div className="notice" role="alert">{value.notice}</div>}
             {workspace}
           </main>
-          {screen === "matrix" && prefs.inspectorOpen && !matrixSplit && <Inspector />}
         </div>
         <StatusBar />
       </div>

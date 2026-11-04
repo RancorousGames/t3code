@@ -60,7 +60,7 @@ input,textarea,select{font:inherit;color:inherit}
 .winbtn:focus-visible{outline:1px solid var(--moss);outline-offset:-2px}
 .winbtn.close:hover{background:#b33a2b;color:#fff}
 
-.body{display:grid;grid-template-columns:240px minmax(0,1fr) auto;min-height:0}
+.body{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:0}
 
 /* ---------- sidebar ---------- */
 .sidebar{background:var(--bg-1);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
@@ -816,6 +816,7 @@ mark.ins{background:var(--moss-bg);color:var(--moss);border-radius:3px}
 /* Optional copy/paste fallback: Matrix on the left, a real ChatGPT webview on the right. */
 .matrix-content{display:grid;grid-template-columns:minmax(0,1fr);flex:1;min-height:0;min-width:0;overflow:hidden}
 .matrix-content>.scroll{min-width:0;min-height:0}
+.matrix-content>.inspector{width:100%;min-width:0;min-height:0}
 .matrix-content.side-by-side>.scroll{overflow:auto}
 .matrix-content.side-by-side .c-id{overflow:hidden}
 .matrix-content.side-by-side .c-id>span:nth-child(2){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

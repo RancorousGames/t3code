@@ -57,7 +57,7 @@ const defaults: MoriPrefs = {
   glossaryEnabled: true,
   draftAhead: 100,
   filesExpanded: true,
-  inspectorOpen: true,
+  inspectorOpen: false,
   // The dev draft column starts collapsed: it is reference material, not the working text.
   columns: DEFAULT_COLUMN_PREFS,
 };
@@ -73,6 +73,9 @@ export function projectForTranslation(project: MoriProject, prefs: MoriPrefs): M
 }
 
 const STORAGE_KEY = "mori.prefs.v1";
+// Older versions persisted inspectorOpen=true even before the user opened a project.
+// Hide that auto-enabled inspector once; future deliberate toggles remain persistent.
+const INSPECTOR_DEFAULT_MIGRATION_KEY = "mori.inspector-hidden-by-default.v1";
 
 const load = (): MoriPrefs => {
   try {
@@ -86,6 +89,7 @@ const load = (): MoriPrefs => {
       glossaryEnabled: stored.glossaryEnabled !== false,
       draftAhead: DRAFT_AHEAD_OPTIONS.includes(stored.draftAhead as number) ? stored.draftAhead as number : defaults.draftAhead,
       filesExpanded: stored.filesExpanded !== false,
+      inspectorOpen: localStorage.getItem(INSPECTOR_DEFAULT_MIGRATION_KEY) === "1" && stored.inspectorOpen === true,
       columns: { ...defaults.columns, ...stored.columns },
     };
   } catch {
@@ -97,6 +101,7 @@ export function usePrefs() {
   const [prefs, setPrefs] = useState(load);
 
   useEffect(() => {
+    localStorage.setItem(INSPECTOR_DEFAULT_MIGRATION_KEY, "1");
     localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
     const style = document.documentElement.style;
     style.setProperty("--ja-scale", TEXT_SCALES[prefs.textSize]);

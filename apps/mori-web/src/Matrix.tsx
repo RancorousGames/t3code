@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import { useApp } from "./app-context.ts";
 import { tr } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
+import { Inspector } from "./Inspector.tsx";
 import { KeyCaps } from "./Overlays.tsx";
 import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
 import { Marked } from "./Marked.tsx";
@@ -302,6 +303,7 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
   };
   const splitRef = useRef<HTMLDivElement>(null);
   const [browserWidth, setBrowserWidth] = useState(46);
+  const inspectorVisible = prefs.inspectorOpen && !sideBySide;
   const columns = sideBySide ? COLUMN_DEFS.filter(def => ["id", "src", "tr", "st"].includes(def.key)) : shownColumns(prefs);
   const captureRef = useRef<HTMLButtonElement>(null);
   const [capture, setCapture] = useState<TermCapture | null>(null);
@@ -499,7 +501,7 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
       </div>
 
       <div ref={splitRef} className={`matrix-content${sideBySide ? " side-by-side" : ""}`}
-        style={{ gridTemplateColumns: sideBySide ? `minmax(0, ${100 - browserWidth}fr) 8px minmax(0, ${browserWidth}fr)` : "minmax(0, 1fr)" }}>
+        style={{ gridTemplateColumns: sideBySide ? `minmax(0, ${100 - browserWidth}fr) 8px minmax(0, ${browserWidth}fr)` : inspectorVisible ? "minmax(0, 1fr) 336px" : "minmax(0, 1fr)" }}>
       <div ref={scrollRef} className="scroll" onMouseUp={onMouseUp} onScroll={() => { if (capture) setCapture(null); saveScroll(); }}>
         <div
           ref={matrixRef}
@@ -609,6 +611,7 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
           }} />
         <div className="matrix-chat-pane"><ChatGPTScreen compact /></div>
       </>}
+      {inspectorVisible && <Inspector />}
       </div>
       {capture && (
         <button
