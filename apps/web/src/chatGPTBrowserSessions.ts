@@ -164,6 +164,15 @@ export function wakeChatGPTBrowserSession(environmentId: string, sessionId: stri
   setLocalStorageItem(`t3code:chatgpt-browser:sessions:${environmentId}`, next, BrowserSessions);
   store.setState({ sessions: next });
 }
+/** Inform the desktop-owned scheduler after durable local lifecycle changes. */
+function retireChatGPTCaffy(sessionId: string, lifecycleReason: "closed" | "hidden" | "snoozed") {
+  const control = typeof window === "undefined" ? null : window.desktopBridge?.caffyControl;
+  if (!control) return;
+  void control({ action: "retire", sessionId, lifecycleReason }).catch(() => {
+    // The desktop scheduler independently reconciles complete inventories.
+    // Local close/hide/snooze must not be rolled back by an IPC outage.
+  });
+}
 const DEFAULT_SESSION_TITLE = /^ChatGPT \d+$/;
 // Delivery markers belong to the conversation's messages, not its sidebar title.
 const DELIVERY_TITLE_MARKER = /^\s*\[T3-MSG:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\]\s*/i;
@@ -839,6 +848,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   const finalizeRollover = useCallback(
     (plan: ChatGPTRolloverPlan) => {
       setSessions((current) => finalizeChatGPTRolloverHierarchy(current, plan));
+      retireChatGPTCaffy(plan.priorId, "hidden");
     },
     [setSessions],
   );
@@ -943,12 +953,14 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             : session,
         ),
       );
+      if (until !== null && until > Date.now())
+        for (const id of ids) retireChatGPTCaffy(id, "snoozed");
     },
     [environmentId, setSessions],
   );
 
   const setSessionVerification = useCallback(
-    (id: string, pending: boolean) =>
+    (id: string, pending: boolean) => {
       setSessions((current) =>
         current.map((session) =>
           session.id === id
@@ -962,7 +974,9 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
               }
             : session,
         ),
-      ),
+      );
+      if (pending) retireChatGPTCaffy(id, "snoozed");
+    },
     [setSessions],
   );
   const quickSnoozeSession = useCallback(
@@ -971,7 +985,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId,
       ]));
       clearChatGPTGuestUserOpened(id);
-      return setSessions((current) =>
+      setSessions((current) =>
         current.map((session) =>
           session.id === id
             ? {
@@ -984,6 +998,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             : session,
         ),
       );
+      if (until > Date.now()) retireChatGPTCaffy(id, "snoozed");
     },
     [environmentId, setSessions],
   );
@@ -1090,8 +1105,10 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
               : session,
           );
       });
-      for (const entry of removed)
+      for (const entry of removed) {
         recordPersistedChatGPTSessionRemoval(environmentId, entry, "expiration");
+        retireChatGPTCaffy(entry.id, "closed");
+      }
       return expired;
     },
     [environmentId, sessions, setSessions],
@@ -1136,6 +1153,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           );
       });
       recordPersistedChatGPTSessionRemoval(environmentId, removed, source);
+      if (removed) retireChatGPTCaffy(removed.id, "closed");
     },
     [environmentId, setSessions],
   );
@@ -1148,7 +1166,10 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
 
   const setSessionHidden = useCallback(
     (id: string, hidden: boolean) =>
-      setSessions((current) => setChatGPTSessionHidden(current, id, hidden)),
+      {
+        setSessions((current) => setChatGPTSessionHidden(current, id, hidden));
+        if (hidden) retireChatGPTCaffy(id, "hidden");
+      },
     [setSessions],
   );
 
@@ -1177,8 +1198,10 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   );
 
   const setSessionArchived = useCallback(
-    (id: string, archive: NonNullable<BrowserSession["archive"]>) =>
-      setSessions((current) => setChatGPTSessionArchived(current, id, archive)),
+    (id: string, archive: NonNullable<BrowserSession["archive"]>) => {
+      setSessions((current) => setChatGPTSessionArchived(current, id, archive));
+      retireChatGPTCaffy(id, "hidden");
+    },
     [setSessions],
   );
 

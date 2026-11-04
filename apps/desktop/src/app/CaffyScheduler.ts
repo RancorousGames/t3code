@@ -63,6 +63,7 @@ export class CaffyScheduler {
   private pumping = false;
   private pumpRequested = false;
   private lastIdentityReconcileAt = 0;
+  private readonly missingSessions = new Map<string, {firstSeenAt: number; misses: number}>();
   private blockerId: number | null = null;
   private readonly deliveries: ChatGPTDeliveryQueue;
   private readonly request: Request;
@@ -236,6 +237,61 @@ export class CaffyScheduler {
       }
     }
     if (changed) this.save();
+    await this.reconcileLifecycle();
+  }
+
+  /**
+   * A normal unloaded guest remains in T3's persisted catalog, so only a
+   * *complete* inventory can prove removal. Two misses 30s apart avoid
+   * erasing valid monitors during renderer hydration/recovery.
+   */
+  async reconcileLifecycle(): Promise<void> {
+    const reply = await this.request({
+      version: 1, requestId: NodeCrypto.randomUUID(),
+      type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
+    }).catch(() => null);
+    const data = reply?.ok && "data" in reply && reply.data &&
+      typeof reply.data === "object" ? reply.data as {
+        sessions?: Array<{
+          id?: string; publicSessionId?: string; browserSessionId?: string;
+          conversationId?: string; bootstrapIdentity?: {publicId?: string; conversationId?: string};
+          lastIdleTransition?: {eventId?: string; conversationId?: string};
+          hidden?: boolean; snoozedUntil?: number; closedAt?: unknown;
+        }>; total?: number; hasMore?: boolean; incomplete?: boolean;
+      } : null;
+    const entries = data?.sessions;
+    if (!Array.isArray(entries) || data?.hasMore || data?.incomplete ||
+        data?.total === undefined || data.total !== entries.length) return;
+    const now = Date.now();
+    for (const row of [...this.entries.values()]) {
+      const ids = [row.sessionId, row.browserSessionId, row.publicSessionId]
+        .filter((id): id is string => !!id);
+      const matches = entries.filter(entry =>
+        (entry.conversationId === row.conversationId ||
+          entry.bootstrapIdentity?.conversationId === row.conversationId) &&
+        [entry.id, entry.browserSessionId, entry.publicSessionId,
+          entry.bootstrapIdentity?.publicId,
+          entry.lastIdleTransition?.conversationId === row.conversationId
+            ? entry.lastIdleTransition.eventId?.split(":")[0] : undefined,
+        ].some(id => id && ids.includes(id)));
+      const key = `${row.sessionId}:${row.conversationId}`;
+      if (matches.length > 1) { this.missingSessions.delete(key); continue; }
+      const found = matches[0];
+      if (found) {
+        this.missingSessions.delete(key);
+        if (found.closedAt != null || found.hidden ||
+            (typeof found.snoozedUntil === "number" && found.snoozedUntil > now))
+          this.retire(row.sessionId,
+            found.closedAt != null ? "closed" : found.hidden ? "hidden" : "snoozed");
+        continue;
+      }
+      const previous = this.missingSessions.get(key);
+      if (previous && previous.misses >= 1 && now - previous.firstSeenAt >= 30_000)
+        this.retire(row.sessionId, "missing");
+      else this.missingSessions.set(key, {
+        firstSeenAt: previous?.firstSeenAt ?? now, misses: (previous?.misses ?? 0) + 1,
+      });
+    }
   }
 
   status(sessionId?: string) {
@@ -366,17 +422,29 @@ export class CaffyScheduler {
     return row;
   }
 
-  stop(sessionId: string) {
+  /**
+   * Lifecycle retirement is terminal. Nothing left queued for this recipient
+   * may be retried or automatically remounted after close / hide / snooze.
+   * The outbox keeps an audit of any attempted but uncertain sends.
+   */
+  retire(sessionId: string, reason: "closed" | "hidden" | "snoozed" | "missing" | "stopped") {
     const row = this.lookup(sessionId);
-    if (!row) return { stopped: false };
-    this.entries.delete(row.sessionId);
-    // A submitted or uncertain delivery may already have reached the recipient.
-    // Do not cancel it blindly or silently create another.
-    if (row.pendingMessageId) {
-      try { this.deliveries.cancel(row.pendingMessageId); } catch { /* preserve in-flight evidence */ }
-    }
-    this.save();
-    return { stopped: true };
+    const ids = row
+      ? [...new Set([sessionId, row.sessionId, row.browserSessionId, row.publicSessionId]
+          .filter((id): id is string => !!id))]
+      : [sessionId];
+    if (row) this.entries.delete(row.sessionId);
+    const detail = `Recipient ${reason}; Caffy delivery retired.`;
+    const cancelled = this.deliveries.retireRecipient(ids, row?.conversationId ?? null,
+      detail, reason === "snoozed" || reason === "hidden" || reason === "stopped");
+    if (row) this.missingSessions.delete(`${row.sessionId}:${row.conversationId}`);
+    if (row) this.save();
+    return { stopped: !!row, cancelled };
+  }
+
+  stop(sessionId: string) {
+    const { stopped } = this.retire(sessionId, "stopped");
+    return { stopped };
   }
 
   pause(sessionId: string, paused: boolean) {
@@ -437,7 +505,11 @@ export class CaffyScheduler {
       row.lastWakeAt = Date.now();
       row.lastError = null;
       if (row.onceOnly) { this.entries.delete(row.sessionId); }
-    } else if (record.status === "needs_attention" || record.status === "cancelled") {
+    } else if (record.status === "cancelled") {
+      // The recipient was removed, or a pending Caffy wake was cancelled.
+      // A stopped monitor must never keep a phantom registration.
+      this.entries.delete(row.sessionId);
+    } else if (record.status === "needs_attention") {
       row.lastError = record.lastError ?? record.status;
       row.paused = true; // no unbounded speculative new message
     }

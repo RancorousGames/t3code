@@ -433,6 +433,8 @@ export const make = Effect.gen(function* () {
             : action === "policy"
               ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking,
                   shutdownWhenIdle: request.shutdownWhenIdle })
+            : action === "retire"
+              ? caffy.retire(request.sessionId ?? "", request.lifecycleReason ?? "closed")
             : action === "stop"
               ? caffy.stop(request.sessionId ?? "")
             : action === "pause" || action === "resume"

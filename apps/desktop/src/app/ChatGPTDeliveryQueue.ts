@@ -431,12 +431,48 @@ export class ChatGPTDeliveryQueue {
     if (!record) throw new Error("Unknown delivery messageId.");
     if (record.status !== "queued")
       throw new Error("Only a not-yet-attempted queued message can be cancelled.");
-    record.status = "cancelled";
-    record.updatedAt = Date.now();
-    this.save();
-    this.notifyTransition(record);
-    this.scheduleNext();
+    this.retireRecipient([record.sessionId], record.conversationId,
+      "Delivery cancelled before submission.", false, record.messageId);
     return this.publicRecord(record);
+  }
+
+  /**
+   * A closed, hidden, snoozed or removed recipient cannot receive future
+   * queued work. Retire every matching lane, including UNKNOWN attempts.
+   * Keep the durable journal and attempted-send evidence: an in-flight user
+   * turn may already have been submitted before this request arrived.
+   */
+  retireRecipient(
+    sessionIds: readonly string[],
+    conversationId: string | null,
+    reason: string,
+    caffyOnly = false,
+    messageId?: string,
+  ): number {
+    const ids = new Set(sessionIds);
+    let retired: DeliveryRecord[] = [];
+    for (const row of this.records.values()) {
+      if (messageId && row.messageId !== messageId) continue;
+      if (!ids.has(row.sessionId) ||
+          (conversationId && row.conversationId !== conversationId) ||
+          (caffyOnly && !isCaffyWakeBody(row.body)) ||
+          row.status === "delivered" || row.status === "cancelled") continue;
+      const possiblySent = row.attempts > 0 ||
+        row.status === "sending" || row.status === "uncertain";
+      row.status = "cancelled";
+      row.updatedAt = Date.now();
+      row.lastError = possiblySent
+        ? `${reason} Prior submission outcome may be unknown; no further delivery will be attempted.`
+        : reason;
+      this.nextTry.delete(row.messageId);
+      retired.push(row);
+    }
+    if (retired.length) {
+      this.save();
+      for (const row of retired) this.notifyTransition(row);
+      this.scheduleNext();
+    }
+    return retired.length;
   }
 
   private publicRecord(record: DeliveryRecord) {
@@ -446,6 +482,9 @@ export class ChatGPTDeliveryQueue {
   }
 
   private update(record: DeliveryRecord, status: DeliveryState, error?: string) {
+    // Lifecycle retirement wins even if an earlier asynchronous send or
+    // reconciliation returns after the recipient was closed or snoozed.
+    if (record.status === "cancelled" && status !== "cancelled") return;
     record.status = status;
     record.updatedAt = Date.now();
     if (error === undefined) delete record.lastError;
@@ -530,6 +569,7 @@ export class ChatGPTDeliveryQueue {
   }
 
   private async submit(record: DeliveryRecord, retry: boolean) {
+    if (record.status === "cancelled") return;
     const previous = {
       lastSubmissionAt: record.lastSubmissionAt,
       sendExpiresAt: record.sendExpiresAt,
@@ -595,6 +635,7 @@ export class ChatGPTDeliveryQueue {
   }
 
   private async process(record: DeliveryRecord) {
+    if (record.status === "cancelled") return;
     if (record.attempts >= MAX_DELIVERY_ATTEMPTS) {
       this.update(record, "needs_attention", `Delivery stopped after ${record.attempts} attempts; retained for debugging.`);
       try { this.notifyExhausted(this.publicRecord(record)); } catch { /* notification failure must not resume retries */ }
@@ -704,7 +745,7 @@ export class ChatGPTDeliveryQueue {
       // This matters when manual sessions start after a wake was reserved.
       let admitted = false;
       try { admitted = await this.dispatchAdmission(head); } catch { admitted = false; }
-      if (!admitted || !this.dispatchAllowed(head)) {
+      if (!admitted || this.records.get(head.messageId)?.status === "cancelled" || !this.dispatchAllowed(head)) {
         this.nextTry.set(head.messageId, Date.now() + 10_000);
         continue;
       }
