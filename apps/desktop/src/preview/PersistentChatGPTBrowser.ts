@@ -58,7 +58,10 @@ const requestOnce = async (
         method,
         path,
         agent: hostAgent,
-        timeout: 15_000,
+        // /sessions/attach awaits ChatGPT's full initial navigation in the host.
+        // A slow page load must not exhaust the ordinary 15s control timeout
+        // before the separate guarded first-prompt readiness window can run.
+        timeout: path === "/sessions/attach" ? 60_000 : 15_000,
         headers: {
           authorization: "Bearer " + tokenFor(dataDir()),
           ...(body === undefined ? {} : { "content-type": "application/json" }),
