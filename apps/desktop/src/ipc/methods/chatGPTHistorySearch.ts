@@ -23,6 +23,45 @@ let activeSearch: Promise<readonly HistoryHit[]> | null = null;
 
 async function delay(ms: number) { await new Promise((resolve) => setTimeout(resolve, ms)); }
 
+/** Read the signed-in profile's recent sidebar links without navigating any user's live tab. */
+async function recentInGuest(window: BrowserWindow): Promise<HistoryHit[]> {
+  await window.loadURL("https://chatgpt.com/");
+  if (window.isDestroyed()) throw new Error("ChatGPT recent-history guest closed.");
+  let previous = "";
+  for (let attempt = 0; attempt < 24; attempt++) {
+    await delay(250);
+    const observation = await window.webContents.executeJavaScript(`(() => {
+      const sidebar = document.querySelector("aside");
+      if (!sidebar || !/Recents|Chats/i.test(sidebar.textContent || ""))
+        return { ready: false, links: [] };
+      return {
+        ready: true,
+        links: [...sidebar.querySelectorAll('a[href*="/c/"]')].slice(0, 40)
+          .map((link) => ({ url: link.href, title: (link.textContent || "").trim().slice(0, 200) })),
+      };
+    })()`, false) as { ready: boolean; links: { url: string; title: string }[] };
+    if (!observation.ready) continue;
+    const valid = new Map<string, HistoryHit>();
+    for (const link of observation.links) {
+      try {
+        const url = new URL(link.url);
+        const match = /^(?:\/g\/[^/]+)?\/c\/([0-9a-f-]{36})\/?$/i.exec(url.pathname);
+        if (url.hostname !== "chatgpt.com" || !match || !UUID.test(match[1]!) || !link.title) continue;
+        const conversationId = match[1]!.toLowerCase();
+        valid.set(conversationId, {
+          conversationId, title: link.title, url: `https://chatgpt.com/c/${conversationId}`,
+        });
+      } catch { /* Ignore non-conversation links. */ }
+    }
+    const hits = [...valid.values()].slice(0, 20);
+    const key = JSON.stringify(hits);
+    if (hits.length && key === previous) return hits;
+    if (!hits.length && attempt >= 12 && key === previous) return [];
+    previous = key;
+  }
+  throw new Error("ChatGPT recent sidebar was not ready.");
+}
+
 async function searchInGuest(window: BrowserWindow, query: string): Promise<HistoryHit[]> {
   // Re-enter search from a known page for every request; the previous
   // search modal must not toggle closed when the button is clicked again.
@@ -105,16 +144,18 @@ export const searchChatGPTHistoryIpc = DesktopIpc.makeIpcMethod({
   payload: Schema.Struct({
     environmentId: Schema.String,
     profileId: Schema.optional(Schema.String),
-    query: Schema.String,
+    query: Schema.optional(Schema.String),
+    mode: Schema.optional(Schema.Literal("recent")),
   }),
   result: Schema.Array(Schema.Struct({
     conversationId: Schema.String,
     title: Schema.String,
     url: Schema.String,
   })),
-  handler: Effect.fn("desktop.ipc.chatgpt.historySearch")(function* ({ environmentId, profileId, query }) {
-    const term = query.trim();
-    if (term.length < 2 || term.length > 150 || !environmentId || environmentId.length > 200)
+  handler: Effect.fn("desktop.ipc.chatgpt.historySearch")(function* ({ environmentId, profileId, query, mode }) {
+    const term = (query ?? "").trim();
+    if ((mode !== "recent" && (term.length < 2 || term.length > 150)) ||
+        !environmentId || environmentId.length > 200)
       return yield* Effect.fail(new Error("Invalid history search query or environment."));
     if (activeSearch) return yield* Effect.tryPromise(() => Promise.reject(new Error("ChatGPT history search already running.")));
     const manager = yield* PreviewManager.PreviewManager;
@@ -143,7 +184,7 @@ export const searchChatGPTHistoryIpc = DesktopIpc.makeIpcMethod({
       } catch { event.preventDefault(); }
     });
     if (guest.cleanup) clearTimeout(guest.cleanup);
-    activeSearch = searchInGuest(guest.window, term);
+    activeSearch = mode === "recent" ? recentInGuest(guest.window) : searchInGuest(guest.window, term);
     try {
       return yield* Effect.tryPromise(() => activeSearch!);
     } finally {

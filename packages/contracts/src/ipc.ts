@@ -2177,7 +2177,8 @@ export interface DesktopBridge {
   searchChatGPTHistory?: (input: {
     environmentId: string;
     profileId?: string;
-    query: string;
+    query?: string;
+    mode?: "recent";
   }) => Promise<readonly { conversationId: string; title: string; url: string }[]>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   onSnapShotEvent: (listener: (event: DesktopSnapShotEvent) => void) => () => void;

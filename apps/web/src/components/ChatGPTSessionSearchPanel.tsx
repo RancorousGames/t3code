@@ -49,6 +49,7 @@ export function ChatGPTSessionSearchPanel({
     conversationId: string; url: string; title: string;
   }[]>([]);
   const [historySearched, setHistorySearched] = useState<string | null>(null);
+  const [historyAttemptRecent, setHistoryAttemptRecent] = useState(false);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
@@ -61,21 +62,23 @@ export function ChatGPTSessionSearchPanel({
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const term = query.trim();
-  const searchOwnHistory = async () => {
-    if (term.length < 2 || historyBusy) return;
+  const searchOwnHistory = async (recent = false) => {
+    if ((!recent && term.length < 2) || historyBusy) return;
     const historySearch = window.desktopBridge?.searchChatGPTHistory;
     if (!historySearch) {
       setHistoryError("ChatGPT history search is unavailable in this T3 build.");
       return;
     }
+    setHistoryAttemptRecent(recent);
     setHistoryBusy(true);
     setHistoryError(null);
     setHistoryHits([]);
     setHistorySearched(null);
     try {
-      const results = await historySearch({ environmentId, profileId, query: term });
+      const results = await historySearch({ environmentId, profileId,
+        ...(recent ? { mode: "recent" as const } : { query: term }) });
       setHistoryHits(results);
-      setHistorySearched(term);
+      setHistorySearched(recent ? "recent:" : term);
     } catch {
       // The DOM may change without notice. Never show guesses, or claim zero
       // results when the native utility failed to inspect search reliably.
@@ -231,6 +234,29 @@ export function ChatGPTSessionSearchPanel({
           </div>}
         </div>
       </div>}
+      <div className="mt-2 border-t border-border/70 pt-2">
+        <Button size="xs" type="button" variant="outline"
+          disabled={historyBusy} onClick={() => void searchOwnHistory(true)}>
+          {historyBusy ? "Reading ChatGPT..." : "Recent ChatGPT chats"}
+        </Button>
+        {historyError && historyAttemptRecent && <p role="status"
+          className="mt-2 text-xs text-muted-foreground">{historyError}</p>}
+        {historySearched === "recent:" && <div className="mt-2 max-h-52 space-y-1 overflow-y-auto">
+          <p className="text-xs font-semibold text-muted-foreground">
+            {historyHits.length} recent conversations in this profile
+          </p>
+          {historyHits.map((hit) => <button key={hit.conversationId} type="button"
+            className="block w-full rounded border border-border/60 p-2 text-left text-xs hover:bg-muted/60"
+            disabled={opening !== null} onClick={() => {
+              setOpening(hit.conversationId);
+              void onChoose({ ...hit, sessionId: "", role: "user", project: null,
+                snippet: "", turnIndex: -1, observedAt: "", firstTurnMissing: true,
+              }).catch((cause: unknown) =>
+                setHistoryError(`Could not open recent ChatGPT conversation: ${String(cause)}`))
+                .finally(() => setOpening(null));
+            }}>{hit.title}</button>)}
+        </div>}
+      </div>
       {term.length < 2 && <p className="mt-2 text-xs text-muted-foreground">Find a session by title, or search messages already observed by T3. Hidden sessions are included.</p>}
     </section>
   );
