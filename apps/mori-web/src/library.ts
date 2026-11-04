@@ -1,6 +1,9 @@
 import { parseMoriProject, type MoriProject } from "./model.ts";
 import { statusOf } from "./insights.ts";
 import { nativeMori } from "./backend.ts";
+import bundledUiCatalog from "../localization/MonkuNoMoriUI.mori?raw";
+import { isLegacyDemo, mergeUiCatalog } from "./startup-projects.ts";
+import { MORI_UI_PROJECT_ID } from "./ui-project-id.ts";
 
 // In the packaged Windows app, native project files under Monku's *separate*
 // user-data directory are authoritative. IndexedDB is the web-preview fallback
@@ -61,9 +64,7 @@ export function readIndex(): LibraryEntry[] {
 
 const writeIndex = (entries: LibraryEntry[]) => localStorage.setItem(INDEX_KEY, JSON.stringify(entries));
 
-const DEMO_KEY = "mori.demo-seeded.v1";
-export const hasSeededDemo = () => localStorage.getItem(DEMO_KEY) === "1";
-export const markSeededDemo = () => localStorage.setItem(DEMO_KEY, "1");
+const DEMO_MIGRATION_KEY = "mori.default-demo-removed.v1";
 
 export const readActiveId = (): string | null => localStorage.getItem(ACTIVE_KEY);
 export const writeActiveId = (id: string) => localStorage.setItem(ACTIVE_KEY, id);
@@ -77,28 +78,68 @@ let initialized: Promise<void> | null = null;
  * original IndexedDB copies. Repeated calls share one initialization promise.
  */
 export function initializeLibrary(): Promise<void> {
-  const backend = nativeMori();
-  if (!backend) return Promise.resolve();
   if (initialized) return initialized;
   initialized = (async () => {
-    let found = await backend.listProjects();
-    if (found.problems.length) {
-      throw new Error(
-        `Native project files need recovery: ${found.problems.map(p => p.reason).join("; ")}`,
-      );
-    }
-    // Only import old browser data when native storage is empty. This prevents
-    // an orphaned IndexedDB project from resurrecting a deleted native project.
-    if (!found.entries.length) {
-      const legacy = readIndex();
-      for (const item of legacy) {
-        const old = await withStore("readonly", store => store.get(item.id));
-        if (old !== undefined) await backend.saveProject(parseMoriProject(old));
+    const backend = nativeMori();
+    if (backend) {
+      let found = await backend.listProjects();
+      if (found.problems.length) {
+        throw new Error(`Native project files need recovery: ${found.problems.map(p => p.reason).join("; ")}`);
       }
-      found = await backend.listProjects();
-      if (found.problems.length) throw new Error("Native project migration requires recovery.");
+      // Migrate earlier browser-only libraries, but never resurrect projects
+      // deleted from a nonempty native library.
+      if (!found.entries.length) {
+        for (const item of readIndex()) {
+          const old = await withStore("readonly", store => store.get(item.id));
+          if (old !== undefined) await backend.saveProject(parseMoriProject(old));
+        }
+        found = await backend.listProjects();
+        if (found.problems.length) throw new Error("Native project migration requires recovery.");
+      }
+      writeIndex(found.entries);
     }
-    writeIndex(found.entries);
+
+    const readStored = async (id: string): Promise<MoriProject | null> => {
+      const raw = backend ? await backend.loadProject(id) : await withStore("readonly", store => store.get(id));
+      return raw == null ? null : parseMoriProject(raw);
+    };
+    const putStored = async (project: MoriProject) => {
+      if (backend) await backend.saveProject(project);
+      else await withStore("readwrite", store => store.put(project));
+    };
+    const deleteStored = async (id: string) => {
+      if (backend) await backend.deleteProject(id);
+      else await withStore("readwrite", store => store.delete(id));
+    };
+
+    // Upgrades from the old auto-demo install should open without a project.
+    // Mark the migration so explicitly reimported samples are not removed later.
+    if (localStorage.getItem(DEMO_MIGRATION_KEY) !== "1") {
+      for (const id of ["mori_sample_hollowmere", "mori_skeleton_demo"]) {
+        const stored = await readStored(id);
+        if (!stored || !isLegacyDemo(stored)) continue;
+        await deleteStored(id);
+        writeIndex(readIndex().filter(entry => entry.id !== id));
+        if (readActiveId() === id) clearActiveId();
+      }
+      localStorage.setItem(DEMO_MIGRATION_KEY, "1");
+    }
+
+    // The UI catalog ships in the renderer bundle, so cloning/updating the
+    // repository never requires a developer-only bootstrap script or paths.
+    const catalog = parseMoriProject(JSON.parse(bundledUiCatalog));
+    if (catalog.id !== MORI_UI_PROJECT_ID) throw new Error("Invalid bundled Mori UI catalog.");
+    const saved = await readStored(catalog.id);
+    const merged = mergeUiCatalog(catalog, saved);
+    if (merged !== saved) await putStored(merged);
+
+    if (backend) {
+      const found = await backend.listProjects();
+      if (found.problems.length) throw new Error("Native project library requires recovery.");
+      writeIndex(found.entries);
+    } else {
+      writeIndex([entryOf(merged), ...readIndex().filter(entry => entry.id !== merged.id)]);
+    }
   })().catch(error => {
     initialized = null;
     throw error;

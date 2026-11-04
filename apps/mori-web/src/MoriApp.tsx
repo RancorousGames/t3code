@@ -5,22 +5,21 @@ import { WindowControls } from "./WindowControls.tsx";
 import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
 import { ShortcutsModal, PaletteModal, TemplatesModal } from "./Dialogs.tsx";
 import { ImportWizard } from "./ImportWizard.tsx";
-import { IconSprite } from "./Icons.tsx";
+import { Icon, IconSprite } from "./Icons.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { MatrixScreen } from "./Matrix.tsx";
 import { Modal, PopoverFrame } from "./Overlays.tsx";
 import { NotificationViewport, notify } from "./Notifications.tsx";
 import type { GoogleStagedTable } from "./google-sync.ts";
-import { PopoverContent } from "./Popovers.tsx";
+import { PopoverContent, ProjectsMenu } from "./Popovers.tsx";
 import { ContextScreen, CharactersScreen, GlossaryScreen, ProjectScreen, SettingsScreen } from "./Reference.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { adoptText, checkRow, statusOf, toggleLock as toggleRowLock, visibleRows, type ViewFilters } from "./insights.ts";
-import { clearActiveId, hasSeededDemo, initializeLibrary, loadProject, markSeededDemo, readActiveId, readIndex, removeProject, saveProject, writeActiveId, type LibraryEntry } from "./library.ts";
+import { clearActiveId, initializeLibrary, loadProject, readActiveId, readIndex, removeProject, saveProject, writeActiveId, type LibraryEntry } from "./library.ts";
 import { editFinalText, recordFinalVersion, type MoriProject } from "./model.ts";
 import { usePrefs } from "./prefs.ts";
 import { useDraftAhead } from "./drafter.ts";
 import { TermModal } from "./TermModal.tsx";
-import { createSampleProject } from "./sampleProject.ts";
 import { keyString, loadBindings, matchAction, saveBindings, type ActionId, type Bindings } from "./shortcuts.ts";
 import { useProjectStore, type SaveState } from "./store.ts";
 import { useUiLocalization } from "./ui-localization.ts";
@@ -294,22 +293,16 @@ export function MoriApp() {
     if (save.kind === "saved") setLibrary(readIndex());
   }, [save]);
 
-  // Opening the app: load the last project, or write the demo on first launch.
+  // Reopen only a previously selected project; fresh installs start empty.
   useEffect(() => {
     if (bootStarted.current) return;
     bootStarted.current = true;
     void (async () => {
       try {
         await initializeLibrary();
-        if (!readIndex().length && !hasSeededDemo()) {
-          const demo = createSampleProject();
-          // Keep a stored copy if one exists, so an emptied index can't overwrite edits to it.
-          await saveProject((await loadProject(demo.id)) ?? demo);
-          markSeededDemo();
-        }
         const entries = readIndex();
         const remembered = readActiveId();
-        const id = entries.find(entry => entry.id === remembered)?.id ?? entries[0]?.id;
+        const id = entries.find(entry => entry.id === remembered)?.id;
         const opened = id ? await loadProject(id) : null;
         if (opened) {
           load(opened);
@@ -367,15 +360,8 @@ export function MoriApp() {
     const entries = readIndex();
     setLibrary(entries);
     if (project?.id !== id) return;
-    const next = entries[0] ? await loadProject(entries[0].id) : null;
-    if (next) {
-      load(next);
-      writeActiveId(next.id);
-      resetView(next);
-    } else {
-      unload();
-      clearActiveId();
-    }
+    unload();
+    clearActiveId();
   };
 
   const value: AppValue | null = project ? {
@@ -430,20 +416,35 @@ export function MoriApp() {
             <div className="tb-left">Monku no Mori</div>
             <div className="tb-right"><WindowControls /></div>
           </header>
-          <div className="boot">
-            {booting ? (
-              <div><b>Opening Mori</b>Loading your projects…</div>
-            ) : (
-              <div>
-                <b>{bootError ? "Mori can’t open its project store" : "No projects yet"}</b>
-                {bootError ?? "Start one from your files, or a public Google Sheets link."}
-                <br />
-                <button type="button" className="btn primary" onClick={() => openModal({ kind: "import", step: 1 })}>New project</button>
-              </div>
-            )}
+          <div className="body">
+            <aside className="sidebar">
+              <button type="button" className="proj" disabled={booting || !!bootError}
+                onClick={event => openPop({ kind: "projects", anchor: event.currentTarget, width: 280 })}>
+                <span className="pmark"><Icon name="folder" size="sm" /></span>
+                <span className="pname">Select project</span>
+                <Icon name="chevron-down" size="sm" />
+              </button>
+            </aside>
+            <main className="boot">
+              {booting ? (
+                <div><b>Opening Mori</b>Loading your projects…</div>
+              ) : (
+                <div>
+                  <b>{bootError ? "Mori can’t open its project store" : "No project selected"}</b>
+                  {bootError ?? "Choose a project from the top left, or import your own files."}
+                  <br />
+                  <button type="button" className="btn primary" onClick={() => openModal({ kind: "import", step: 1 })}>New project</button>
+                </div>
+              )}
+            </main>
           </div>
         </div>
+        {pop?.kind === "projects" && <PopoverFrame anchor={pop.anchor} width={pop.width} onClose={closePop}>
+          <ProjectsMenu currentId={null} library={library} openProject={openProject}
+            newProject={() => openModal({ kind: "import", step: 1 })} closePop={closePop} toast={toast} />
+        </PopoverFrame>}
         {modal?.kind === "import" && <ImportModal step={modal.step} tables={modal.tables} onClose={closeModal} onCreate={createProject} onAppend={appendToProject} />}
+        <NotificationViewport />
       </>
     );
   }

@@ -41,7 +41,7 @@ export function moriUiLocalizationPlugin() {
       if (missing.length) {
         throw Error(
           missing.length + " Mori UI strings are absent from the localization project.\n" +
-          "Run: node apps/mori-web/scripts/bootstrap-ui-project.cjs --install\n" +
+          "Run: node apps/mori-web/scripts/bootstrap-ui-project.cjs\n" +
           missing.slice(0, 12).join("\n"),
         );
       }

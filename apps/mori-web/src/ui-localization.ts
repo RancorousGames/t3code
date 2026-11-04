@@ -2,7 +2,8 @@ import { useEffect, useSyncExternalStore } from "react";
 import { loadProject } from "./library.ts";
 import type { MoriProject } from "./model.ts";
 
-export const MORI_UI_PROJECT_ID = "mori_self_ui_ja";
+import { MORI_UI_PROJECT_ID } from "./ui-project-id.ts";
+export { MORI_UI_PROJECT_ID } from "./ui-project-id.ts";
 export type UiLanguage = "en" | "ja";
 const LANGUAGE_KEY = "mori.interface-language.v1";
 let language: UiLanguage = localStorage.getItem(LANGUAGE_KEY) === "ja" ? "ja" : "en";

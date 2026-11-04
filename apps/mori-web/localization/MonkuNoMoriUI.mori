@@ -90,7 +90,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:353 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:346 (ui-call:toast)"
     },
     {
       "id": "ui.c4f0b531bd6e61",
@@ -99,7 +99,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:280 (ui-call:toast)"
+      "note": "src/Popovers.tsx:293 (ui-call:toast)"
     },
     {
       "id": "ui.f0953f0c3aa34e",
@@ -108,7 +108,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:189 (ui-call:toast)"
+      "note": "src/Popovers.tsx:202 (ui-call:toast)"
     },
     {
       "id": "ui.2b644f131d5007",
@@ -198,7 +198,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:139 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:138 (ui-call:toast)"
     },
     {
       "id": "ui.d2e1c6883a0df5",
@@ -261,7 +261,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:139 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:138 (ui-call:toast)"
     },
     {
       "id": "ui.ac8c8d96c8af8b",
@@ -270,7 +270,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:132 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:131 (ui-call:toast)"
     },
     {
       "id": "ui.e12077f1d6da3b",
@@ -450,7 +450,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:280 (ui-call:toast)"
+      "note": "src/Popovers.tsx:293 (ui-call:toast)"
     },
     {
       "id": "ui.105174a37afd64",
@@ -459,7 +459,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:361 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:354 (ui-call:toast)"
     },
     {
       "id": "ui.74b09e52826353",
@@ -468,7 +468,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:250 (ui-call:toast)"
+      "note": "src/Popovers.tsx:263 (ui-call:toast)"
     },
     {
       "id": "ui.11fb682be0a023",
@@ -666,7 +666,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:243 (ui-call:toast)"
+      "note": "src/Popovers.tsx:256 (ui-call:toast)"
     },
     {
       "id": "ui.af166538b73be0",
@@ -864,7 +864,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:505 (ui-return)"
+      "note": "src/MoriApp.tsx:506 (ui-return)"
     },
     {
       "id": "ui.1405a63e8a78b8",
@@ -891,7 +891,7 @@
       "final": "キャラクター",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:538 (jsx-text); src/Popovers.tsx:274 (jsx-text); src/Reference.tsx:58 (jsx-attribute:title); src/Reference.tsx:344 (jsx-text); src/Reference.tsx:466 (explicit-translation); src/Sidebar.tsx:104 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:538 (jsx-text); src/Popovers.tsx:287 (jsx-text); src/Reference.tsx:58 (jsx-attribute:title); src/Reference.tsx:344 (jsx-text); src/Reference.tsx:466 (explicit-translation); src/Sidebar.tsx:104 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.f685225552cb5c",
@@ -1009,6 +1009,15 @@
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
       "note": "src/ImportWizard.tsx:445 (jsx-expression)"
+    },
+    {
+      "id": "ui.ff7a777703fdfb",
+      "source": "Choose a project from the top left, or import your own files.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:434 (jsx-expression)"
     },
     {
       "id": "ui.6d4e30eea6946a",
@@ -1260,7 +1269,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:314 (jsx-text)"
+      "note": "src/Popovers.tsx:327 (jsx-text)"
     },
     {
       "id": "ui.12a7bd86e0a430",
@@ -1287,7 +1296,7 @@
       "final": "コンテキスト",
       "status": "translated",
       "sourceFile": "src/Dialogs.tsx",
-      "note": "src/Dialogs.tsx:209 (label-map); src/ImportWizard.tsx:531 (jsx-text); src/Popovers.tsx:266 (jsx-text); src/Reference.tsx:202 (jsx-attribute:title); src/Sidebar.tsx:110 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/Dialogs.tsx:209 (label-map); src/ImportWizard.tsx:531 (jsx-text); src/Popovers.tsx:279 (jsx-text); src/Reference.tsx:202 (jsx-attribute:title); src/Sidebar.tsx:110 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.31fbef162594de",
@@ -1728,7 +1737,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:270 (jsx-expression)"
+      "note": "src/Popovers.tsx:283 (jsx-expression)"
     },
     {
       "id": "ui.2ac21dfa785473",
@@ -1818,7 +1827,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:250 (ui-call:toast)"
+      "note": "src/Popovers.tsx:263 (ui-call:toast)"
     },
     {
       "id": "ui.3db8a3c12ca6f8",
@@ -2106,7 +2115,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:286 (jsx-text)"
+      "note": "src/Popovers.tsx:299 (jsx-text)"
     },
     {
       "id": "ui.4c4e436f9a453c",
@@ -2223,7 +2232,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/GoogleConnect.tsx",
-      "note": "src/GoogleConnect.tsx:99 (jsx-text); src/ImportWizard.tsx:346 (jsx-text); src/Popovers.tsx:310 (jsx-text)"
+      "note": "src/GoogleConnect.tsx:99 (jsx-text); src/ImportWizard.tsx:346 (jsx-text); src/Popovers.tsx:323 (jsx-text)"
     },
     {
       "id": "ui.8dbb16383d4f5b",
@@ -2241,7 +2250,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:313 (jsx-text)"
+      "note": "src/Popovers.tsx:326 (jsx-text)"
     },
     {
       "id": "ui.683a6fdc8bb020",
@@ -2538,7 +2547,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:162 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:161 (ui-call:toast)"
     },
     {
       "id": "ui.e9bef0b0f3c25e",
@@ -2718,7 +2727,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:435 (jsx-text)"
+      "note": "src/MoriApp.tsx:430 (jsx-text)"
     },
     {
       "id": "ui.14dc14eafae8e4",
@@ -2817,7 +2826,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:97 (jsx-text); src/Popovers.tsx:301 (jsx-text)"
+      "note": "src/Popovers.tsx:97 (jsx-text); src/Popovers.tsx:314 (jsx-text)"
     },
     {
       "id": "ui.78611a0882f688",
@@ -2943,7 +2952,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Chrome.tsx",
-      "note": "src/Chrome.tsx:46 (jsx-attribute:alt); src/MoriApp.tsx:430 (jsx-text)"
+      "note": "src/Chrome.tsx:46 (jsx-attribute:alt); src/MoriApp.tsx:416 (jsx-text)"
     },
     {
       "id": "ui.2f5875bf399bbb",
@@ -2970,7 +2979,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:438 (jsx-expression)"
+      "note": "src/MoriApp.tsx:433 (jsx-expression)"
     },
     {
       "id": "ui.ab611a9e415134",
@@ -2997,7 +3006,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:253 (ui-call:prompt); src/Reference.tsx:192 (ui-call:prompt)"
+      "note": "src/Popovers.tsx:266 (ui-call:prompt); src/Reference.tsx:192 (ui-call:prompt)"
     },
     {
       "id": "ui.2bf1c88cba98a0",
@@ -3096,7 +3105,7 @@
       "final": "新しいプロジェクト",
       "status": "translated",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:141 (ui-branch); src/ImportWizard.tsx:276 (jsx-expression); src/ImportWizard.tsx:508 (jsx-text); src/MoriApp.tsx:441 (jsx-text); src/shortcuts.ts:28 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/ImportWizard.tsx:141 (ui-branch); src/ImportWizard.tsx:276 (jsx-expression); src/ImportWizard.tsx:508 (jsx-text); src/MoriApp.tsx:436 (jsx-text); src/shortcuts.ts:28 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.cf8d3c2d8e84bb",
@@ -3105,7 +3114,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:212 (jsx-text)"
+      "note": "src/Popovers.tsx:225 (jsx-text)"
     },
     {
       "id": "ui.66d64278b4c150",
@@ -3168,7 +3177,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:185 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:184 (ui-call:toast)"
     },
     {
       "id": "ui.dedc5d13072ebf",
@@ -3186,7 +3195,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:189 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:188 (ui-call:toast)"
     },
     {
       "id": "ui.b87c858242a566",
@@ -3258,7 +3267,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:194 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:193 (ui-call:toast)"
     },
     {
       "id": "ui.a657a29e6bcaf1",
@@ -3270,22 +3279,22 @@
       "note": "src/GoogleSyncPanel.tsx:20 (ui-call:setMessage)"
     },
     {
+      "id": "ui.329a6532ae3b77",
+      "source": "No project selected",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:433 (jsx-expression)"
+    },
+    {
       "id": "ui.610521342aa316",
       "source": "No projects in this browser yet.",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:225 (jsx-text)"
-    },
-    {
-      "id": "ui.f83c8065228656",
-      "source": "No projects yet",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:438 (jsx-expression)"
+      "note": "src/Popovers.tsx:238 (jsx-text)"
     },
     {
       "id": "ui.dd007d8c9f822d",
@@ -3303,7 +3312,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:273 (jsx-text)"
+      "note": "src/Popovers.tsx:286 (jsx-text)"
     },
     {
       "id": "ui.28d5573eb6d067",
@@ -3519,7 +3528,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:164 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:163 (ui-call:toast)"
     },
     {
       "id": "ui.057b0b09c4e1fe",
@@ -3654,7 +3663,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:216 (jsx-text)"
+      "note": "src/Popovers.tsx:229 (jsx-text)"
     },
     {
       "id": "ui.7e743fe7b4b433",
@@ -3708,7 +3717,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:189 (ui-call:toast)"
+      "note": "src/Popovers.tsx:202 (ui-call:toast)"
     },
     {
       "id": "ui.653a4ab74b7fea",
@@ -3717,7 +3726,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:435 (jsx-text)"
+      "note": "src/MoriApp.tsx:430 (jsx-text)"
     },
     {
       "id": "ui.ec91fdd9256cb7",
@@ -3915,7 +3924,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:198 (jsx-text)"
+      "note": "src/Popovers.tsx:211 (jsx-text)"
     },
     {
       "id": "ui.9de05f33794e0e",
@@ -3951,7 +3960,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:318 (jsx-text)"
+      "note": "src/Popovers.tsx:331 (jsx-text)"
     },
     {
       "id": "ui.86d21738af13e7",
@@ -4167,7 +4176,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:239 (ui-call:confirm)"
+      "note": "src/Popovers.tsx:252 (ui-call:confirm)"
     },
     {
       "id": "ui.0b863881efcb1d",
@@ -4365,7 +4374,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:293 (jsx-text)"
+      "note": "src/Popovers.tsx:306 (jsx-text)"
     },
     {
       "id": "ui.c4fcbe6866f556",
@@ -4392,7 +4401,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:297 (jsx-text)"
+      "note": "src/Popovers.tsx:310 (jsx-text)"
     },
     {
       "id": "ui.91f20b053f6f15",
@@ -4419,7 +4428,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:260 (ui-call:toast); src/Reference.tsx:53 (ui-call:toast); src/Reference.tsx:198 (ui-call:toast)"
+      "note": "src/Popovers.tsx:273 (ui-call:toast); src/Reference.tsx:53 (ui-call:toast); src/Reference.tsx:198 (ui-call:toast)"
     },
     {
       "id": "ui.c24133ec4fdccd",
@@ -4537,6 +4546,15 @@
       "status": "translated",
       "sourceFile": "src/Reference.tsx",
       "note": "src/Reference.tsx:460 (ui-option); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.dafa79fdef56bd",
+      "source": "Select project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:424 (jsx-text)"
     },
     {
       "id": "ui.257ef4ccd82ffb",
@@ -4953,15 +4971,6 @@
       "note": "src/ImportWizard.tsx:529 (jsx-text)"
     },
     {
-      "id": "ui.aa9113d2a24f77",
-      "source": "Start one from your files, or a public Google Sheets link.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:439 (jsx-expression)"
-    },
-    {
       "id": "ui.359d29d58b026f",
       "source": "Start project",
       "ai": "",
@@ -5103,7 +5112,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:265 (jsx-text)"
+      "note": "src/Popovers.tsx:278 (jsx-text)"
     },
     {
       "id": "ui.d8bb094e902d89",
@@ -5121,7 +5130,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:290 (jsx-text)"
+      "note": "src/Popovers.tsx:303 (jsx-text)"
     },
     {
       "id": "ui.e04caac22065ea",
@@ -5157,7 +5166,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Popovers.tsx",
-      "note": "src/Popovers.tsx:191 (ui-call:toast)"
+      "note": "src/Popovers.tsx:204 (ui-call:toast)"
     },
     {
       "id": "ui.015ac0aa81ee25",
@@ -5166,7 +5175,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:332 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:325 (ui-call:toast)"
     },
     {
       "id": "ui.25287d45f5517e",
@@ -5202,7 +5211,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:341 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:334 (ui-call:toast)"
     },
     {
       "id": "ui.69dd1cc269496f",
@@ -5229,7 +5238,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:321 (ui-branch)"
+      "note": "src/MoriApp.tsx:314 (ui-branch)"
     },
     {
       "id": "ui.738d2738d4853e",
@@ -5247,7 +5256,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:203 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:202 (ui-call:toast)"
     },
     {
       "id": "ui.f6311f413a6122",
@@ -5274,7 +5283,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:126 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:125 (ui-call:toast)"
     },
     {
       "id": "ui.d0f62545074d3f",
@@ -5580,7 +5589,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:361 (ui-call:toast)"
+      "note": "src/MoriApp.tsx:354 (ui-call:toast)"
     },
     {
       "id": "ui.c36d819e7bc6d2",
@@ -5987,5 +5996,5 @@
     "src/main.tsx",
     "src/Overlays.tsx"
   ],
-  "lastModified": "2026-11-04T02:39:42.091Z"
+  "lastModified": "2026-11-04T05:26:40.899Z"
 }

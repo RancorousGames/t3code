@@ -435,7 +435,7 @@ input,textarea,select{font:inherit;color:inherit}
 .toast .i{color:var(--moss)}
 
 /* ---------- app additions: screens and states the mockup didn't cover ---------- */
-.boot{grid-row:2/4;min-height:0;display:grid;place-items:center;color:var(--text-3);font-size:13px;padding:24px;text-align:center}
+.boot{grid-column:2/-1;min-height:0;display:grid;place-items:center;color:var(--text-3);font-size:13px;padding:24px;text-align:center}
 .boot b{display:block;color:var(--text);font-size:15px;margin-bottom:6px}
 .boot .btn{margin-top:14px}
 .notice{display:flex;align-items:center;gap:8px;padding:7px 14px;font-size:12px;color:var(--lantern);background:var(--lantern-bg);border-bottom:1px solid var(--lantern-bd)}

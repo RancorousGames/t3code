@@ -7,7 +7,13 @@ named **Monku no Mori · Interface**. Each row represents one English UI message
 
 From the T3 repository root:
 
-    node apps/mori-web/scripts/bootstrap-ui-project.cjs --install
+    node apps/mori-web/scripts/bootstrap-ui-project.cjs
+
+Every fresh install automatically adds the bundled **Monku no Mori · Interface**
+project to the project picker without opening it. Existing installations receive
+new interface keys on update, keeping their saved translations, drafts and edits.
+No manual `--install` command is required on another PC; the optional `--install`
+flag is only for updating the local native library immediately during development.
 
 The shared AST scanner (scripts/ui-string-compiler.cjs) inventories and
 instruments UI labels, buttons, form controls, accessible labels, tooltips,

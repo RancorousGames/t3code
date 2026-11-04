@@ -4,7 +4,7 @@ import { formatUi } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { Opt, PopLabel, PopSearch } from "./Overlays.tsx";
 import { withSpeaker } from "./insights.ts";
-import { readIndex, saveProject } from "./library.ts";
+import { readIndex, saveProject, type LibraryEntry } from "./library.ts";
 import { parseMoriProject, type MoriCharacter } from "./model.ts";
 import { DEFAULT_COLUMN_PREFS, type ResizableColumn } from "./prefs.ts";
 import { EXAMPLE_CHARACTERS, newTemplateId, readTemplates, useTemplates, writeTemplates, type CharacterTemplate } from "./templates.ts";
@@ -175,6 +175,19 @@ function ColumnsPopover() {
 
 function ProjectsPopover() {
   const { project, library, openProject, openModal, closePop, toast } = useApp();
+  return <ProjectsMenu currentId={project.id} library={library} openProject={openProject}
+    newProject={() => openModal({ kind: "import", step: 1 })} closePop={closePop} toast={toast} />;
+}
+
+/** Also used by the initial empty workspace, before AppContext has a project. */
+export function ProjectsMenu({ currentId, library, openProject, newProject, closePop, toast }: {
+  currentId: string | null;
+  library: LibraryEntry[];
+  openProject: (id: string) => Promise<void>;
+  newProject: () => void;
+  closePop: () => void;
+  toast: (message: string) => void;
+}) {
   const fileInput = useRef<HTMLInputElement>(null);
   const openFile = async (file: File | undefined) => {
     if (!file) return;
@@ -197,17 +210,17 @@ function ProjectsPopover() {
     <>
       <PopLabel>Projects</PopLabel>
       {library.map(entry => (
-        <Opt key={entry.id} onPick={() => { if (entry.id !== project.id) void openProject(entry.id); else closePop(); }}>
+        <Opt key={entry.id} onPick={() => { if (entry.id !== currentId) void openProject(entry.id); else closePop(); }}>
           <span className="pmark" style={{ width: 26, height: 26, fontSize: 10.5 }}>{entry.name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? "").join("")}</span>
           <span className="opt-t">
             <span>{entry.name}</span>
             <span className="sub">{formatUi("{0} lines · {1} translated", [entry.lines, entry.translated])}</span>
           </span>
-          {entry.id === project.id && <Icon name="check" size="sm" className="ok" />}
+          {entry.id === currentId && <Icon name="check" size="sm" className="ok" />}
         </Opt>
       ))}
       <div className="pop-sep" />
-      <Opt onPick={() => { closePop(); openModal({ kind: "import", step: 1 }); }}>
+      <Opt onPick={() => { closePop(); newProject(); }}>
         <Icon name="plus" size="sm" />
         <span className="opt-t"><span>New project…</span></span>
       </Opt>
