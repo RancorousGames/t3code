@@ -25,6 +25,14 @@ export function setUiLanguage(next: UiLanguage) {
 export function tr(source: string): string {
   return language === "ja" ? translations.get(source) ?? source : source;
 }
+/** Translate an interpolated UI message. {0}, {1}, etc. are stable and may
+ * be reordered by the Japanese translator without changing the source code. */
+export function formatUi(source: string, values: readonly unknown[]): string {
+  return tr(source).replace(/\{(\d+)\}/g, (token, index: string) => {
+    const n = Number(index);
+    return n < values.length ? String(values[n] ?? "") : token;
+  });
+}
 export function translatedUiCount(): number { return translations.size; }
 
 /** Explicitly re-read the authoritative project library. The current language

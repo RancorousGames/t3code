@@ -7,7 +7,7 @@ import { keyLabel } from "./shortcuts.ts";
 import type { SaveState } from "./store.ts";
 import { nativeMori } from "./backend.ts";
 import { WindowControls } from "./WindowControls.tsx";
-import { tr } from "./ui-localization.ts";
+import { tr, formatUi } from "./ui-localization.ts";
 
 // The window has no menu bar: commands live in the search bar (Ctrl+K), keys are listed in F1,
 // and every other action sits next to the thing it changes.
@@ -77,9 +77,9 @@ export function Titlebar() {
 
 const saveLabel = (save: SaveState): { text: string; color: string } => {
   switch (save.kind) {
-    case "saving": return { text: "Saving…", color: "var(--lantern)" };
-    case "saved": return { text: `Saved ${nativeMori() ? "on this PC" : "in this browser"} · ${new Date(save.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`, color: "var(--moss)" };
-    case "error": return { text: "Not saved · see the notice above", color: "var(--berry)" };
+    case "saving": return { text: tr("Saving…"), color: "var(--lantern)" };
+    case "saved": return { text: formatUi("Saved {0} · {1}", [tr(nativeMori() ? "on this PC" : "in this browser"), new Date(save.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })]), color: "var(--moss)" };
+    case "error": return { text: tr("Not saved · see the notice above"), color: "var(--berry)" };
     case "idle": return { text: nativeMori() ? "Stored locally on this PC · not synced" : "Stored in this browser · not synced to Google", color: "var(--moss)" };
   }
 };
@@ -101,7 +101,6 @@ export function StatusBar() {
         )}
         {warnings > 0 && <span className="sb warn"><Icon name="alert" size="xs" />{warnings} warning{warnings > 1 ? "s" : ""} on this line</span>}
         <span className="grow" />
-        <span className="sb">EN → JA</span>
         <span className="sb">{prefs.jaFont}</span>
         <button type="button" className="sbb" onClick={() => openModal({ kind: "shortcuts" })}>
           <Icon name="keyboard" size="sm" />

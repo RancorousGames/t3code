@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Icon } from "./Icons.tsx";
+import { formatUi } from "./ui-localization.ts";
 import { DocMark, GoogleMark, SheetMark } from "./Icons.tsx";
 import { ACCEPTED_EXTENSIONS, fetchPublicSheet, kindOf, readFile, type SourceKind, type StagedTable } from "./importers.ts";
 import { guessMapping, planImport, processedPreview, signatureOf, type Mapping } from "./importPlan.ts";
@@ -28,7 +29,7 @@ const KIND_LABEL: Record<SourceKind, string> = {
   json: "JSON", csv: "CSV", txt: "TXT", po: "PO", js: "JS", xlsx: "XLSX", docx: "DOCX", sheet: "SHEETS",
 };
 
-const SKIPPED_TYPES = `Only ${ACCEPTED_EXTENSIONS.map(ext => ext.toUpperCase()).join(", ")} files can be imported.`;
+const skippedTypes = () => formatUi("Only {0} files can be imported.", [ACCEPTED_EXTENSIONS.map(ext => ext.toUpperCase()).join(", ")]);
 
 const isFileEntry = (entry: FileSystemEntry): entry is FileSystemFileEntry => entry.isFile;
 
@@ -142,7 +143,7 @@ export function ImportWizard({ initialStep, initialTables, onClose, onCreate }: 
         messages.push(cause instanceof Error ? cause.message : `${file.name} couldn’t be read.`);
       }
     }
-    if (skipped) messages.push(`${skipped} file${skipped === 1 ? " was" : "s were"} skipped. ${SKIPPED_TYPES}`);
+    if (skipped) messages.push(`${skipped} file${skipped === 1 ? " was" : "s were"} skipped. ${skippedTypes()}`);
     if (next.length) setSources(current => [...current, ...next]);
     if (messages.length) setProblems(current => [...current, ...messages]);
     setBusy(false);

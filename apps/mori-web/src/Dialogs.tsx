@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "./app-context.ts";
+import { tr } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { KeyCaps } from "./Overlays.tsx";
 import { ACTIONS, assignBinding, clearBinding, defaultBindings, keyLabel, keyString, type ActionDef, type ActionGroup, type ActionId } from "./shortcuts.ts";
@@ -60,7 +61,7 @@ export function ShortcutsModal() {
   const filtered = (action: ActionDef) => !query.trim() || action.label.toLowerCase().includes(query.trim().toLowerCase());
   const column = (groups: ActionGroup[]) => groups.map(group => (
     <div key={group} className="sk-g">
-      <h4>{group}</h4>
+      <h4>{tr(group)}</h4>
       {ACTIONS.filter(action => action.group === group && filtered(action)).map(action => (
         <div key={action.id}>
           <div className="sk">
@@ -234,7 +235,7 @@ export function TemplatesModal() {
         )}
         {templates.map(template => (
           <div key={template.id} className="tpl-row">
-            <span className="tag">{TEMPLATE_KIND_LABEL[template.kind]}</span>
+            <span className="tag">{tr(TEMPLATE_KIND_LABEL[template.kind])}</span>
             <div className="opt-t">
               <span>{template.name}</span>
               <span className="sub">{describe(template)}</span>

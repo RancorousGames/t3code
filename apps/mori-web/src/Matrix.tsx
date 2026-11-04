@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useApp } from "./app-context.ts";
+import { tr } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { KeyCaps } from "./Overlays.tsx";
 import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
@@ -127,7 +128,7 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
       title={`${label} — click to expand`}
       onClick={event => { event.stopPropagation(); if (isResizable(key)) setColumn(key, { collapsed: false }); }}
     >
-      {key === "id" ? <span className={`sdot ${status}`} title={`${row.id} · ${STATUS_LABEL[status]}`} /> : has && <span className="cdot" style={{ background: color ?? "var(--text-3)" }} />}
+      {key === "id" ? <span className={`sdot ${status}`} title={`${row.id} · ${tr(STATUS_LABEL[status])}`} /> : has && <span className="cdot" style={{ background: color ?? "var(--text-3)" }} />}
     </div>
   );
 
@@ -143,7 +144,7 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
       case "id":
         return (
           <div key="id" className="c c-id">
-            <span className={`sdot ${status}`} title={STATUS_LABEL[status]} />
+            <span className={`sdot ${status}`} title={tr(STATUS_LABEL[status])} />
             <span>{row.id}</span>
             {dupes.length > 0 && <span className="dup" title={`Same English as ${dupes.join(", ")}`}>={dupes.length}</span>}
           </div>

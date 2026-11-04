@@ -1,15 +1,45 @@
-# Bootstrapping Monku no Mori's Japanese interface
+# Monku no Mori UI localization
 
-Monku no Mori can edit its own English-to-Japanese UI strings as a regular translation project.
+Mori translates its own interface through its normal native translation project,
+named **Monku no Mori · Interface**. Each row represents one English UI message.
 
-Run the source extractor from the t3code root:
+## Refresh the source inventory
+
+From the T3 repository root:
 
     node apps/mori-web/scripts/bootstrap-ui-project.cjs --install
 
-This scans static JSX labels, titles, placeholders and selected messages, generating localization/MonkuNoMoriUI.mori and installing/updating the native project named Monku no Mori · Interface (EN → JA). Existing curated and AI drafts are preserved when English strings match. Stable row IDs are derived from English text rather than source line numbers.
+The shared AST scanner (scripts/ui-string-compiler.cjs) inventories and
+instruments UI labels, buttons, form controls, accessible labels, tooltips,
+statuses, warnings and messages in the TSX UI and selected TypeScript modules.
+The Vite transform adds runtime translation lookup. Static module-level
+label records use live getters, so language changes affect them immediately.
 
-To translate, choose the project from Mori's project picker, then use the Matrix or AI Chats as usual. The source file and line are in each row's notes. English remains authoritative and final Japanese is stored in the regular native project file.
+Interpolated text uses numbered placeholders ({0}, {1}, etc.) that Japanese
+translators can reorder. Never translate arbitrary project contents, user
+created labels, identifiers, file paths or keyboard bindings.
 
-Settings -> Language switches between English and Japanese. Translated labels appear immediately; untranslated labels fall back to English. The app loads curated UI translations from the self-translation project independently of whichever project is currently active.
+Row IDs are hashes of the English source and remain stable when code moves.
+Regenerating and installing the catalog preserves existing curated translations,
+AI drafts, history and lock state. The generated .mori file is a source catalog;
+the native project library is authoritative for translator edits.
 
-Current first milestone: the core sidebar, titlebar breadcrumb, search command, and selected Settings elements call tr() directly. The Vite localization transform also wraps catalogued static JSX text and user-facing attributes across the app, so curated strings appear immediately without hand-editing every component. More complex dynamic/interpolated messages still need explicit tr() integration and placeholders; never translate user content, IDs or code. If a new string is added to the source, run the extractor again and rebuild.
+## Preview
+
+Open the interface translation project and translate via Matrix or AI Chats.
+Open Settings > Language > 日本語 to preview translations. Edits to the active
+self-translation project refresh live. Reload re-reads saved translations
+without restarting the application.
+
+English is used for untranslated keys. Curated translations take precedence
+over AI drafts. AI drafts are previewed but remain unapproved.
+
+## Guardrail
+
+The Vite build fails if a new extracted UI label is absent from the
+MonkuNoMoriUI.mori catalog. Run the bootstrap command after adding UI strings.
+The generator and compiler use the same AST scanner, preventing silent
+drift between the translation project and actual UI.
+
+Module identifiers and user-supplied project titles, file names and custom
+session titles are data, not UI messages.

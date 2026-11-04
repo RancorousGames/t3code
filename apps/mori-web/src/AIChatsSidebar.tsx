@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DragEvent, MouseEvent } from "react";
 import { Icon } from "./Icons.tsx";
+import { tr } from "./ui-localization.ts";
 import type { MoriChatSession } from "./chatgpt-sessions.ts";
 import { ChatGPTSessionIcon } from "../../web/src/components/sidebar/ChatGPTSessionIcon.tsx";
 import { chatGPTSessionDisplayRole } from "../../web/src/components/sidebar/chatGPTSidebarVisuals.ts";
@@ -205,7 +206,7 @@ export function AIChatsSidebar({
                 const next = new Set(old); if (next.has(group.name)) next.delete(group.name); else next.add(group.name); return next;
               })}>
               <Icon name={foldedGroups.has(group.name) ? "chevron-right" : "chevron-down"} size="xs" />
-              <span>{group.name}</span><small>{group.rows.length}</small>
+              <span>{group.name === "Other" ? tr("Other") : group.name}</span><small>{group.rows.length}</small>
             </button>}
             {!foldedGroups.has(group.name) && group.rows.map(session => {
               const age = moriSidebarAge(session, activeId, now);
@@ -238,7 +239,7 @@ export function AIChatsSidebar({
                       onDoubleClick={() => onDoubleClick(session)}>
                       {session.verificationPending && <span className="mori-ai-verify" title="Awaiting verification">◷</span>}
                       {role === "worker" && <span className="mori-ai-role" title="Worker">✦</span>}
-                      <span>{session.title}</span>
+                      <span>{session.title === "New ChatGPT chat" ? tr("New ChatGPT chat") : session.title}</span>
                     </button>}
                 {(session.snoozedUntil ?? 0) > now && <button type="button" className="mori-ai-row-action"
                     title="Unsnooze" aria-label={`Unsnooze ${session.title}`} onClick={() => onUnsnooze(session.id)}>

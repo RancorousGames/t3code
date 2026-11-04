@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useApp } from "./app-context.ts";
+import { tr, formatUi } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { checkRow, extractTokens, glossaryHits, statusOf } from "./insights.ts";
 import { Marked } from "./Marked.tsx";
@@ -89,7 +90,7 @@ function InspectorBody({ row }: { row: MoriRow }) {
       <div className="ins-head">
         <div className="ih-row">
           <span className="mono">{row.id}</span>
-          <span className={`pill ${status}`}>{STATUS_LABEL[status]}</span>
+          <span className={`pill ${status}`}>{tr(STATUS_LABEL[status])}</span>
           {row.isLocked && <span className="pill lock"><Icon name="lock" size="xs" />Locked</span>}
           <span className="grow" />
           <span className="muted tabnum" style={{ fontSize: 11.5 }}>{index + 1} / {visible.length}</span>
@@ -260,7 +261,7 @@ function InspectorBody({ row }: { row: MoriRow }) {
                 <span className="mono">{other.id}</span>
                 <span>· {other.sourceFile ?? "no file"}</span>
                 {other.final.trim() && other.final !== row.final && !row.isLocked && (
-                  <button type="button" className="btn xs outline" onClick={() => adopt(row.id, other.final, `Translation from ${other.id}`)}>Use</button>
+                  <button type="button" className="btn xs outline" onClick={() => adopt(row.id, other.final, formatUi("Translation from {0}", [other.id]))}>Use</button>
                 )}
                 {other.final.trim() && other.final === row.final && (
                   <span style={{ marginLeft: "auto", color: "var(--moss)", fontSize: 11, fontWeight: 600 }}>matches</span>
@@ -276,15 +277,15 @@ function InspectorBody({ row }: { row: MoriRow }) {
         {versions.length ? versions.map((version, n) => (
           <div key={n} className={`ver${version.current ? " current" : ""}`} style={cssVar("--k", version.label === "AI draft" ? "var(--mist)" : version.label === "Dev draft" ? "var(--bark)" : "var(--moss)")}>
             <div className="ver-h">
-              <b>{version.label}</b>
-              <span>· {version.when}</span>
+              <b>{tr(version.label)}</b>
+              <span>· {tr(version.when)}</span>
               {!version.current && !row.isLocked && (
                 <button
                   type="button"
                   className="btn xs outline"
                   onClick={() => adopt(row.id, version.text, version.label === "Yours" ? "Earlier version" : version.label)}
                 >
-                  {version.action}
+                  {tr(version.action)}
                 </button>
               )}
             </div>

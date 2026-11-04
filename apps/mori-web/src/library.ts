@@ -109,14 +109,38 @@ export function initializeLibrary(): Promise<void> {
 /** Writes project data first, then updates the cached library index. */
 export async function saveProject(project: MoriProject): Promise<void> {
   const native = nativeMori();
+  let next = project;
   if (native) {
     await initializeLibrary();
-    await native.saveProject(project);
+    if (project.id === "mori_self_ui_ja") {
+      // A source-catalog bootstrap can add UI rows while the translation editor
+      // still has the older project open. Its next autosave must not erase those
+      // new keys or newly seeded translations.
+      const current = await native.loadProject(project.id);
+      if (current) {
+        const catalog = parseMoriProject(current);
+        const outdated = project.rows.length < catalog.rows.length;
+        if (outdated) {
+          const saved = new Map(catalog.rows.map(row => [row.id, row]));
+          const incoming = new Set(project.rows.map(row => row.id));
+          const merged = project.rows.filter(row =>
+            !/(?:EN\s*(?:→|->)\s*JA|English\s*(?:→|->)\s*Japanese)/i.test(row.source)).map(row => {
+            const latest = saved.get(row.id);
+            return latest?.final?.trim() && !row.final.trim() && !row.ai?.trim()
+              ? { ...row, final: latest.final, status: "translated" as const } : row;
+          });
+          merged.push(...catalog.rows.filter(row => !incoming.has(row.id)));
+          next = { ...project, rows: merged };
+        }
+      }
+      next = { ...next, name: next.name.replace(/\s*\(EN\s*(?:→|->)\s*JA\)\s*$/, "") };
+    }
+    await native.saveProject(next);
   } else {
-    await withStore("readwrite", store => store.put(project));
+    await withStore("readwrite", store => store.put(next));
   }
-  const others = readIndex().filter(entry => entry.id !== project.id);
-  writeIndex([entryOf(project), ...others]);
+  const others = readIndex().filter(entry => entry.id !== next.id);
+  writeIndex([entryOf(next), ...others]);
 }
 
 export async function loadProject(id: string): Promise<MoriProject | null> {

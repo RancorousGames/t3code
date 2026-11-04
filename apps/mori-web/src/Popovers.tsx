@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useApp } from "./app-context.ts";
+import { formatUi } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { Opt, PopLabel, PopSearch } from "./Overlays.tsx";
 import { withSpeaker } from "./insights.ts";
@@ -200,7 +201,7 @@ function ProjectsPopover() {
           <span className="pmark" style={{ width: 26, height: 26, fontSize: 10.5 }}>{entry.name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? "").join("")}</span>
           <span className="opt-t">
             <span>{entry.name}</span>
-            <span className="sub">EN → JA · {entry.lines} lines · {entry.translated} translated</span>
+            <span className="sub">{formatUi("{0} lines · {1} translated", [entry.lines, entry.translated])}</span>
           </span>
           {entry.id === project.id && <Icon name="check" size="sm" className="ok" />}
         </Opt>
