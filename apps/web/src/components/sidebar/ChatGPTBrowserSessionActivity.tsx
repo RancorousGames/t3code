@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { recordChatGPTProviderActivity } from "../../chatGPTProviderActivity";
 import * as Schema from "effect/Schema";
 import { CircleIcon, GlobeIcon, LoaderCircleIcon, MoonIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -525,6 +526,7 @@ export function useChatGPTBrowserSessionActivity(
           `state=${next} ${detail}`,
         );
       }
+      if (!hibernated) recordChatGPTProviderActivity(environmentId, sessionId, next);
       previousState.current = next;
       setResult((current) =>
         current.tabId === runtimeTabId && current.activity === next && current.reason === reason

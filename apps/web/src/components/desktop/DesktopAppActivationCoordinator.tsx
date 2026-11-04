@@ -51,6 +51,7 @@ import {
   runChatGPTSessionControl,
 } from "../../chatGPTSessionControl";
 import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
+import { readChatGPTProviderActivity } from "../../chatGPTProviderActivity";
 import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
 import {
   resolveExistingChatGPTSessionAddress,
@@ -1925,6 +1926,7 @@ export function DesktopAppActivationCoordinator() {
                 const loaded = isPersistentChatGPTSessionOptedIn(entry.id)
                   ? nativeUrl !== null
                   : !!conversationId && isLoadedChatGPTBrowserGuest(environmentId, entry);
+                const activity = loaded ? readChatGPTProviderActivity(environmentId, entry.id) : "unknown";
                 return {
                   ref: { provider: "t3", id: entry.id },
                   kind: "t3/chatgpt",
@@ -1953,8 +1955,10 @@ export function DesktopAppActivationCoordinator() {
                     : {}),
                   state: {
                     reachability: entry.hidden ? "Unreachable" : loaded ? "Reachable" : "Unknown",
-                    activity: "Unknown",
-                    confidence: "Unknown",
+                    activity: activity === "working" ? "Working" : activity === "idle" ? "Idle"
+                      : activity === "invalid" ? "Errored" : activity === "interrupted"
+                      || activity === "delivery-timeout" ? "Errored" : "Unknown",
+                    confidence: activity === "unknown" ? "Unknown" : "Confirmed",
                     elsewhere: null,
                     observedAt,
                   },

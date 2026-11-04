@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { recordChatGPTProviderActivity } from "../../chatGPTProviderActivity";
 import { wakeChatGPTBrowserSession } from "../../chatGPTBrowserSessions";
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
@@ -228,6 +229,8 @@ export function usePersistentChatGPTSidebarActivity(
         latestWorkingAt.current = Date.now();
         setLastWorkingAt(latestWorkingAt.current);
       }
+      if (observed.resident === true)
+        recordChatGPTProviderActivity(environmentId, sessionId, observed.activity);
       previousActivity = observed.activity;
       previousResidency = observed.resident;
       setObservation((previous) =>
