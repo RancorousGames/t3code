@@ -584,11 +584,15 @@ export class TaskBoardWorkCoordinator {
       // prompt without ever bootstrapping. Reclaim its Queue intent only after
       // the exact abandoned T3 guest is durably closed.
       if (this.caffy.policyEnabled) {
-        try { await this.recoverUnstartedGuests(snapshots); }
-        catch (error) { this.lastError = `Unstarted guest recovery: ${String(error)}`; }
-      }
-      if (!this.lastError?.startsWith("Unstarted guest recovery:"))
+        try {
+          await this.recoverUnstartedGuests(snapshots);
+          this.lastError = null;
+        } catch (error) {
+          this.lastError = `Unstarted guest recovery: ${String(error)}`;
+        }
+      } else {
         this.lastError = null;
+      }
     } catch (error) {
       this.lastError = String(error);
       // Do not clear a Starting reservation on transport errors or timeouts.
