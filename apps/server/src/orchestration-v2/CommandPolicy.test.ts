@@ -72,14 +72,16 @@ it("resolves automatic message delivery from authoritative provider capabilities
     ),
     { type: "start_immediately" },
   );
-  assert.deepEqual(
-    CommandPolicy.resolveMessageDispatchIntent(
-      dispatchProjection(baseCapabilities),
-      { type: "start_immediately" },
-      "auto",
-    ),
-    { type: "steer_active", targetRunId: activeRunId },
-  );
+  for (const intent of ["auto", "gentle"] as const) {
+    assert.deepEqual(
+      CommandPolicy.resolveMessageDispatchIntent(
+        dispatchProjection(baseCapabilities),
+        { type: "start_immediately" },
+        intent,
+      ),
+      { type: "steer_active", targetRunId: activeRunId },
+    );
+  }
   assert.deepEqual(
     CommandPolicy.resolveMessageDispatchIntent(
       dispatchProjection(
@@ -177,7 +179,7 @@ it("queues a steer for a provider that cannot steer either way", () => {
       },
     })),
   );
-  for (const deliveryIntent of ["auto", "steer"] as const) {
+  for (const deliveryIntent of ["auto", "gentle", "steer"] as const) {
     assert.deepEqual(
       CommandPolicy.resolveMessageDispatchIntent(
         projection,

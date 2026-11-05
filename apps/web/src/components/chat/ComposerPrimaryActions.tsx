@@ -31,7 +31,7 @@ interface ComposerPrimaryActionsProps {
   pendingAction: PendingActionState | null;
   isRunning: boolean;
   canInterrupt: boolean;
-  followUpBehavior?: "queue" | "steer";
+  followUpBehavior?: "gentle" | "queue" | "steer";
   canSteer?: boolean;
   alternateShortcutLabel?: string | null;
   showPlanFollowUpPrompt: boolean;
@@ -45,6 +45,7 @@ interface ComposerPrimaryActionsProps {
   preserveComposerFocusOnPointerDown?: boolean;
   isEditingQueuedMessage?: boolean;
   onSubmitMessage?: MouseEventHandler<HTMLButtonElement>;
+  onSendMode?: (mode: "gentle" | "queue" | "steer") => void;
   onResume?: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -85,7 +86,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   pendingAction,
   isRunning,
   canInterrupt,
-  followUpBehavior = "steer",
+  followUpBehavior = "gentle",
   canSteer = true,
   alternateShortcutLabel = null,
   showPlanFollowUpPrompt,
@@ -99,6 +100,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   isEditingQueuedMessage = false,
   onSubmitMessage,
+  onSendMode,
   onResume,
   onPreviousPendingQuestion,
   onInterrupt,
@@ -121,6 +123,12 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       alternateModifier: shortcutModifiers.metaKey || shortcutModifiers.ctrlKey,
     }) === "queue";
   const alternateAction = alternateComposerDispatchAction(followUpBehavior);
+  const activeDispatchMode = resolveComposerDispatchMode({
+    running: isRunning,
+    activeTurnDefault: followUpBehavior,
+    canSteer,
+    alternateModifier: shortcutModifiers.metaKey || shortcutModifiers.ctrlKey,
+  });
   const isSendDisabled = !canOperateThread || sendDisabledReason !== null;
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
 
@@ -279,9 +287,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         ? "Compact and send"
         : isQueuing
           ? "Queue message"
-          : isRunning
-            ? "Steer message"
-            : "Submit message";
+          : isRunning && activeDispatchMode === "steer"
+            ? "Steer now"
+            : "Send message";
   const submitStatus = isEnvironmentUnavailable
     ? "Environment disconnected"
     : (sendDisabledReason ??
@@ -297,7 +305,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     (compactsBeforeSend
       ? `Summarize ${compactTokens} tokens of history, then send`
       : isRunning && !isEditingQueuedMessage && canSteer
-        ? `Click to ${followUpBehavior}, ${isMacPlatform(navigator.platform) ? "⌘" : "Ctrl"}-click${alternateShortcutLabel ? ` or ${alternateShortcutLabel}` : ""} to ${alternateAction}`
+        ? `${submitLabel}. ${isMacPlatform(navigator.platform) ? "⌘" : "Ctrl"}-click${alternateShortcutLabel ? ` or ${alternateShortcutLabel}` : ""} to ${alternateAction === "gentle" ? "send without interrupting" : alternateAction}. Use the arrow for all three send modes.`
         : submitLabel);
 
   const sendButton = (
@@ -352,7 +360,44 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       <TooltipPopup>{submitTooltip}</TooltipPopup>
     </Tooltip>
   );
-  if (compactTokens === null) return submit;
+  if (compactTokens === null)
+    return isRunning &&
+      !showResume &&
+      !isEditingQueuedMessage &&
+      !compactsBeforeSend &&
+      onSendMode ? (
+      <div className="flex items-center gap-1">
+        {submit}
+        <Menu>
+          <MenuTrigger
+            render={
+              <button
+                type="button"
+                className="rounded-full p-1.5 hover:bg-foreground/10"
+                aria-label="Choose send mode"
+                disabled={
+                  isSendBusy || isSendDisabled || isEnvironmentUnavailable || !hasSendableContent
+                }
+                onMouseDown={
+                  preserveComposerFocusOnPointerDown ? (event) => event.preventDefault() : undefined
+                }
+              />
+            }
+          >
+            <ChevronDownIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
+            <MenuItem onClick={() => onSendMode("gentle")}>Send without interrupting</MenuItem>
+            <MenuItem onClick={() => onSendMode("queue")}>Queue after current turn</MenuItem>
+            <MenuItem disabled={!canSteer} onClick={() => onSendMode("steer")}>
+              Steer now (interrupt)
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+      </div>
+    ) : (
+      submit
+    );
 
   return (
     <div data-chat-composer-compact-send="true" className="flex items-center gap-2">

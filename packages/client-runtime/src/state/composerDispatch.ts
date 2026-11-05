@@ -1,4 +1,4 @@
-export type ComposerDispatchMode = "auto" | "queue" | "steer" | "restart";
+export type ComposerDispatchMode = "auto" | "gentle" | "queue" | "steer" | "restart";
 export type ActiveTurnComposerAction = Exclude<ComposerDispatchMode, "auto">;
 
 export function resolveComposerDispatchMode(input: {
@@ -10,8 +10,8 @@ export function resolveComposerDispatchMode(input: {
 }): ComposerDispatchMode {
   if (!input.running) return "auto";
   if (input.canSteer === false) return "queue";
-  const defaultAction = input.activeTurnDefault ?? "steer";
-  if (input.alternateModifier) return defaultAction === "queue" ? "steer" : "queue";
+  const defaultAction = input.activeTurnDefault ?? "gentle";
+  if (input.alternateModifier) return defaultAction === "queue" ? "gentle" : "queue";
   return defaultAction;
 }
 

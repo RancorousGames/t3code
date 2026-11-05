@@ -261,7 +261,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   } | null;
   isRunning: boolean;
   canInterrupt: boolean;
-  followUpBehavior: "queue" | "steer";
+  followUpBehavior: "gentle" | "queue" | "steer";
   canSteer: boolean;
   alternateShortcutLabel: string | null;
   showPlanFollowUpPrompt: boolean;
@@ -274,6 +274,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   preserveComposerFocusOnPointerDown?: boolean;
   isEditingQueuedMessage: boolean;
   onSubmitMessage: React.MouseEventHandler<HTMLButtonElement>;
+  onSendMode: (mode: "gentle" | "queue" | "steer") => void;
   onResume: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -318,6 +319,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         isEditingQueuedMessage={props.isEditingQueuedMessage}
         onSubmitMessage={props.onSubmitMessage}
+        onSendMode={props.onSendMode}
         onResume={props.onResume}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}

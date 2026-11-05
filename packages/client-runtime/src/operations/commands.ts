@@ -182,7 +182,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly interactionMode: ProviderInteractionMode;
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
-  readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
+  readonly dispatchMode?: "auto" | "gentle" | "queue" | "steer" | "restart" | "start";
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {

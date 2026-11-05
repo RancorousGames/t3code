@@ -4682,6 +4682,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly idleCompaction?: OrchestrationV2ConversationMessage["idleCompaction"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
+    readonly gentleSteer?: boolean;
     readonly forceRestart: boolean;
   }) {
     const targetRun = input.projection.runs.find((candidate) => candidate.id === input.targetRunId);
@@ -4830,6 +4831,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly modelSwitch?: OrchestrationV2ModelSwitch | undefined;
       }) {
         const message: OrchestrationV2ConversationMessage = {
+          ...(input.gentleSteer ? { gentleSteer: true } : {}),
           createdBy: input.createdBy,
           creationSource: input.creationSource,
           ...(input.delegatedCompletion === undefined
@@ -5623,7 +5625,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // text the agent never receives, and like any user send it releases the
     // hold; an explicit steer or restart still fails below.
     if (
-      command.deliveryIntent === "auto" &&
+      (command.deliveryIntent === "auto" || command.deliveryIntent === "gentle") &&
       (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") &&
       (yield* stopReachedRun(command, command.threadId, dispatchMode.targetRunId))
     ) {
@@ -5813,6 +5815,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             payload: { ...sourcePlan, status: "completed" },
           });
 
+    // A non-interrupting follow-up must never restart a run to apply a model change.
+    if (command.deliveryIntent === "gentle" && dispatchMode.type === "steer_active") {
+      const target = projection.runs.find((run) => run.id === dispatchMode.targetRunId);
+      if (target !== undefined && !modelSelectionsEqual(target.modelSelection, modelSelection)) {
+        dispatchMode = { type: "queue_after_active" };
+      }
+    }
     if (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") {
       yield* dispatchSteerIntoRun({
         command,
@@ -5837,6 +5846,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : { scheduledTaskId: command.scheduledTaskId }),
         ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
         ...(command.idleCompaction === undefined ? {} : { idleCompaction: command.idleCompaction }),
+        gentleSteer: command.deliveryIntent === "gentle",
         forceRestart: dispatchMode.type === "restart_active",
       });
       return;

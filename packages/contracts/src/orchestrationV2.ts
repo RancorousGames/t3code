@@ -1284,6 +1284,7 @@ export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpire
 export type OrchestrationV2IdleCompaction = typeof OrchestrationV2IdleCompaction.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  gentleSteer: Schema.optional(Schema.Boolean),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -3163,7 +3164,7 @@ export const OrchestrationV2Command = Schema.Union([
     usageLimitContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
-    deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
+    deliveryIntent: Schema.optional(Schema.Literals(["auto", "gentle", "steer", "restart"])),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
         parentRunId: RunId,

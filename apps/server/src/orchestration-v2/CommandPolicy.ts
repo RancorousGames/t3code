@@ -92,7 +92,7 @@ export function goalCommandStopsActiveRun(
 export function resolveMessageDispatchIntent(
   projection: OrchestrationV2ThreadProjection,
   requestedMode: MessageDispatchMode,
-  deliveryIntent?: "auto" | "steer" | "restart",
+  deliveryIntent?: "auto" | "gentle" | "steer" | "restart",
 ): MessageDispatchMode {
   const mode = resolveDeliveryIntent(projection, requestedMode, deliveryIntent);
   if (mode.type !== "steer_active") return mode;
@@ -144,12 +144,22 @@ function providerTurnCapabilities(
 function resolveDeliveryIntent(
   projection: OrchestrationV2ThreadProjection,
   requestedMode: MessageDispatchMode,
-  deliveryIntent?: "auto" | "steer" | "restart",
+  deliveryIntent?: "auto" | "gentle" | "steer" | "restart",
 ): MessageDispatchMode {
   if (deliveryIntent === undefined) return requestedMode;
 
   const activeRun = projection.runs.findLast(isActiveRun);
   if (activeRun === undefined) return { type: "start_immediately" };
+  if (deliveryIntent === "gentle") {
+    const runningTurn = projection.providerTurns.some(
+      (turn) => turn.runAttemptId === activeRun.activeAttemptId && turn.status === "running",
+    );
+    return activeRun.status === "running" &&
+      runningTurn &&
+      providerTurnCapabilities(projection, activeRun)?.supportsActiveSteering === true
+      ? { type: "steer_active", targetRunId: activeRun.id }
+      : { type: "queue_after_active" };
+  }
   if (deliveryIntent === "steer") {
     return { type: "steer_active", targetRunId: activeRun.id };
   }

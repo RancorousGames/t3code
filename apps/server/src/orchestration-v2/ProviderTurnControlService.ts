@@ -368,6 +368,7 @@ export const layer: Layer.Layer<
           }
           yield* loaded.session.value
             .steerTurn({
+              ...(message.gentleSteer ? { gentle: true } : {}),
               threadId: input.threadId,
               runId: run.id,
               providerThread: loaded.providerThread,

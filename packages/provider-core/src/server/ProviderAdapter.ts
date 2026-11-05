@@ -462,6 +462,8 @@ export interface ProviderAdapterV2TurnInput {
 }
 
 export interface ProviderAdapterV2SteerInput {
+  /** Deliver without interrupting foreground tools when supported by the provider. */
+  readonly gentle?: boolean;
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly providerThread: OrchestrationV2ProviderThread;
