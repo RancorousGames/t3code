@@ -921,7 +921,7 @@ export class CaffyScheduler {
     this.taskReservations = reservations.map(row => ({
       requestId: row.requestId,
       sessionId: row.sessionId,
-      holdUntil: row.holdUntil,
+      ...(row.holdUntil === undefined ? {} : { holdUntil: row.holdUntil }),
     }));
     this.taskBoardInventoryReady = inventoryReady;
   }
@@ -978,7 +978,7 @@ export class CaffyScheduler {
     // the guest becomes an observed worker; otherwise each slow browser load
     // lets the coordinator spawn another task and exceed the configured cap.
     // Bound this grace period: old idle/failed task sessions are not capacity.
-    const sessionsById = new Map(data.sessions.map(s => [canonical(s.id), s]));
+    const sessionsById = new Map(data.sessions.filter(s => !!s.id).map(s => [canonical(s.id!), s]));
     const taskReserved = this.taskReservations.filter(row => {
       if (!row.sessionId) return row.holdUntil === undefined || now < row.holdUntil;
       const id = canonical(row.sessionId);

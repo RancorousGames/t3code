@@ -27,6 +27,10 @@ interface QueueItem {
   error?: string | null;
 }
 interface QueueSnapshot { boardRoot: string; items: QueueItem[]; dispatchEnabled: boolean }
+interface RetiredGuestReceipt {
+  boardRoot: string; taskId: string; queueRequest: string;
+  requestId: string; sessionId: string;
+}
 const ROOT_CANDIDATES = [
   process.env.T3CODE_REPO_ROOT,
   NodePath.resolve(import.meta.dirname, "..", "..", "..", ".."),
@@ -52,6 +56,7 @@ const TASKBOARD_CATALOG = () => NodePath.join(
 const RESERVATION_LEASE_SECONDS = 180;
 const STARTING_HOLD_MS = 5 * 60_000;
 const STARTING_RECHECK_MS = 45_000;
+const UNSTARTED_GUEST_GRACE_MS = 60 * 60_000;
 const PUMP_INTERVAL_MS = 15_000;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
@@ -96,6 +101,9 @@ function rootKey(value: string) { return NodePath.resolve(value).toLowerCase(); 
 export class TaskBoardWorkCoordinator {
   private readonly caffy: CaffyScheduler;
   private readonly home: string;
+  private readonly retiredGuestDir: string;
+  private lastUnstartedGuestCheckAt = 0;
+  private readonly rejectedUnstartedGuests = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private busy = false;
@@ -112,6 +120,7 @@ export class TaskBoardWorkCoordinator {
     // The desktop state directory is <T3 home>/userdata (or /dev in a
     // source-checkout run). Standalone CLI requests must use the same pipe.
     this.home = NodePath.resolve(stateDir, "..");
+    this.retiredGuestDir = NodePath.join(stateDir, "task-retired-guests");
   }
 
   private projects(): Project[] {
@@ -216,7 +225,8 @@ export class TaskBoardWorkCoordinator {
 
   private syncReservations(inventoryReady: boolean) {
     this.caffy.setTaskReservations(this.reservations().map(row => ({
-      requestId: row.requestId, sessionId: row.sessionId, holdUntil: row.holdUntil,
+      requestId: row.requestId, sessionId: row.sessionId,
+      ...(row.holdUntil === undefined ? {} : {holdUntil: row.holdUntil}),
     })), inventoryReady);
   }
 
@@ -311,6 +321,130 @@ export class TaskBoardWorkCoordinator {
     this.lastError = `Task ${item.taskId}: ${result.status ?? "unknown"}; retaining the same Starting reservation.`;
   }
 
+  /** A Queue task is claimed at guest allocation, not when its agent starts.
+   * Retire only provably unbootstrapped, noncanonical, idle guests after one
+   * hour; persist the exact receipt before closing so crashes cannot strand
+   * the TaskBoard claim. Never replay an UNKNOWN prompt in that old guest. */
+  private async recoverUnstartedGuests(snapshots: QueueSnapshot[]): Promise<void> {
+    NodeFS.mkdirSync(this.retiredGuestDir, { recursive: true });
+    const outstanding = NodeFS.readdirSync(this.retiredGuestDir)
+      .filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
+    for (const name of outstanding) {
+      const file = NodePath.join(this.retiredGuestDir, name);
+      let receipt: RetiredGuestReceipt;
+      try { receipt = JSON.parse(NodeFS.readFileSync(file, "utf8")) as RetiredGuestReceipt; }
+      catch { continue; }
+      const item = snapshots.find(board => rootKey(board.boardRoot) === rootKey(receipt.boardRoot))
+        ?.items.find(row => row.taskId === receipt.taskId);
+      if (!item || item.state !== "working" ||
+          item.queueRequest !== receipt.queueRequest ||
+          item.reservationId !== receipt.requestId ||
+          item.sessionId !== receipt.sessionId ||
+          (item.claimed && item.claimedBy !== `t3:${receipt.sessionId}`)) {
+        NodeFS.rmSync(file, { force: true });
+        continue;
+      }
+      const status = await cli("node.exe", [
+        NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+      ], JSON.stringify({
+        action: "close_status", sessionId: receipt.sessionId, home: this.home,
+      }), 15_000) as {status?: string; persisted?: boolean};
+      if (status.status === "closed" && status.persisted === true) {
+        await this.taskCommand(receipt.boardRoot, [
+          "task", "queue", "reclaim", receipt.taskId,
+          "--queue-request", receipt.queueRequest,
+          "--request-id", receipt.requestId,
+          "--session-id", receipt.sessionId,
+          "--reason", "Unbootstrapped T3 guest retired after one hour without an assistant response.",
+          "--confirmed-session-closed",
+        ]);
+        NodeFS.rmSync(file, { force: true });
+        await this.readQueues();
+      } else if (status.status !== "closing") {
+        let response: {closeAccepted?: boolean; closed?: boolean};
+        try { response = await cli("node.exe", [
+          NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+        ], JSON.stringify({
+          action: "change_state", sessionId: receipt.sessionId, state: "closed",
+          home: this.home,
+        }), 25_000) as {closeAccepted?: boolean; closed?: boolean}; }
+        catch (error) {
+          this.rejectedUnstartedGuests.set(receipt.sessionId, Date.now() + 10 * 60_000);
+          NodeFS.rmSync(file, {force: true}); // Definitive refusal; try another eligible task.
+          throw error;
+        }
+        if (!response.closeAccepted && !response.closed)
+          throw new Error(`Retiring unstarted T3 guest ${receipt.sessionId} was not accepted`);
+      }
+      return; // One exact close/reconcile per pump; never flood or exceed capacity.
+    }
+
+    if (Date.now() - this.lastUnstartedGuestCheckAt < 30_000 ||
+        this.caffy.hasPendingQueuedWakes) return;
+    this.lastUnstartedGuestCheckAt = Date.now();
+    const capacity = await this.caffy.capacity().catch(() => null);
+    if (!capacity?.admissible) return;
+    const listed = await cli("node.exe", [
+      NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+    ], JSON.stringify({
+      action: "list", which: "all", includeHidden: true, home: this.home,
+    }), 25_000) as {sessions?: Array<{
+      id: string; spawnRequestId?: string; autoClose?: boolean; humanControlled?: boolean;
+      autoCloseExempt?: boolean; borderColor?: string | null; verificationPending?: boolean;
+      hidden?: boolean; closedAt?: unknown; conversationId?: string | null;
+      observedGuestUrl?: string | null;
+      bootstrapIdentity?: {state?: string; conversationId?: string};
+      binding?: {boundAt?: string; taskRef?: {board?: string; id?: string}};
+      lastRole?: string | null; lastWorkingAt?: number | null; totalTurns?: number | null;
+      activity?: string; status?: string; statusObservedAt?: string;
+    }>; total?: number; hasMore?: boolean; incomplete?: boolean };
+    if (!Array.isArray(listed.sessions) || listed.hasMore || listed.incomplete ||
+        (listed.total !== undefined && listed.total !== listed.sessions.length)) return;
+    const byId = new Map(listed.sessions.map(session => [session.id, session]));
+    const now = Date.now();
+    const candidates = snapshots.flatMap(board => board.dispatchEnabled ? board.items
+      .filter(item => item.state === "working" && item.sessionId &&
+        item.reservationId && UUID.test(item.queueRequest) && !item.legacyOpenRig &&
+        (!item.claimed || item.claimedBy === `t3:${item.sessionId}`))
+      .map(item => ({ boardRoot: board.boardRoot, item })) : [])
+      .sort((a, b) => a.item.created.localeCompare(b.item.created));
+    for (const {boardRoot, item} of candidates) {
+      const session = byId.get(item.sessionId!);
+      if (!session ||
+          (this.rejectedUnstartedGuests.get(item.sessionId!) ?? 0) > now ||
+          session.spawnRequestId !== item.reservationId ||
+          session.binding?.taskRef?.id !== item.taskId ||
+          !session.binding?.taskRef?.board ||
+          rootKey(session.binding.taskRef.board) !== rootKey(boardRoot) ||
+          session.bootstrapIdentity?.state !== "awaiting_marker" ||
+          session.bootstrapIdentity.conversationId || session.conversationId ||
+          session.closedAt != null || session.hidden || session.humanControlled ||
+          session.autoCloseExempt || session.borderColor || session.verificationPending ||
+          session.lastRole !== "user" || !session.observedGuestUrl ||
+          (session.lastWorkingAt != null && session.lastWorkingAt > 0) ||
+          (session.totalTurns != null && session.totalTurns > 1) ||
+          session.activity === "working" ||
+          session.status !== "pending_or_stalled") continue;
+      const boundAt = Date.parse(session.binding.boundAt ?? "");
+      const observedAt = Date.parse(session.statusObservedAt ?? "");
+      if (!Number.isFinite(boundAt) || now - boundAt < UNSTARTED_GUEST_GRACE_MS ||
+          !Number.isFinite(observedAt) || observedAt > now + 1_000 ||
+          now - observedAt > 15_000) continue;
+      const receipt: RetiredGuestReceipt = {
+        boardRoot, taskId: item.taskId, queueRequest: item.queueRequest,
+        requestId: item.reservationId!, sessionId: item.sessionId!,
+      };
+      const hash = NodeCrypto.createHash("sha256")
+        .update(rootKey(boardRoot) + "\\0" + receipt.taskId + "\\0" + receipt.requestId)
+        .digest("hex");
+      const file = NodePath.join(this.retiredGuestDir, `${hash}.json`);
+      NodeFS.writeFileSync(file + ".tmp", JSON.stringify(receipt), {encoding: "utf8", flush: true});
+      NodeFS.renameSync(file + ".tmp", file);
+      await this.recoverUnstartedGuests(snapshots);
+      return;
+    }
+  }
+
   /** Recover ONLY task spawns whose persisted first message definitely never
    * reached ChatGPT. UNKNOWN submissions remain untouched to avoid duplicates. */
   private async recoverConfirmedUnsent(snapshots: QueueSnapshot[]): Promise<void> {
@@ -328,7 +462,7 @@ export class TaskBoardWorkCoordinator {
     const candidate = working.find(({ item }) => {
       const session = sessions.get(item.sessionId!);
       return session?.spawnRequestId === item.reservationId &&
-        session.promptDelivery === "not_sent" && session.sendAttempted === false &&
+        session?.promptDelivery === "not_sent" && session.sendAttempted === false &&
         (this.promptRecoveryAttempts.get(item.reservationId!) ?? 0) < 3;
     });
     if (!candidate) return;
@@ -446,7 +580,15 @@ export class TaskBoardWorkCoordinator {
         await this.startReserved(candidate.boardRoot, candidate.item, requestId);
         return; // One selection at a time; capacity is sampled again next pump.
       }
-      this.lastError = null;
+      // A previously dispatched guest can remain forever at a visible user
+      // prompt without ever bootstrapping. Reclaim its Queue intent only after
+      // the exact abandoned T3 guest is durably closed.
+      if (this.caffy.policyEnabled) {
+        try { await this.recoverUnstartedGuests(snapshots); }
+        catch (error) { this.lastError = `Unstarted guest recovery: ${String(error)}`; }
+      }
+      if (!this.lastError?.startsWith("Unstarted guest recovery:"))
+        this.lastError = null;
     } catch (error) {
       this.lastError = String(error);
       // Do not clear a Starting reservation on transport errors or timeouts.
