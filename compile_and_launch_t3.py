@@ -138,11 +138,14 @@ def stop_custom_app(root: Path) -> bool:
     for item in running_custom_processes(root):
         pid = int(item["ProcessId"])
         if pid in roots:
-            subprocess.run(["taskkill.exe", "/PID", str(pid), "/T", "/F"],
+            # Never use /T: the independent persistent ChatGPT Chromium host
+            # was spawned by this Electron PID and must survive T3 restarts.
+            subprocess.run(["taskkill.exe", "/PID", str(pid), "/F"],
                            capture_output=True, text=True, check=False,
                            creationflags=CREATE_NO_WINDOW)
 
-    # An orphaned renderer may outlive the Electron root.
+    # Clean up only processes running the T3 custom executable. The separate
+    # electron.exe Chromium host is deliberately excluded and stays resident.
     for item in running_custom_processes(root):
         pid = int(item["ProcessId"])
         subprocess.run(["taskkill.exe", "/PID", str(pid), "/F"],

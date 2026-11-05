@@ -1,13 +1,8 @@
 /**
- * Keep the *real* T3 BrowserWindow and its native ChatGPT WebContentsViews alive
- * when the user closes the visible desktop window.
- *
- * Keep the native taskbar button alive by minimizing rather than hiding;
- * ordinary taskbar clicks restore the window, and a second executable launch
- * also reveals the existing single-instance owner.
- *
- * App.quit(), updater-controlled quit, and explicit process shutdown still
- * destroy the owner. Closing/minimizing is intentionally distinct from Quit.
+ * Allow the T3 desktop process to fully exit when its main window closes.
+ * The independent Chromium host (and its ChatGPT pages) remains alive and is
+ * reattached by a newly launched T3; the taskbar shortcut starts a fresh app.
+ * A second launch while T3 is open still focuses the existing window.
  */
 import type { App, BrowserWindow } from "electron";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Synchronous main-process acknowledgement for Win32 native reload.
@@ -108,17 +103,11 @@ export function installPersistentMainWindowLifecycle(app: App): void {
     });
 
     window.on("closed", () => {
-      if (primaryWindow === window) primaryWindow = null;
-    });
-
-    window.on("close", (event) => {
-      // Do not intercept popups, WSL connecting splashes, updater shutdown,
-      // explicit Quit, or windows that never loaded the real T3 interface.
-      if (quitting || !primaryT3Window || window.isDestroyed()) return;
-      event.preventDefault();
-      // Hiding removes the taskbar button, making an already-running T3 appear
-      // impossible to reopen. Minimized windows keep their normal taskbar slot.
-      if (!window.isMinimized()) window.minimize();
+      if (primaryWindow !== window) return;
+      primaryWindow = null;
+      // Other hidden Electron utility windows must not keep the T3 owner alive
+      // after its main window is closed. Chromium pages live in another process.
+      if (!quitting) app.quit();
     });
   });
 }
