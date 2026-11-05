@@ -2046,6 +2046,44 @@ export function DesktopAppActivationCoordinator() {
             const result =
               work.action === "create"
                 ? await executeProviderBrowserCreate(environmentId, work, createSession)
+                : work.action === "load"
+                  ? await (async () => {
+                      const id = work.browserSessionId;
+                      const entry = readChatGPTBrowserSessions(environmentId)
+                        .find((candidate) => candidate.id === id);
+                      if (!id || !entry)
+                        return { ok: false as const, code: "Unavailable" as const,
+                          message: "The selected browser session no longer exists on this PC." };
+                      // Android can request an unloaded session by its stable T3
+                      // identity. Mount the exact guest in the background; do not
+                      // switch tabs, reload a resident page, or send any message.
+                      requestChatGPTDeliveryMount(environmentId, id);
+                      try {
+                        if (isPersistentChatGPTSessionOptedIn(id)) {
+                          const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+                          if (!bridge) throw new Error("Native ChatGPT browser unavailable");
+                          const saved = getLocalStorageItem(
+                            chatGPTBrowserLastUrlKey(environmentId, id), Schema.String);
+                          const recovered = resolveWarmChatGPTConversationUrl(entry, saved);
+                          const expected = work.expectedConversationId;
+                          // The T3 provider already checked the selected
+                          // session's authoritative /c/ binding. Never attach
+                          // a different saved URL when it differs from that ID.
+                          const url = expected && chatGPTConversationIdFromUrl(recovered) !== expected
+                            ? `https://chatgpt.com/c/${expected}`
+                            : recovered ?? "https://chatgpt.com/";
+                          await warmMissingNativeChatGPT(bridge, environmentId, id, url);
+                        }
+                        for (const ms of [500, 2_000, 5_000, 10_000, 20_000, 40_000, 75_000])
+                          window.setTimeout(() => window.dispatchEvent(new Event("t3:agent-provider-refresh")), ms);
+                        window.setTimeout(() => releaseChatGPTDeliveryMount(environmentId, id), 180_000);
+                        return { ok: true as const, data: { state: "Loading" } };
+                      } catch (cause) {
+                        releaseChatGPTDeliveryMount(environmentId, id);
+                        return { ok: false as const, code: "Unavailable" as const,
+                          message: cause instanceof Error ? cause.message : "PC could not mount browser session." };
+                      }
+                    })()
                 : work.action === "visibility"
                   ? await (async () => {
                       const id = work.browserSessionId;

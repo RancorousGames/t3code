@@ -122,6 +122,13 @@ export const AgentProviderV1HistoryItem = Schema.Struct({
 });
 export type AgentProviderV1HistoryItem = typeof AgentProviderV1HistoryItem.Type;
 
+/** Explicitly wake an existing browser session without sending or reloading a conversation. */
+export const AgentProviderV1LoadRequest = Schema.Struct({
+  session: AgentProviderV1SessionRef,
+  expectedEnvironmentId: OpaqueId,
+  expectedConversation: Schema.optional(Schema.NullOr(OpaqueId)),
+});
+
 /** Read newest native timeline window, then walk backward with the server's opaque cursor. */
 export const AgentProviderV1HistoryRequest = Schema.Struct({
   session: AgentProviderV1SessionRef,
@@ -156,7 +163,7 @@ export const AgentProviderV1DesktopWork = Schema.Struct({
   environmentId: OpaqueId,
   browserSessionId: Schema.optional(OpaqueId),
   expectedConversationId: Schema.optional(OpaqueId),
-  action: Schema.Literals(["history", "submit", "create", "visibility"]),
+  action: Schema.Literals(["history", "submit", "create", "visibility", "load"]),
   visibility: Schema.optional(
     Schema.Struct({
       hidden: Schema.optional(Schema.Boolean),
@@ -329,6 +336,7 @@ export const AgentProviderV1Method = Schema.Literals([
   "sessions.list",
   "sessions.get",
   "sessions.history",
+  "sessions.load",
   "sessions.updates",
   "sessions.subscribe",
   "sessions.submit",

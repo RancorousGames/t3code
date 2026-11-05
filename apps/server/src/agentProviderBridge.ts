@@ -17,7 +17,7 @@ export type BrowserWork = {
   environmentId: string;
   browserSessionId?: string;
   expectedConversationId?: string;
-  action: "history" | "submit" | "create" | "visibility";
+  action: "history" | "submit" | "create" | "visibility" | "load";
   visibility?: { hidden?: boolean; snoozedUntil?: number | null };
   text?: string;
   delivery?: "WhenIdle" | "WaitForSlot" | "Steer";
@@ -116,7 +116,7 @@ export function dispatchBrowserWork(
   environmentId: string,
   browserSessionId: string,
   expectedConversationId: string | null,
-  action: "history" | "submit" | "visibility",
+  action: "history" | "submit" | "visibility" | "load",
   text?: string,
   options?: {
     delivery?: "WhenIdle" | "WaitForSlot" | "Steer";
@@ -136,7 +136,7 @@ export function dispatchBrowserWork(
   if (
     session.kind !== "t3/chatgpt" ||
     session.source.browserSessionId !== browserSessionId ||
-    (action !== "visibility" &&
+    (action !== "visibility" && action !== "load" &&
       session.source.conversationId !== expectedConversationId &&
       // A cold guest has no observed conversation; queued delivery will
       // verify the exact requested conversation before touching its composer.
@@ -145,8 +145,11 @@ export function dispatchBrowserWork(
         options?.delivery === "WhenIdle" &&
         session.source.conversationId === null
       )) ||
-    (action !== "visibility" &&
+    (action !== "visibility" && action !== "load" &&
       !session.capabilities.includes(action === "history" ? "ReadHistory" : "Submit")) ||
+    (action === "load" && expectedConversationId !== null &&
+      session.source.conversationId !== null &&
+      session.source.conversationId !== expectedConversationId) ||
     (action === "submit" && !session.deliveryModes.includes(options?.delivery ?? "WhenIdle"))
   )
     return Promise.resolve({
@@ -181,7 +184,7 @@ export function dispatchBrowserWork(
     jobs.set(work.jobId, { owner, work, claimed: false, resolve });
     // Never replay after timeout: the desktop might already have pressed Enter.
     Effect.runFork(
-      Effect.sleep(action === "submit" ? SUBMIT_TIMEOUT_MS : READ_TIMEOUT_MS).pipe(
+      Effect.sleep(action === "submit" ? SUBMIT_TIMEOUT_MS : action === "load" ? 35_000 : READ_TIMEOUT_MS).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (!jobs.has(work.jobId)) return;

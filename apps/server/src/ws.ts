@@ -7,6 +7,7 @@ import {
   AgentProviderV1DesktopWorkResult,
   AgentProviderV1HistoryPage,
   AgentProviderV1HistoryRequest,
+  AgentProviderV1LoadRequest,
   AgentProviderV1OperationGet,
   AgentProviderV1UpdatesRequest,
   AgentProviderV1Submit,
@@ -2787,6 +2788,34 @@ export const layerWsRpc = (
                     ? "native_interrupt_command_accepted;run_terminal_not_observed"
                     : result.type,
               });
+            }
+            if (request.method === "sessions.load") {
+              const decoded = yield* Effect.result(
+                Schema.decodeUnknownEffect(AgentProviderV1LoadRequest)(request.params),
+              );
+              if (Result.isFailure(decoded))
+                return error("InvalidInput", "Invalid session load request.");
+              const { session, expectedEnvironmentId, expectedConversation } = decoded.success;
+              if (expectedEnvironmentId !== environmentId)
+                return error("EnvironmentChanged", "Session load environment changed.");
+              if (session.provider !== "t3")
+                return error("InvalidInput", "Expected a T3 session.");
+              const nativeId = rawNativeThreadId(session);
+              if (nativeId !== null) {
+                const shell = yield* Effect.result(threadManagement.getThreadShell(nativeId));
+                return Result.isFailure(shell)
+                  ? error("Unavailable", "Native session could not be located.")
+                  : reply({ state: "Ready" });
+              }
+              if (session.id.startsWith("thread:"))
+                return error("InvalidInput", "Malformed native thread reference.");
+              const result = yield* Effect.promise(() => dispatchBrowserWork(
+                environmentId, session.id, expectedConversation ?? null, "load",
+              ));
+              if (result === null)
+                return error("Unavailable", "PC did not acknowledge the browser load request.");
+              if (!result.ok) return error(result.code, result.message);
+              return reply({ state: "Loading" });
             }
             if (request.method === "sessions.history" || request.method === "sessions.submit") {
               const isSubmit = request.method === "sessions.submit";
