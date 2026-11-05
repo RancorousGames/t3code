@@ -45,8 +45,8 @@ describe("sidebar unloaded recency", () => {
     });
     expect(groups.flatMap((g) => g.rows.map((row) => row.session.id))).toEqual([
       "working",
-      "green",
       "blue",
+      "green",
       "old",
     ]);
   });

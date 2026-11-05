@@ -277,6 +277,67 @@ describe("ChatGPT last-active/status sorting", () => {
     ]);
   });
 
+  it("sorts yesterday's idle and unloaded sessions by use time for 24 hours, then by project", () => {
+    const now = 2_000_000_000;
+    const hour = 60 * 60_000;
+    const sessions = [
+      { id: "old-zulu", title: "Old Zulu", project: "Zulu" },
+      { id: "yesterday-zulu", title: "Yesterday Zulu", project: "Zulu" },
+      { id: "old-alpha", title: "Old Alpha", project: "Alpha" },
+      { id: "yesterday-alpha", title: "Yesterday Alpha", project: "Alpha" },
+      { id: "old-gamma", title: "Old Gamma", project: "Gamma" },
+      { id: "exact-cutoff", title: "At cutoff", project: "Beta" },
+    ];
+    const activity = {
+      "old-zulu": { age: "unloaded" as const, lastWorkingAt: now - 25 * hour },
+      "yesterday-zulu": { age: "unloaded" as const, lastWorkingAt: now - 8 * hour },
+      "old-alpha": { age: "inactive" as const, lastWorkingAt: now - 26 * hour },
+      "yesterday-alpha": { age: "inactive" as const, lastWorkingAt: now - 3 * hour },
+      "old-gamma": { age: "unloaded" as const, lastWorkingAt: 0 },
+      "exact-cutoff": { age: "unloaded" as const, lastWorkingAt: now - 24 * hour },
+    };
+    const ids = layoutChatGPTSessions(
+      sessions, [], "activity", activity, [], undefined, true, now,
+    ).flatMap((group) => group.rows.map(({ session }) => session.id));
+    expect(ids).toEqual([
+      "yesterday-alpha", "yesterday-zulu", "old-alpha", "exact-cutoff",
+      "old-gamma", "old-zulu",
+    ]);
+  });
+
+  it("uses interaction timestamps even if an unloaded session never produced a working heartbeat", () => {
+    const now = 2_000_000_000;
+    const hour = 60 * 60_000;
+    const sessions = [
+      { id: "old", title: "Old", project: "Alpha" },
+      { id: "clicked", title: "Clicked", project: "Zulu", lastDirectInteractionAt: now - 2 * hour },
+      { id: "working", title: "Worked", project: "Alpha" },
+    ];
+    const ids = layoutChatGPTSessions(sessions, [], "activity", {
+      old: { age: "unloaded", lastWorkingAt: now - 48 * hour },
+      clicked: { age: "unloaded", lastWorkingAt: 0 },
+      working: { age: "inactive", lastWorkingAt: now - 4 * hour },
+    }, [], undefined, true, now)[0]!.rows.map(({ session }) => session.id);
+    expect(ids).toEqual(["clicked", "working", "old"]);
+  });
+
+  it("does not group recently used children under older project trees", () => {
+    const now = 2_000_000_000;
+    const sessions = [
+      { id: "parent", title: "Old parent", project: "Alpha" },
+      { id: "child", title: "Recently used child", parentSessionId: "parent", project: "Alpha" },
+      { id: "older-child", title: "Old child", parentSessionId: "parent", project: "Alpha" },
+    ];
+    const groups = layoutChatGPTSessions(sessions, [], "activity", {
+      parent: { age: "unloaded", lastWorkingAt: now - 48 * 60 * 60_000 },
+      child: { age: "inactive", lastWorkingAt: now - 14 * 60 * 60_000 },
+      "older-child": { age: "unloaded", lastWorkingAt: now - 48 * 60 * 60_000 },
+    }, [], undefined, true, now);
+    expect(groups[0]!.rows.map(({ session, depth }) => [session.id, depth])).toEqual([
+      ["child", 0], ["parent", 0], ["older-child", 1],
+    ]);
+  });
+
   it("keeps permanent project assignments in Started while activity is flat", () => {
     const pinned = [{ key: "pin:wartribes", title: "Wartribes" }];
     const assigned = [

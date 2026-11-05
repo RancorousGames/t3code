@@ -54,6 +54,7 @@ import {
   applyConfirmedChatGPTSessionMetadata,
   groupChatGPTSessions,
   layoutChatGPTSessions,
+  wasChatGPTSessionActiveWithinDay,
   type ChatGPTSessionSortActivity,
   type ChatGPTSessionSortMode,
   type ChatGPTPermanentProject,
@@ -871,13 +872,49 @@ export function ChatGPTBrowserSidebarEntry({
   }, [environmentId, pruneExpiredHidden, close]);
   const isSnoozed = (session: { readonly snoozedUntil?: number | undefined }) =>
     typeof session.snoozedUntil === "number" && session.snoozedUntil > clockNow;
+  // Use durable timestamps even when browser guests have not been remounted
+  // after T3 starts. This feeds both activity ordering and Hide Unloaded.
+  const sortActivityById = useMemo(() => {
+    const savedTimeline = environmentId
+      ? getChatGPTSessionPersistedStore(environmentId).getState().timeline : null;
+    const result: Record<string, ChatGPTSessionSortActivity> = {};
+    for (const session of sessions) {
+      const observed = activities[session.id];
+      let savedWorking = 0;
+      if (environmentId) {
+        try {
+          savedWorking = getLocalStorageItem(
+            chatGPTBrowserLastWorkingKey(environmentId, session.id), Schema.Number,
+          ) ?? 0;
+        } catch { /* Incomplete saved timestamps should not break the sidebar. */ }
+      }
+      const lastWorkingAt = Math.max(observed?.lastWorkingAt ?? 0, savedWorking);
+      result[session.id] = {
+        age: observed?.age ?? "unknown",
+        lastWorkingAt,
+        lastActivityAt: Math.max(
+          lastWorkingAt,
+          session.lastDirectInteractionAt ?? 0,
+          savedTimeline?.[session.id]?.active ?? 0,
+        ),
+      };
+    }
+    return result;
+  }, [sessions, activities, environmentId]);
   // Visibility only affects sidebar rows. Recovery, activity monitoring and
   // webview runtime all continue using the full non-hidden session list.
   const visibleSessions = sessions.filter((session) => !session.hidden);
   const sidebarVisibleSessions = visibleSessions.filter(
     (session) =>
       !(workingHiddenIds.has(session.id) && activities[session.id]?.age === "working") &&
-      !hideChatGPTSessionAsUnloaded(activities[session.id]?.age, hideUnloaded),
+      // Activity sorting must still show sessions used yesterday even when every
+      // guest is currently unloaded and Hide Unloaded is enabled.
+      !hideChatGPTSessionAsUnloaded(
+        activities[session.id]?.age,
+        hideUnloaded && !(sortMode === "activity" && wasChatGPTSessionActiveWithinDay(
+          sortActivityById[session.id]?.lastActivityAt ?? 0, clockNow,
+        )),
+      ),
   );
   const hiddenSessions = sessions.filter((session) => session.hidden);
   // The verified manager seat ledger, not a parent link or title, determines
@@ -1064,14 +1101,16 @@ export function ChatGPTBrowserSidebarEntry({
         pendingQuestionIds,
       );
     }
+    const groupingActivity = sortMode === "activity" ? sortActivityById : activities;
     const groups = layoutChatGPTSessions(
       displayedSessions.filter((session) => !isAIInterfaceSession(session)),
       registeredProjects,
       showingHidden ? "started" : sortMode,
-      activities as Readonly<Record<string, ChatGPTSessionSortActivity>>,
+      groupingActivity as Readonly<Record<string, ChatGPTSessionSortActivity>>,
       permanentProjects,
       freshPinnedIds[0],
       erroredSessionsAtBottom,
+      clockNow,
     );
     const filtered = filterChatGPTWorkerGroups(
       groups,
@@ -1153,6 +1192,9 @@ export function ChatGPTBrowserSidebarEntry({
     showWorkersWithSelectedParent,
     erroredSessionsAtBottom,
     permanentProjectKeys,
+    clockNow,
+    environmentId,
+    sortActivityById,
   ]);
   const searchResults = useMemo(
     () =>
@@ -1488,7 +1530,7 @@ export function ChatGPTBrowserSidebarEntry({
         const control = window.desktopBridge?.caffyControl;
         if (!control) throw new Error("T3 Caffy v2 is unavailable; rebuild and restart T3.");
         if (action === "caffy:stop") {
-          await control({ action: "stop", sessionId });
+          await control({ action: "stop", sessionId, stopInitiator: "user" });
           setKeepAwakeFeedback("Caffy stopped for this session.");
         } else if (action === "caffy:queued") {
           await configureCaffy(sessionId, "queued");

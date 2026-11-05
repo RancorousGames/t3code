@@ -321,6 +321,12 @@ export function groupChatGPTSessions(
 }
 
 export type ChatGPTSessionSortMode = "started" | "activity";
+export const CHATGPT_ACTIVITY_PROJECT_FALLBACK_MS = 24 * 60 * 60_000;
+
+export function wasChatGPTSessionActiveWithinDay(lastActivityAt: number, now: number): boolean {
+  return Number.isFinite(lastActivityAt) && lastActivityAt > 0 && lastActivityAt <= now &&
+    now - lastActivityAt < CHATGPT_ACTIVITY_PROJECT_FALLBACK_MS;
+}
 export type ChatGPTSessionSortActivity = {
   readonly age:
     | "working"
@@ -334,6 +340,8 @@ export type ChatGPTSessionSortActivity = {
     | "unloaded-working"
     | "inactive";
   readonly lastWorkingAt: number;
+  /** Includes verified work and deliberate user interaction, even while unloaded. */
+  readonly lastActivityAt?: number;
 };
 export function layoutChatGPTSessions(
   sessions: readonly BrowserSession[],
@@ -343,6 +351,7 @@ export function layoutChatGPTSessions(
   permanentProjects: readonly ChatGPTPermanentProject[] = [],
   selectedSessionId?: string,
   erroredSessionsAtBottom = true,
+  now = Date.now(),
 ): ChatGPTSidebarGroup[] {
   if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects);
   void selectedSessionId;
@@ -359,6 +368,25 @@ export function layoutChatGPTSessions(
     invalid: 4,
   };
   const order = new Map(sessions.map((session, index) => [session.id, index]));
+  const lastActivityAt = (session: BrowserSession) => Math.max(
+    activityById[session.id]?.lastActivityAt ?? 0,
+    activityById[session.id]?.lastWorkingAt ?? 0,
+    session.lastDirectInteractionAt ?? 0,
+  );
+  const isError = (session: BrowserSession) =>
+    ["interrupted", "delivery-timeout", "invalid"].includes(
+      activityById[session.id]?.age ?? "unknown",
+    );
+  // Recent conversations stay in one global recency list even after they turn
+  // grey or are unloaded. After 24 h they return to project-tree ordering.
+  const isRecentlyActive = (session: BrowserSession) => {
+    if (erroredSessionsAtBottom && isError(session)) return false;
+    const at = lastActivityAt(session);
+    return wasChatGPTSessionActiveWithinDay(at, now) ||
+      ["recent", "unloaded-recent", "unloaded-working"].includes(
+        activityById[session.id]?.age ?? "unknown",
+      );
+  };
   const enriched = applyConfirmedChatGPTSessionMetadata(sessions);
   // Activity mode is a global queue. A working child must never be held below
   // an inactive manager, and parent labels are visual context, not sessions.
@@ -372,9 +400,13 @@ export function layoutChatGPTSessions(
     .sort((a, b) => {
       const aRank = rank[activityById[a.id]?.age ?? "unknown"];
       const bRank = rank[activityById[b.id]?.age ?? "unknown"];
+      const aRecent = isRecentlyActive(a);
+      const bRecent = isRecentlyActive(b);
       return (
+        Number(bRecent) - Number(aRecent) ||
+        (aRecent && bRecent ? lastActivityAt(b) - lastActivityAt(a) : 0) ||
         aRank - bRank ||
-        (activityById[b.id]?.lastWorkingAt ?? 0) - (activityById[a.id]?.lastWorkingAt ?? 0) ||
+        lastActivityAt(b) - lastActivityAt(a) ||
         (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)
       );
     });
@@ -425,25 +457,17 @@ export function layoutChatGPTSessions(
       pushActive(child, 0, index === 0 ? byId.get(parentId)?.title : undefined),
     );
   }
-  // Working/recent sessions keep global activity order. Other sessions form
-  // parent trees first; independent trees are ordered by project second.
+  // Work within the past 24 h stays globally ordered by latest activity, even
+  // for idle/unloaded/unknown guests. Older guests fall back to project trees.
   const inactiveById = new Map(inactive.map((session) => [session.id, session]));
   const inactiveChildren = new Map<string, BrowserSession[]>();
-  const isError = (session: BrowserSession) =>
-    ["interrupted", "delivery-timeout", "invalid"].includes(
-      activityById[session.id]?.age ?? "unknown",
-    );
-  const isRecent = (session: BrowserSession) =>
-    ["recent", "unloaded-recent", "unloaded-working"].includes(
-      activityById[session.id]?.age ?? "unknown",
-    );
   for (const session of inactive) {
     const parentId = parents.get(session.id);
     const parent = parentId ? inactiveById.get(parentId) : undefined;
     if (
       !parent ||
-      isRecent(parent) ||
-      isRecent(session) ||
+      isRecentlyActive(parent) ||
+      isRecentlyActive(session) ||
       (erroredSessionsAtBottom && isError(parent) !== isError(session))
     )
       continue;
@@ -464,8 +488,8 @@ export function layoutChatGPTSessions(
     const parentId = parents.get(session.id);
     return !parentId || !inactiveChildren.get(parentId)?.some((child) => child.id === session.id);
   });
-  const regularRoots = roots.filter((session) => isRecent(session));
-  const projectRoots = roots.filter((session) => !isRecent(session));
+  const regularRoots = roots.filter((session) => isRecentlyActive(session));
+  const projectRoots = roots.filter((session) => !isRecentlyActive(session));
   // Sort standalone trees by project without disturbing intra-tree ancestry.
   const assignedProject = new Map<string, string>();
   for (const group of groupChatGPTSessions(enriched, projects, permanentProjects)) {
