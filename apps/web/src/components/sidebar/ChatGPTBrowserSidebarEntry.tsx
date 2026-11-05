@@ -2339,6 +2339,8 @@ export function ChatGPTBrowserSidebarEntry({
           sensors={sensors}
           onDragEnd={({ active, over, activatorEvent }) => {
             if (showingHidden || isSearching || !over || active.id === over.id) return;
+            // Status sections (Errors, Questions) are not project destinations.
+            if (String(over.id).startsWith("group:status:")) return;
             const dragged = String(active.id),
               target = String(over.id);
             // Activity mode flattens projects into one status queue. Resolve
@@ -2437,110 +2439,6 @@ export function ChatGPTBrowserSidebarEntry({
                       group.key === "status:activity" &&
                       section !== null &&
                       section !== previousSection;
-                    // Project headings belong to idle/unloaded root families only. Recent
-                    // sessions keep their global order, and children never split a family.
-                    const age = activities[session.id]?.age;
-                    const projectEligible =
-                      age !== "working" &&
-                      !["recent", "unloaded-recent", "unloaded-working"].includes(age ?? "") &&
-                      age !== "invalid" &&
-                      age !== "interrupted" &&
-                      age !== "delivery-timeout";
-                    const projectTitle = projectTitles.get(session.id) ?? "Other";
-                    const previousRoot = group.rows
-                      .slice(0, index)
-                      .reverse()
-                      .find((row) => {
-                        const previousAge = activities[row.session.id]?.age;
-                        return (
-                          row.depth === 0 &&
-                          previousAge !== "working" &&
-                          !["recent", "unloaded-recent", "unloaded-working"].includes(
-                            previousAge ?? "",
-                          ) &&
-                          previousAge !== "invalid" &&
-                          previousAge !== "interrupted" &&
-                          previousAge !== "delivery-timeout"
-                        );
-                      });
-                    const projectHeading =
-                      sortMode === "activity" &&
-                      !isSearching &&
-                      !showingHidden &&
-                      group.key === "status:activity" &&
-                      projectEligible &&
-                      depth === 0 &&
-                      (!previousRoot ||
-                        (projectTitles.get(previousRoot.session.id) ?? "Other") !== projectTitle);
-                    const familyRoot =
-                      depth > 0
-                        ? group.rows
-                            .slice(0, index)
-                            .reverse()
-                            .find((row) => row.depth === 0)?.session
-                        : session;
-                    const familyProject =
-                      projectTitles.get(familyRoot?.id ?? session.id) ?? "Other";
-                    const familyProjectKey =
-                      recognizedGroups.find((entry) => entry.title === familyProject)?.key ??
-                      (familyProject === "Other" ? "other" : `activity-project:${familyProject}`);
-                    const familyCollapsed =
-                      sortMode === "activity" &&
-                      group.key === "status:activity" &&
-                      !isSearching &&
-                      projectEligible &&
-                      collapsedGroups.has(familyProjectKey);
-                    if (familyCollapsed && !projectHeading) return null;
-                    const projectCounts = {
-                      idle: 0,
-                      unloaded: 0,
-                      error: 0,
-                      recovering: 0,
-                      snoozed: 0,
-                      hidden: 0,
-                    };
-                    if (projectHeading && collapsedGroups.has(familyProjectKey)) {
-                      group.rows.forEach((row, rowIndex) => {
-                        const rowAge = activities[row.session.id]?.age;
-                        if (
-                          rowAge === "working" ||
-                          rowAge === "recent" ||
-                          rowAge === "unloaded-recent" ||
-                          rowAge === "unloaded-working"
-                        )
-                          return;
-                        const root =
-                          row.depth === 0
-                            ? row.session
-                            : group.rows
-                                .slice(0, rowIndex)
-                                .reverse()
-                                .find((entry) => entry.depth === 0)?.session;
-                        if (
-                          (projectTitles.get(root?.id ?? row.session.id) ?? "Other") !==
-                          projectTitle
-                        )
-                          return;
-                        if (
-                          rowAge === "invalid" ||
-                          rowAge === "interrupted" ||
-                          rowAge === "delivery-timeout"
-                        ) {
-                          const phase = autoMaintenancePaused
-                            ? null
-                            : recoveryPhases[row.session.id];
-                          if (phase === "checking" || phase === "refreshing" || phase === "queued")
-                            projectCounts.recovering++;
-                          else projectCounts.error++;
-                        } else if (rowAge === "unloaded") projectCounts.unloaded++;
-                        else projectCounts.idle++;
-                      });
-                      sessions.forEach((other) => {
-                        if ((projectTitles.get(other.id) ?? "Other") !== projectTitle) return;
-                        if (other.hidden) projectCounts.hidden++;
-                        else if (isSnoozed(other)) projectCounts.snoozed++;
-                      });
-                    }
                     return (
                       <Fragment key={session.id}>
                         {divider && (
@@ -2553,81 +2451,7 @@ export function ChatGPTBrowserSidebarEntry({
                             <span className="h-px min-w-0 flex-1 bg-border/70" />
                           </div>
                         )}
-                        {projectHeading && (
-                          <DroppableProjectHeader id={familyProjectKey}>
-                            <SidebarMenuButton
-                              size="sm"
-                              aria-label={`${projectTitle} project sessions`}
-                              aria-expanded={!collapsedGroups.has(familyProjectKey)}
-                              onClick={() =>
-                                setCollapsedGroupKeys((current) =>
-                                  current.includes(familyProjectKey)
-                                    ? current.filter((key) => key !== familyProjectKey)
-                                    : [...current, familyProjectKey],
-                                )
-                              }
-                              onContextMenu={(event) => {
-                                event.preventDefault();
-                                void showProjectContextMenu(familyProjectKey, {
-                                  x: event.clientX,
-                                  y: event.clientY,
-                                });
-                              }}
-                            >
-                              {collapsedGroups.has(familyProjectKey) ? (
-                                <ChevronRightIcon aria-hidden />
-                              ) : (
-                                <ChevronDownIcon aria-hidden />
-                              )}
-                              <span className="truncate font-medium">
-                                {groupLabels.find((label) => label.key === familyProjectKey)
-                                  ?.title ?? projectTitle}
-                              </span>
-                              {permanentProjectKeys.has(familyProjectKey) && (
-                                <CrownIcon
-                                  aria-label="Permanent project"
-                                  className="size-3 text-muted-foreground"
-                                />
-                              )}
-                              {collapsedGroups.has(familyProjectKey) && (
-                                <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[10px] tabular-nums">
-                                  {projectCounts.idle > 0 && (
-                                    <span className="text-zinc-300" title="Idle">
-                                      {projectCounts.idle}
-                                    </span>
-                                  )}
-                                  {projectCounts.unloaded > 0 && (
-                                    <span className="text-zinc-500" title="Unloaded">
-                                      {projectCounts.unloaded}
-                                    </span>
-                                  )}
-                                  {projectCounts.error > 0 && (
-                                    <span className="text-red-400" title="Error">
-                                      {projectCounts.error}
-                                    </span>
-                                  )}
-                                  {projectCounts.recovering > 0 && (
-                                    <span className="text-orange-400" title="Recovering">
-                                      {projectCounts.recovering}
-                                    </span>
-                                  )}
-                                  {projectCounts.snoozed > 0 && (
-                                    <span className="text-sky-400/70" title="Snoozed">
-                                      {projectCounts.snoozed}
-                                    </span>
-                                  )}
-                                  {projectCounts.hidden > 0 && (
-                                    <span className="text-zinc-500/70" title="Hidden">
-                                      {projectCounts.hidden}
-                                    </span>
-                                  )}
-                                </span>
-                              )}
-                            </SidebarMenuButton>
-                          </DroppableProjectHeader>
-                        )}
-                        {!familyCollapsed &&
-                          sortMode === "activity" &&
+                        {sortMode === "activity" &&
                           inactiveParentHeader &&
                           !isSearching && (
                             <div
@@ -2637,7 +2461,7 @@ export function ChatGPTBrowserSidebarEntry({
                               <span className="truncate">{inactiveParentHeader}</span>
                             </div>
                           )}
-                        {!familyCollapsed && (
+                        {(
                           <SortableBrowserSessionRow
                             key={session.id}
                             id={session.id}

@@ -496,15 +496,76 @@ export function layoutChatGPTSessions(
     for (const { session } of group.rows) assignedProject.set(session.id, group.title ?? "");
   }
   const projectName = (session: BrowserSession) =>
-    (session.project ?? assignedProject.get(session.id) ?? "").toLocaleLowerCase();
+    (session.project ?? assignedProject.get(session.id) ?? "").toLocaleLowerCase().replace(/[\s_-]+/g, "");
   projectRoots.sort(
     (a, b) =>
       (erroredSessionsAtBottom ? Number(isError(a)) - Number(isError(b)) : 0) ||
       projectName(a).localeCompare(projectName(b)) ||
+      lastActivityAt(b) - lastActivityAt(a) ||
       (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
   );
   for (const session of [...regularRoots, ...projectRoots]) emitInactive(session, 0);
   inactive.forEach((session) => emitInactive(session, 0));
-  const rows = [...activeRows, ...remainingRows];
-  return rows.length ? [{ key: "status:activity", title: null, rows }] : [];
+
+  // A flat activity queue and inline per-row headings made the same project
+  // appear repeatedly whenever an old project row followed an ungrouped row.
+  // Keep the <24h queue flat, then render ONE real group for each older project.
+  const recentRows = [
+    ...activeRows,
+    ...remainingRows.filter(({ session }) => isRecentlyActive(session)),
+  ];
+  const originalGroups = groupChatGPTSessions(enriched, projects, permanentProjects);
+  const assignedGroup = new Map(
+    originalGroups.flatMap((group) =>
+      group.rows.map(({ session }) => [session.id, group] as const),
+    ),
+  );
+  const projectIdentity = (title: string) => title.toLocaleLowerCase().replace(/[\s_-]+/g, "");
+  const preferredGroup = new Map<string, ChatGPTSidebarGroup>();
+  for (const group of originalGroups) {
+    if (group.key === "other" || !group.title) continue;
+    const identity = projectIdentity(group.title);
+    const previous = preferredGroup.get(identity);
+    if (!previous || (previous.key?.startsWith("hint:") && group.key?.startsWith("project:")))
+      preferredGroup.set(identity, group);
+  }
+  const olderGroups = new Map<string, { key: string; title: string; rows: ChatGPTSidebarSession[] }>();
+  let root: BrowserSession | null = null;
+  for (const row of remainingRows) {
+    if (isRecentlyActive(row.session)) continue;
+    if (row.depth === 0 || root === null) root = row.session;
+
+    const error = erroredSessionsAtBottom && isError(root);
+    const original = assignedGroup.get(root.id);
+    // Do not reclassify an explicitly assigned singleton as projectless merely
+    // because Started mode omits headings for one-session projects.
+    const title = error ? "Errors"
+      : original?.key && original.key !== "other" ? original.title ?? "Other"
+      : root.project?.trim() && root.project.toLowerCase() !== "other"
+        ? root.project.trim() : "Other";
+    // Aliases and separately inferred project keys share the same header,
+    // preferring durable registered/permanent identity for collapse and drag.
+    const canonical = error ? "status:errors" : projectIdentity(title);
+    const preferred = preferredGroup.get(canonical);
+    const displayTitle = !error && preferred?.title ? preferred.title : title;
+    const key = error ? "status:errors"
+      : preferred?.key ?? (original?.key && original.key !== "other" ? original.key
+        : title === "Other" ? "other" : `hint:${canonical}`);
+    let group = olderGroups.get(canonical);
+    if (!group) {
+      group = { key, title: displayTitle, rows: [] };
+      olderGroups.set(canonical, group);
+    }
+    group.rows.push(row);
+  }
+  const groups: ChatGPTSidebarGroup[] = [];
+  if (recentRows.length)
+    groups.push({ key: "status:activity", title: null, rows: recentRows });
+  const orderedGroups = [...olderGroups.values()].sort((a, b) =>
+    Number(a.key === "status:errors") - Number(b.key === "status:errors") ||
+    Number(a.title === "Other") - Number(b.title === "Other") ||
+    a.title.localeCompare(b.title),
+  );
+  groups.push(...orderedGroups);
+  return groups;
 }

@@ -227,18 +227,50 @@ describe("ChatGPT last-active/status sorting", () => {
     const expected = groupChatGPTSessions(sessions, projects);
     expect(actual).toEqual(expected);
   });
+  it("shows each project once after the recent queue, without projectless rows splitting its sessions", () => {
+    const now = 2_000_000_000;
+    const hour = 60 * 60_000;
+    const sessions = [
+      { id: "old-t3-1", title: "T3 worker one", project: "t3code" },
+      { id: "old-other", title: "Unassigned old chat" },
+      { id: "old-alpha", title: "Alpha chat", project: "Alpha" },
+      { id: "recent", title: "Work from last night", project: "t3code" },
+      { id: "old-t3-2", title: "T3 worker two", project: "T3 Code" },
+      { id: "error", title: "Broken chat", project: "Alpha" },
+      { id: "old-t3-3", title: "T3 worker three", project: "t3code" },
+    ];
+    const ages = Object.fromEntries(sessions.map((session) => [
+      session.id, {
+        age: session.id === "error" ? "invalid" as const : "unloaded" as const,
+        lastWorkingAt: session.id === "recent" ? now - 12 * hour : now - 28 * hour,
+      },
+    ]));
+    const groups = layoutChatGPTSessions(sessions, [], "activity", ages, [], undefined, true, now);
+    const normalizedTitle = (title: string | null) => title?.toLowerCase().replace(/[\s_-]+/g, "") ?? null;
+    expect(groups.map((group) => normalizedTitle(group.title))).toEqual([
+      null, "alpha", "t3code", "other", "errors",
+    ]);
+    expect(groups[0]?.rows.map((row) => row.session.id)).toEqual(["recent"]);
+    expect(groups.find((group) => normalizedTitle(group.title) === "t3code")?.rows.map((row) => row.session.id))
+      .toEqual(["old-t3-1", "old-t3-2", "old-t3-3"]);
+    const ids = groups.flatMap((group) => group.rows.map((row) => row.session.id));
+    expect(ids).toHaveLength(sessions.length);
+    expect(new Set(ids).size).toBe(sessions.length);
+    expect(groups.filter((group) => normalizedTitle(group.title) === "t3code")).toHaveLength(1);
+  });
+
   it("globally sorts activity across projects, including idle chats, before errors", () => {
     const groups = layoutChatGPTSessions(sessions, projects, "activity", byId);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.title).toBeNull();
-    expect(groups[0]?.rows.map(({ session, depth }) => [session.id, depth])).toEqual([
+    expect(groups[0]?.key).toBe("status:activity");
+    expect(groups.at(-1)?.key).toBe("status:errors");
+    expect(groups.flatMap((group) => group.rows.map(({ session, depth }) => [session.id, depth]))).toEqual([
       ["workingWartribes", 0],
       ["workingAltraea", 0],
       ["recentAltraea", 0],
-      ["idleAltraea", 0],
       ["idleAltraea2", 0],
-      ["idleWartribes", 0],
+      ["idleAltraea", 0],
       ["idleWartribes2", 0],
+      ["idleWartribes", 0],
       ["interrupted", 0],
       ["invalid", 0],
     ]);
@@ -317,7 +349,7 @@ describe("ChatGPT last-active/status sorting", () => {
       old: { age: "unloaded", lastWorkingAt: now - 48 * hour },
       clicked: { age: "unloaded", lastWorkingAt: 0 },
       working: { age: "inactive", lastWorkingAt: now - 4 * hour },
-    }, [], undefined, true, now)[0]!.rows.map(({ session }) => session.id);
+    }, [], undefined, true, now).flatMap((group) => group.rows.map(({ session }) => session.id));
     expect(ids).toEqual(["clicked", "working", "old"]);
   });
 
@@ -333,7 +365,7 @@ describe("ChatGPT last-active/status sorting", () => {
       child: { age: "inactive", lastWorkingAt: now - 14 * 60 * 60_000 },
       "older-child": { age: "unloaded", lastWorkingAt: now - 48 * 60 * 60_000 },
     }, [], undefined, true, now);
-    expect(groups[0]!.rows.map(({ session, depth }) => [session.id, depth])).toEqual([
+    expect(groups.flatMap((group) => group.rows.map(({ session, depth }) => [session.id, depth]))).toEqual([
       ["child", 0], ["parent", 0], ["older-child", 1],
     ]);
   });
@@ -351,11 +383,11 @@ describe("ChatGPT last-active/status sorting", () => {
       "wt-new": { age: "inactive" as const, lastWorkingAt: 50 },
     };
     const global = layoutChatGPTSessions(assigned, projects, "activity", activity, pinned);
-    expect(global).toHaveLength(1);
-    expect(global[0]?.rows.map(({ session }) => session.id)).toEqual([
+    expect(global.map((group) => group.title)).toEqual(["Settling Altraea", "Wartribes"]);
+    expect(global.flatMap((group) => group.rows.map(({ session }) => session.id))).toEqual([
       "alt-new",
-      "wt-old",
       "wt-new",
+      "wt-old",
     ]);
     expect(global[0]?.rows[0]?.session.project).toBe("Settling Altraea");
 
@@ -381,14 +413,14 @@ describe("ChatGPT last-active/status sorting", () => {
       "working-other": { age: "working", lastWorkingAt: 1_000 },
       "idle-child": { age: "inactive", lastWorkingAt: 10 },
     });
-    expect(grouped).toHaveLength(1);
+    expect(grouped[0]?.key).toBe("status:activity");
     expect(
-      grouped[0]?.rows.map(({ session, depth, childCount, inactiveParentHeader }) => [
+      grouped.flatMap((group) => group.rows.map(({ session, depth, childCount, inactiveParentHeader }) => [
         session.id,
         depth,
         childCount,
         inactiveParentHeader ?? null,
-      ]),
+      ])),
     ).toEqual([
       ["working-child", 0, 0, "Wartribes manager"],
       ["working-other", 0, 0, null],
@@ -435,7 +467,7 @@ describe("ChatGPT last-active/status sorting", () => {
       recent: { age: "recent", lastWorkingAt: 30 },
       idle: { age: "inactive", lastWorkingAt: 4 },
       errored: { age: "invalid", lastWorkingAt: 0 },
-    })[0]!.rows;
+    }).flatMap((group) => group.rows);
     const parent = rows.findIndex((row) => row.session.id === "parent");
     expect(rows.slice(parent, parent + 4).map(({ session, depth }) => [session.id, depth])).toEqual(
       [
@@ -455,7 +487,7 @@ describe("ChatGPT last-active/status sorting", () => {
       { id: "b-child", title: "B child", project: "Alpha", parentSessionId: "b-parent" },
       { id: "a-parent", title: "A manager", project: "Alpha" },
     ];
-    const rows = layoutChatGPTSessions(sessions, [], "activity", {})[0]!.rows;
+    const rows = layoutChatGPTSessions(sessions, [], "activity", {}).flatMap((group) => group.rows);
     expect(rows.map(({ session, depth }) => [session.id, depth])).toEqual([
       ["a-parent", 0],
       ["a-child", 1],
@@ -478,7 +510,7 @@ describe("ChatGPT last-active/status sorting", () => {
       "error-child": { age: "interrupted" as const, lastWorkingAt: 0 },
     };
     const rows = (bottom: boolean) =>
-      layoutChatGPTSessions(sessions, [], "activity", activities, [], undefined, bottom)[0]!.rows;
+      layoutChatGPTSessions(sessions, [], "activity", activities, [], undefined, bottom).flatMap((group) => group.rows);
     expect(rows(true).map(({ session }) => session.id)).toEqual([
       "idle-alpha",
       "idle-zulu",
@@ -541,8 +573,7 @@ describe("ChatGPT last-active/status sorting", () => {
         second: { age: "recent", lastWorkingAt: 10 },
       },
     );
-    expect(actual).toHaveLength(1);
-    expect(actual[0]?.rows.map(({ session }) => session.id)).toEqual([
+    expect(actual.flatMap((group) => group.rows.map(({ session }) => session.id))).toEqual([
       "first",
       "second",
       "third",
