@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "./app-context.ts";
 import { Icon } from "./Icons.tsx";
-import { loadChatSessions } from "./chatgpt-sessions.ts";
+import { loadChatSessions, MORI_CHAT_SESSIONS_CHANGED } from "./chatgpt-sessions.ts";
 import { canDraft } from "./ai-batch.ts";
-import { MATRIX_BATCH_EVENT, activateMatrixBatch, eligibleMatrixRows, newMatrixBatchPlan,
+import { MATRIX_BATCH_EVENT, activateMatrixBatch, requestMatrixBatchStop, eligibleMatrixRows, newMatrixBatchPlan,
   readMatrixBatchPlan, readMatrixBatchSettings, saveMatrixBatchPlan, saveMatrixBatchSettings,
   type MatrixBatchSettings } from "./matrix-batch.ts";
 
@@ -15,7 +15,13 @@ export function MatrixBatchControls() {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLDivElement>(null);
   const [rowMenu, setRowMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-  const sessions = useMemo(() => loadChatSessions().filter(s => s.projectId === project.id && !s.hidden), [project.id]);
+  const [allSessions, setAllSessions] = useState(loadChatSessions);
+  const sessions = useMemo(() => allSessions.filter(s => s.projectId === project.id && !s.hidden), [allSessions, project.id]);
+  useEffect(() => {
+    const refresh = () => setAllSessions(loadChatSessions());
+    window.addEventListener(MORI_CHAT_SESSIONS_CHANGED, refresh);
+    return () => window.removeEventListener(MORI_CHAT_SESSIONS_CHANGED, refresh);
+  }, []);
   const file = view.file ?? activeRow?.sourceFile ?? null;
   const activeSession = localStorage.getItem(`mori.ai-chats.active:${project.id}`);
   const sessionId = sessions.some(s => s.id === settings.sessionId) ? settings.sessionId
@@ -103,7 +109,7 @@ export function MatrixBatchControls() {
         toast("Resolve the failed ChatGPT batch in AI Chats before resuming."); return;
       }
     }
-    saveMatrixBatchPlan({ ...plan, stage, error: stage === "running" ? undefined : plan.error });
+    saveMatrixBatchPlan({ ...plan, stage, error: stage === "running" || stage === "paused" ? undefined : plan.error, waitingSince: undefined });
     if (stage === "running") activateMatrixBatch(plan.sessionId);
   };
   const reviewDrafts = () => {
@@ -112,14 +118,15 @@ export function MatrixBatchControls() {
     if (first) select(first);
   };
   return <div className="mori-matrix-batch-controls">
-    {plan && <span className="mori-matrix-batch-progress" role="status">
-      {plan.stage === "paused" ? "Paused · " : plan.stage === "stopped" ? "Stopped · " : plan.stage === "done" ? "AI drafts saved · " : "Translating "}
+    {plan && <span className="mori-matrix-batch-progress" role="status" title={plan.error ?? undefined}>
+      {plan.stage === "paused" ? `Paused · ${plan.error ?? "Check selected chat"} · ` : plan.stage === "stopped" ? "Stopped · " : plan.stage === "failed" ? `Failed · ${plan.error ?? "No message was submitted"} · ` : plan.stage === "done" ? "AI drafts saved · " : plan.error ? `${plan.error} · ` : "Translating "}
       {plan.cursor}/{plan.ids.length}{plan.skipped ? ` · ${plan.skipped} skipped` : ""}
     </span>}
     {plan?.stage === "done" && <button type="button" className="btn sm outline" onClick={reviewDrafts}>Review drafts</button>}
     {plan?.stage === "running" && <button type="button" className="btn sm outline" onClick={() => changeStage("paused")}>Pause</button>}
     {plan?.stage === "paused" && <button type="button" className="btn sm outline" onClick={() => changeStage("running")}>Resume</button>}
     {busy && <button type="button" className="btn sm outline" onClick={() => { activateMatrixBatch(plan!.sessionId); go("chatgpt"); }}>View chat</button>}
+    {busy && <button type="button" className="btn sm outline" onClick={() => requestMatrixBatchStop(plan!.id)}>Stop batch</button>}
     <div className="mori-matrix-batch-trigger" ref={trigger}>
       <button type="button" className="btn primary sm" disabled={busy} onClick={() => start()} title="Translate using saved batch settings">
         <Icon name="sparkle" size="xs" /> Translate
@@ -152,7 +159,7 @@ export function MatrixBatchControls() {
           {sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
         </select>
         <small>{eligible.length} eligible in the next {settings.size} displayed lines · up to 5 per request · no wrap</small>
-        {plan?.stage === "paused" && <button type="button" className="btn sm outline" onClick={() => changeStage("stopped")}>Stop previous queue</button>}
+        {plan?.stage === "paused" && <button type="button" className="btn sm outline" onClick={() => requestMatrixBatchStop(plan.id)}>Clear failed batch</button>}
         <button type="button" className="btn primary" disabled={busy || !eligible.length || !sessionId} onClick={() => start()}>
           Translate {eligible.length} lines
         </button>

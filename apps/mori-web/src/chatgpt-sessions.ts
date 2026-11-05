@@ -32,6 +32,7 @@ export interface MoriChatSession {
   titleSource?: "user" | "bootstrap" | undefined;
 }
 const STORAGE_KEY = "mori.chatgpt-sessions.v1";
+export const MORI_CHAT_SESSIONS_CHANGED = "mori:chat-sessions-changed";
 const DEFAULT_URL = "https://chatgpt.com/";
 
 export function normalizedChatGPTUrl(url: string): string | null {
@@ -120,4 +121,5 @@ export function loadChatSessions(): MoriChatSession[] {
 }
 export function saveChatSessions(sessions: MoriChatSession[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  queueMicrotask(() => window.dispatchEvent(new Event(MORI_CHAT_SESSIONS_CHANGED)));
 }

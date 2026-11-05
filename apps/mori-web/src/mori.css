@@ -930,3 +930,5 @@ mark.ins{background:var(--moss-bg);color:var(--moss);border-radius:3px}
 .row.mori-batch-queued{box-shadow:inset 2px 0 rgba(156,187,224,.5)}
 @keyframes mori-matrix-wait-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.mori-matrix-row-batch-indicator.waiting{animation:none}}
+
+.mori-matrix-batch-progress{display:inline-block;max-width:min(32vw,360px);overflow:hidden;text-overflow:ellipsis;vertical-align:middle}

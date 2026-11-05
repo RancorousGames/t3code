@@ -7,6 +7,29 @@ import { projectForTranslation, type MoriPrefs } from "./prefs.ts";
 const MAX_MESSAGE = 24_000;
 export const CHAT_BATCH_SIZE = 5;
 
+type InstructionSnapshot = { contract: string; project: string };
+const CONTEXT_PREFIX = "mori.batch.instructions.v1:";
+const instructionKey = (projectId: string, sessionId: string, conversationId: string) =>
+  `${CONTEXT_PREFIX}${projectId}:${sessionId}:${conversationId}`;
+
+export function readChatBatchInstructions(projectId: string, sessionId: string, conversationId: string | null): InstructionSnapshot | null {
+  if (!conversationId) return null;
+  try {
+    const data: unknown = JSON.parse(localStorage.getItem(instructionKey(projectId, sessionId, conversationId)) ?? "null");
+    if (!data || typeof data !== "object" || !("contract" in data) || !("project" in data)) return null;
+    return typeof data.contract === "string" && typeof data.project === "string"
+      ? { contract: data.contract, project: data.project } : null;
+  } catch { return null; }
+}
+
+export function markChatBatchInstructions(request: ChatBatchRequest, conversationId: string) {
+  const contract = request.files.find(file => file.name === "INSTRUCTIONS.md")?.content;
+  const project = request.files.find(file => file.name === "PROJECT_CONTEXT.md")?.content;
+  if (contract === undefined || project === undefined) return;
+  localStorage.setItem(instructionKey(request.projectId, request.sessionId, conversationId),
+    JSON.stringify({ contract, project }));
+}
+
 /** An app-owned materialized file. This is sent INLINE to ChatGPT as well as
  * snapshotted on disk; ChatGPT cannot access an absolute local path. */
 export interface ChatBatchFile {
@@ -71,6 +94,7 @@ export function makeChatBatch(
   rows: MoriRow[],
   sessionId: string,
   requestId: string,
+  previouslySent: InstructionSnapshot | null = null,
 ): ChatBatchRequest {
   if (!rows.length || rows.length > AI_BATCH_LIMIT || rows.some(row => !canDraft(row))) {
     throw Error(`Choose 1–${AI_BATCH_LIMIT} unlocked, untranslated English lines.`);
@@ -104,11 +128,29 @@ export function makeChatBatch(
     })),
   };
   files.push({ name: "BATCH_REQUEST.json", content: JSON.stringify(payload, null, 2) });
+  // A local session can navigate to another conversation. The caller supplies a
+  // baseline only for the current, confirmed ChatGPT conversation identity.
+  const contract = files.find(file => file.name === "INSTRUCTIONS.md")!.content;
+  const projectContext = files.find(file => file.name === "PROJECT_CONTEXT.md")!.content;
+  const firstUse = !previouslySent;
+  const changedContract = firstUse || previouslySent.contract !== contract;
+  const changedProject = firstUse || previouslySent.project !== projectContext;
+  const inline = files.filter(file =>
+    file.name !== "INSTRUCTIONS.md" && file.name !== "PROJECT_CONTEXT.md");
   const message = [
     `MONKU_TRANSLATION_BATCH_ID: ${requestId}`,
-    "Translate this batch. The following virtual files contain their FULL CONTENTS. They are supplied inline,",
-    "not by local filesystem paths; follow INSTRUCTIONS.md and return the specified JSON only.",
-    ...files.map(file => `<<<BEGIN FILE: ${file.name}>>>\n${file.content}\n<<<END FILE: ${file.name}>>>`),
+    firstUse
+      ? "Translate this batch. Follow the translator rules and project context provided below. Return the specified JSON only."
+      : "Translate this batch using the translator rules and project context already established in this conversation. Return JSON only.",
+    ...(changedContract ? [
+      firstUse ? "Translator instructions:" : "Translator instructions changed to:",
+      `<<<BEGIN FILE: INSTRUCTIONS.md>>>\n${contract}\n<<<END FILE: INSTRUCTIONS.md>>>`,
+    ] : []),
+    ...(changedProject ? [
+      firstUse ? "Project instructions and context:" : "Project instructions changed to:",
+      `<<<BEGIN FILE: PROJECT_CONTEXT.md>>>\n${projectContext}\n<<<END FILE: PROJECT_CONTEXT.md>>>`,
+    ] : []),
+    ...inline.map(file => `<<<BEGIN FILE: ${file.name}>>>\n${file.content}\n<<<END FILE: ${file.name}>>>`),
   ].join("\n\n");
   if (message.length > MAX_MESSAGE) {
     throw Error(`Translation task is ${message.length} characters (maximum ${MAX_MESSAGE}). Shorten project context or reduce batch size.`);

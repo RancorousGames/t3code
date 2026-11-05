@@ -3,10 +3,10 @@ import { chatGPTConversationIdFromUrl } from "../../web/src/chatGPTConversationI
 import { isChatGPTHomeUrl } from "../../web/src/chatGPTBrowserPrewarm.ts";
 import { inspectChatGPTPage, type PageInspection } from "../../web/src/chatGPTSessionDom.ts";
 import { chatGPTWebviewAutomation } from "../../web/src/chatGPTWebviewAutomation.ts";
-import { CHAT_BATCH_SIZE, chooseChatBatch, makeChatBatch, mergeChatBatchDrafts, parseChatBatchAnswer, type ChatBatchRequest } from "./chat-batches.ts";
+import { CHAT_BATCH_SIZE, chooseChatBatch, makeChatBatch, mergeChatBatchDrafts, parseChatBatchAnswer, readChatBatchInstructions, markChatBatchInstructions, type ChatBatchRequest } from "./chat-batches.ts";
 import { notify } from "./Notifications.tsx";
 import { nativeMori } from "./backend.ts";
-import { MATRIX_BATCH_EVENT, readMatrixBatchPlan, saveMatrixBatchPlan, type MatrixBatchPlan } from "./matrix-batch.ts";
+import { MATRIX_BATCH_EVENT, MATRIX_BATCH_STOP, readMatrixBatchPlan, saveMatrixBatchPlan, type MatrixBatchPlan } from "./matrix-batch.ts";
 import { canDraft } from "./ai-batch.ts";
 import type { MoriProject } from "./model.ts";
 import type { MoriPrefs } from "./prefs.ts";
@@ -104,6 +104,26 @@ export function useChatBatchWorker(input: {
     return () => window.removeEventListener(MATRIX_BATCH_EVENT, onChange);
   }, [project.id]);
 
+  useEffect(() => {
+    const stop = (event: Event) => {
+      const currentPlan = planRef.current;
+      if (!currentPlan || (event as CustomEvent<string>).detail !== currentPlan.id) return;
+      if (dispatching.current || sending) {
+        toast("A submission is being checked. Stop again after it finishes.");
+        return;
+      }
+      const pending = jobRef.current;
+      if (pending?.planId === currentPlan.id) {
+        if (pending.stage !== "staged" &&
+          !window.confirm("Discard tracking for this ChatGPT batch? A response may still arrive or be recoverable, but it will not be imported.")) return;
+        updateJob(null);
+      }
+      updatePlan({ ...currentPlan, stage: "stopped", waitingSince: undefined, error: "Queue stopped. Start a new batch when ready." });
+    };
+    window.addEventListener(MATRIX_BATCH_STOP, stop);
+    return () => window.removeEventListener(MATRIX_BATCH_STOP, stop);
+  }, [sending, toast, updateJob, updatePlan]);
+
   const run = async (chunk?: { ids: string[]; planId: string; cursorEnd: number; skipped: number }) => {
     if (!chunk && (planRef.current?.stage === "running" || planRef.current?.stage === "paused")) {
       toast("Finish or stop the Matrix translation queue first.");
@@ -136,7 +156,9 @@ export function useChatBatchWorker(input: {
       if (expected === null && !isChatGPTHomeUrl(current.url)) {
         throw Error("Open a ChatGPT conversation before starting this batch.");
       }
-      const request = makeChatBatch(projectRef.current, prefs, rows.filter((row): row is NonNullable<typeof row> => !!row), sessionId, crypto.randomUUID());
+      const request = makeChatBatch(projectRef.current, prefs,
+        rows.filter((row): row is NonNullable<typeof row> => !!row), sessionId,
+        crypto.randomUUID(), readChatBatchInstructions(projectRef.current.id, sessionId, expected));
       const host = nativeMori();
       // Snapshot actual files before sending; a failed local write must not
       // accidentally create an untraceable ChatGPT request.
@@ -196,6 +218,7 @@ export function useChatBatchWorker(input: {
         if (page.messages.some((entry) => entry.role === "user" && entry.text.includes(marker))) {
           prepared = { ...prepared, stage: "sent", conversationId: observedConversation };
           updateJob(prepared);
+          markChatBatchInstructions(prepared.request, observedConversation);
           break;
         }
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
@@ -205,8 +228,25 @@ export function useChatBatchWorker(input: {
       toast(`Sent ${request.ids.length} ${request.ids.length === 1 ? "line" : "lines"} to ChatGPT. Waiting for JSON proposals.`);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "ChatGPT batch submission failed.";
-      if (prepared) updateJob({ ...prepared, stage: prepared.stage === "unknown" ? "unknown" : "failed", error: message });
-      if (chunk && planRef.current?.id === chunk.planId) updatePlan({ ...planRef.current, stage: "paused", error: message });
+      // An idle new-chat shell may expose its composer before the React
+      // submission handler is ready. Retry preflight without consuming a batch.
+      const currentPlan = chunk && planRef.current?.id === chunk.planId ? planRef.current : null;
+      const notReady = !prepared && message === "ChatGPT must be idle, connected, and ready before translating.";
+      if (currentPlan && notReady && currentPlan.stage === "running") {
+        const since = currentPlan.waitingSince ?? Date.now();
+        if (Date.now() - since < 90_000) {
+          if (!currentPlan.waitingSince) updatePlan({ ...currentPlan, waitingSince: since, error: "Waiting for the selected ChatGPT session to become ready…" });
+          return;
+        }
+      }
+      if (prepared?.stage === "staged") {
+        // All direct-submit results were explicit no-submit. Nothing to recover.
+        updateJob(null);
+      } else if (prepared) {
+        // An unknown callback result may have sent; preserve its exact identity.
+        updateJob({ ...prepared, stage: prepared.stage === "unknown" ? "unknown" : "failed", error: message });
+      }
+      if (currentPlan) updatePlan({ ...currentPlan, stage: prepared && prepared.stage !== "staged" ? "paused" : "failed", error: message, waitingSince: undefined });
       toast(message);
     } finally { setSending(false); }
   };
@@ -301,6 +341,8 @@ export function useChatBatchWorker(input: {
       const turn = [...page.messages].reverse().find(message =>
         message.role === "user" && message.text.includes(marker))?.turn;
       if (turn === undefined) return;
+      const confirmedId = chatGPTConversationIdFromUrl(page.url);
+      if (confirmedId) markChatBatchInstructions(pending.request, confirmedId);
       const response = page.messages.find(message => message.role === "assistant" && message.turn === turn);
       if (!response?.text.trim()) return;
       try {
