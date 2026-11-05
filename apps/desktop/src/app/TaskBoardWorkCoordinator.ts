@@ -59,6 +59,9 @@ const STARTING_RECHECK_MS = 45_000;
 // A guest stuck at the original prompt must not monopolize a queue item for hours.
 const UNSTARTED_GUEST_GRACE_MS = 5 * 60_000;
 const PUMP_INTERVAL_MS = 15_000;
+const RETRY_BASE_MS = 30_000;
+const RETRY_MAX_MS = 10 * 60_000;
+const PUMP_STUCK_MS = 4 * 60_000;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
 function cli(command: string, args: string[], stdin?: string, timeout = 35_000): Promise<unknown> {
@@ -108,6 +111,7 @@ export class TaskBoardWorkCoordinator {
   private lastAbandonedStartCheckAt = 0;
   private lastReleasedWorkerCheckAt = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private followupTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private busy = false;
   private lastError: string | null = null;
@@ -117,6 +121,28 @@ export class TaskBoardWorkCoordinator {
   private readonly promptRecoveryAttempts = new Map<string, number>();
   private readonly startingFirstSeen = new Map<string, number>();
   private readonly startingLastAttempt = new Map<string, number>();
+  // A definite rejection is safe to retry, but it must not monopolize the
+  // first Queue position. Unknown/possibly-created spawns are NEVER retried.
+  private readonly definiteFailures = new Map<string, {
+    attempts: number; retryAt: number; reason: string;
+  }>();
+  private lastAdmissionAt: number | null = null;
+  private lastAdmissionAttemptAt: number | null = null;
+  private lastIdleReason: string | null = null;
+  private pumpStartedAt: number | null = null;
+  private lastPumpCompletedAt: number | null = null;
+
+  private retryKey(boardRoot: string, item: QueueItem): string {
+    return rootKey(boardRoot) + "\0" + item.taskId + "\0" + item.queueRequest;
+  }
+
+  private backoffDefiniteFailure(boardRoot: string, item: QueueItem, reason: string) {
+    const key = this.retryKey(boardRoot, item);
+    const attempts = (this.definiteFailures.get(key)?.attempts ?? 0) + 1;
+    const retryAt = Date.now() + Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 5));
+    this.definiteFailures.set(key, { attempts, retryAt, reason });
+    this.lastIdleReason = `Task ${item.taskId} rejected before creation; retry after ${new Date(retryAt).toLocaleTimeString()} while checking other queued tasks.`;
+  }
 
   constructor(stateDir: string, caffy: CaffyScheduler) {
     this.caffy = caffy;
@@ -178,7 +204,14 @@ export class TaskBoardWorkCoordinator {
           this.startingLastAttempt.delete(id);
         }
       }
-      this.lastError = null;
+      // Snapshot polling is not evidence that a previous admission failure
+      // has cleared. Keep diagnostics until a confirmed successful admission.
+      const keys = new Set(snapshots.flatMap(board => board.items
+        .filter(item => item.state !== "completed")
+        .map(item => this.retryKey(board.boardRoot, item))));
+      for (const key of this.definiteFailures.keys()) {
+        if (!keys.has(key)) this.definiteFailures.delete(key);
+      }
       this.syncReservations(true);
       return snapshots;
     } catch (error) {
@@ -247,11 +280,41 @@ export class TaskBoardWorkCoordinator {
         reason: "Unconfirmed startup quarantined; after 30 minutes without a live matching T3 session it is safely returned to Queue. Does not count against capacity.",
       })),
       lastError: this.lastError,
+      lastIdleReason: this.lastIdleReason,
+      lastAdmissionAt: this.lastAdmissionAt === null ? null : new Date(this.lastAdmissionAt).toISOString(),
+      lastAdmissionAttemptAt: this.lastAdmissionAttemptAt === null ? null : new Date(this.lastAdmissionAttemptAt).toISOString(),
+      pumpBusy: this.busy,
+      pumpRunningMs: this.pumpStartedAt === null ? 0 : Date.now() - this.pumpStartedAt,
+      lastPumpCompletedAt: this.lastPumpCompletedAt === null ? null : new Date(this.lastPumpCompletedAt).toISOString(),
+      eligibleQueued: this.snapshots.reduce((n, board) => n + (board.dispatchEnabled ?
+        board.items.filter(item => item.state === "queued" && item.readiness &&
+          !item.claimed && !item.legacyOpenRig && UUID.test(item.queueRequest)).length : 0), 0),
+      coolingDown: this.snapshots.flatMap(board => board.dispatchEnabled ? board.items
+        .filter(item => item.state === "queued" && item.readiness && !item.claimed)
+        .flatMap(item => {
+          const failure = this.definiteFailures.get(this.retryKey(board.boardRoot, item));
+          return failure && failure.retryAt > Date.now() ? [{
+            boardRoot: board.boardRoot, taskId: item.taskId, attempts: failure.attempts,
+            retryAt: new Date(failure.retryAt).toISOString(), reason: failure.reason,
+          }] : [];
+        }) : []),
       queued: this.snapshots.reduce((n, board) => n + board.items.filter(item =>
         item.state === "queued" && !item.claimed && !item.legacyOpenRig).length, 0),
       legacyOpenRig: this.snapshots.reduce((n, board) => n + board.items.filter(item =>
         item.legacyOpenRig).length, 0),
     };
+  }
+
+  /** A confirmed start or definite pre-spawn rejection releases the queue
+   * lane. Recheck other tasks immediately; the periodic pump remains the
+   * fallback if this one-shot tick is lost during a desktop suspension. */
+  private requestFollowupPump() {
+    if (!this.running || this.followupTimer !== null) return;
+    this.followupTimer = setTimeout(() => {
+      this.followupTimer = null;
+      void this.pump();
+    }, 1000);
+    this.followupTimer.unref?.();
   }
 
   start() {
@@ -269,6 +332,8 @@ export class TaskBoardWorkCoordinator {
     this.running = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.followupTimer) clearTimeout(this.followupTimer);
+    this.followupTimer = null;
     this.caffy.setTaskReservations([], false);
   }
 
@@ -307,15 +372,22 @@ export class TaskBoardWorkCoordinator {
         "--reason", result.message ?? "T3 definitively rejected the start before creating a session",
         "--confirmed-not-created",
       ]);
-      this.lastError = `Task ${item.taskId}: ${result.status ?? "start rejected"} before creation; returned to queued for a new reservation.`;
+      this.backoffDefiniteFailure(boardRoot, item, result.message ??
+        `T3 rejected start: ${result.status ?? "unknown"}`);
+      this.lastError = `Task ${item.taskId}: ${result.status ?? "start rejected"} before creation; safely requeued with retry backoff.`;
       await this.readQueues();
+      this.requestFollowupPump();
       return;
     }
     if (["created", "opened", "prompt_unknown"].includes(result.status ?? "")) {
+      this.lastAdmissionAt = Date.now();
+      this.lastIdleReason = null;
+      this.definiteFailures.delete(this.retryKey(boardRoot, item));
       this.lastError = result.status === "prompt_unknown"
         ? `Task ${item.taskId}: session created; initial prompt delivery needs inspection.`
         : null;
       await this.readQueues();
+      this.requestFollowupPump();
       return;
     }
     // Unknown / in-flight outcomes stay Starting with the same reservation ID.
@@ -628,8 +700,15 @@ export class TaskBoardWorkCoordinator {
   }
 
   async pump() {
-    if (!this.running || this.busy) return;
+    if (!this.running) return;
+    if (this.busy) {
+      if (this.pumpStartedAt !== null && Date.now() - this.pumpStartedAt > PUMP_STUCK_MS) {
+        this.lastError = "TaskBoard dispatcher has been in one pump too long; waiting for bounded exact-request reconciliation rather than risking duplicate workers.";
+      }
+      return;
+    }
     this.busy = true;
+    this.pumpStartedAt = Date.now();
     try {
       let snapshots = await this.readQueues();
       if (!this.running) return;
@@ -724,11 +803,34 @@ export class TaskBoardWorkCoordinator {
         (a.item.priority === "urgent" ? 0 : 1) - (b.item.priority === "urgent" ? 0 : 1) ||
         a.item.created.localeCompare(b.item.created) ||
         a.boardRoot.localeCompare(b.boardRoot) || a.item.taskId.localeCompare(b.item.taskId));
-      for (const candidate of queued.slice(0, 20)) {
-        if (!this.running || !this.caffy.policyEnabled || this.caffy.hasPendingQueuedWakes) return;
-        const capacity = await this.caffy.capacity().catch(() => ({ admissible: false }));
-        if (!capacity.admissible) return;
+      if (!queued.length) {
+        const pending = snapshots.reduce((n, board) => n + (board.dispatchEnabled
+          ? board.items.filter(item => item.state === "queued").length : 0), 0);
+        this.lastIdleReason = pending
+          ? `${pending} queued TaskBoard tasks are not currently executable (readiness, dependencies, or user input).`
+          : "No eligible tasks are queued in enabled TaskBoard projects.";
+      }
+      const nowForRetry = Date.now();
+      const candidates = queued.filter(row =>
+        (this.definiteFailures.get(this.retryKey(row.boardRoot, row.item))?.retryAt ?? 0) <= nowForRetry);
+      if (queued.length && !candidates.length) {
+        const next = Math.min(...queued.map(row =>
+          this.definiteFailures.get(this.retryKey(row.boardRoot, row.item))?.retryAt ?? nowForRetry));
+        this.lastIdleReason = `${queued.length} eligible queued tasks are cooling down after confirmed start failures. Automatic retry at ${new Date(next).toISOString()}.`;
+      }
+      for (const candidate of candidates.slice(0, 20)) {
+        if (!this.running || !this.caffy.policyEnabled) return;
+        if (this.caffy.hasPendingQueuedWakes) {
+          this.lastIdleReason = "An earlier queued Caffy wake has dispatch priority.";
+          return;
+        }
+        const capacity = await this.caffy.capacity().catch(() => null);
+        if (!capacity?.admissible) {
+          this.lastIdleReason = capacity?.reason ?? "Capacity inventory unavailable; dispatch fails closed.";
+          return;
+        }
         const requestId = NodeCrypto.randomUUID();
+        this.lastAdmissionAttemptAt = Date.now();
         try {
           await this.taskCommand(candidate.boardRoot, [
             "task", "queue", "reserve", candidate.item.taskId,
@@ -736,13 +838,23 @@ export class TaskBoardWorkCoordinator {
             "--request-id", requestId,
             "--lease-seconds", String(RESERVATION_LEASE_SECONDS),
           ]);
-        } catch {
-          // Another coordinator may have reserved it first. Refresh the canonical
-          // board instead of guessing whether this request won the compare-and-set.
-          await this.readQueues();
+        } catch (error) {
+          // No spawn can occur before TaskBoard's atomic reservation. Refresh
+          // the authoritative state after an uncertain CAS; never assume that
+          // a timed-out write failed, or fabricate a replacement request.
+          const refreshed = await this.readQueues();
+          const current = refreshed.find(board => rootKey(board.boardRoot) === rootKey(candidate.boardRoot))
+            ?.items.find(item => item.taskId === candidate.item.taskId);
+          if (current?.state === "queued" && current.queueRequest === candidate.item.queueRequest &&
+              current.readiness && !current.claimed) {
+            this.backoffDefiniteFailure(candidate.boardRoot, candidate.item,
+              `Queue reservation did not succeed: ${String(error)}`);
+            this.lastError = `Task ${candidate.item.taskId}: reservation could not be obtained; other eligible tasks will be tried.`;
+          }
           continue;
         }
         this.syncReservations(true);
+        this.lastIdleReason = null;
         await this.startReserved(candidate.boardRoot, candidate.item, requestId);
         return; // One selection at a time; capacity is sampled again next pump.
       }
@@ -760,6 +872,8 @@ export class TaskBoardWorkCoordinator {
       await this.readQueues().catch(() => []);
     } finally {
       this.busy = false;
+      this.pumpStartedAt = null;
+      this.lastPumpCompletedAt = Date.now();
     }
   }
 }

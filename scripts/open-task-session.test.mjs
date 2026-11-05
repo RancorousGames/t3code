@@ -221,6 +221,43 @@ test("T3 queue pickup binds the TaskBoard reservation and atomically marks the s
   assert.equal(ctx.task.claimed_by, "t3:queue-session");
 });
 
+test("a green custom column dispatches through the same guarded TaskBoard queue protocol", async () => {
+  const ctx = await context();
+  ctx.task.column = "chatgpt-sessions";
+  const queueRequest = "12121212-1212-4121-8121-121212121212";
+  const reservationId = "34343434-3434-4343-8343-343434343434";
+  const queueIntent = {
+    mode: "queue", queue_request: queueRequest, queue_state: "starting",
+    queue_reservation_id: reservationId,
+  };
+  let spawns = 0;
+  const command = async (_board, args) => {
+    if (args[1] === "show") return { task: { ...ctx.task }, readiness: "ready" };
+    if (args[1] === "execution") return queueIntent;
+    if (args[1] === "queue" && args[2] === "working") {
+      assert.equal(args[7], reservationId);
+      queueIntent.queue_state = "working";
+      queueIntent.queue_session_id = "custom-column-session";
+      ctx.task.claimed_by = "t3:custom-column-session";
+    }
+    return { task: { ...ctx.task } };
+  };
+  const result = await openTaskSession({
+    ...ctx.input, intent: "implement", kind: "chatgpt", background: true,
+    requireQueue: true, queueRequest, reservationId,
+  }, {
+    home: ctx.home, command,
+    exchange: async () => {
+      spawns++;
+      return {ok: true, messageSent: true, sessionId: "custom-column-session"};
+    },
+  });
+  assert.equal(result.status, "created");
+  assert.equal(spawns, 1);
+  assert.equal(queueIntent.queue_state, "working");
+  assert.equal(ctx.task.claimed_by, "t3:custom-column-session");
+});
+
 test("unknown queue spawn is reconciled with the same reservation and never resubmitted", async () => {
   const ctx = await context();
   const queueRequest = "33333333-3333-4333-8333-333333333333";

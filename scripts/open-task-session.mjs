@@ -142,7 +142,10 @@ export async function openTaskSession(
         !["starting", "working"].includes(queueIntent.queue_state) || legacyOpenRig;
       const taskInvalid = task.archived || task.completed || task.kind !== "task" &&
         task.kind !== "recurring";
-      const noLongerReady = !alreadyWorking && (task.claimed_by || task.column !== "ai-ready" ||
+      // TaskBoard owns green-column eligibility. A column ID of "ai-ready"
+      // is not required: other columns can be green and dispatchable. The
+      // reservation and final atomic claim recheck authoritative readiness.
+      const noLongerReady = !alreadyWorking && (task.claimed_by ||
         task.attention?.some(flag => ["blocked", "needs-user", "question"].includes(flag)) ||
         task.blocked_reason || task.review_status === "open" || shown.readiness !== "ready");
       if (priorAttempt && !priorReservationAttempt) {
