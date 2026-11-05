@@ -457,7 +457,8 @@ export class TaskBoardWorkCoordinator {
     if (Date.now() - this.lastPromptRecoveryAt < 30_000) return;
     this.lastPromptRecoveryAt = Date.now();
     const working = snapshots.flatMap(board => board.items
-      .filter(item => item.state === "working" && item.sessionId && item.reservationId && !item.legacyOpenRig)
+      .filter(item => item.state === "working" && item.sessionId && item.reservationId &&
+        item.claimed && item.claimedBy === `t3:${item.sessionId}` && !item.legacyOpenRig)
       .map(item => ({ boardRoot: board.boardRoot, item })));
     if (!working.length) return;
     const listed = await cli("node.exe", [NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs")],
