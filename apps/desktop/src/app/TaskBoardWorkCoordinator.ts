@@ -464,12 +464,17 @@ export class TaskBoardWorkCoordinator {
     const listed = await cli("node.exe", [NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs")],
       JSON.stringify({ action: "list", which: "all", includeHidden: true, home: this.home }),
       25_000) as { sessions?: Array<{ id: string; spawnRequestId?: string;
+        binding?: {boundAt?: string};
         promptDelivery?: string; sendAttempted?: boolean | null }> };
     const sessions = new Map((listed.sessions ?? []).map(s => [s.id, s]));
     const candidate = working.find(({ item }) => {
       const session = sessions.get(item.sessionId!);
+      const bound = Date.parse(session?.binding?.boundAt ?? "");
+      // Old never-started guests are retired and requeued, not repeatedly
+      // resubmitted; a slow old prompt repair used to block new admissions.
       return session?.spawnRequestId === item.reservationId &&
         session?.promptDelivery === "not_sent" && session.sendAttempted === false &&
+        Number.isFinite(bound) && Date.now() - bound < 2 * 60_000 &&
         (this.promptRecoveryAttempts.get(item.reservationId!) ?? 0) < 3;
     });
     if (!candidate) return;
@@ -491,11 +496,6 @@ export class TaskBoardWorkCoordinator {
     try {
       let snapshots = await this.readQueues();
       if (!this.running) return;
-      if (this.caffy.policyEnabled) {
-        try { await this.recoverConfirmedUnsent(snapshots); }
-        catch (error) { this.lastError = `Prompt recovery: ${String(error)}`; }
-      }
-
       // Recover a durable Starting request even when admission is paused. It
       // may already have created a worker, so its exact request must reconcile.
       const starting = snapshots.flatMap(board => board.items
@@ -515,15 +515,21 @@ export class TaskBoardWorkCoordinator {
         snapshots = await this.readQueues();
         if (!this.running) return;
       }
-      // Maintenance runs even at capacity and even while another TaskBoard
-      // item is queued. The old location after admission never ran when the
-      // phantom worker was saturating the limit.
+      // Full-capacity maintenance must still run, especially when the slot
+      // is occupied by a ghost guest. But if there is free capacity and a
+      // fresh queued task, admit it before doing slow recovery I/O.
       if (this.caffy.policyEnabled) {
-        try {
-          await this.recoverUnstartedGuests(snapshots);
-          snapshots = this.snapshots;
-        } catch (error) {
-          this.lastError = `Unstarted guest recovery: ${String(error)}`;
+        const readyQueued = snapshots.some(board => board.dispatchEnabled &&
+          board.items.some(item => item.state === "queued" && item.readiness &&
+            !item.claimed && !item.legacyOpenRig && UUID.test(item.queueRequest)));
+        const freeCapacity = (await this.caffy.capacity().catch(() => null))?.admissible ?? false;
+        if (!readyQueued || !freeCapacity) {
+          try {
+            await this.recoverUnstartedGuests(snapshots);
+            snapshots = this.snapshots;
+          } catch (error) {
+            this.lastError = `Unstarted guest recovery: ${String(error)}`;
+          }
         }
       }
       // Old ambiguous starts remain in TaskBoard for exact-request recovery,
@@ -596,8 +602,14 @@ export class TaskBoardWorkCoordinator {
         await this.startReserved(candidate.boardRoot, candidate.item, requestId);
         return; // One selection at a time; capacity is sampled again next pump.
       }
-      // Queue admission and orphan recovery are independent; maintenance ran
-      // above, before any full-capacity or Reserved early returns.
+      // Repair only a recent, definitively unsent original prompt after all
+      // eligible new queued work has had admission priority. Any wake may
+      // activate a worker, so never attempt it when admission is full.
+      if (!this.caffy.hasPendingQueuedWakes &&
+          (await this.caffy.capacity().catch(() => null))?.admissible) {
+        try { await this.recoverConfirmedUnsent(snapshots); }
+        catch (error) { this.lastError = `Prompt recovery: ${String(error)}`; }
+      }
     } catch (error) {
       this.lastError = String(error);
       // Do not clear a Starting reservation on transport errors or timeouts.
