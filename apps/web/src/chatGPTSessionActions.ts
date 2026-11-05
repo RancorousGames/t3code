@@ -3,7 +3,7 @@ import type { ChatGPTSessionModel } from "./chatGPTSessionModel";
 
 /** Display and command surfaces share this vocabulary; guards stay with their existing handlers. */
 export type ChatGPTSessionActionId =
-  | "open" | "keep_working" | "answer" | "send" | "reload" | "stop_continue"
+  | "open" | "keep_working" | "answer" | "send" | "reload" | "keep_loaded" | "stop_continue"
   | "retry_recovery" | "check_delivery" | "confirm_delivered" | "wake"
   | "snooze" | "unsnooze" | "complete" | "archive" | "hide" | "unhide"
   | "agent_reboot" | "copy_url" | "open_browser";
@@ -14,6 +14,7 @@ export interface ChatGPTSessionActionContext {
   canSend?: boolean;
   canStop?: boolean;
   canReload?: boolean;
+  keepLoaded?: boolean;
   canReboot?: boolean;
 }
 
@@ -71,6 +72,7 @@ export const CHATGPT_SESSION_ACTIONS: readonly ChatGPTSessionAction[] = [
   define("check_delivery", "Check delivery", (context) => context.model.attention === "unconfirmed_send"),
   define("confirm_delivered", "Confirm delivered", (context) => context.model.attention === "unconfirmed_send"),
   define("reload", "Reload session", (context) => context.canReload === true),
+  define("keep_loaded", "Keep loaded", always),
   define("wake", "Wake session", (context) =>
     ["unloaded", "hibernated", "loading"].includes(context.model.residency)),
   define("snooze", "Snooze", (context) => !snoozed(context) && !hidden(context)),
@@ -110,13 +112,14 @@ export function chatGPTNativeActionMenu(
   context: ChatGPTSessionActionContext,
 ): ContextMenuItem<string>[] {
   const nativeIds: readonly ChatGPTSessionActionId[] = [
-    "open", "reload", "unsnooze", "agent_reboot",
+    "open", "keep_loaded", "unsnooze", "agent_reboot",
   ];
   return availableChatGPTSessionActions(context)
     .filter((action) => nativeIds.includes(action.id))
     .map((action, index) => ({
       id: `registry:${action.id}`,
       label: action.label(context),
+      ...(action.id === "keep_loaded" ? { checked: context.keepLoaded === true } : {}),
       ...(index === 0 ? {} : { separatorBefore: action.danger === true }),
     }));
 }

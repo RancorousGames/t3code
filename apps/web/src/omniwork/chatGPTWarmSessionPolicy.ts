@@ -8,9 +8,11 @@ interface WarmSessions {
   readonly loadingAt: Record<string, number>;
   /** Scheduler-computed, advisory ordering; never authority to load a guest. */
   readonly forecast: Record<string, readonly { id: string; notBefore: number; ordinal: number }[]>;
+  /** Memory-only user pins: forgotten when T3 restarts. */
+  readonly keepLoadedIds: ReadonlySet<string>;
 }
 const EMPTY_IDS: readonly string[] = [];
-export const useChatGPTWarmSessions = create<WarmSessions>(() => ({ byEnvironment: {}, loadingAt: {}, forecast: {} }));
+export const useChatGPTWarmSessions = create<WarmSessions>(() => ({ byEnvironment: {}, loadingAt: {}, forecast: {}, keepLoadedIds: new Set() }));
 
 export const useWarmChatGPTSessionIds = (environmentId: string | null) =>
   useChatGPTWarmSessions((state) =>
@@ -27,6 +29,15 @@ export function publishWarmChatGPTForecast(
     return { forecast: { ...state.forecast, [environmentId]: proposed } };
   });
 }
+export function toggleKeepLoadedChatGPTSession(id: string): void {
+  useChatGPTWarmSessions.setState((state) => {
+    const keepLoadedIds = new Set(state.keepLoadedIds);
+    if (keepLoadedIds.has(id)) keepLoadedIds.delete(id);
+    else keepLoadedIds.add(id);
+    return { keepLoadedIds };
+  });
+}
+
 export const warmLoadingKey = (environmentId: string, id: string) => JSON.stringify([environmentId, id]);
 
 /** Loading means a page was actively requested, not that the warm scheduler may choose it later. */
@@ -64,6 +75,7 @@ export interface WarmCandidate {
   readonly manager: boolean;
   readonly highlighted: boolean;
   readonly selected: boolean;
+  readonly keepLoaded?: boolean;
   readonly deliveryPending?: boolean;
   /** A durable Caffy wake is due now or within the 30-minute prewarm window. */
   readonly caffyDueSoon?: boolean;
@@ -109,15 +121,16 @@ export function nextWarmChatGPTSession(input: WarmSelection): string | null {
   const priority = (c: WarmCandidate): number => {
     if (c.selected) return 0;
     if (c.deliveryPending) return 1;
-    if (c.caffyDueSoon) return 2;
-    if (c.recoveryQueued) return 3;
-    if (c.activeBeforeFailure) return 4;
-    if (c.recentlyClicked >= 0) return 5;
-    if (c.highlighted) return 6;
-    if (c.lastActiveAt > 0 && c.lastActiveAt >= input.now - RECENT_MS) return 7;
-    if (c.manager) return 8;
-    if (c.lastActivityAt > 0) return 9;
-    return 10;
+    if (c.keepLoaded) return 2;
+    if (c.caffyDueSoon) return 3;
+    if (c.recoveryQueued) return 4;
+    if (c.activeBeforeFailure) return 5;
+    if (c.recentlyClicked >= 0) return 6;
+    if (c.highlighted) return 7;
+    if (c.lastActiveAt > 0 && c.lastActiveAt >= input.now - RECENT_MS) return 8;
+    if (c.manager) return 9;
+    if (c.lastActivityAt > 0) return 10;
+    return 11;
   };
   const choice = input.candidates
     .filter((candidate) =>

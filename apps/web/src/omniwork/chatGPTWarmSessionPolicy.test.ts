@@ -4,7 +4,7 @@ import { makeChatGPTStartupLoadPlan, shouldLoadChatGPTSession } from "./chatGPTS
 import {
   activateWarmChatGPTSession, finishWarmChatGPTSessionLoad,
   plannedWarmChatGPTSessions, nextWarmChatGPTSession, warmLoadingKey,
-  useChatGPTWarmSessions, type WarmCandidate,
+  useChatGPTWarmSessions, toggleKeepLoadedChatGPTSession, type WarmCandidate,
 } from "./chatGPTWarmSessionPolicy";
 
 const now = Date.now();
@@ -17,7 +17,7 @@ const candidate = (id: string, overrides: Partial<WarmCandidate> = {}): WarmCand
 const selection = (candidates: WarmCandidate[], loaded: string[] = [], count = 8) =>
   ({ candidates, loadedIds: new Set(loaded), targetCount: count, now });
 
-beforeEach(() => useChatGPTWarmSessions.setState({ byEnvironment: {}, loadingAt: {}, forecast: {} }));
+beforeEach(() => useChatGPTWarmSessions.setState({ byEnvironment: {}, loadingAt: {}, forecast: {}, keepLoadedIds: new Set() }));
 
 describe("stable warm ChatGPT working set", () => {
   it("implements all eight tiers in the exact requested order", () => {
@@ -43,6 +43,20 @@ describe("stable warm ChatGPT working set", () => {
       candidate("selected", { selected: true })];
     expect(plannedWarmChatGPTSessions(selection(all))).toEqual(["selected", "delivery", "active"]);
     expect(nextWarmChatGPTSession(selection(all, ["selected"], 1))).toBe("delivery");
+  });
+
+  it("keeps a user-pinned session directly after selected and pending delivery, only in memory", () => {
+    const all = [candidate("activity", { activeBeforeFailure: true }),
+      candidate("pinned", { keepLoaded: true }),
+      candidate("delivery", { deliveryPending: true }),
+      candidate("selected", { selected: true })];
+    expect(plannedWarmChatGPTSessions(selection(all))).toEqual([
+      "selected", "delivery", "pinned", "activity",
+    ]);
+    toggleKeepLoadedChatGPTSession("pinned");
+    expect(useChatGPTWarmSessions.getState().keepLoadedIds.has("pinned")).toBe(true);
+    toggleKeepLoadedChatGPTSession("pinned");
+    expect(useChatGPTWarmSessions.getState().keepLoadedIds.has("pinned")).toBe(false);
   });
 
   it("selects only the three clicked ranks, most recent first; older clicks fall back", () => {

@@ -166,6 +166,7 @@ import {
 import {
   useWarmChatGPTSessionIds,
   useChatGPTWarmSessions,
+  toggleKeepLoadedChatGPTSession,
   warmLoadingKey,
 } from "../../omniwork/chatGPTWarmSessionPolicy";
 import {
@@ -1356,6 +1357,7 @@ export function ChatGPTBrowserSidebarEntry({
         Date.now(),
       ),
       canReload: true,
+      keepLoaded: useChatGPTWarmSessions.getState().keepLoadedIds.has(sessionId),
       canReboot: true,
       hasConversationUrl: !!savedUrl,
     };
@@ -1429,6 +1431,8 @@ export function ChatGPTBrowserSidebarEntry({
                 to: "/browser/$browserSessionId",
                 params: { browserSessionId: targetId },
               });
+            } else if (id === "keep_loaded") {
+              toggleKeepLoadedChatGPTSession(targetId);
             } else if (id === "reload") {
               await runChatGPTSessionControl({
                 environmentId,
