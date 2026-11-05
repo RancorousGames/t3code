@@ -944,6 +944,7 @@ export class CaffyScheduler {
       return unavailable("T3 inventory unavailable");
     const data = reply.data as { sessions?: Array<WorkCapacitySessionIdentity & {
       activity?: string; status?: string; statusObservedAt?: string;
+      binding?: { boundAt?: string };
     }>; total?: number; hasMore?: boolean; incomplete?: boolean };
     if (!Array.isArray(data.sessions) || data.hasMore || data.incomplete ||
         (data.total !== undefined && data.total !== data.sessions.length)) return unavailable("T3 inventory incomplete");
@@ -971,11 +972,20 @@ export class CaffyScheduler {
         // except when its session has explicitly been paused until later.
         ((row.beginAt == null || row.beginAt <= now) &&
           row.lastWakeAt !== null && now - row.lastWakeAt < 120_000))).length;
-    // TaskBoard Working entries with a bound session are historical board state,
-    // not capacity reservations. The live working inventory above already counts
-    // genuinely active sessions. Only Reserved/Starting entries (no sessionId)
-    // hold provisional slots; otherwise idle workers permanently exhaust the cap.
-    const taskReserved = this.taskReservations.filter(row => !row.sessionId).length;
+    // A TaskBoard "Working" transition means a guest UUID was allocated, NOT
+    // that the first prompt has started. Keep its launch slot occupied until
+    // the guest becomes an observed worker; otherwise each slow browser load
+    // lets the coordinator spawn another task and exceed the configured cap.
+    // Bound this grace period: old idle/failed task sessions are not capacity.
+    const sessionsById = new Map(data.sessions.map(s => [canonical(s.id), s]));
+    const taskReserved = this.taskReservations.filter(row => {
+      if (!row.sessionId) return true; // Reserved / Starting
+      const id = canonical(row.sessionId);
+      if (workingIds.has(id)) return false; // already counted as active
+      const bound = Date.parse(sessionsById.get(id)?.binding?.boundAt ?? "");
+      return Number.isFinite(bound) && bound <= now + 1000 &&
+        now - bound < 180_000; // recent, still-starting TaskBoard guest
+    }).length;
     const totalReserved = reserved + extraReserved + taskReserved;
     const used = workingIds.size + totalReserved;
     if (!this.taskBoardInventoryReady) {

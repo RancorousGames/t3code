@@ -100,6 +100,8 @@ export class TaskBoardWorkCoordinator {
   private lastError: string | null = null;
   private lastObservedAt: string | null = null;
   private snapshots: QueueSnapshot[] = [];
+  private lastPromptRecoveryAt = 0;
+  private readonly promptRecoveryAttempts = new Map<string, number>();
 
   constructor(stateDir: string, caffy: CaffyScheduler) {
     this.caffy = caffy;
@@ -274,12 +276,46 @@ export class TaskBoardWorkCoordinator {
     this.lastError = `Task ${item.taskId}: ${result.status ?? "unknown"}; retaining the same Starting reservation.`;
   }
 
+  /** Recover ONLY task spawns whose persisted first message definitely never
+   * reached ChatGPT. UNKNOWN submissions remain untouched to avoid duplicates. */
+  private async recoverConfirmedUnsent(snapshots: QueueSnapshot[]): Promise<void> {
+    if (Date.now() - this.lastPromptRecoveryAt < 30_000) return;
+    this.lastPromptRecoveryAt = Date.now();
+    const working = snapshots.flatMap(board => board.items
+      .filter(item => item.state === "working" && item.sessionId && item.reservationId && !item.legacyOpenRig)
+      .map(item => ({ boardRoot: board.boardRoot, item })));
+    if (!working.length) return;
+    const listed = await cli("node.exe", [NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs")],
+      JSON.stringify({ action: "list", which: "all", includeHidden: true, home: this.home }),
+      25_000) as { sessions?: Array<{ id: string; spawnRequestId?: string;
+        promptDelivery?: string; sendAttempted?: boolean | null }> };
+    const sessions = new Map((listed.sessions ?? []).map(s => [s.id, s]));
+    const candidate = working.find(({ item }) => {
+      const session = sessions.get(item.sessionId!);
+      return session?.spawnRequestId === item.reservationId &&
+        session.promptDelivery === "not_sent" && session.sendAttempted === false &&
+        (this.promptRecoveryAttempts.get(item.reservationId!) ?? 0) < 3;
+    });
+    if (!candidate) return;
+    const { item, boardRoot } = candidate;
+    this.promptRecoveryAttempts.set(item.reservationId!,
+      (this.promptRecoveryAttempts.get(item.reservationId!) ?? 0) + 1);
+    await cli("node.exe", [NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs")],
+      JSON.stringify({
+        action: "open-task", taskRef: { board: boardRoot, id: item.taskId },
+        intent: "implement", kind: "chatgpt", background: true,
+        requireQueue: true, queueRequest: item.queueRequest,
+        reservationId: item.reservationId, home: this.home,
+      }), 35_000);
+  }
+
   async pump() {
     if (!this.running || this.busy) return;
     this.busy = true;
     try {
       const snapshots = await this.readQueues();
       if (!this.running) return;
+      if (this.caffy.policyEnabled) await this.recoverConfirmedUnsent(snapshots);
 
       // Recover a durable Starting request even when admission is paused. It
       // may already have created a worker, so its exact request must reconcile.

@@ -1665,7 +1665,31 @@ export function DesktopAppActivationCoordinator() {
             session.spawnRequestId === request.requestId || session.id === previousSpawn?.sessionId,
         );
         if (previousSpawn || previousSession) {
-          // A lost creation acknowledgement is not permission to create/send again.
+          // A request with this exact task-bound identity may recover a first
+          // prompt ONLY when the prior attempt conclusively never submitted it.
+          // Unknown outcomes and attempted submissions are never replayed.
+          const safeTaskRecovery = request.taskRef && previousSpawn && previousSession &&
+            previousSession.spawnRequestId === request.requestId &&
+            previousSession.binding?.taskRef?.board === request.taskRef.board &&
+            previousSession.binding.taskRef.id === request.taskRef.id &&
+            previousSpawn.initialDelivery?.delivery === "not_sent" &&
+            previousSpawn.initialDelivery.sendAttempted === false;
+          if (safeTaskRecovery) {
+            const pending = startChatGPTSpawnDelivery(
+              environmentId, request.requestId, previousSpawn.sessionId,
+              () => sendInitialChatGPTPrompt({
+                environmentId, sessionId: previousSpawn.sessionId,
+                requestId: request.requestId, prompt: request.prompt,
+              }),
+              { retryDefinitelyNotSent: true },
+            );
+            const lane = `${environmentId}:${previousSpawn.sessionId}`;
+            deliveryLanesRef.current.set(lane, pending);
+            void pending.finally(() => {
+              if (deliveryLanesRef.current.get(lane) === pending)
+                deliveryLanesRef.current.delete(lane);
+            });
+          }
           return {
             version: 1,
             requestId: request.requestId,

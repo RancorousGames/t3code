@@ -552,6 +552,17 @@ export async function persistentChatGPTRequest(input: PersistentChatGPTRequest):
             });
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            if (message.includes("Browser host timed out")) {
+              // The host registers a new page before its slow loadURL settles.
+              // Probe the exact scoped page: a timed-out HTTP acknowledgement
+              // is not evidence that the page failed or permission to recreate it.
+              const observed = await safeRead(socket, "/sessions/probe", {
+                sessionId: input.sessionId,
+                environmentId: input.environmentId ?? "local",
+                profileId: input.profileId ?? "default",
+              }) as { residency?: string; url?: string };
+              if (observed.residency === "resident") return observed;
+            }
             if (
               !message.includes("Scoped ChatGPT sign-in transfer failed") ||
               !remainingCookies ||

@@ -50,6 +50,7 @@ export function startChatGPTSpawnDelivery(
   requestId: string,
   sessionId: string,
   send: () => Promise<ChatGPTInitialPromptReceipt>,
+  options: { retryDefinitelyNotSent?: boolean } = {},
 ): Promise<void> {
   const key = deliveryKey(environmentId, requestId);
   const active = activeInitialDeliveries.get(key);
@@ -57,8 +58,12 @@ export function startChatGPTSpawnDelivery(
   const existing = readChatGPTSpawnReceipts(environmentId).find((r) => r.requestId === requestId);
   if (!existing || existing.sessionId !== sessionId)
     throw new Error("Initial delivery requires the exact persisted spawn reservation.");
-  // A prior durable attempt, including UNKNOWN, must never be dispatched again.
-  if (existing.initialDelivery) return Promise.resolve();
+  // Only an explicit confirmed pre-submit failure may be attempted again.
+  // UNKNOWN or sendAttempted=true may already have posted a user turn: never replay.
+  const safeRetry = options.retryDefinitelyNotSent === true &&
+    existing.initialDelivery?.delivery === "not_sent" &&
+    existing.initialDelivery.sendAttempted === false;
+  if (existing.initialDelivery && !safeRetry) return Promise.resolve();
   const save = (initialDelivery: NonNullable<SpawnReceipt["initialDelivery"]>) => {
     const current = getLocalStorageItem(STORAGE_KEY, SpawnReceipts) ?? [];
     if (!current.some((r) => r.requestId === requestId && r.sessionId === sessionId))

@@ -208,6 +208,21 @@ export async function openTaskSession(
         throw Error("Claimed ChatGPT ID matches multiple sessions; refusing ambiguous focus.");
       if (browserMatches.length === 1) {
         const sessionId = browserMatches[0].id;
+        // Repair only a provably unsent TaskBoard first prompt, with the exact
+        // original durable spawn request. T3 itself checks the persisted
+        // not_sent/sendAttempted=false receipt before starting delivery.
+        if (input.requireQueue === true && input.reservationId === priorAttempt?.requestId &&
+            browserMatches[0].spawnRequestId === input.reservationId &&
+            browserMatches[0].promptDelivery === "not_sent" &&
+            browserMatches[0].sendAttempted === false) {
+          const request = createChatGPTSpawnRequest({
+            title: `${task.id} ${task.title}`.slice(0, 80),
+            message: taskPrompt(task, { intent: "implement", board }),
+            parentSessionId: "", project: Path.basename(Path.dirname(board)),
+            seatId: "", role: "worker", autoClose: true, taskBoard: board, taskId: id,
+          }, input.reservationId);
+          await exchange(controlAddress(home), request, 25_000);
+        }
         if (!input.background) {
           const focused = await control({ action: "focus", sessionId }, { home, exchange });
           if (focused.sessionId !== sessionId)
