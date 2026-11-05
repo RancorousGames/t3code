@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -63,6 +62,25 @@ describe("fresh ChatGPT session direct-submit delivery", () => {
     expect(submitted[0]).toContain("preserveDraft: true");
     expect(submitted[0]).not.toContain("execCommand");
     expect(submitted[0]).not.toContain("editor.focus");
+  });
+
+  it("reboots a registered manual session using its original public ID, not its browser slot ID", async () => {
+    const { input, automation, session } = fixture();
+    const publicId = "9a2a1a2a-771c-44bd-a511-d8c807b1665e";
+    input.readSessions = (() => [{
+      ...session,
+      bootstrapIdentity: { state: "registered", publicId },
+    }]) as never;
+
+    await sendInitialChatGPTPrompt({ ...input, newManagedWorker: false });
+    const submitted = automation.evaluate.mock.calls.find(([, arg]) =>
+      arg.expression.includes("const fresh = true"))?.[1].expression;
+    const serializedPrompt = submitted?.match(/callback\(("(?:\\.|[^"\\])*"), performance\.now/u)?.[1];
+    expect(serializedPrompt).toBeDefined();
+    const handoff = JSON.parse(serializedPrompt!) as string;
+    expect(handoff).toContain('Bootstrap(role="personal", given_id="' + publicId + '")');
+    expect(handoff).toContain("Your own T3 browser session ID: " + publicId);
+    expect(handoff).not.toContain('given_id="session"');
   });
 
   it("keeps UNKNOWN and does not resubmit after IPC failure at callback invocation", async () => {

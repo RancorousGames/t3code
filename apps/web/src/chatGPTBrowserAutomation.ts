@@ -10,7 +10,7 @@ import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSe
 import { nativeChatGPTInitialPromptAutomation } from "./browser/nativeChatGPTInitialPromptAutomation";
 import { readChatGPTSessionProfileId } from "./chatGPTAccountProfiles";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
-import { publicChatGPTParentId } from "./chatGPTBootstrapIdentity";
+import { publicChatGPTParentId, publicChatGPTSessionId } from "./chatGPTBootstrapIdentity";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { acquireBrowserSurfaceActivity } from "./browser/browserSurfaceStore";
 import { wakeChatGPTGuest } from "./browser/chatGPTGuestHibernation";
@@ -92,7 +92,7 @@ export async function sendInitialChatGPTPrompt(input: {
   if (!automation) throw new Error("ChatGPT automation requires T3 Code desktop.");
   const prompt = buildChatGPTSessionHandoffPrompt(
     input.prompt,
-    session.id,
+    publicChatGPTSessionId(session),
     publicChatGPTParentId(sessions, session),
     {
       newManagedWorker: input.newManagedWorker !== false,
