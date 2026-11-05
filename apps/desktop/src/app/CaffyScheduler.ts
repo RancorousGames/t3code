@@ -971,8 +971,11 @@ export class CaffyScheduler {
         // except when its session has explicitly been paused until later.
         ((row.beginAt == null || row.beginAt <= now) &&
           row.lastWakeAt !== null && now - row.lastWakeAt < 120_000))).length;
-    const taskReserved = this.taskReservations.filter(row =>
-      !row.sessionId || !workingIds.has(canonical(row.sessionId))).length;
+    // TaskBoard Working entries with a bound session are historical board state,
+    // not capacity reservations. The live working inventory above already counts
+    // genuinely active sessions. Only Reserved/Starting entries (no sessionId)
+    // hold provisional slots; otherwise idle workers permanently exhaust the cap.
+    const taskReserved = this.taskReservations.filter(row => !row.sessionId).length;
     const totalReserved = reserved + extraReserved + taskReserved;
     const used = workingIds.size + totalReserved;
     if (!this.taskBoardInventoryReady) {
