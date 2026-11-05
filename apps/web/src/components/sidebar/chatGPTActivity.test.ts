@@ -177,11 +177,28 @@ describe("ChatGPT composer activity", () => {
       "<span> Please try again.</span></div>";
     expect(readActivity()).toBe("delivery-timeout");
 
-    // A failed assistant turn can display an inline error, not a toast.
+    // Real inline provider errors use an error/status region; ordinary assistant
+    // content quoting the same words must not turn a completed reply orange.
     document.body.innerHTML =
       '<div id="prompt-textarea"></div>' +
-      '<div data-message-author-role="assistant"><div>Message delivery timed out. Please try again.</div></div>';
+      '<div data-message-author-role="assistant"><div role="alert">Message delivery timed out. Please try again.</div></div>';
     expect(readActivity()).toBe("delivery-timeout");
+
+    document.body.innerHTML =
+      '<div id="prompt-textarea"></div>' +
+      '<div data-content-search-unit-key="turn-1:assistant"><div>Message delivery timed out. Please try again.</div></div>';
+    expect(readActivity()).toBe("idle");
+
+    document.body.innerHTML =
+      '<div id="prompt-textarea"></div>' +
+      '<div data-content-search-unit-key="turn-1:user">Message delivery timed out. Please try again.</div>';
+    expect(readActivity()).toBe("idle");
+
+    document.body.innerHTML =
+      '<div id="prompt-textarea"></div>' +
+      '<div data-content-search-unit-key="turn-1:assistant">' +
+      '<div data-markdown-text-style="assistant-message">Message delivery timed out. Please try again.</div></div>';
+    expect(readActivity()).toBe("idle");
 
     // A standalone page error is also valid, even without a status role.
     document.body.innerHTML =

@@ -146,21 +146,23 @@ function readChatGPTActivity(loadFailure: boolean) {
         if (!node.textContent?.includes(notice.prefix.split(" ")[0]!)) continue;
         const element = node.parentElement;
         if (!element || !visible(element)) continue;
-        if (
-          element.closest(
-            '[data-message-author-role="user"], blockquote, pre, code, [contenteditable], textarea',
-          )
-        )
-          continue;
-        // Ignore error phrases quoted in the assistant's formatted answer,
-        // but allow actual inline delivery errors within the assistant turn.
-        if (
-          notice.state === "delivery-timeout" &&
-          element.closest(
-            '[data-message-author-role="assistant"] .markdown, [data-message-author-role="assistant"] .prose',
-          )
-        )
-          continue;
+        // Modern ChatGPT renders turns under content-search-unit-key instead of
+        // data-message-author-role. Never treat the user's or assistant's prose
+        // quoting a failure as a live provider failure.
+        if (element.closest(
+          '[data-message-author-role="user"],[data-content-search-unit-key$=":user"],' +
+          '[data-testid="user-message"],blockquote,pre,code,[contenteditable],textarea,' +
+          '.markdown,.prose,[data-markdown-text-style="assistant-message"]',
+        )) continue;
+        const assistantTurn = element.closest(
+          '[data-message-author-role="assistant"],[data-content-search-unit-key$=":assistant"],' +
+          '[data-testid="assistant-message"]',
+        );
+        // An actual inline error is a provider status region, not ordinary
+        // assistant text. Standalone notices outside a turn remain detectable.
+        if (assistantTurn && !element.closest(
+          '[role="alert"],[role="status"],[data-testid*="error"],[data-state="error"]',
+        )) continue;
         // Status text may be split across sibling spans. Keep the match local
         // so a quoted sentence elsewhere in the conversation cannot trigger it.
         let container: Element | null = element;

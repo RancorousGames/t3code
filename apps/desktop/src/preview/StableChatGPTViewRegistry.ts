@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { WebContentsView, type BrowserWindow, type Rectangle } from "electron";
 import { MENU_ACTION_CHANNEL, STABLE_CHATGPT_VIEW_STATE_CHANNEL } from "../ipc/channels.ts";
+import { installChatGPTInstantRetry } from "./ChatGPTInstantRetry.ts";
 import {
   dispatchChatGPTGuestKeyToOwner,
   nativeChatGPTGuestShortcut,
@@ -198,6 +199,12 @@ export function createStableChatGPTViewRegistry(owner: BrowserWindow) {
         .catch(() => undefined);
     };
     view.webContents.on("dom-ready", preventChildWindowDragging);
+    if (!isNativeBrowserSlice(identity)) {
+      view.webContents.on("dom-ready", () => {
+        if (view.webContents.isDestroyed()) return;
+        void view.webContents.executeJavaScript(`(() => { (${installChatGPTInstantRetry.toString()})(window, document); return true; })()`).catch(() => undefined);
+      });
+    }
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     view.setVisible(false);
     owner.contentView.addChildView(view);
