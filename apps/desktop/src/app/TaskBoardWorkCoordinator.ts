@@ -139,6 +139,7 @@ export class TaskBoardWorkCoordinator {
   private readonly workerWakeJournal: string;
   private readonly managedWorkerWakes = new Map<string, ManagedWorkerWake>();
   private lastWorkerWakeScanAt = 0;
+  private workerWakeScanRunning = false;
   private workerWakeJournalReady = true;
 
   private retryKey(boardRoot: string, item: QueueItem): string {
@@ -715,18 +716,25 @@ export class TaskBoardWorkCoordinator {
    * ChatGPT guest. Only exact, idle, assistant-responded queue-bound workers
    * are eligible. Durable ownership means we never override manual Caffy and
    * can stop only monitors that this coordinator created. */
-  private async reconcileManagedWorkerWakes(snapshots: QueueSnapshot[]): Promise<void> {
-    if (!this.workerWakeJournalReady || Date.now() - this.lastWorkerWakeScanAt < 30_000) return;
-    this.lastWorkerWakeScanAt = Date.now();
-    const currentClaims = snapshots.flatMap(board => board.items
-      .filter(item => item.state === "working" && item.sessionId &&
-        item.claimed && item.claimedBy === `t3:${item.sessionId}` &&
-        item.reservationId && !item.legacyOpenRig)
-      .map(item => ({boardRoot: board.boardRoot, item})));
+  private scheduleWorkerWakeMaintenance(snapshots: QueueSnapshot[]) {
+    // Guarded Caffy registration may mount a cold browser and take 95 seconds.
+    // It must NEVER hold the TaskBoard admission pump or prevent new work
+    // from filling a free slot while a previous worker is being resumed.
+    if (!this.running || this.workerWakeScanRunning) return;
+    this.workerWakeScanRunning = true;
+    void this.reconcileManagedWorkerWakes(snapshots).catch(error => {
+      this.lastError = `Task worker continuation: ${String(error)}`;
+    }).finally(() => { this.workerWakeScanRunning = false; });
+  }
+
+  private cleanupManagedWorkerWakes(snapshots: QueueSnapshot[]) {
+    if (!this.workerWakeJournalReady || !this.managedWorkerWakes.size) return;
     for (const [id, wake] of this.managedWorkerWakes) {
-      const stillOwned = currentClaims.some(({boardRoot, item}) =>
-        id === item.sessionId && item.reservationId === wake.requestId &&
-        item.taskId === wake.taskId && rootKey(boardRoot) === rootKey(wake.boardRoot));
+      const stillOwned = snapshots.some(board =>
+        rootKey(board.boardRoot) === rootKey(wake.boardRoot) &&
+        board.items.some(item => item.taskId === wake.taskId &&
+          item.state === "working" && item.reservationId === wake.requestId &&
+          item.sessionId === id && item.claimed && item.claimedBy === `t3:${id}`));
       if (stillOwned) continue;
       const monitor = this.caffy.status(id) as {
         conversationId?: string; mode?: string;
@@ -735,8 +743,17 @@ export class TaskBoardWorkCoordinator {
         this.caffy.stop(id, "agent");
       this.managedWorkerWakes.delete(id);
       this.saveWorkerWakes();
-      return; // One durable cleanup per sweep.
     }
+  }
+
+  private async reconcileManagedWorkerWakes(snapshots: QueueSnapshot[]): Promise<void> {
+    if (!this.workerWakeJournalReady || Date.now() - this.lastWorkerWakeScanAt < 30_000) return;
+    this.lastWorkerWakeScanAt = Date.now();
+    const currentClaims = snapshots.flatMap(board => board.items
+      .filter(item => item.state === "working" && item.sessionId &&
+        item.claimed && item.claimedBy === `t3:${item.sessionId}` &&
+        item.reservationId && !item.legacyOpenRig)
+      .map(item => ({boardRoot: board.boardRoot, item})));
     if (!currentClaims.length) return;
     const listed = await cli("node.exe", [
       NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
@@ -799,12 +816,25 @@ export class TaskBoardWorkCoordinator {
       this.managedWorkerWakes.set(id, wake);
       this.saveWorkerWakes(); // Persist exact ownership before scheduling.
       try {
+        if (!this.running) return;
         if (!existing) {
           await this.caffy.set({
             sessionId: id, conversationId: wake.conversationId,
             mode: "queued", onceOnly: false, keepAwake: true,
             beginAt: Math.max(wake.beginAt, Date.now() + 30_000),
           });
+        }
+        const taskStillClaimed = this.snapshots.some(board =>
+          rootKey(board.boardRoot) === rootKey(boardRoot) &&
+          board.items.some(current => current.taskId === item.taskId &&
+            current.state === "working" && current.reservationId === item.reservationId &&
+            current.sessionId === id && current.claimed &&
+            current.claimedBy === `t3:${id}`));
+        if (!this.running || !taskStillClaimed) {
+          this.caffy.stop(id, "agent");
+          this.managedWorkerWakes.delete(id);
+          this.saveWorkerWakes();
+          return;
         }
         wake.active = true;
         this.saveWorkerWakes();
@@ -869,6 +899,8 @@ export class TaskBoardWorkCoordinator {
     try {
       let snapshots = await this.readQueues();
       if (!this.running) return;
+      try { this.cleanupManagedWorkerWakes(snapshots); }
+      catch (error) { this.lastError = `Managed Caffy cleanup: ${String(error)}`; }
       // Recover a durable Starting request even when admission is paused. It
       // may already have created a worker, so its exact request must reconcile.
       const starting = snapshots.flatMap(board => board.items
@@ -968,8 +1000,7 @@ export class TaskBoardWorkCoordinator {
           : "No eligible tasks are queued in enabled TaskBoard projects.";
         // Queue can be drained while unfinished workers sit idle. Maintain
         // these exact existing workers via Caffy instead of creating duplicates.
-        try { await this.reconcileManagedWorkerWakes(snapshots); }
-        catch (error) { this.lastError = `Task worker continuation: ${String(error)}`; }
+        this.scheduleWorkerWakeMaintenance(snapshots);
       }
       const nowForRetry = Date.now();
       const candidates = queued.filter(row =>
@@ -978,6 +1009,7 @@ export class TaskBoardWorkCoordinator {
         const next = Math.min(...queued.map(row =>
           this.definiteFailures.get(this.retryKey(row.boardRoot, row.item))?.retryAt ?? nowForRetry));
         this.lastIdleReason = `${queued.length} eligible queued tasks are cooling down after confirmed start failures. Automatic retry at ${new Date(next).toISOString()}.`;
+        this.scheduleWorkerWakeMaintenance(snapshots);
       }
       for (const candidate of candidates.slice(0, 20)) {
         if (!this.running || !this.caffy.policyEnabled) return;
