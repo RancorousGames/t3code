@@ -13,9 +13,11 @@ export function ensureTaskBoardAppRunning(): Promise<void> {
   if (pending) return pending;
   pending = (async () => {
     const running = await new Promise<boolean>((resolve) => {
-      NodeCP.execFile("tasklist.exe", ["/FI", "IMAGENAME eq taskboard.exe", "/FO", "CSV", "/NH"],
-        { windowsHide: true, timeout: 3_000 }, (error, stdout) => {
-          resolve(!error && /^\s*"taskboard\.exe"\s*,/im.test(stdout));
+      // T3 also runs a short-lived taskboard.exe CLI; only the GUI has a native window.
+      NodeCP.execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+        "Get-Process taskboard -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1 -ExpandProperty Id"],
+        { windowsHide: true, timeout: 4_000 }, (error, stdout) => {
+          resolve(!error && /^\d+\s*$/m.test(stdout));
         });
     });
     if (running) return;
