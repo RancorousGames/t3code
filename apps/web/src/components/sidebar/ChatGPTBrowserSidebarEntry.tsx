@@ -2637,6 +2637,9 @@ export function ChatGPTBrowserSidebarEntry({
                                     <div className="text-foreground/75">
                                       {recoveryLabel ?? model.statusLine}
                                     </div>
+                                    {pendingLoad && (
+                                      <div className="text-foreground/75">{pendingLoad.title}</div>
+                                    )}
                                     {caffyLabel && (
                                       <div className="text-sky-400/90">{caffyLabel}</div>
                                     )}
@@ -2700,7 +2703,6 @@ export function ChatGPTBrowserSidebarEntry({
                               );
                               return (
                                 <div
-                                  title={pendingLoad?.title}
                                   data-chatgpt-selected-session={activeSessionId === session.id}
                                   className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${activeSessionId === session.id ? "ring-1 ring-inset ring-primary/70" : ""}`}
                                   onContextMenu={(event) => {
