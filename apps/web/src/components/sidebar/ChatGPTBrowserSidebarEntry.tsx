@@ -102,6 +102,7 @@ import {
 import { deriveChatGPTSession } from "../../chatGPTSessionModel";
 import { useChatGPTLiveTasks, visibleReadyChatGPTLiveTasks } from "../../chatGPTLiveTasks";
 import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
+import { useChatGPTReadyNudge } from "../../chatGPTReadyNudge";
 import { scheduleCaffyBegin } from "../../omniwork/chatGPTCaffyPauseResume";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
 import {
@@ -389,7 +390,9 @@ export function ChatGPTBrowserSidebarEntry({
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const autoMaintenancePaused = useChatGPTRecoverySettings().paused;
   const environmentId = usePrimaryEnvironmentId();
-  const readyTaskCount = visibleReadyChatGPTLiveTasks(useChatGPTLiveTasks()).length;
+  const liveTasks = useChatGPTLiveTasks();
+  const readyTaskCount = visibleReadyChatGPTLiveTasks(liveTasks).length;
+  useChatGPTReadyNudge(liveTasks, environmentId, navigate);
   const warmedIds = useWarmChatGPTSessionIds(environmentId);
   const forecast = useChatGPTWarmSessions((state) =>
     environmentId ? state.forecast[environmentId] : undefined,
