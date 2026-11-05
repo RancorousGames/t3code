@@ -2,12 +2,12 @@
  * Keep the *real* T3 BrowserWindow and its native ChatGPT WebContentsViews alive
  * when the user closes the visible desktop window.
  *
- * Electron's existing Clerk single-instance lock then makes an ordinary
- * second launch of T3 Code (Custom).exe reveal this same owner; no alternate
- * launcher, demo window, or special flag is needed.
+ * Keep the native taskbar button alive by minimizing rather than hiding;
+ * ordinary taskbar clicks restore the window, and a second executable launch
+ * also reveals the existing single-instance owner.
  *
  * App.quit(), updater-controlled quit, and explicit process shutdown still
- * destroy the owner. Closing/hiding is intentionally distinct from Quit.
+ * destroy the owner. Closing/minimizing is intentionally distinct from Quit.
  */
 import type { App, BrowserWindow } from "electron";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Synchronous main-process acknowledgement for Win32 native reload.
@@ -40,14 +40,13 @@ export function installPersistentMainWindowLifecycle(app: App): void {
     quitting = true;
   });
 
-  // Handle a normal second executable launch synchronously, ahead of the
-  // asynchronous desktop/Clerk activation pipeline. A hidden persistent owner
-  // is still alive but has no visible taskbar window; showing it must not
-  // depend on a backend handshake or an Effect service remembering the HWND.
+  // Handle a second executable launch synchronously, ahead of the
+  // asynchronous desktop/Clerk activation pipeline. This also repairs any
+  // older hidden window left behind by a prior build.
   app.on("second-instance", () => {
     if (quitting || !primaryWindow || primaryWindow.isDestroyed()) return;
-    if (primaryWindow.isMinimized()) primaryWindow.restore();
     if (!primaryWindow.isVisible()) primaryWindow.show();
+    if (primaryWindow.isMinimized()) primaryWindow.restore();
     primaryWindow.focus();
   });
 
@@ -117,7 +116,9 @@ export function installPersistentMainWindowLifecycle(app: App): void {
       // explicit Quit, or windows that never loaded the real T3 interface.
       if (quitting || !primaryT3Window || window.isDestroyed()) return;
       event.preventDefault();
-      window.hide();
+      // Hiding removes the taskbar button, making an already-running T3 appear
+      // impossible to reopen. Minimized windows keep their normal taskbar slot.
+      if (!window.isMinimized()) window.minimize();
     });
   });
 }
