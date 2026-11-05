@@ -156,10 +156,11 @@ def stop_custom_app(root: Path) -> bool:
 
 
 def session_backup(root: Path) -> Path:
-    """Back up the browser's saved ChatGPT session names and URLs *after* shutdown.
+    """Back up ChatGPT session metadata AND Caffy schedules *after* shutdown.
 
-    Browser session metadata lives in Chromium Local Storage, not the T3
-    project database. Never wipe or migrate the live profile during a build.
+    Browser session metadata lives in Chromium Local Storage while desktop
+    Caffy state lives in .t3/userdata. Never wipe the live profile during
+    a build, and preserve the scheduler state needed for a faithful restart.
     """
     profile = Path(os.environ["APPDATA"]) / "t3code-custom"
     source = profile / "Local Storage"
@@ -191,7 +192,18 @@ def session_backup(root: Path) -> Path:
         item = profile / filename
         if item.is_file():
             shutil.copy2(item, backup / filename)
-    print(f"ChatGPT session-name/URL storage backed up: {backup}", flush=True)
+    caffy_state = root / ".t3" / "userdata" / "caffy-v2.json"
+    if caffy_state.is_file():
+        copied = backup / "caffy-v2.json"
+        shutil.copy2(caffy_state, copied)
+        if hashlib.sha256(caffy_state.read_bytes()).digest() != hashlib.sha256(
+            copied.read_bytes()
+        ).digest():
+            raise RuntimeError("Caffy schedule backup failed verification.")
+    caffy_snapshots = caffy_state.parent / "caffy-snapshots"
+    if caffy_snapshots.is_dir():
+        shutil.copytree(caffy_snapshots, backup / "caffy-snapshots")
+    print(f"ChatGPT sessions and Caffy schedule state backed up: {backup}", flush=True)
     return backup
 
 

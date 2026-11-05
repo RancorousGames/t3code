@@ -76,6 +76,10 @@ export class CaffyScheduler {
   private pumpRequested = false;
   private lastIdentityReconcileAt = 0;
   private readonly missingSessions = new Map<string, {firstSeenAt: number; misses: number}>();
+  /** A startup inventory may be temporarily empty or partially hydrated.
+   * Only retire an absent recipient after we observed that exact session in
+   * this process, or after an explicit close/missing-delivery receipt. */
+  private readonly observedLifecycleIds = new Set<string>();
   private blockerId: number | null = null;
   private readonly deliveries: ChatGPTDeliveryQueue;
   private readonly request: Request;
@@ -131,6 +135,24 @@ export class CaffyScheduler {
     });
   }
 
+  /** Retain recent durable configuration snapshots so a bad lifecycle
+   * reconciliation or forced restart cannot destroy the only recoverable copy.
+   * Snapshots are forensic backups, never silently restored after Stop Caffy.
+   */
+  private backupConfiguration() {
+    if (this.entries.size === 0) return;
+    try {
+      const directory = NodePath.join(NodePath.dirname(this.file), "caffy-snapshots");
+      NodeFS.mkdirSync(directory, { recursive: true });
+      const filename = `caffy-${new Date().toISOString().replace(/[:.]/g, "-")}-${NodeCrypto.randomUUID()}.json`;
+      NodeFS.copyFileSync(this.file, NodePath.join(directory, filename));
+      const snapshots = NodeFS.readdirSync(directory)
+        .filter(name => /^caffy-.*\.json$/.test(name)).sort();
+      for (const stale of snapshots.slice(0, Math.max(0, snapshots.length - 12)))
+        NodeFS.rmSync(NodePath.join(directory, stale), { force: true });
+    } catch { /* Snapshot failure must not prevent live Caffy operations. */ }
+  }
+
   private save() {
     const tmp = this.file + "." + process.pid + ".tmp";
     try {
@@ -178,6 +200,7 @@ export class CaffyScheduler {
   start() {
     if (this.started) return;
     this.started = true;
+    this.backupConfiguration();
     let changed = false;
     for (const row of this.entries.values()) {
       if (this.legacyConflict(row.sessionId, row.conversationId)) {
@@ -249,6 +272,8 @@ export class CaffyScheduler {
           !this.entries.has(binding.browserSessionId)) {
         // A not-yet-enqueued monitor can safely adopt the verified recipient.
         // In-flight UNKNOWN deliveries must retain their exact old identity.
+        this.observedLifecycleIds.delete(row.sessionId);
+        this.missingSessions.delete(row.sessionId);
         this.entries.delete(row.sessionId);
         row.sessionId = binding.browserSessionId;
         row.browserSessionId = binding.browserSessionId;
@@ -274,8 +299,10 @@ export class CaffyScheduler {
       typeof reply.data === "object" ? reply.data as {
         sessions?: Array<{
           id?: string; publicSessionId?: string; browserSessionId?: string;
-          conversationId?: string; bootstrapIdentity?: {publicId?: string; conversationId?: string};
-          lastIdleTransition?: {eventId?: string; conversationId?: string};
+          conversationId?: string; bootstrapIdentity?: {
+            state?: string; publicId?: string; conversationId?: string;
+          };
+          lastIdleTransition?: {eventId?: string; conversationId?: string; sequence?: number};
           hidden?: boolean; snoozedUntil?: number; closedAt?: unknown;
         }>; total?: number; hasMore?: boolean; incomplete?: boolean;
       } : null;
@@ -286,26 +313,68 @@ export class CaffyScheduler {
     for (const row of [...this.entries.values()]) {
       const ids = [row.sessionId, row.browserSessionId, row.publicSessionId]
         .filter((id): id is string => !!id);
+      // Existence is a property of the stable T3 session, NOT its current
+      // conversation. Reboots and restored tabs may change conversation IDs
+      // while the Caffy schedule (including its delayed start) must survive.
       const matches = entries.filter(entry =>
-        (row.rebootOperationId ||
-          entry.conversationId === row.conversationId ||
-          entry.bootstrapIdentity?.conversationId === row.conversationId) &&
         [entry.id, entry.browserSessionId, entry.publicSessionId,
           entry.bootstrapIdentity?.publicId,
-          entry.lastIdleTransition?.conversationId === row.conversationId
-            ? entry.lastIdleTransition.eventId?.split(":")[0] : undefined,
+          entry.lastIdleTransition?.eventId?.split(":")[0],
         ].some(id => id && ids.includes(id)));
-      const key = `${row.sessionId}:${row.conversationId}`;
+      const key = row.sessionId;
       if (matches.length > 1) { this.missingSessions.delete(key); continue; }
       const found = matches[0];
       if (found) {
+        this.observedLifecycleIds.add(key);
         this.missingSessions.delete(key);
         if (found.closedAt != null || found.hidden ||
-            (typeof found.snoozedUntil === "number" && found.snoozedUntil > now))
+            (typeof found.snoozedUntil === "number" && found.snoozedUntil > now)) {
           this.retire(row.sessionId,
             found.closedAt != null ? "closed" : found.hidden ? "hidden" : "snoozed");
+          continue;
+        }
+        if (row.rebootOperationId || !found.conversationId ||
+            found.conversationId === row.conversationId) continue;
+
+        // A new conversation within an existing browser session is not a
+        // disappearance. Adopt it only with positive binding evidence; until
+        // then preserve Caffy, but never deliver to the stale conversation.
+        const nextId = found.conversationId;
+        const registeredNew = UUID.test(nextId) &&
+          found.bootstrapIdentity?.state === "registered" &&
+          found.bootstrapIdentity.conversationId === nextId;
+        const proof = registeredNew ? null : UUID.test(nextId) && found.id
+          ? await this.read(found.id, nextId).catch(() => null) : null;
+        const verified = registeredNew ||
+          (proof?.conversationGuardValidated === true &&
+            proof.verifiedConversationId === nextId);
+        if (this.entries.get(row.sessionId) !== row) continue;
+        if (!verified) {
+          const detail = "Session switched conversations; Caffy retained until the new conversation is verified.";
+          if (row.lastError !== detail) { row.lastError = detail; this.save(); }
+          continue;
+        }
+        const oldConversationId = row.conversationId;
+        // Retire the old conversation's wake before switching identities.
+        // Clear the pending ID first: its cancelled receipt must not remove
+        // this still-active Caffy monitor through onDelivery().
+        row.pendingMessageId = null;
+        this.deliveries.retireRecipient(ids, oldConversationId,
+          "Caffy session migrated to a verified new conversation.", true);
+        row.conversationId = nextId;
+        row.lastIdleSequence =
+          found.lastIdleTransition?.conversationId === nextId
+            ? found.lastIdleTransition.sequence ?? 0 : 0;
+        row.lastWakeAt = null;
+        row.lastActivatedAt = now;
+        row.lastRebootAt = now;
+        row.lastError = null;
+        this.save();
         continue;
       }
+      // A cold session list can be reported as complete before the browser
+      // catalog hydrates. Never erase a persisted monitor on that evidence.
+      if (!this.observedLifecycleIds.has(key)) continue;
       const previous = this.missingSessions.get(key);
       if (previous && previous.misses >= 1 && now - previous.firstSeenAt >= 30_000)
         this.retire(row.sessionId, "missing");
@@ -361,6 +430,7 @@ export class CaffyScheduler {
       this.maxWorking = input.maxWorking;
     }
     this.save();
+    this.backupConfiguration();
     this.deliveries.resumeAllowed();
     void this.pump();
     return { keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
@@ -428,8 +498,15 @@ export class CaffyScheduler {
         prior.pendingWake = true;
         prior.pendingReason = "manual";
         this.save();
+        this.backupConfiguration();
       }
-      if (prior.paused) { prior.paused = false; prior.lastError = null; this.save(); void this.pump(); }
+      if (prior.paused) {
+        prior.paused = false;
+        prior.lastError = null;
+        this.save();
+        this.backupConfiguration();
+        void this.pump();
+      }
       return prior;
     }
     const row: CaffyConfig = {
@@ -457,6 +534,7 @@ export class CaffyScheduler {
     if (prior && prior.sessionId !== row.sessionId) this.entries.delete(prior.sessionId);
     this.entries.set(row.sessionId, row);
     this.save();
+    this.backupConfiguration();
     void this.pump();
     return row;
   }
@@ -476,8 +554,11 @@ export class CaffyScheduler {
     const detail = `Recipient ${reason}; Caffy delivery retired.`;
     const cancelled = this.deliveries.retireRecipient(ids, row?.conversationId ?? null,
       detail, reason === "snoozed" || reason === "hidden" || reason === "stopped");
-    if (row) this.missingSessions.delete(`${row.sessionId}:${row.conversationId}`);
-    if (row) this.save();
+    if (row) {
+      this.missingSessions.delete(row.sessionId);
+      this.observedLifecycleIds.delete(row.sessionId);
+      this.save();
+    }
     return { stopped: !!row, cancelled };
   }
 
@@ -531,6 +612,7 @@ export class CaffyScheduler {
       row.lastError = null;
     }
     this.save();
+    this.backupConfiguration();
     if (at === null) void this.pump();
     return row;
   }
@@ -546,6 +628,7 @@ export class CaffyScheduler {
       throw new Error("Auto-reboot frequency must be 30, 60 or 120 minutes.");
     row.autoRebootMinutes = minutes;
     this.save();
+    this.backupConfiguration();
     return row;
   }
 
@@ -656,6 +739,7 @@ export class CaffyScheduler {
       throw new Error("Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.");
     row.paused = paused;
     this.save();
+    this.backupConfiguration();
     if (!paused) { this.deliveries.resumeAllowed(); void this.pump(); }
     return row;
   }
@@ -666,6 +750,7 @@ export class CaffyScheduler {
     if (!enabled && row.mode === "startup") return this.stop(sessionId);
     row.startup = enabled;
     this.save();
+    this.backupConfiguration();
     return row;
   }
 
@@ -750,8 +835,11 @@ export class CaffyScheduler {
     });
     const entry = matches.length === 1 ? matches[0] : null;
     return entry?.id && entry.closedAt == null &&
-      (entry.conversationId === conversationId ||
-        entry.bootstrapIdentity?.conversationId === conversationId)
+      // If the browser is visibly on another conversation, an older Bootstrap
+      // marker cannot authorize a wake to its obsolete conversation ID.
+      (entry.conversationId
+        ? entry.conversationId === conversationId
+        : entry.bootstrapIdentity?.conversationId === conversationId)
       ? {
           id: entry.bootstrapIdentity?.publicId ?? entry.publicSessionId ?? entry.id,
           // Bootstrap replaces the public ID; the renderer still mounts using
@@ -1007,6 +1095,10 @@ export class CaffyScheduler {
         if (this.entries.get(row.sessionId) !== row || row.paused ||
             (row.mode === "queued" && !this.keepT3Busy)) continue;
         if (!bound) {
+          // Reconciliation already identified this as the same live session
+          // with a new conversation. Preserve the more actionable diagnostic,
+          // and avoid rewriting the Caffy state every scheduler tick.
+          if (row.lastError?.startsWith("Session switched conversations;")) continue;
           const reason = "T3 cannot verify this exact session and conversation; pending wake retained.";
           if (row.lastError !== reason) { row.lastError = reason; this.save(); }
           continue;
