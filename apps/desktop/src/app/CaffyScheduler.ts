@@ -960,8 +960,25 @@ export class CaffyScheduler {
       return Number.isFinite(observed) && observed <= now + 1000 && now - observed <= 15_000 &&
         (s.activity === "working" || s.status === "working");
     }).map(s => s.id).filter((id): id is string => !!id).map(canonical));
-    for (const report of this.workingReports.values())
-      for (const id of report.ids) workingIds.add(canonical(id));
+    // Header reports can outlive a tab's actual activity, particularly when
+    // several T3 windows report disjoint historical green borders. A fresh
+    // authoritative idle observation supersedes the header's stale ID; an
+    // unobserved or unreadable session stays conservatively counted.
+    const observedById = new Map(data.sessions
+      .filter(s => !!s.id).map(s => [canonical(s.id!), s]));
+    for (const report of this.workingReports.values()) {
+      for (const id of report.ids) {
+        const resolved = canonical(id);
+        const session = observedById.get(resolved);
+        const observed = Date.parse(session?.statusObservedAt ?? "");
+        const fresh = Number.isFinite(observed) && observed <= now + 1000 &&
+          now - observed <= 15_000;
+        const knownIdle = fresh && session?.activity === "idle" &&
+          ["new", "done_or_idle", "pending_or_stalled", "waiting_for_input"]
+            .includes(session.status ?? "");
+        if (!knownIdle) workingIds.add(resolved);
+      }
+    }
     // A newly queued message may not yet be reflected as 'working' by T3.
     // Count it as a provisional slot, or one pump could enqueue 6+ wakes.
     const reserved = [...this.entries.values()].filter(row =>

@@ -56,7 +56,8 @@ const TASKBOARD_CATALOG = () => NodePath.join(
 const RESERVATION_LEASE_SECONDS = 180;
 const STARTING_HOLD_MS = 5 * 60_000;
 const STARTING_RECHECK_MS = 45_000;
-const UNSTARTED_GUEST_GRACE_MS = 60 * 60_000;
+// A guest stuck at the original prompt must not monopolize a queue item for hours.
+const UNSTARTED_GUEST_GRACE_MS = 10 * 60_000;
 const PUMP_INTERVAL_MS = 15_000;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
@@ -329,6 +330,7 @@ export class TaskBoardWorkCoordinator {
     NodeFS.mkdirSync(this.retiredGuestDir, { recursive: true });
     const outstanding = NodeFS.readdirSync(this.retiredGuestDir)
       .filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
+    const closingSessionIds = new Set<string>();
     for (const name of outstanding) {
       const file = NodePath.join(this.retiredGuestDir, name);
       let receipt: RetiredGuestReceipt;
@@ -376,14 +378,16 @@ export class TaskBoardWorkCoordinator {
         if (!response.closeAccepted && !response.closed)
           throw new Error(`Retiring unstarted T3 guest ${receipt.sessionId} was not accepted`);
       }
-      return; // One exact close/reconcile per pump; never flood or exceed capacity.
+      // A closing guest can take longer than one pump. Check other guests
+      // without selecting this same request recursively until it is closed.
+      if (status.status !== "closing") return;
+      closingSessionIds.add(receipt.sessionId);
     }
 
-    if (Date.now() - this.lastUnstartedGuestCheckAt < 30_000 ||
-        this.caffy.hasPendingQueuedWakes) return;
+    if (Date.now() - this.lastUnstartedGuestCheckAt < 30_000) return;
     this.lastUnstartedGuestCheckAt = Date.now();
-    const capacity = await this.caffy.capacity().catch(() => null);
-    if (!capacity?.admissible) return;
+    // Recovery is maintenance, not new admission: running at capacity is
+    // precisely when an abandoned worker needs to be retired.
     const listed = await cli("node.exe", [
       NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
     ], JSON.stringify({
@@ -410,7 +414,7 @@ export class TaskBoardWorkCoordinator {
       .sort((a, b) => a.item.created.localeCompare(b.item.created));
     for (const {boardRoot, item} of candidates) {
       const session = byId.get(item.sessionId!);
-      if (!session ||
+      if (!session || closingSessionIds.has(item.sessionId!) ||
           (this.rejectedUnstartedGuests.get(item.sessionId!) ?? 0) > now ||
           session.spawnRequestId !== item.reservationId ||
           session.binding?.taskRef?.id !== item.taskId ||
@@ -420,11 +424,13 @@ export class TaskBoardWorkCoordinator {
           session.bootstrapIdentity.conversationId || session.conversationId ||
           session.closedAt != null || session.hidden || session.humanControlled ||
           session.autoCloseExempt || session.borderColor || session.verificationPending ||
-          session.lastRole !== "user" || !session.observedGuestUrl ||
+          !session.autoClose ||
+          ![null, undefined, "user"].includes(session.lastRole) ||
+          !session.observedGuestUrl ||
           (session.lastWorkingAt != null && session.lastWorkingAt > 0) ||
           (session.totalTurns != null && session.totalTurns > 1) ||
           session.activity === "working" ||
-          session.status !== "pending_or_stalled") continue;
+          !["new", "pending_or_stalled"].includes(session.status ?? "")) continue;
       const boundAt = Date.parse(session.binding.boundAt ?? "");
       const observedAt = Date.parse(session.statusObservedAt ?? "");
       if (!Number.isFinite(boundAt) || now - boundAt < UNSTARTED_GUEST_GRACE_MS ||
@@ -508,10 +514,19 @@ export class TaskBoardWorkCoordinator {
         snapshots = await this.readQueues();
         if (!this.running) return;
       }
+      // Maintenance runs even at capacity and even while another TaskBoard
+      // item is queued. The old location after admission never ran when the
+      // phantom worker was saturating the limit.
+      if (this.caffy.policyEnabled) {
+        try {
+          await this.recoverUnstartedGuests(snapshots);
+          snapshots = this.snapshots;
+        } catch (error) {
+          this.lastError = `Unstarted guest recovery: ${String(error)}`;
+        }
+      }
       // Old ambiguous starts remain in TaskBoard for exact-request recovery,
       // but stop consuming capacity or repeatedly blocking unrelated launches.
-      // Keep queue state/capacity visible while paused, but do not begin a task
-      // whose durable reservation has not reached Starting.
       if (!this.caffy.policyEnabled) return;
 
       // Resume an unexpired Reserved task, or replace an expired lease.
@@ -580,19 +595,8 @@ export class TaskBoardWorkCoordinator {
         await this.startReserved(candidate.boardRoot, candidate.item, requestId);
         return; // One selection at a time; capacity is sampled again next pump.
       }
-      // A previously dispatched guest can remain forever at a visible user
-      // prompt without ever bootstrapping. Reclaim its Queue intent only after
-      // the exact abandoned T3 guest is durably closed.
-      if (this.caffy.policyEnabled) {
-        try {
-          await this.recoverUnstartedGuests(snapshots);
-          this.lastError = null;
-        } catch (error) {
-          this.lastError = `Unstarted guest recovery: ${String(error)}`;
-        }
-      } else {
-        this.lastError = null;
-      }
+      // Queue admission and orphan recovery are independent; maintenance ran
+      // above, before any full-capacity or Reserved early returns.
     } catch (error) {
       this.lastError = String(error);
       // Do not clear a Starting reservation on transport errors or timeouts.

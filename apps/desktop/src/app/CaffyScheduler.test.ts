@@ -42,7 +42,7 @@ function fixture() {
   let roster: Array<{
     id: string; conversationId: string; bootstrapIdentity: {
       state: string; publicId: string; conversationId: string;
-    }; hidden?: boolean;
+    }; hidden?: boolean; status?: string; activity?: string; statusObservedAt?: string;
   }> = [];
   let guardedRead = false;
   let retirementCount = 0;
@@ -95,6 +95,26 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       c.setTaskReservations([{ requestId: WAKE, sessionId: null, holdUntil: Date.now() - 1 }]);
       const expired = await c.capacity();
       expect(expired).toMatchObject({ limit: 3, working: 2, reserved: 0, used: 2, available: 1, admissible: true });
+    } finally { c.close(); f.dispose(); }
+  });
+  it("does not count stale header workers that the refreshed guest inventory confirms idle", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      f.setRoster([
+        { id: SESSION, conversationId: ORIGINAL,
+          bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+          status: "done_or_idle", activity: "idle", statusObservedAt: new Date().toISOString() },
+        { id: REPLACEMENT, conversationId: REPLACEMENT,
+          bootstrapIdentity: {state: "registered", publicId: REPLACEMENT, conversationId: REPLACEMENT},
+          status: "working", activity: "working", statusObservedAt: new Date().toISOString() },
+      ]);
+      c.setTaskReservations([], true);
+      c.reportWorkingSnapshot([SESSION, REPLACEMENT], "stale-sidebar");
+      const actual = await c.capacity();
+      expect(actual).toMatchObject({
+        working: 1, reserved: 0, used: 1, available: 2, admissible: true,
+      });
     } finally { c.close(); f.dispose(); }
   });
   it("shows a durable crossed-out marker only after an agent stop, clearing it on reconfiguration", async () => {
