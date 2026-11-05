@@ -63,7 +63,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:123 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:148 (jsx-expression)"
     },
     {
       "id": "ui.d92acb96893e3b",
@@ -234,7 +234,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:311 (ui-call:notify)"
+      "note": "src/useChatBatchWorker.ts:340 (ui-call:notify)"
     },
     {
       "id": "ui.f142c9cd381872",
@@ -270,7 +270,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:402 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:438 (ui-branch)"
     },
     {
       "id": "ui.03c7ed08ce05bd",
@@ -336,15 +336,6 @@
       "note": "src/Matrix.tsx:523 (ui-branch)"
     },
     {
-      "id": "ui.5d92c62133c628",
-      "source": "A ChatGPT reply is still being tracked. Resolve it in AI Chats before starting another batch.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:92 (ui-call:toast)"
-    },
-    {
       "id": "ui.e5f14376a23af8",
       "source": "A normalized translation list, for handing over or reviewing elsewhere.",
       "ai": "",
@@ -363,13 +354,31 @@
       "note": "src/Inspector.tsx:306 (jsx-attribute:placeholder)"
     },
     {
+      "id": "ui.5313b3d0e59c64",
+      "source": "A previous ChatGPT reply is still tracked. Resolve or discard it in AI Chats first.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:117 (ui-call:toast)"
+    },
+    {
+      "id": "ui.4588395c7fdcb1",
+      "source": "A previous ChatGPT request is still tracked. Resolve or discard it in AI Chats before resuming.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:134 (ui-call:toast)"
+    },
+    {
       "id": "ui.53ed76ab9631d5",
       "source": "A submission is being checked. Stop again after it finishes.",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:112 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:130 (ui-call:toast)"
     },
     {
       "id": "ui.5a9251bed8f056",
@@ -603,7 +612,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:122 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:147 (jsx-expression)"
     },
     {
       "id": "ui.e31d787bfc310d",
@@ -639,7 +648,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:156 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:181 (jsx-text)"
     },
     {
       "id": "ui.fc8d2dc83944c4",
@@ -648,7 +657,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:138 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:163 (jsx-text)"
     },
     {
       "id": "ui.00207374ed7b5f",
@@ -846,7 +855,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:403 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:439 (ui-branch)"
     },
     {
       "id": "ui.531ffbfcfe3713",
@@ -864,7 +873,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:149 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:174 (jsx-text)"
     },
     {
       "id": "ui.d806724cf94fcc",
@@ -873,7 +882,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:134 (jsx-attribute:aria-label)"
+      "note": "src/MatrixBatchControls.tsx:159 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.79860cf2fd31c2",
@@ -882,7 +891,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:137 (jsx-attribute:aria-label)"
+      "note": "src/MatrixBatchControls.tsx:162 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f1021b9fb9c695",
@@ -1053,7 +1062,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:230 (ui-variable:message)"
+      "note": "src/useChatBatchWorker.ts:249 (ui-variable:message)"
     },
     {
       "id": "ui.9656c950b53b38",
@@ -1080,7 +1089,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:560 (jsx-attribute:aria-label); src/MatrixBatchControls.tsx:157 (jsx-attribute:aria-label)"
+      "note": "src/ChatGPTScreen.tsx:560 (jsx-attribute:aria-label); src/MatrixBatchControls.tsx:182 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f3e19cfec3c41a",
@@ -1089,7 +1098,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:400 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:436 (ui-branch)"
     },
     {
       "id": "ui.8fec81657ba8eb",
@@ -1107,7 +1116,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:122 (ui-branch)"
+      "note": "src/MatrixBatchControls.tsx:147 (ui-branch)"
     },
     {
       "id": "ui.58d5d42460ebeb",
@@ -1209,13 +1218,13 @@
       "note": "src/ChatGPTScreen.tsx:28 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
-      "id": "ui.9076e948494221",
-      "source": "Clear failed batch",
+      "id": "ui.3a7330e1f40cbf",
+      "source": "Clear previous batch",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:162 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:187 (jsx-text)"
     },
     {
       "id": "ui.3b7ea51793e9d9",
@@ -1287,7 +1296,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:169 (jsx-attribute:aria-label)"
+      "note": "src/MatrixBatchControls.tsx:194 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.e503367c41c06b",
@@ -1512,7 +1521,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:313 (ui-variable:message)"
+      "note": "src/useChatBatchWorker.ts:342 (ui-variable:message)"
     },
     {
       "id": "ui.51abf739617c70",
@@ -1593,7 +1602,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:147 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:172 (jsx-text)"
     },
     {
       "id": "ui.533b58fa63ed14",
@@ -1611,7 +1620,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:152 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:177 (jsx-text)"
     },
     {
       "id": "ui.fd8b8dae442166",
@@ -1755,7 +1764,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:390 (ui-call:confirm)"
+      "note": "src/useChatBatchWorker.ts:426 (ui-call:confirm)"
     },
     {
       "id": "ui.7a9da0733620b8",
@@ -1764,7 +1773,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:118 (ui-call:confirm)"
+      "note": "src/useChatBatchWorker.ts:136 (ui-call:confirm)"
     },
     {
       "id": "ui.48845bff334a50",
@@ -1791,7 +1800,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:161 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:186 (jsx-text)"
     },
     {
       "id": "ui.6491a847cd6ff2",
@@ -1980,7 +1989,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:161 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:186 (jsx-text)"
     },
     {
       "id": "ui.c6c094bc0054f9",
@@ -2070,7 +2079,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:146 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:171 (jsx-text)"
     },
     {
       "id": "ui.458c1fed574354",
@@ -2214,7 +2223,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:122 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:147 (jsx-expression)"
     },
     {
       "id": "ui.abc7e9892806b0",
@@ -2313,7 +2322,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:133 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:152 (ui-call:toast)"
     },
     {
       "id": "ui.238680dc727dd6",
@@ -2322,7 +2331,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:129 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:148 (ui-call:toast)"
     },
     {
       "id": "ui.96a3d1cf0bc4b5",
@@ -2331,7 +2340,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:142 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:167 (jsx-text)"
     },
     {
       "id": "ui.5ec9391b203c8c",
@@ -2745,7 +2754,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:366 (ui-variable:message)"
+      "note": "src/useChatBatchWorker.ts:402 (ui-variable:message)"
     },
     {
       "id": "ui.5d64f839bd1c36",
@@ -2970,7 +2979,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:386 (jsx-text); src/MatrixBatchControls.tsx:164 (jsx-text); src/Reference.tsx:426 (jsx-text)"
+      "note": "src/ImportWizard.tsx:386 (jsx-text); src/MatrixBatchControls.tsx:189 (jsx-text); src/Reference.tsx:426 (jsx-text)"
     },
     {
       "id": "ui.3b26a5427458ed",
@@ -2979,7 +2988,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:154 (jsx-text); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:405 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:179 (jsx-text); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:405 (jsx-text)"
     },
     {
       "id": "ui.acf932d9f0e496",
@@ -3519,7 +3528,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:97 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:122 (ui-call:toast)"
     },
     {
       "id": "ui.b87c858242a566",
@@ -3591,7 +3600,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:122 (ui-branch)"
+      "note": "src/MatrixBatchControls.tsx:147 (ui-branch)"
     },
     {
       "id": "ui.1b5927013668cb",
@@ -3672,7 +3681,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:158 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:183 (jsx-text)"
     },
     {
       "id": "ui.31366b3b2c60c3",
@@ -3969,7 +3978,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:142 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:161 (ui-call:toast)"
     },
     {
       "id": "ui.7849b5e475c5ee",
@@ -4023,7 +4032,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:137 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:156 (ui-call:toast)"
     },
     {
       "id": "ui.56e9c58226ed66",
@@ -4032,7 +4041,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:94 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:107 (ui-call:toast)"
     },
     {
       "id": "ui.3c05a6e868666d",
@@ -4176,16 +4185,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:126 (jsx-text)"
-    },
-    {
-      "id": "ui.55f203dfe47637",
-      "source": "Pause or stop the existing translation queue first.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:90 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:151 (jsx-text)"
     },
     {
       "id": "ui.9ec9c8d15ce491",
@@ -4194,7 +4194,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:122 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:147 (jsx-expression)"
     },
     {
       "id": "ui.6ce21ccdb95b86",
@@ -4230,7 +4230,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:399 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:435 (ui-branch)"
     },
     {
       "id": "ui.3cf43df19d0fa1",
@@ -4258,6 +4258,15 @@
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
       "note": "src/ImportWizard.tsx:414 (jsx-attribute:title)"
+    },
+    {
+      "id": "ui.d47f1c6f01d578",
+      "source": "Previous ChatGPT submission is unconfirmed. Review the chat or start another batch.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/useChatBatchWorker.ts",
+      "note": "src/useChatBatchWorker.ts:103 (ui-branch)"
     },
     {
       "id": "ui.43fd77d2ed8dcd",
@@ -4392,7 +4401,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:121 (object-property:error)"
+      "note": "src/useChatBatchWorker.ts:139 (object-property:error)"
     },
     {
       "id": "ui.15859972180af6",
@@ -4683,13 +4692,13 @@
       "note": "src/MoriApp.tsx:533 (jsx-attribute:aria-label)"
     },
     {
-      "id": "ui.28ea5042b27b82",
-      "source": "Resolve the failed ChatGPT batch in AI Chats before resuming.",
+      "id": "ui.6023ff0ac1520d",
+      "source": "Resolve the previous attempt in AI Chats, or stop the batch, before starting another.",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:109 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:112 (ui-call:toast)"
     },
     {
       "id": "ui.a76e13b9839270",
@@ -4725,7 +4734,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:127 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:152 (jsx-text)"
     },
     {
       "id": "ui.aff0766a5290e1",
@@ -4752,7 +4761,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:125 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:150 (jsx-text)"
     },
     {
       "id": "ui.c3e5afa7de72dc",
@@ -4950,7 +4959,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:308 (ui-call:notify)"
+      "note": "src/useChatBatchWorker.ts:337 (ui-call:notify)"
     },
     {
       "id": "ui.c24133ec4fdccd",
@@ -5004,7 +5013,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:144 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:169 (jsx-text)"
     },
     {
       "id": "ui.415155739590b1",
@@ -5088,13 +5097,22 @@
       "note": "src/MoriApp.tsx:483 (jsx-text)"
     },
     {
+      "id": "ui.fe82e2a7fead77",
+      "source": "Selected ChatGPT session was not ready within 10 seconds. Choose an idle session and try again.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/useChatBatchWorker.ts",
+      "note": "src/useChatBatchWorker.ts:286 (object-property:error)"
+    },
+    {
       "id": "ui.5a1ae20e50938f",
       "source": "Selected line",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:140 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:165 (jsx-text)"
     },
     {
       "id": "ui.257ef4ccd82ffb",
@@ -5112,7 +5130,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:401 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:437 (ui-branch)"
     },
     {
       "id": "ui.b8ed5279e897be",
@@ -5130,7 +5148,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:228 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:247 (ui-call:toast)"
     },
     {
       "id": "ui.ddcd0de4c3ccaa",
@@ -5508,7 +5526,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:139 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:164 (jsx-text)"
     },
     {
       "id": "ui.1c84f1c021fca1",
@@ -5553,7 +5571,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:129 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:154 (jsx-text)"
     },
     {
       "id": "ui.a13bc11d1e8530",
@@ -5571,7 +5589,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:122 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:147 (jsx-expression)"
     },
     {
       "id": "ui.ccca93dfe16f4c",
@@ -5770,6 +5788,15 @@
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
       "note": "src/Reference.tsx:557 (jsx-text)"
+    },
+    {
+      "id": "ui.49109af55b0958",
+      "source": "The previous translation attempt did not complete.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/useChatBatchWorker.ts",
+      "note": "src/useChatBatchWorker.ts:104 (ui-branch)"
     },
     {
       "id": "ui.0b131f6ce45f50",
@@ -5985,7 +6012,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:393 (object-property:error)"
+      "note": "src/useChatBatchWorker.ts:429 (object-property:error)"
     },
     {
       "id": "ui.8fe147696fbf47",
@@ -5994,7 +6021,7 @@
       "final": "翻訳",
       "status": "translated",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:132 (jsx-text); src/MatrixBatchControls.tsx:163 (jsx-text); src/Sidebar.tsx:89 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/MatrixBatchControls.tsx:157 (jsx-text); src/MatrixBatchControls.tsx:188 (jsx-text); src/Sidebar.tsx:89 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.08a2c579ad3da9",
@@ -6012,7 +6039,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:174 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:199 (jsx-text)"
     },
     {
       "id": "ui.92b788c239b20b",
@@ -6030,7 +6057,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:173 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:198 (jsx-text)"
     },
     {
       "id": "ui.5e3fcd841f2c7e",
@@ -6048,7 +6075,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:131 (jsx-attribute:title)"
+      "note": "src/MatrixBatchControls.tsx:156 (jsx-attribute:title)"
     },
     {
       "id": "ui.abbc13c13e35c8",
@@ -6066,7 +6093,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:122 (jsx-expression); src/shortcuts.ts:21 (label-map); src/shortcuts.ts:22 (label-map); src/shortcuts.ts:23 (label-map); src/shortcuts.ts:24 (label-map); src/shortcuts.ts:25 (label-map)"
+      "note": "src/MatrixBatchControls.tsx:147 (jsx-expression); src/shortcuts.ts:21 (label-map); src/shortcuts.ts:22 (label-map); src/shortcuts.ts:23 (label-map); src/shortcuts.ts:24 (label-map); src/shortcuts.ts:25 (label-map)"
     },
     {
       "id": "ui.20f7bd7894c4ce",
@@ -6093,7 +6120,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:143 (object-property:error)"
+      "note": "src/useChatBatchWorker.ts:162 (object-property:error)"
     },
     {
       "id": "ui.743957bbd62bca",
@@ -6105,13 +6132,22 @@
       "note": "src/CodexTranslationPanel.tsx:58 (jsx-text)"
     },
     {
+      "id": "ui.09607afa48624d",
+      "source": "Translation is still in progress, or finishing its 10-second error cooldown.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:106 (ui-call:toast)"
+    },
+    {
       "id": "ui.05db7e2f43d9b1",
       "source": "Translation scope",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:145 (jsx-attribute:aria-label)"
+      "note": "src/MatrixBatchControls.tsx:170 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.4ba5c6645965bf",
@@ -6354,7 +6390,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:128 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:153 (jsx-text)"
     },
     {
       "id": "ui.1e85dc470fd0f3",
@@ -6408,7 +6444,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:238 (object-property:error)"
+      "note": "src/useChatBatchWorker.ts:257 (object-property:error)"
     },
     {
       "id": "ui.4bd9354bb65223",
@@ -6699,5 +6735,5 @@
     "src/main.tsx",
     "src/Overlays.tsx"
   ],
-  "lastModified": "2026-11-05T05:05:00.116Z"
+  "lastModified": "2026-11-05T05:15:04.541Z"
 }

@@ -13,6 +13,7 @@ export function MatrixBatchControls() {
   const [settings, setSettings] = useState(() => readMatrixBatchSettings(project.id));
   const [plan, setPlan] = useState(() => readMatrixBatchPlan(project.id));
   const [open, setOpen] = useState(false);
+  const [cooldownClock, setCooldownClock] = useState(Date.now);
   const trigger = useRef<HTMLDivElement>(null);
   const [rowMenu, setRowMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [allSessions, setAllSessions] = useState(loadChatSessions);
@@ -41,7 +42,22 @@ export function MatrixBatchControls() {
     return [...groups.values()].flat();
   }, [visible, folded]);
   const eligible = eligibleMatrixRows(project, chosen, activeRow?.id ?? null, file, displayed);
-  const busy = plan?.stage === "running" || plan?.stage === "paused";
+  const errored = plan?.stage === "failed" ||
+    (plan?.stage === "paused" && !!plan.error);
+  const coolingDown = !!errored && cooldownClock < (plan?.errorAt ?? 0) + 10_000;
+  const busy = plan?.stage === "running" || coolingDown;
+  const recoverable = plan?.stage === "paused" || plan?.stage === "running";
+
+  useEffect(() => {
+    const deadline = (plan?.errorAt ?? 0) + 10_000;
+    const remaining = deadline - Date.now();
+    if (!(plan?.stage === "failed" || (plan?.stage === "paused" && plan.error)) || remaining <= 0) {
+      setCooldownClock(Date.now());
+      return;
+    }
+    const timer = window.setTimeout(() => setCooldownClock(Date.now()), remaining + 1);
+    return () => window.clearTimeout(timer);
+  }, [plan?.id, plan?.stage, plan?.error, plan?.errorAt]);
 
   useEffect(() => {
     setSettings(readMatrixBatchSettings(project.id));
@@ -87,11 +103,20 @@ export function MatrixBatchControls() {
     saveMatrixBatchSettings(project.id, next);
   };
   const start = (count = settings.size, focusId = activeRow?.id ?? null, fromRow = false) => {
-    if (busy) { toast("Pause or stop the existing translation queue first."); return; }
-    if (localStorage.getItem(`mori.ai-chat.batch:${project.id}`)) {
-      toast("A ChatGPT reply is still being tracked. Resolve it in AI Chats before starting another batch."); return;
-    }
+    if (busy) { toast("Translation is still in progress, or finishing its 10-second error cooldown."); return; }
     if (!sessionId) { toast("Open a ChatGPT session in AI Chats before translating."); return; }
+    // An unknown dispatch may have reached ChatGPT; never resubmit it
+    // automatically, and require confirmation before discarding tracking.
+    if (plan && (plan.stage === "paused" || plan.stage === "failed")) {
+      if (!requestMatrixBatchStop(plan.id)) {
+        toast("Resolve the previous attempt in AI Chats, or stop the batch, before starting another.");
+        return;
+      }
+    }
+    if (localStorage.getItem(`mori.ai-chat.batch:${project.id}`)) {
+      toast("A previous ChatGPT reply is still tracked. Resolve or discard it in AI Chats first.");
+      return;
+    }
     const next = newMatrixBatchPlan(project, { ...chosen, size: count, ...(fromRow ? { start: "selected" as const } : {}) },
       focusId, fromRow ? project.rows.find(row => row.id === focusId)?.sourceFile ?? null : file, displayed);
     if (!next) { toast("No eligible untranslated lines in this scope."); return; }
@@ -105,8 +130,8 @@ export function MatrixBatchControls() {
     if (!plan) return;
     if (stage === "running") {
       const pending = localStorage.getItem(`mori.ai-chat.batch:${project.id}`);
-      if (pending && JSON.parse(pending).stage === "failed") {
-        toast("Resolve the failed ChatGPT batch in AI Chats before resuming."); return;
+      if (pending) {
+        toast("A previous ChatGPT request is still tracked. Resolve or discard it in AI Chats before resuming."); return;
       }
     }
     saveMatrixBatchPlan({ ...plan, stage, error: stage === "running" || stage === "paused" ? undefined : plan.error, waitingSince: undefined });
@@ -125,8 +150,8 @@ export function MatrixBatchControls() {
     {plan?.stage === "done" && <button type="button" className="btn sm outline" onClick={reviewDrafts}>Review drafts</button>}
     {plan?.stage === "running" && <button type="button" className="btn sm outline" onClick={() => changeStage("paused")}>Pause</button>}
     {plan?.stage === "paused" && <button type="button" className="btn sm outline" onClick={() => changeStage("running")}>Resume</button>}
-    {busy && <button type="button" className="btn sm outline" onClick={() => { activateMatrixBatch(plan!.sessionId); go("chatgpt"); }}>View chat</button>}
-    {busy && <button type="button" className="btn sm outline" onClick={() => requestMatrixBatchStop(plan!.id)}>Stop batch</button>}
+    {recoverable && <button type="button" className="btn sm outline" onClick={() => { activateMatrixBatch(plan!.sessionId); go("chatgpt"); }}>View chat</button>}
+    {recoverable && <button type="button" className="btn sm outline" onClick={() => requestMatrixBatchStop(plan!.id)}>Stop batch</button>}
     <div className="mori-matrix-batch-trigger" ref={trigger}>
       <button type="button" className="btn primary sm" disabled={busy} onClick={() => start()} title="Translate using saved batch settings">
         <Icon name="sparkle" size="xs" /> Translate
@@ -159,7 +184,7 @@ export function MatrixBatchControls() {
           {sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
         </select>
         <small>{eligible.length} eligible in the next {settings.size} displayed lines · up to 5 per request · no wrap</small>
-        {plan?.stage === "paused" && <button type="button" className="btn sm outline" onClick={() => requestMatrixBatchStop(plan.id)}>Clear failed batch</button>}
+        {(plan?.stage === "paused" || plan?.stage === "failed") && <button type="button" className="btn sm outline" onClick={() => requestMatrixBatchStop(plan.id)}>Clear previous batch</button>}
         <button type="button" className="btn primary" disabled={busy || !eligible.length || !sessionId} onClick={() => start()}>
           Translate {eligible.length} lines
         </button>

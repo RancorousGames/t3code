@@ -6,7 +6,7 @@ import { chatGPTWebviewAutomation } from "../../web/src/chatGPTWebviewAutomation
 import { CHAT_BATCH_SIZE, chooseChatBatch, makeChatBatch, mergeChatBatchDrafts, parseChatBatchAnswer, readChatBatchInstructions, markChatBatchInstructions, type ChatBatchRequest } from "./chat-batches.ts";
 import { notify } from "./Notifications.tsx";
 import { nativeMori } from "./backend.ts";
-import { MATRIX_BATCH_EVENT, MATRIX_BATCH_STOP, readMatrixBatchPlan, saveMatrixBatchPlan, type MatrixBatchPlan } from "./matrix-batch.ts";
+import { MATRIX_BATCH_EVENT, MATRIX_BATCH_STOP, readMatrixBatchPlan, saveMatrixBatchPlan, type MatrixBatchPlan, type MatrixBatchStopRequest } from "./matrix-batch.ts";
 import { canDraft } from "./ai-batch.ts";
 import type { MoriProject } from "./model.ts";
 import type { MoriPrefs } from "./prefs.ts";
@@ -29,6 +29,7 @@ type PendingJob = {
   planId?: string;
   planCursorEnd?: number;
   planSkipped?: number;
+  uncertainSince?: number;
 };
 
 const storageKey = (id: string) => `mori.ai-chat.batch:${id}`;
@@ -91,10 +92,26 @@ export function useChatBatchWorker(input: {
 
   useEffect(() => {
     const next = restore(project.id);
-    jobRef.current = next;
-    setJob(next);
-    planRef.current = readMatrixBatchPlan(project.id);
-    setPlan(planRef.current);
+    let recoveredPlan = readMatrixBatchPlan(project.id);
+    if (recoveredPlan?.stage === "running" && next?.planId === recoveredPlan.id &&
+        (next.stage === "unknown" || next.stage === "staged" || next.stage === "failed")) {
+      // An interrupted renderer cannot resume its in-flight direct-submit call.
+      // Keep uncertain submissions for inspection and never replay them.
+      recoveredPlan = { ...recoveredPlan,
+        stage: next.stage === "unknown" ? "paused" : "failed",
+        error: next.stage === "unknown"
+          ? "Previous ChatGPT submission is unconfirmed. Review the chat or start another batch."
+          : "The previous translation attempt did not complete.",
+        errorAt: next.stage === "unknown" ? next.uncertainSince ?? 0 : 0,
+        waitingSince: undefined,
+      };
+      saveMatrixBatchPlan(recoveredPlan);
+    }
+    jobRef.current = next?.stage === "staged" ? null : next;
+    setJob(jobRef.current);
+    if (next?.stage === "staged") localStorage.removeItem(storageKey(project.id));
+    planRef.current = recoveredPlan;
+    setPlan(recoveredPlan);
     const onChange = (event: Event) => {
       if ((event as CustomEvent<string>).detail !== project.id) return;
       planRef.current = readMatrixBatchPlan(project.id);
@@ -107,7 +124,8 @@ export function useChatBatchWorker(input: {
   useEffect(() => {
     const stop = (event: Event) => {
       const currentPlan = planRef.current;
-      if (!currentPlan || (event as CustomEvent<string>).detail !== currentPlan.id) return;
+      const request = (event as CustomEvent<MatrixBatchStopRequest>).detail;
+      if (!currentPlan || request.planId !== currentPlan.id) return;
       if (dispatching.current || sending) {
         toast("A submission is being checked. Stop again after it finishes.");
         return;
@@ -119,13 +137,14 @@ export function useChatBatchWorker(input: {
         updateJob(null);
       }
       updatePlan({ ...currentPlan, stage: "stopped", waitingSince: undefined, error: "Queue stopped. Start a new batch when ready." });
+      request.stopped = true;
     };
     window.addEventListener(MATRIX_BATCH_STOP, stop);
     return () => window.removeEventListener(MATRIX_BATCH_STOP, stop);
   }, [sending, toast, updateJob, updatePlan]);
 
   const run = async (chunk?: { ids: string[]; planId: string; cursorEnd: number; skipped: number }) => {
-    if (!chunk && (planRef.current?.stage === "running" || planRef.current?.stage === "paused")) {
+    if (!chunk && planRef.current?.stage === "running") {
       toast("Finish or stop the Matrix translation queue first.");
       return;
     }
@@ -186,7 +205,7 @@ export function useChatBatchWorker(input: {
           throw Error("ChatGPT session changed before batch dispatch; no message sent.");
         // Persist before every potentially irreversible callback. A lost IPC
         // response is UNKNOWN and must never cause a second batch submission.
-        prepared = { ...prepared, stage: "unknown" };
+        prepared = { ...prepared, stage: "unknown", uncertainSince: Date.now() };
         updateJob(prepared);
         const outcome = await chatGPTWebviewAutomation.directSubmit(runtimeId, {
           text: request.message,
@@ -197,7 +216,7 @@ export function useChatBatchWorker(input: {
           submitted = true;
           break;
         }
-        prepared = { ...prepared, stage: "staged" };
+        prepared = { ...prepared, stage: "staged", uncertainSince: undefined };
         updateJob(prepared);
         await new Promise<void>((resolve) => setTimeout(resolve, 200));
       }
@@ -234,7 +253,7 @@ export function useChatBatchWorker(input: {
       const notReady = !prepared && message === "ChatGPT must be idle, connected, and ready before translating.";
       if (currentPlan && notReady && currentPlan.stage === "running") {
         const since = currentPlan.waitingSince ?? Date.now();
-        if (Date.now() - since < 90_000) {
+        if (Date.now() - since < 10_000) {
           if (!currentPlan.waitingSince) updatePlan({ ...currentPlan, waitingSince: since, error: "Waiting for the selected ChatGPT session to become ready…" });
           return;
         }
@@ -246,7 +265,7 @@ export function useChatBatchWorker(input: {
         // An unknown callback result may have sent; preserve its exact identity.
         updateJob({ ...prepared, stage: prepared.stage === "unknown" ? "unknown" : "failed", error: message });
       }
-      if (currentPlan) updatePlan({ ...currentPlan, stage: prepared && prepared.stage !== "staged" ? "paused" : "failed", error: message, waitingSince: undefined });
+      if (currentPlan) updatePlan({ ...currentPlan, stage: prepared && prepared.stage !== "staged" ? "paused" : "failed", error: message, waitingSince: undefined, errorAt: prepared?.stage === "unknown" ? prepared.uncertainSince : undefined });
       toast(message);
     } finally { setSending(false); }
   };
@@ -258,8 +277,18 @@ export function useChatBatchWorker(input: {
     const advance = async () => {
       const current = planRef.current;
       if (!current || current.stage !== "running" || dispatching.current ||
-        sending || jobRef.current || activeId !== current.sessionId ||
-        !guestRef.current || readyIdRef.current !== current.sessionId) return;
+        sending || jobRef.current) return;
+      if (activeId !== current.sessionId || !guestRef.current ||
+        readyIdRef.current !== current.sessionId) {
+        const since = current.waitingSince ?? Date.now();
+        if (Date.now() - since >= 10_000) {
+          updatePlan({ ...current, stage: "failed", waitingSince: undefined,
+            error: "Selected ChatGPT session was not ready within 10 seconds. Choose an idle session and try again." });
+        } else if (!current.waitingSince) {
+          updatePlan({ ...current, waitingSince: since });
+        }
+        return;
+      }
       const selected: string[] = [];
       let skipped = 0;
       let end = current.cursor;
@@ -336,13 +365,20 @@ export function useChatBatchWorker(input: {
       const page = await guestRef.current.executeJavaScript(inspectExpression(12)) as PageInspection;
       if (jobRef.current?.request.requestId !== pending.request.requestId ||
           !sameConversation(pending.conversationId, page.url)) return;
-      if (page.activity === "working" || page.connectionInterrupted || page.lastRole !== "assistant") return;
+      if (page.connectionInterrupted) return;
       const marker = `MONKU_TRANSLATION_BATCH_ID: ${pending.request.requestId}`;
       const turn = [...page.messages].reverse().find(message =>
         message.role === "user" && message.text.includes(marker))?.turn;
       if (turn === undefined) return;
       const confirmedId = chatGPTConversationIdFromUrl(page.url);
-      if (confirmedId) markChatBatchInstructions(pending.request, confirmedId);
+      if (!confirmedId) return;
+      markChatBatchInstructions(pending.request, confirmedId);
+      if (pending.stage === "unknown") updateJob({ ...pending, stage: "sent", conversationId: confirmedId, error: undefined });
+      const currentPlan = planRef.current;
+      if (pending.planId && currentPlan?.id === pending.planId &&
+        currentPlan.stage === "paused" && currentPlan.error?.includes("user turn is unconfirmed"))
+        updatePlan({ ...currentPlan, stage: "running", error: undefined });
+      if (page.activity === "working" || page.lastRole !== "assistant") return;
       const response = page.messages.find(message => message.role === "assistant" && message.turn === turn);
       if (!response?.text.trim()) return;
       try {

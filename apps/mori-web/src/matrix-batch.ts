@@ -17,6 +17,7 @@ export type MatrixBatchPlan = {
   stage: "running" | "paused" | "done" | "stopped" | "failed";
   error?: string | undefined;
   waitingSince?: number | undefined;
+  errorAt?: number | undefined;
 };
 
 export const MATRIX_BATCH_EVENT = "mori:matrix-batch-changed";
@@ -74,21 +75,29 @@ export function readMatrixBatchPlan(projectId: string): MatrixBatchPlan | null {
     // ChatGPT delivery cannot resume, so it must not disable Translate indefinitely.
     if (raw.stage === "paused" && raw.error &&
       !localStorage.getItem(`mori.ai-chat.batch:${projectId}`))
-      return { ...raw, stage: "failed" };
+      return { ...raw, stage: "failed", errorAt: raw.errorAt ?? 0 };
     return raw;
   } catch { return null; }
 }
 
 export function saveMatrixBatchPlan(plan: MatrixBatchPlan) {
-  localStorage.setItem(planKey(plan.projectId), JSON.stringify(plan));
+  const previous = readMatrixBatchPlan(plan.projectId);
+  const errorAt = (plan.stage === "paused" || plan.stage === "failed") && plan.error
+    ? plan.errorAt ?? (previous?.error === plan.error && previous.stage === plan.stage ? previous.errorAt ?? 0 : Date.now())
+    : undefined;
+  const saved = { ...plan, errorAt };
+  localStorage.setItem(planKey(plan.projectId), JSON.stringify(saved));
   window.dispatchEvent(new CustomEvent(MATRIX_BATCH_EVENT, { detail: plan.projectId }));
 }
 
 export function activateMatrixBatch(sessionId: string) {
   window.dispatchEvent(new CustomEvent(MATRIX_BATCH_ACTIVATE, { detail: sessionId }));
 }
-export function requestMatrixBatchStop(planId: string) {
-  window.dispatchEvent(new CustomEvent(MATRIX_BATCH_STOP, { detail: planId }));
+export type MatrixBatchStopRequest = { planId: string; stopped: boolean };
+export function requestMatrixBatchStop(planId: string): boolean {
+  const detail: MatrixBatchStopRequest = { planId, stopped: false };
+  window.dispatchEvent(new CustomEvent(MATRIX_BATCH_STOP, { detail }));
+  return detail.stopped;
 }
 
 export function newMatrixBatchPlan(project: MoriProject, settings: MatrixBatchSettings, selectedId: string | null, file: string | null, displayedRows: readonly MoriRow[] = project.rows): MatrixBatchPlan | null {
@@ -96,6 +105,6 @@ export function newMatrixBatchPlan(project: MoriProject, settings: MatrixBatchSe
   if (!ids.length || !settings.sessionId) return null;
   return {
     id: crypto.randomUUID(), projectId: project.id, sessionId: settings.sessionId,
-    ids, cursor: 0, skipped: 0, stage: "running",
+    ids, cursor: 0, skipped: 0, stage: "running", waitingSince: Date.now(),
   };
 }
