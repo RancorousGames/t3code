@@ -32,6 +32,7 @@ import { DesktopAppActivationBroker } from "./DesktopAppActivationBroker.ts";
 import { ChatGPTDeliveryQueue } from "./ChatGPTDeliveryQueue.ts";
 import { CaffyScheduler } from "./CaffyScheduler.ts";
 import { TaskBoardWorkCoordinator } from "./TaskBoardWorkCoordinator.ts";
+import { ensureTaskBoardAppRunning } from "./TaskBoardAutoLaunch.ts";
 import { ChatGPTExecutionReceiptProducer } from "./ChatGPTExecutionReceiptProducer.ts";
 import { ChatGPTIdleTransitionJournal, type VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -380,6 +381,12 @@ export const make = Effect.gen(function* () {
   const taskBoardCoordinator = new TaskBoardWorkCoordinator(
     path.resolve(desktopEnvironment.stateDir), caffy,
   );
+  const launchTaskBoardIfBusy = () => {
+    if (!caffy.policyEnabled) return;
+    void ensureTaskBoardAppRunning().catch((cause) => {
+      void runPromise(logWarning("TaskBoard auto-launch failed", { cause }));
+    });
+  };
   const handleRequest = (
     request: DesktopAppActivationRequest,
   ): Promise<DesktopAppActivationResponse> => {
@@ -451,6 +458,7 @@ export const make = Effect.gen(function* () {
             : action === "startup"
               ? caffy.startup(request.sessionId ?? "", request.startup === true)
             : caffy.wake(request.sessionId ?? "");
+          if (action === "policy" && request.keepT3Busy === true) launchTaskBoardIfBusy();
           return { version: 1 as const, requestId: request.requestId, ok: true as const, data };
         } catch (error) {
           return { version: 1 as const, requestId: request.requestId, ok: false as const,
@@ -563,7 +571,12 @@ export const make = Effect.gen(function* () {
           ),
         ),
     ).pipe(
-      Effect.tap(() => Effect.sync(() => { deliveries.start(); caffy.start(); taskBoardCoordinator.start(); })),  
+      Effect.tap(() => Effect.sync(() => {
+        deliveries.start();
+        caffy.start();
+        taskBoardCoordinator.start();
+        launchTaskBoardIfBusy();
+      })),
       Effect.asVoid,
     ),
     setRendererReady: Effect.fn("DesktopAppActivation.setRendererReady")(function* (ready) {
