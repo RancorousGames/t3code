@@ -313,7 +313,7 @@ export class TaskBoardWorkCoordinator {
     if (!this.running || this.busy) return;
     this.busy = true;
     try {
-      const snapshots = await this.readQueues();
+      let snapshots = await this.readQueues();
       if (!this.running) return;
       if (this.caffy.policyEnabled) await this.recoverConfirmedUnsent(snapshots);
 
@@ -326,7 +326,12 @@ export class TaskBoardWorkCoordinator {
         const next = starting[0]!;
         this.syncReservations(true);
         await this.starting(next.item, next.boardRoot, next.item.reservationId!);
-        return;
+        // A correlation-unknown Starting request must retain its reservation,
+        // but must NOT starve other queued work when capacity remains. Refresh
+        // the authoritative board inventory before selecting anything else;
+        // capacity() still counts all unresolved Starting slots.
+        snapshots = await this.readQueues();
+        if (!this.running) return;
       }
       // Keep queue state/capacity visible while paused, but do not begin a task
       // whose durable reservation has not reached Starting.
