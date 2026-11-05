@@ -26,6 +26,29 @@ export interface ChatGPTSidebarGroup {
 
 type Assignment = { key: string; title: string };
 
+/** Task verbs/status labels are not project identities. Keep this scoped to
+ * inferred single-word names and old inferred hints; real registered/pinned
+ * projects with these names remain valid. */
+const GENERIC_TASK_WORDS = new Set([
+  "add", "adjust", "analyze", "analyse", "analysis", "assess", "assessment",
+  "audit", "build", "check", "checking", "compare", "complete", "configure",
+  "create", "debug", "design", "diagnose", "diagnostic", "evaluate", "experiment",
+  "find", "finish", "fix", "implement", "implementation", "improve", "inspect",
+  "integrate", "investigate", "investigation", "locate", "maintain", "migrate",
+  "monitor", "optimize", "plan", "planning", "read", "refactor", "repair",
+  "research", "resolve", "resume", "review", "reviews", "run", "running",
+  "setup", "start", "study", "task", "tasks", "test", "testing", "tests",
+  "troubleshoot", "update", "validate", "verification", "verify", "work",
+  "working", "write", "implementing", "investigating", "reviewing",
+  "fixing", "analyzing", "analysing", "building", "creating", "testing",
+  "updating", "refactoring", "diagnosing", "inspecting", "validating",
+  "researching", "optimizing", "monitoring", "migrating", "designing",
+  "debugging", "verifying", "comparing", "evaluating", "resolving",
+]);
+
+export const isGenericChatGPTProjectName = (name: string): boolean =>
+  GENERIC_TASK_WORDS.has(name.trim().toLowerCase());
+
 const readable = (value: string): string =>
   value
     .replace(/([a-z\d])([A-Z])/g, "$1 $2")
@@ -66,7 +89,8 @@ export function applyConfirmedChatGPTSessionMetadata(
 ): BrowserSession[] {
   return sessions.map((session) => {
     const confirmed = corrections[session.id];
-    if (!confirmed?.project || session.project !== undefined) return session;
+    if (!confirmed?.project || session.project !== undefined ||
+        isGenericChatGPTProjectName(confirmed.project)) return session;
     return { ...session, project: confirmed.project };
   });
 }
@@ -165,7 +189,7 @@ function discoverNameGroups(
     for (const match of title.matchAll(/\b[A-Za-z][A-Za-z0-9]{3,}\b/g)) {
       const raw = match[0],
         word = raw.toLowerCase();
-      if (projectWords.has(word)) continue;
+      if (projectWords.has(word) || GENERIC_TASK_WORDS.has(word)) continue;
       if (!frequency.has(word)) frequency.set(word, new Set());
       frequency.get(word)!.add(session.id);
       const looksLikeName =
@@ -221,10 +245,18 @@ export function groupChatGPTSessions(
         (project) => readable(project.title).toLowerCase() === readable(hint).toLowerCase(),
       );
       if (pinned) return { key: pinned.key, title: pinned.title };
-      const project = matchRegisteredProject(hint, projects);
-      return project
-        ? { key: `project:${project.id}`, title: project.title }
-        : { key: `hint:${hint.toLowerCase()}`, title: readable(hint) };
+      const registered = projects.find((project) =>
+        readable(project.title).toLowerCase() === readable(hint).toLowerCase() ||
+        pathKey(project.workspaceRoot) === pathKey(hint),
+      );
+      if (registered) return { key: `project:${registered.id}`, title: registered.title };
+      // Earlier automatic grouping persisted "Implement" / "Investigate"
+      // as project hints. Ignore these stale hints and reclassify by the title.
+      if (!isGenericChatGPTProjectName(hint)) {
+        const project = matchRegisteredProject(hint, projects);
+        if (project) return { key: `project:${project.id}`, title: project.title };
+        return { key: `hint:${hint.toLowerCase()}`, title: readable(hint) };
+      }
     }
     const pinned = permanentMatch(session.title);
     if (pinned) return { key: pinned.key, title: pinned.title };
@@ -541,7 +573,8 @@ export function layoutChatGPTSessions(
     // because Started mode omits headings for one-session projects.
     const title = error ? "Errors"
       : original?.key && original.key !== "other" ? original.title ?? "Other"
-      : root.project?.trim() && root.project.toLowerCase() !== "other"
+      : root.project?.trim() && root.project.toLowerCase() !== "other" &&
+          !isGenericChatGPTProjectName(root.project)
         ? root.project.trim() : "Other";
     // Aliases and separately inferred project keys share the same header,
     // preferring durable registered/permanent identity for collapse and drag.

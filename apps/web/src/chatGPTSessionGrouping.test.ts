@@ -122,6 +122,52 @@ describe("ChatGPT session project grouping", () => {
     expect(groups[0]?.title).toBe("Other");
   });
 
+  it("rejects action words as inferred projects, including old persisted bad hints", () => {
+    const actionWords = [
+      "Implement", "Investigate", "Analyze", "Test", "Check", "Review",
+      "Fix", "Debug", "Verify", "Build", "Research", "Create", "Plan",
+    ];
+    const sessions = actionWords.flatMap((action, index) => [
+      { id: `one-${index}`, title: `${action} the sidebar behavior` },
+      { id: `two-${index}`, title: `${action} another issue`, project: action },
+    ]);
+    const groups = groupChatGPTSessions(sessions, []);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.key).toBe("other");
+    expect(groups[0]?.rows).toHaveLength(sessions.length);
+    const older = layoutChatGPTSessions(
+      sessions, [], "activity", {}, [], undefined, true, Date.now(),
+    );
+    expect(older.map((group) => group.title)).toEqual(["Other"]);
+  });
+
+  it("can still use explicitly registered or pinned projects with generic names", () => {
+    const registered = [{ id: "test", title: "Test", workspaceRoot: "D:/Projects/Test" }];
+    const pinned = [{ key: "pin:investigate", title: "Investigate" }];
+    expect(matchRegisteredProject("Test", registered)?.id).toBe("test");
+    const groups = groupChatGPTSessions([
+      { id: "one", title: "Test systems", project: "Test" },
+      { id: "two", title: "Test performance", project: "Test" },
+      { id: "three", title: "Investigate client", project: "Investigate" },
+      { id: "four", title: "Investigate server", project: "Investigate" },
+    ], registered, pinned);
+    expect(groups.map((group) => [group.key, group.title, group.rows.map(({session}) => session.id)])).toEqual([
+      ["pin:investigate", "Investigate", ["three", "four"]],
+      ["project:test", "Test", ["one", "two"]],
+    ]);
+    expect(groups.some((group) => group.key === "pin:investigate" && group.rows.length === 2)).toBe(true);
+  });
+
+  it("reassigns stale generic inferred hints to a real project when the title identifies one", () => {
+    const groups = groupChatGPTSessions([
+      { id: "one", title: "Implement Wartribes combat", project: "Implement" },
+      { id: "two", title: "Investigate Wartribes foliage", project: "Investigate" },
+    ], projects);
+    expect(groups.find((group) => group.title === "Wartribes")
+      ?.rows.map((row) => row.session.id)).toEqual(["one", "two"]);
+    expect(groups.some((group) => ["Implement", "Investigate"].includes(group.title ?? ""))).toBe(false);
+  });
+
   it("matches T3's registered project names or workspace directories", () => {
     expect(matchRegisteredProject("Altraea 1v1 Opus Empire", projects)?.id).toBe("altraea");
     expect(matchRegisteredProject("Wartribes combat", projects)?.id).toBe("wartribes");

@@ -1,4 +1,5 @@
 import type { DesktopOpenRigSeatSessions, DesktopOpenRigSeatTopology } from "@t3tools/contracts";
+import { isGenericChatGPTProjectName } from "../../chatGPTSessionGrouping";
 /** The sidebar appearance utilities depend on a structural session view,
  * not T3's store. Embedded apps reuse them without loading router/recovery. */
 export interface ChatGPTSidebarAppearanceSession {
@@ -77,7 +78,8 @@ export function chatGPTSidebarProjectTitles(
 ): ReadonlyMap<string, string> {
   const titles = new Map<string, string>();
   for (const session of sessions) {
-    if (session.project?.trim()) titles.set(session.id, session.project.trim());
+    if (session.project?.trim() && !isGenericChatGPTProjectName(session.project))
+      titles.set(session.id, session.project.trim());
   }
   // Displayed grouping takes precedence: a child follows its actual parent's
   // project even if its stored project hint predates the verified parent link.
