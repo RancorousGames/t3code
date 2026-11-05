@@ -92,6 +92,8 @@ export const BrowserSession = Schema.Struct({
   snoozedAt: Schema.optional(Schema.Number),
   verificationPending: Schema.optional(Schema.Boolean),
   quickSnoozeStep: Schema.optional(Schema.Number),
+  // Only backend spawns that explicitly opt in use the one-hour idle lifetime.
+  autoClose: Schema.optional(Schema.Boolean),
   // Sticky exemptions: unsnooze or clearing a colored border never reenables auto-close.
   autoCloseExempt: Schema.optional(Schema.Boolean),
   lastDirectInteractionAt: Schema.optional(Schema.Number),
@@ -623,6 +625,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         project?: string;
         initialConversationUrl?: string;
         spawnRequestId?: string;
+        autoClose?: boolean;
         explicitlyUserCreated?: boolean;
         /** Explicit profile for a new manual session; ignored for backend workers. */
         profileId?: string;
@@ -768,6 +771,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
                 ? { parentSessionId: metadata.parentSessionId }
                 : {}),
             ...(metadata?.project ? { project: metadata.project } : {}),
+            ...(metadata?.spawnRequestId && metadata.autoClose === true ? { autoClose: true } : {}),
           },
         ];
       });

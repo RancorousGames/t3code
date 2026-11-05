@@ -593,6 +593,7 @@ export async function inspectBrowserSession(
     parentSessionId: entry.parentSessionId ?? null,
     binding: entry.binding ?? null,
     spawnRequestId: entry.spawnRequestId ?? null,
+    autoClose: entry.autoClose === true,
     project: entry.project ?? null,
     url:
       entry.hidden && entry.archive && !entry.archive.restoredAt

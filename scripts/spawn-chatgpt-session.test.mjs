@@ -79,7 +79,12 @@ NodeTest.test("the OMCP/CLI spawn request carries explicit parent UUID only when
     "request-2",
   );
   NodeAssert.equal(without.parentSessionId, undefined);
+  NodeAssert.equal(without.autoClose, undefined);
   NodeAssert.equal(without.project, "t3code");
+  const optIn = createChatGPTSpawnRequest(parseArguments([
+    "--title", "Worker", "--message", "Implement", "--auto-close",
+  ]), "request-auto-close");
+  NodeAssert.equal(optIn.autoClose, true);
 });
 
 NodeTest.test("explicit OpenRig binding metadata survives the spawn CLI boundary", () => {

@@ -253,6 +253,7 @@ export async function openTaskSession(
           project: intent === "implement" ? Path.basename(Path.dirname(board)) : "",
           seatId: "",
           role: intent === "implement" ? "worker" : "personal",
+          autoClose: intent === "implement",
           taskBoard: board,
           taskId: id,
         },

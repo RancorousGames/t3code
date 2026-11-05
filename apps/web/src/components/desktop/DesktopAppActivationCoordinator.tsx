@@ -1739,6 +1739,7 @@ export function DesktopAppActivationCoordinator() {
           : undefined;
         const metadata = {
           spawnRequestId: request.requestId,
+          ...(request.autoClose === true ? { autoClose: true } : {}),
           ...(parentSessionId ? { parentSessionId } : {}),
           ...(projectHint ? { project: projectHint } : {}),
           ...(binding ? { binding } : {}),

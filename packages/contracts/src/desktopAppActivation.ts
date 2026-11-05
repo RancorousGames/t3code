@@ -128,6 +128,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     title: TrimmedNonEmptyString,
     prompt: Schema.String.check(Schema.isNonEmpty()),
     parentSessionId: Schema.optional(TrimmedNonEmptyString),
+    autoClose: Schema.optional(Schema.Boolean),
     project: Schema.optional(TrimmedNonEmptyString),
     seatId: Schema.optional(TrimmedNonEmptyString),
     role: Schema.optional(Schema.Literals(["manager", "worker", "personal"])),

@@ -111,6 +111,7 @@ test("unclaimed task creates once, claims exact session, then reopens", async ()
   const exchange = async (_address, request) => {
     spawnCalls++;
     assert.equal(request.type, "chatgpt.spawn");
+    assert.equal(request.autoClose, undefined); // Conversation-only spawns remain opt-in.
     assert.match(request.prompt, /Two layouts ready/);
     return { ok: true, messageSent: true, sessionId: "session-1" };
   };
@@ -156,6 +157,7 @@ test("implementation Spawn sends a task-bound worker prompt without a parent", a
     requests.push(request);
     assert.equal(request.type, "chatgpt.spawn");
     assert.equal(request.role, "worker");
+    assert.equal(request.autoClose, true); // TaskBoard Start now
     assert.deepEqual(request.taskRef, { board: ctx.board, id: ctx.task.id });
     assert.match(request.prompt, /Implement TaskBoard task T3-9000/);
     assert.match(request.prompt, /Acceptance criteria:/);
@@ -214,6 +216,7 @@ test("T3 queue pickup binds the TaskBoard reservation and atomically marks the s
   assert.equal(result.status, "created");
   assert.equal(exchangeCalls.length, 1);
   assert.equal(exchangeCalls[0].requestId, reservationId);
+  assert.equal(exchangeCalls[0].autoClose, true); // T3 queued admission
   assert.equal(queueIntent.queue_state, "working");
   assert.equal(ctx.task.claimed_by, "t3:queue-session");
 });

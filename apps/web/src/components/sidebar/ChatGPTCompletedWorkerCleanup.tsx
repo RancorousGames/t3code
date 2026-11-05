@@ -15,6 +15,11 @@ import {
   type WorkerCreationEvidence,
 } from "../../chatGPTCompletedWorkerPolicy";
 import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
+import {
+  clearSpawnAutoCloseIdleSince,
+  readSpawnAutoCloseIdleSince,
+  spawnAutoCloseCandidate,
+} from "../../chatGPTSpawnAutoClose";
 import { isChatGPTGuestHibernated } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
@@ -56,12 +61,24 @@ export function ChatGPTCompletedWorkerCleanup({
 
   useEffect(() => {
     const read = window.desktopBridge?.readTaskBoardWorkerClaims;
-    if (!read || managerIds === null || scanning.current || now - lastScan.current < 50_000) return;
+    if (scanning.current || now - lastScan.current < 50_000) return;
+    const verifiedManagers = read ? managerIds : null;
     scanning.current = true;
     lastScan.current = now;
     let unmounted = false;
     const scan = async () => {
-      const claims = await read();
+      let trustedManagers = verifiedManagers;
+      const readClaimsSafely = async () => {
+        if (!trustedManagers) return [];
+        try { return await read!(); }
+        catch {
+          // A TaskBoard outage cannot authorize legacy cleanup, but must not
+          // disable a separately opted-in worker idle lifetime.
+          trustedManagers = null;
+          return [];
+        }
+      };
+      const claims = await readClaimsSafely();
       const receiptCreatedAt = new Map(
         readChatGPTSpawnReceipts(environmentId).map((r) => [r.sessionId, r.createdAt]),
       );
@@ -78,17 +95,21 @@ export function ChatGPTCompletedWorkerCleanup({
         };
       };
 
+      const candidateFor = (
+        sessions: readonly (typeof initial)[number][],
+        worker: (typeof initial)[number],
+        ownedClaims: typeof claims,
+        at: number,
+      ) => spawnAutoCloseCandidate(
+        sessions, worker, selectedBrowserSessionId(), at,
+        readSpawnAutoCloseIdleSince(environmentId, worker.id),
+      ) ?? completedWorkerCandidate(
+        sessions, worker, ownedClaims, trustedManagers, selectedBrowserSessionId(),
+        at, creationEvidence(worker.id),
+      );
       for (const worker of initial) {
         if (unmounted) return;
-        const originalCandidate = completedWorkerCandidate(
-          initial,
-          worker,
-          claims,
-          managerIds,
-          selectedBrowserSessionId(),
-          Date.now(),
-          creationEvidence(worker.id),
-        );
+        const originalCandidate = candidateFor(initial, worker, claims, Date.now());
         if (!originalCandidate || hasUncertainChatGPTSend(environmentId, worker.id)) continue;
 
         const status = await inspectBrowserSession(environmentId, worker);
@@ -104,12 +125,11 @@ export function ChatGPTCompletedWorkerCleanup({
           if (!bridge ||
               await nativeChatGPTResidency(bridge, environmentId, worker.id) !== "resident")
             continue;
-          const refreshedClaims = await read();
+          const refreshedClaims = await readClaimsSafely();
           const currentSessions = readChatGPTBrowserSessions(environmentId);
           const current = currentSessions.find((entry) => entry.id === worker.id);
           if (unmounted || !current || JSON.stringify(current) !== JSON.stringify(worker) ||
-              !completedWorkerCandidate(currentSessions, current, refreshedClaims, managerIds,
-                selectedBrowserSessionId(), Date.now(), creationEvidence(current.id)) ||
+              !candidateFor(currentSessions, current, refreshedClaims, Date.now()) ||
               hasUncertainChatGPTSend(environmentId, worker.id))
             continue;
           try {
@@ -129,6 +149,7 @@ export function ChatGPTCompletedWorkerCleanup({
             removeSession(worker.id, "completed-worker");
             removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, worker.id));
             removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, worker.id));
+            clearSpawnAutoCloseIdleSince(environmentId, worker.id);
             return;
           } catch (error) {
             console.warn("[ChatGPT completed-worker cleanup] Native close refused", worker.id, error);
@@ -181,22 +202,14 @@ export function ChatGPTCompletedWorkerCleanup({
           // Recheck the entire claim set, role, timers, exemptions and session
           // identity after asynchronous host/UI operations. A sidebar click
           // does NOT make a session human-controlled.
-          const refreshedClaims = await read();
+          const refreshedClaims = await readClaimsSafely();
           const currentSessions = readChatGPTBrowserSessions(environmentId);
           const current = currentSessions.find((entry) => entry.id === worker.id);
           if (
             unmounted ||
             !current ||
             JSON.stringify(current) !== JSON.stringify(worker) ||
-            !completedWorkerCandidate(
-              currentSessions,
-              current,
-              refreshedClaims,
-              managerIds,
-              selectedBrowserSessionId(),
-              Date.now(),
-              creationEvidence(current.id),
-            )
+            !candidateFor(currentSessions, current, refreshedClaims, Date.now())
           ) continue;
 
           if (liveClose) {
@@ -257,6 +270,7 @@ export function ChatGPTCompletedWorkerCleanup({
           removeSession(current.id, "completed-worker");
           removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, current.id));
           removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, current.id));
+          clearSpawnAutoCloseIdleSince(environmentId, current.id);
           console.info("[ChatGPT completed-worker cleanup]", {
             sessionId: current.id,
             taskIds: originalCandidate.taskIds,
@@ -271,7 +285,7 @@ export function ChatGPTCompletedWorkerCleanup({
     };
     void scan()
       .catch((error: unknown) => {
-        console.warn("[ChatGPT completed-worker cleanup] TaskBoard unavailable; no close", error);
+        console.warn("[ChatGPT worker cleanup] TaskBoard unavailable; only explicitly flagged workers can close", error);
       })
       .finally(() => {
         scanning.current = false;

@@ -31,6 +31,7 @@ export function parseArguments(args) {
     taskId: "",
     requestId: "",
     requireParent: false,
+    autoClose: false,
     dryRun: false,
   };
   for (let i = 0; i < args.length; i++) {
@@ -39,6 +40,8 @@ export function parseArguments(args) {
       options.dryRun = true;
     } else if (arg === "--require-parent") {
       options.requireParent = true;
+    } else if (arg === "--auto-close") {
+      options.autoClose = true;
     } else if (
       arg === "--title" ||
       arg === "--message" ||
@@ -154,6 +157,7 @@ export function createChatGPTSpawnRequest(options, requestId = NodeCrypto.random
     title: options.title.trim(),
     prompt: options.message,
     ...(options.parentSessionId.trim() ? { parentSessionId: options.parentSessionId.trim() } : {}),
+    ...(options.autoClose === true ? { autoClose: true } : {}),
     ...(options.project.trim() ? { project: options.project.trim() } : {}),
     ...(options.seatId?.trim() ? { seatId: options.seatId.trim() } : {}),
     ...(options.role?.trim() ? { role: options.role.trim() } : {}),
@@ -297,7 +301,7 @@ export async function main(args = process.argv.slice(2)) {
   const options = parseArguments(args);
   if (options === null) {
     process.stdout.write(
-      "Usage: node scripts/spawn-chatgpt-session.mjs --title NAME (--message TEXT | --message-file PATH) [--parent-session-id T3_BROWSER_UUID] [--require-parent] [--project NAME] [--home PATH] [--dry-run]\n",
+      "Usage: node scripts/spawn-chatgpt-session.mjs --title NAME (--message TEXT | --message-file PATH) [--parent-session-id T3_BROWSER_UUID] [--require-parent] [--auto-close] [--project NAME] [--home PATH] [--dry-run]\n",
     );
     return;
   }

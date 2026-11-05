@@ -1,4 +1,6 @@
 import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity";
+import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
+import { observeSpawnAutoCloseActivity } from "./chatGPTSpawnAutoClose";
 
 type Observation = { activity: ChatGPTActivityState; observedAt: number };
 const observations = new Map<string, Observation>();
@@ -11,6 +13,10 @@ export function recordChatGPTProviderActivity(
   activity: ChatGPTActivityState,
 ): void {
   if (activity === "unknown") return;
+  const session = getChatGPTSessionPersistedStore(environmentId).getState().sessions.find(
+    (entry) => entry.id === sessionId && entry.autoClose === true,
+  );
+  if (session) observeSpawnAutoCloseActivity(environmentId, session, activity);
   const identity = key(environmentId, sessionId);
   const previous = observations.get(identity);
   observations.set(identity, { activity, observedAt: Date.now() });
