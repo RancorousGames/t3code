@@ -82,7 +82,7 @@ export class CaffyScheduler {
   private shutdownError: string | null = null;
   private readonly shutdownPC: () => void;
   private readonly workingReports = new Map<string, { observedAt: number; ids: Set<string> }>();
-  private taskReservations: Array<{requestId: string; sessionId: string | null}> = [];
+  private taskReservations: Array<{requestId: string; sessionId: string | null; holdUntil?: number}> = [];
   private taskBoardInventoryReady = false;
   private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -915,12 +915,13 @@ export class CaffyScheduler {
   }
 
   setTaskReservations(
-    reservations: ReadonlyArray<{requestId: string; sessionId: string | null}>,
+    reservations: ReadonlyArray<{requestId: string; sessionId: string | null; holdUntil?: number}>,
     inventoryReady = true,
   ) {
     this.taskReservations = reservations.map(row => ({
       requestId: row.requestId,
       sessionId: row.sessionId,
+      holdUntil: row.holdUntil,
     }));
     this.taskBoardInventoryReady = inventoryReady;
   }
@@ -979,7 +980,7 @@ export class CaffyScheduler {
     // Bound this grace period: old idle/failed task sessions are not capacity.
     const sessionsById = new Map(data.sessions.map(s => [canonical(s.id), s]));
     const taskReserved = this.taskReservations.filter(row => {
-      if (!row.sessionId) return true; // Reserved / Starting
+      if (!row.sessionId) return row.holdUntil === undefined || now < row.holdUntil;
       const id = canonical(row.sessionId);
       if (workingIds.has(id)) return false; // already counted as active
       const bound = Date.parse(sessionsById.get(id)?.binding?.boundAt ?? "");

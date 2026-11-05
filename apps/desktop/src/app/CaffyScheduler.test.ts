@@ -84,6 +84,19 @@ const monitor = (scheduler: CaffyScheduler) =>
   scheduler.status(SESSION) as CaffyConfig | null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
+  it("counts non-TaskBoard workers while expiring an unresolved Starting hold", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      c.reportWorkingSnapshot([SESSION, ORIGINAL], "browser");
+      c.setTaskReservations([{ requestId: WAKE, sessionId: null, holdUntil: Date.now() + 60_000 }]);
+      const held = await c.capacity();
+      expect(held).toMatchObject({ limit: 3, working: 2, reserved: 1, used: 3, available: 0, admissible: false });
+      c.setTaskReservations([{ requestId: WAKE, sessionId: null, holdUntil: Date.now() - 1 }]);
+      const expired = await c.capacity();
+      expect(expired).toMatchObject({ limit: 3, working: 2, reserved: 0, used: 2, available: 1, admissible: true });
+    } finally { c.close(); f.dispose(); }
+  });
   it("shows a durable crossed-out marker only after an agent stop, clearing it on reconfiguration", async () => {
     const f = fixture();
     try {

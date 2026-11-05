@@ -50,6 +50,8 @@ const TASKBOARD_CATALOG = () => NodePath.join(
   "TaskBoard", "projects.json",
 );
 const RESERVATION_LEASE_SECONDS = 180;
+const STARTING_HOLD_MS = 5 * 60_000;
+const STARTING_RECHECK_MS = 45_000;
 const PUMP_INTERVAL_MS = 15_000;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
@@ -102,6 +104,8 @@ export class TaskBoardWorkCoordinator {
   private snapshots: QueueSnapshot[] = [];
   private lastPromptRecoveryAt = 0;
   private readonly promptRecoveryAttempts = new Map<string, number>();
+  private readonly startingFirstSeen = new Map<string, number>();
+  private readonly startingLastAttempt = new Map<string, number>();
 
   constructor(stateDir: string, caffy: CaffyScheduler) {
     this.caffy = caffy;
@@ -153,6 +157,15 @@ export class TaskBoardWorkCoordinator {
         this.lastObservedAt = output.observedAt ?? new Date().toISOString();
       }
       this.snapshots = snapshots;
+      const startingIds = new Set(snapshots.flatMap(board => board.items
+        .filter(item => item.state === "starting" && item.reservationId)
+        .map(item => item.reservationId!)));
+      for (const id of this.startingFirstSeen.keys()) {
+        if (!startingIds.has(id)) {
+          this.startingFirstSeen.delete(id);
+          this.startingLastAttempt.delete(id);
+        }
+      }
       this.lastError = null;
       this.syncReservations(true);
       return snapshots;
@@ -164,10 +177,25 @@ export class TaskBoardWorkCoordinator {
     }
   }
 
+  private startingSince(boardRoot: string, item: QueueItem): number {
+    const requestId = item.reservationId!;
+    const firstSeen = this.startingFirstSeen.get(requestId) ?? Date.now();
+    this.startingFirstSeen.set(requestId, firstSeen);
+    const hash = NodeCrypto.createHash("sha256")
+      .update(rootKey(boardRoot) + "\0" + item.taskId)
+      .digest("hex");
+    const journal = NodePath.join(this.home, "userdata", "task-open-locks", `${hash}.json`);
+    try {
+      const saved = JSON.parse(NodeFS.readFileSync(journal, "utf8")) as { requestId?: string };
+      if (saved.requestId === requestId) return Math.min(firstSeen, NodeFS.statSync(journal).mtimeMs);
+    } catch { /* The TaskBoard reservation can precede its spawn journal. */ }
+    return firstSeen;
+  }
+
   private reservations(snapshots = this.snapshots): Array<{
     boardRoot: string; taskId: string; requestId: string;
     state: "reserved" | "starting" | "working";
-    expiresAt: string | null; sessionId: string | null;
+    expiresAt: string | null; sessionId: string | null; holdUntil?: number;
   }> {
     const now = Date.now();
     return snapshots.flatMap(board => board.items.flatMap(item => {
@@ -181,23 +209,30 @@ export class TaskBoardWorkCoordinator {
       return [{
         boardRoot: board.boardRoot, taskId: item.taskId, requestId: item.reservationId,
         state, expiresAt, sessionId: state === "working" ? item.sessionId ?? null : null,
+        ...(state === "starting" ? { holdUntil: this.startingSince(board.boardRoot, item) + STARTING_HOLD_MS } : {}),
       }];
     }));
   }
 
   private syncReservations(inventoryReady: boolean) {
     this.caffy.setTaskReservations(this.reservations().map(row => ({
-      requestId: row.requestId, sessionId: row.sessionId,
+      requestId: row.requestId, sessionId: row.sessionId, holdUntil: row.holdUntil,
     })), inventoryReady);
   }
 
   status() {
     const reservations = this.reservations();
+    const quarantined = reservations.filter(row => row.state === "starting" &&
+      row.holdUntil !== undefined && row.holdUntil <= Date.now());
     return {
       active: this.running,
       keepT3Busy: this.caffy.policyEnabled,
       observedAt: this.lastObservedAt,
       reservations,
+      quarantined: quarantined.map(row => ({
+        boardRoot: row.boardRoot, taskId: row.taskId, requestId: row.requestId,
+        reason: "Unconfirmed startup exceeded the recovery window; not retried or counted against capacity",
+      })),
       lastError: this.lastError,
       queued: this.snapshots.reduce((n, board) => n + board.items.filter(item =>
         item.state === "queued" && !item.claimed && !item.legacyOpenRig).length, 0),
@@ -315,24 +350,32 @@ export class TaskBoardWorkCoordinator {
     try {
       let snapshots = await this.readQueues();
       if (!this.running) return;
-      if (this.caffy.policyEnabled) await this.recoverConfirmedUnsent(snapshots);
+      if (this.caffy.policyEnabled) {
+        try { await this.recoverConfirmedUnsent(snapshots); }
+        catch (error) { this.lastError = `Prompt recovery: ${String(error)}`; }
+      }
 
       // Recover a durable Starting request even when admission is paused. It
       // may already have created a worker, so its exact request must reconcile.
       const starting = snapshots.flatMap(board => board.items
         .filter(item => item.state === "starting" && item.reservationId && !item.legacyOpenRig)
         .map(item => ({ boardRoot: board.boardRoot, item })));
-      if (starting.length) {
-        const next = starting[0]!;
-        this.syncReservations(true);
-        await this.starting(next.item, next.boardRoot, next.item.reservationId!);
-        // A correlation-unknown Starting request must retain its reservation,
-        // but must NOT starve other queued work when capacity remains. Refresh
-        // the authoritative board inventory before selecting anything else;
-        // capacity() still counts all unresolved Starting slots.
+      const now = Date.now();
+      const nextStarting = starting.find(({ boardRoot, item }) => {
+        const requestId = item.reservationId!;
+        return now < this.startingSince(boardRoot, item) + STARTING_HOLD_MS &&
+          now - (this.startingLastAttempt.get(requestId) ?? 0) >= STARTING_RECHECK_MS;
+      });
+      if (nextStarting) {
+        const { boardRoot, item } = nextStarting;
+        this.startingLastAttempt.set(item.reservationId!, now);
+        try { await this.starting(item, boardRoot, item.reservationId!); }
+        catch (error) { this.lastError = `Starting ${item.taskId}: ${String(error)}`; }
         snapshots = await this.readQueues();
         if (!this.running) return;
       }
+      // Old ambiguous starts remain in TaskBoard for exact-request recovery,
+      // but stop consuming capacity or repeatedly blocking unrelated launches.
       // Keep queue state/capacity visible while paused, but do not begin a task
       // whose durable reservation has not reached Starting.
       if (!this.caffy.policyEnabled) return;
