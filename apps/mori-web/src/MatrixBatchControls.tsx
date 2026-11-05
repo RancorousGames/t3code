@@ -9,7 +9,7 @@ import { MATRIX_BATCH_EVENT, activateMatrixBatch, eligibleMatrixRows, newMatrixB
 
 const PRESETS = [5, 20, 100, 300];
 export function MatrixBatchControls() {
-  const { project, activeRow, view, setView, select, go, toast } = useApp();
+  const { project, activeRow, visible, folded, view, setView, select, go, toast } = useApp();
   const [settings, setSettings] = useState(() => readMatrixBatchSettings(project.id));
   const [plan, setPlan] = useState(() => readMatrixBatchPlan(project.id));
   const [open, setOpen] = useState(false);
@@ -21,7 +21,20 @@ export function MatrixBatchControls() {
   const sessionId = sessions.some(s => s.id === settings.sessionId) ? settings.sessionId
     : sessions.some(s => s.id === activeSession) ? activeSession : sessions[0]?.id ?? null;
   const chosen = { ...settings, sessionId };
-  const eligible = eligibleMatrixRows(project, chosen, activeRow?.id ?? null, file);
+  // Match the rows actually laid out on screen: file groups appear in first-seen
+  // order and manually collapsed groups are not part of the visible sequence.
+  const displayed = useMemo(() => {
+    const groups = new Map<string, typeof visible>();
+    for (const row of visible) {
+      const fileKey = row.sourceFile ?? "";
+      if (folded.has(`group:${fileKey}`)) continue;
+      const group = groups.get(fileKey);
+      if (group) group.push(row);
+      else groups.set(fileKey, [row]);
+    }
+    return [...groups.values()].flat();
+  }, [visible, folded]);
+  const eligible = eligibleMatrixRows(project, chosen, activeRow?.id ?? null, file, displayed);
   const busy = plan?.stage === "running" || plan?.stage === "paused";
 
   useEffect(() => {
@@ -70,12 +83,11 @@ export function MatrixBatchControls() {
   const start = (count = settings.size, focusId = activeRow?.id ?? null, fromRow = false) => {
     if (busy) { toast("Pause or stop the existing translation queue first."); return; }
     if (localStorage.getItem(`mori.ai-chat.batch:${project.id}`)) {
-      toast("A ChatGPT reply is still being tracked; resolve it in AI Chats first.");
-      go("chatgpt"); return;
+      toast("A ChatGPT reply is still being tracked. Resolve it in AI Chats before starting another batch."); return;
     }
-    if (!sessionId) { toast("Open a ChatGPT session in AI Chats first."); go("chatgpt"); return; }
+    if (!sessionId) { toast("Open a ChatGPT session in AI Chats before translating."); return; }
     const next = newMatrixBatchPlan(project, { ...chosen, size: count, ...(fromRow ? { start: "selected" as const } : {}) },
-      focusId, fromRow ? project.rows.find(row => row.id === focusId)?.sourceFile ?? null : file);
+      focusId, fromRow ? project.rows.find(row => row.id === focusId)?.sourceFile ?? null : file, displayed);
     if (!next) { toast("No eligible untranslated lines in this scope."); return; }
     saveMatrixBatchSettings(project.id, chosen);
     saveMatrixBatchPlan(next);
@@ -88,8 +100,7 @@ export function MatrixBatchControls() {
     if (stage === "running") {
       const pending = localStorage.getItem(`mori.ai-chat.batch:${project.id}`);
       if (pending && JSON.parse(pending).stage === "failed") {
-        toast("Resolve the failed ChatGPT batch in AI Chats before resuming.");
-        go("chatgpt"); return;
+        toast("Resolve the failed ChatGPT batch in AI Chats before resuming."); return;
       }
     }
     saveMatrixBatchPlan({ ...plan, stage, error: stage === "running" ? undefined : plan.error });
@@ -140,10 +151,10 @@ export function MatrixBatchControls() {
           {!sessions.length && <option value="">No sessions — open AI Chats</option>}
           {sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
         </select>
-        <small>{eligible.length} eligible · {Math.min(eligible.length, settings.size)} selected · 5 per request</small>
+        <small>{eligible.length} eligible in the next {settings.size} displayed lines · up to 5 per request · no wrap</small>
         {plan?.stage === "paused" && <button type="button" className="btn sm outline" onClick={() => changeStage("stopped")}>Stop previous queue</button>}
         <button type="button" className="btn primary" disabled={busy || !eligible.length || !sessionId} onClick={() => start()}>
-          Translate {Math.min(eligible.length, settings.size)} lines
+          Translate {eligible.length} lines
         </button>
       </div>}
     </div>

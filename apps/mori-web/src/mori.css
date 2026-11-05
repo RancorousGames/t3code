@@ -911,3 +911,22 @@ mark.ins{background:var(--moss-bg);color:var(--moss);border-radius:3px}
 .mori-row-batch-menu button{display:block;text-align:left;width:100%;padding:8px 10px;color:var(--text);font-size:12px;border-radius:4px}
 .mori-row-batch-menu button:hover:not(:disabled){background:var(--bg-3)}
 .mori-row-batch-menu button:disabled{opacity:.45}
+
+/* Keep the ChatGPT worker rendered while Matrix remains the visible screen.
+   display:none detaches the guest from layout and prevents the normal
+   composer-readiness checks from detecting an idle ChatGPT conversation. */
+.main:not(.mori-chat-full):not(.mori-matrix-split) .mori-persistent-chat{
+  display:flex;position:fixed;left:-2000px;top:0;width:1100px;height:740px;
+  pointer-events:none;
+}
+.mori-matrix-row-batch-indicator{
+  display:inline-block;flex:none;box-sizing:border-box;width:11px;height:11px;
+  border:2px solid rgba(156,187,224,.28);border-top-color:var(--text-2);
+  border-radius:50%;vertical-align:middle;
+}
+.mori-matrix-row-batch-indicator.waiting{animation:mori-matrix-wait-spin .8s linear infinite}
+.mori-matrix-row-batch-indicator.paused{border-color:var(--text-3);border-style:dashed}
+.mori-matrix-row-batch-label{display:inline-flex;align-items:center;gap:8px;color:var(--text-3);font-size:11px}
+.row.mori-batch-queued{box-shadow:inset 2px 0 rgba(156,187,224,.5)}
+@keyframes mori-matrix-wait-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.mori-matrix-row-batch-indicator.waiting{animation:none}}

@@ -63,7 +63,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:106 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:117 (jsx-expression)"
     },
     {
       "id": "ui.d92acb96893e3b",
@@ -180,7 +180,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:154 (jsx-attribute:title); src/Matrix.tsx:517 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:155 (jsx-attribute:title); src/Matrix.tsx:532 (jsx-attribute:title)"
     },
     {
       "id": "ui.216aa96b96f47a",
@@ -216,7 +216,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:573 (jsx-expression)"
+      "note": "src/Matrix.tsx:588 (jsx-expression)"
     },
     {
       "id": "ui.f8a7b8805c7152",
@@ -243,7 +243,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:573 (jsx-expression)"
+      "note": "src/Matrix.tsx:588 (jsx-expression)"
     },
     {
       "id": "ui.dd095ff1fc2d0a",
@@ -333,16 +333,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:508 (ui-branch)"
+      "note": "src/Matrix.tsx:523 (ui-branch)"
     },
     {
-      "id": "ui.a01a88699003a0",
-      "source": "A ChatGPT reply is still being tracked; resolve it in AI Chats first.",
+      "id": "ui.5d92c62133c628",
+      "source": "A ChatGPT reply is still being tracked. Resolve it in AI Chats before starting another batch.",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:73 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:86 (ui-call:toast)"
     },
     {
       "id": "ui.e5f14376a23af8",
@@ -396,7 +396,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:288 (ui-branch); src/ImportWizard.tsx:367 (jsx-text); src/Matrix.tsx:605 (jsx-text)"
+      "note": "src/ImportWizard.tsx:288 (ui-branch); src/ImportWizard.tsx:367 (jsx-text); src/Matrix.tsx:621 (jsx-text)"
     },
     {
       "id": "ui.8143aa12e22ea9",
@@ -558,7 +558,7 @@
       "final": "AI下書き",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:79 (version-label); src/Matrix.tsx:35 (object-getter:label); src/Popovers.tsx:140 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:79 (version-label); src/Matrix.tsx:36 (object-getter:label); src/Popovers.tsx:140 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.af0d24c1255397",
@@ -594,7 +594,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:105 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:116 (jsx-expression)"
     },
     {
       "id": "ui.e31d787bfc310d",
@@ -606,13 +606,31 @@
       "note": "src/Chrome.tsx:122 (ui-branch)"
     },
     {
+      "id": "ui.53fd8dcca8c00c",
+      "source": "AI paused",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:219 (jsx-expression)"
+    },
+    {
+      "id": "ui.dd7f48aa55acf4",
+      "source": "AI queued…",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:219 (jsx-expression)"
+    },
+    {
       "id": "ui.55bc9968161e53",
       "source": "AI session",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:138 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:149 (jsx-text)"
     },
     {
       "id": "ui.fc8d2dc83944c4",
@@ -621,7 +639,25 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:120 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:131 (jsx-text)"
+    },
+    {
+      "id": "ui.00207374ed7b5f",
+      "source": "AI translation paused",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:176 (jsx-attribute:title); src/Matrix.tsx:176 (jsx-attribute:aria-label)"
+    },
+    {
+      "id": "ui.e99ee06da6c259",
+      "source": "AI translation queued",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:158 (jsx-attribute:title)"
     },
     {
       "id": "ui.a52ace420f2175",
@@ -630,7 +666,7 @@
       "final": "すべて",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:44 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:45 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.2f2b467abeb011",
@@ -684,7 +720,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:601 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:617 (jsx-attribute:title)"
     },
     {
       "id": "ui.8890f264bb0dcc",
@@ -711,7 +747,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:422 (ui-variable:speakerLabel); src/Popovers.tsx:114 (jsx-text)"
+      "note": "src/Matrix.tsx:437 (ui-variable:speakerLabel); src/Popovers.tsx:114 (jsx-text)"
     },
     {
       "id": "ui.65e7f879a69301",
@@ -819,7 +855,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:131 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:142 (jsx-text)"
     },
     {
       "id": "ui.d806724cf94fcc",
@@ -828,7 +864,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:116 (jsx-attribute:aria-label)"
+      "note": "src/MatrixBatchControls.tsx:127 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.79860cf2fd31c2",
@@ -837,7 +873,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:119 (jsx-attribute:aria-label)"
+      "note": "src/MatrixBatchControls.tsx:130 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f1021b9fb9c695",
@@ -1035,7 +1071,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:560 (jsx-attribute:aria-label); src/MatrixBatchControls.tsx:139 (jsx-attribute:aria-label)"
+      "note": "src/ChatGPTScreen.tsx:560 (jsx-attribute:aria-label); src/MatrixBatchControls.tsx:150 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f3e19cfec3c41a",
@@ -1224,7 +1260,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:151 (jsx-attribute:aria-label)"
+      "note": "src/MatrixBatchControls.tsx:162 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.e503367c41c06b",
@@ -1269,7 +1305,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:534 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:549 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.2dc2308a0f0d67",
@@ -1287,7 +1323,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:533 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:548 (jsx-attribute:title)"
     },
     {
       "id": "ui.b085369075ac56",
@@ -1323,7 +1359,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:479 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:494 (jsx-attribute:title)"
     },
     {
       "id": "ui.9aec0c12c412d8",
@@ -1332,7 +1368,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:480 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:495 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.459a23a5980fd5",
@@ -1530,7 +1566,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:129 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:140 (jsx-text)"
     },
     {
       "id": "ui.533b58fa63ed14",
@@ -1548,7 +1584,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:134 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:145 (jsx-text)"
     },
     {
       "id": "ui.fd8b8dae442166",
@@ -1656,7 +1692,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:80 (version-label); src/Matrix.tsx:34 (object-getter:label); src/Popovers.tsx:139 (object-getter:label)"
+      "note": "src/Inspector.tsx:80 (version-label); src/Matrix.tsx:35 (object-getter:label); src/Popovers.tsx:139 (object-getter:label)"
     },
     {
       "id": "ui.599fc58fd0f769",
@@ -1713,6 +1749,15 @@
       "note": "src/Notifications.tsx:85 (jsx-attribute:aria-label)"
     },
     {
+      "id": "ui.46e83392bed751",
+      "source": "displayed lines · up to 5 per request · no wrap",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:154 (jsx-text)"
+    },
+    {
       "id": "ui.6491a847cd6ff2",
       "source": "Docs and Sheets",
       "ai": "",
@@ -1755,7 +1800,7 @@
       "final": "下書きのみ",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:41 (label-map); src/Matrix.tsx:46 (object-getter:label); src/Reference.tsx:407 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:42 (label-map); src/Matrix.tsx:47 (object-getter:label); src/Reference.tsx:407 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e9a88691df3595",
@@ -1818,7 +1863,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:543 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:558 (jsx-attribute:title)"
     },
     {
       "id": "ui.59af4ccc9a80ad",
@@ -1893,13 +1938,13 @@
       "note": "src/Inspector.tsx:140 (jsx-text)"
     },
     {
-      "id": "ui.947a3ddf8fe496",
-      "source": "eligible ·",
+      "id": "ui.7cce1115e310ac",
+      "source": "eligible in the next",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:143 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:154 (jsx-text)"
     },
     {
       "id": "ui.c6c094bc0054f9",
@@ -1944,7 +1989,7 @@
       "final": "英語",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:33 (object-getter:label); src/Popovers.tsx:138 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:492 (jsx-text); src/TermModal.tsx:68 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:34 (object-getter:label); src/Popovers.tsx:138 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:492 (jsx-text); src/TermModal.tsx:68 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.b0743af92dedfb",
@@ -1989,7 +2034,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:128 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:139 (jsx-text)"
     },
     {
       "id": "ui.458c1fed574354",
@@ -2151,7 +2196,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:445 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:460 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.da8a78c49cc63f",
@@ -2187,7 +2232,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:463 (jsx-attribute:placeholder); src/shortcuts.ts:19 (object-getter:label)"
+      "note": "src/Matrix.tsx:478 (jsx-attribute:placeholder); src/shortcuts.ts:19 (object-getter:label)"
     },
     {
       "id": "ui.e5a78058be3c64",
@@ -2241,7 +2286,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:124 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:135 (jsx-text)"
     },
     {
       "id": "ui.5ec9391b203c8c",
@@ -2493,7 +2538,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:451 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:466 (jsx-attribute:title)"
     },
     {
       "id": "ui.10f44e5a1fbc77",
@@ -2628,7 +2673,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:494 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:509 (jsx-attribute:title)"
     },
     {
       "id": "ui.5eaf4cfeb16f08",
@@ -2673,7 +2718,7 @@
       "final": "日本語",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:36 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/TermModal.tsx:71 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:37 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/TermModal.tsx:71 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.a62cf07e0f035c",
@@ -2835,7 +2880,7 @@
       "final": "行",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:31 (object-getter:label); src/Popovers.tsx:136 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:32 (object-getter:label); src/Popovers.tsx:136 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.a3a88a55dd50fa",
@@ -2880,7 +2925,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:386 (jsx-text); src/MatrixBatchControls.tsx:146 (jsx-text); src/Reference.tsx:426 (jsx-text)"
+      "note": "src/ImportWizard.tsx:386 (jsx-text); src/MatrixBatchControls.tsx:157 (jsx-text); src/Reference.tsx:426 (jsx-text)"
     },
     {
       "id": "ui.3b26a5427458ed",
@@ -2889,7 +2934,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:136 (jsx-text); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:405 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:147 (jsx-text); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:405 (jsx-text)"
     },
     {
       "id": "ui.acf932d9f0e496",
@@ -2979,7 +3024,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:246 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:250 (jsx-attribute:title)"
     },
     {
       "id": "ui.14493f5f5470ed",
@@ -2997,7 +3042,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:94 (jsx-text); src/Matrix.tsx:48 (object-getter:label)"
+      "note": "src/Inspector.tsx:94 (jsx-text); src/Matrix.tsx:49 (object-getter:label)"
     },
     {
       "id": "ui.7979b7fe8fb10d",
@@ -3006,7 +3051,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:232 (jsx-expression)"
+      "note": "src/Matrix.tsx:236 (jsx-expression)"
     },
     {
       "id": "ui.15297923dfdf89",
@@ -3429,7 +3474,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:79 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:91 (ui-call:toast)"
     },
     {
       "id": "ui.b87c858242a566",
@@ -3483,7 +3528,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:555 (jsx-text)"
+      "note": "src/Matrix.tsx:570 (jsx-text)"
     },
     {
       "id": "ui.ee7bc80b93e945",
@@ -3573,7 +3618,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:140 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:151 (jsx-text)"
     },
     {
       "id": "ui.31366b3b2c60c3",
@@ -3609,7 +3654,7 @@
       "final": "原文ファイルなし",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:104 (jsx-expression); src/Matrix.tsx:566 (ui-branch); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:104 (jsx-expression); src/Matrix.tsx:581 (ui-branch); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e624562fd557be",
@@ -3897,7 +3942,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:430 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:445 (jsx-attribute:title)"
     },
     {
       "id": "ui.1e848b37800b8d",
@@ -3927,13 +3972,13 @@
       "note": "src/useChatBatchWorker.ts:117 (ui-call:toast)"
     },
     {
-      "id": "ui.4dd8905ff61164",
-      "source": "Open a ChatGPT session in AI Chats first.",
+      "id": "ui.56e9c58226ed66",
+      "source": "Open a ChatGPT session in AI Chats before translating.",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:76 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:88 (ui-call:toast)"
     },
     {
       "id": "ui.3c05a6e868666d",
@@ -4005,7 +4050,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:487 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:502 (jsx-attribute:title)"
     },
     {
       "id": "ui.8f838ebe56bdd4",
@@ -4077,7 +4122,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:109 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:120 (jsx-text)"
     },
     {
       "id": "ui.55f203dfe47637",
@@ -4086,7 +4131,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:71 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:84 (ui-call:toast)"
     },
     {
       "id": "ui.535c6639e33e07",
@@ -4095,7 +4140,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:105 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:116 (jsx-expression)"
     },
     {
       "id": "ui.6ce21ccdb95b86",
@@ -4285,6 +4330,15 @@
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
       "note": "src/ChatGPTScreen.tsx:616 (ui-branch)"
+    },
+    {
+      "id": "ui.15859972180af6",
+      "source": "Queued for AI translation",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:176 (jsx-attribute:title)"
     },
     {
       "id": "ui.10072b997d12aa",
@@ -4572,7 +4626,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:91 (ui-call:toast)"
+      "note": "src/MatrixBatchControls.tsx:103 (ui-call:toast)"
     },
     {
       "id": "ui.a76e13b9839270",
@@ -4608,7 +4662,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:110 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:121 (jsx-text)"
     },
     {
       "id": "ui.aff0766a5290e1",
@@ -4635,7 +4689,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:108 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:119 (jsx-text)"
     },
     {
       "id": "ui.c3e5afa7de72dc",
@@ -4743,7 +4797,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:175 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:177 (jsx-attribute:title)"
     },
     {
       "id": "ui.b4f9b3025c7d2c",
@@ -4887,7 +4941,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:126 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:137 (jsx-text)"
     },
     {
       "id": "ui.415155739590b1",
@@ -4971,22 +5025,13 @@
       "note": "src/MoriApp.tsx:483 (jsx-text)"
     },
     {
-      "id": "ui.e0a702db9cb19f",
-      "source": "selected · 5 per request",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:143 (jsx-text)"
-    },
-    {
       "id": "ui.5a1ae20e50938f",
       "source": "Selected line",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:122 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:133 (jsx-text)"
     },
     {
       "id": "ui.257ef4ccd82ffb",
@@ -5121,7 +5166,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:440 (jsx-attribute:title); src/Matrix.tsx:440 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:455 (jsx-attribute:title); src/Matrix.tsx:455 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.947f259f43574e",
@@ -5130,7 +5175,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:432 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:447 (jsx-attribute:title)"
     },
     {
       "id": "ui.2daa234ebe967a",
@@ -5148,7 +5193,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:495 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:510 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.49f775fe066210",
@@ -5328,7 +5373,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:661 (jsx-text); src/Inspector.tsx:107 (jsx-attribute:title); src/Matrix.tsx:32 (object-getter:label); src/Matrix.tsx:424 (ui-variable:speakerLabel); src/Popovers.tsx:137 (object-getter:label)"
+      "note": "src/ImportWizard.tsx:661 (jsx-text); src/Inspector.tsx:107 (jsx-attribute:title); src/Matrix.tsx:33 (object-getter:label); src/Matrix.tsx:439 (ui-variable:speakerLabel); src/Popovers.tsx:137 (object-getter:label)"
     },
     {
       "id": "ui.e4b4a287e93f68",
@@ -5364,7 +5409,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:489 (jsx-text)"
+      "note": "src/Matrix.tsx:504 (jsx-text)"
     },
     {
       "id": "ui.9b66106890a843",
@@ -5400,7 +5445,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:121 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:132 (jsx-text)"
     },
     {
       "id": "ui.1c84f1c021fca1",
@@ -5445,7 +5490,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:432 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:447 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.97abe276f050da",
@@ -5454,7 +5499,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:144 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:155 (jsx-text)"
     },
     {
       "id": "ui.800f60fda83f40",
@@ -5463,7 +5508,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:105 (jsx-expression)"
+      "note": "src/MatrixBatchControls.tsx:116 (jsx-expression)"
     },
     {
       "id": "ui.ccca93dfe16f4c",
@@ -5805,7 +5850,7 @@
       "final": "未完了",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:45 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:46 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e8f585eec943d0",
@@ -5823,7 +5868,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:608 (jsx-text)"
+      "note": "src/Matrix.tsx:624 (jsx-text)"
     },
     {
       "id": "ui.9c46b38e241584",
@@ -5850,7 +5895,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:486 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:501 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.456a73bbcefb1d",
@@ -5886,7 +5931,7 @@
       "final": "翻訳",
       "status": "translated",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:114 (jsx-text); src/MatrixBatchControls.tsx:145 (jsx-text); src/Sidebar.tsx:89 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/MatrixBatchControls.tsx:125 (jsx-text); src/MatrixBatchControls.tsx:156 (jsx-text); src/Sidebar.tsx:89 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.08a2c579ad3da9",
@@ -5904,7 +5949,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:156 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:167 (jsx-text)"
     },
     {
       "id": "ui.92b788c239b20b",
@@ -5922,7 +5967,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:155 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:166 (jsx-text)"
     },
     {
       "id": "ui.5e3fcd841f2c7e",
@@ -5940,7 +5985,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:113 (jsx-attribute:title)"
+      "note": "src/MatrixBatchControls.tsx:124 (jsx-attribute:title)"
     },
     {
       "id": "ui.abbc13c13e35c8",
@@ -5949,7 +5994,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:41 (label-map); src/Matrix.tsx:47 (object-getter:label); src/Reference.tsx:406 (jsx-text); src/Sidebar.tsx:80 (explicit-translation)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:42 (label-map); src/Matrix.tsx:48 (object-getter:label); src/Reference.tsx:406 (jsx-text); src/Sidebar.tsx:80 (explicit-translation)"
     },
     {
       "id": "ui.74841e5f8b07a2",
@@ -5958,7 +6003,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:105 (jsx-expression); src/shortcuts.ts:21 (label-map); src/shortcuts.ts:22 (label-map); src/shortcuts.ts:23 (label-map); src/shortcuts.ts:24 (label-map); src/shortcuts.ts:25 (label-map)"
+      "note": "src/MatrixBatchControls.tsx:116 (jsx-expression); src/shortcuts.ts:21 (label-map); src/shortcuts.ts:22 (label-map); src/shortcuts.ts:23 (label-map); src/shortcuts.ts:24 (label-map); src/shortcuts.ts:25 (label-map)"
     },
     {
       "id": "ui.20f7bd7894c4ce",
@@ -6003,7 +6048,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:127 (jsx-attribute:aria-label)"
+      "note": "src/MatrixBatchControls.tsx:138 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.4ba5c6645965bf",
@@ -6021,7 +6066,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:555 (jsx-text)"
+      "note": "src/Matrix.tsx:570 (jsx-text)"
     },
     {
       "id": "ui.5bc5c6a24e44c6",
@@ -6030,7 +6075,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:136 (jsx-attribute:placeholder)"
+      "note": "src/Matrix.tsx:137 (jsx-attribute:placeholder)"
     },
     {
       "id": "ui.14d33bd014e6b4",
@@ -6039,7 +6084,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:189 (jsx-expression); src/Matrix.tsx:423 (ui-variable:speakerLabel); src/Popovers.tsx:72 (jsx-text); src/Popovers.tsx:127 (jsx-text)"
+      "note": "src/Matrix.tsx:191 (jsx-expression); src/Matrix.tsx:438 (ui-variable:speakerLabel); src/Popovers.tsx:72 (jsx-text); src/Popovers.tsx:127 (jsx-text)"
     },
     {
       "id": "ui.d24c41ae530aa2",
@@ -6057,7 +6102,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:246 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:250 (jsx-attribute:title)"
     },
     {
       "id": "ui.94798842ac921e",
@@ -6093,7 +6138,7 @@
       "final": "未翻訳",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:41 (label-map); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:42 (label-map); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.c2bedec15fcdfe",
@@ -6174,7 +6219,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:209 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:211 (jsx-attribute:title)"
     },
     {
       "id": "ui.651b3da9836889",
@@ -6246,7 +6291,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MatrixBatchControls.tsx",
-      "note": "src/MatrixBatchControls.tsx:111 (jsx-text)"
+      "note": "src/MatrixBatchControls.tsx:122 (jsx-text)"
     },
     {
       "id": "ui.1e85dc470fd0f3",
@@ -6283,6 +6328,15 @@
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
       "note": "src/Inspector.tsx:60 (ui-call:toast)"
+    },
+    {
+      "id": "ui.903e9d3c9f4376",
+      "source": "Waiting for AI translation",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/Matrix.tsx",
+      "note": "src/Matrix.tsx:176 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.4bd9354bb65223",
@@ -6573,5 +6627,5 @@
     "src/main.tsx",
     "src/Overlays.tsx"
   ],
-  "lastModified": "2026-11-05T03:26:15.613Z"
+  "lastModified": "2026-11-05T03:41:43.330Z"
 }

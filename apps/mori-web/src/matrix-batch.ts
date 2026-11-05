@@ -44,13 +44,22 @@ export function saveMatrixBatchSettings(projectId: string, settings: MatrixBatch
   localStorage.setItem(settingsKey(projectId), JSON.stringify(settings));
 }
 
-export function eligibleMatrixRows(project: MoriProject, settings: MatrixBatchSettings, selectedId: string | null, file: string | null): MoriRow[] {
-  const rows = settings.scope === "file" && file
-    ? project.rows.filter(row => row.sourceFile === file) : project.rows;
-  const startIndex = settings.start === "selected" && selectedId
-    ? rows.findIndex(row => row.id === selectedId) : -1;
-  const ordered = startIndex < 0 ? rows : [...rows.slice(startIndex), ...rows.slice(0, startIndex)];
-  return ordered.filter(row => canDraft(row) && !row.ai?.trim());
+/** Select from the actual Matrix display order, without wrapping to the top.
+ * A batch of 5 covers the selected row plus the next FOUR displayed rows;
+ * ineligible rows are skipped, not replaced by distant rows elsewhere. */
+export function eligibleMatrixRows(
+  project: MoriProject, settings: MatrixBatchSettings, selectedId: string | null,
+  file: string | null, displayedRows: readonly MoriRow[] = project.rows,
+): MoriRow[] {
+  if (settings.scope === "file" && !file) return [];
+  const rows = settings.scope === "file" ? displayedRows.filter(row => row.sourceFile === file) : displayedRows;
+  const eligible = (row: MoriRow) => canDraft(row) && !row.ai?.trim();
+  const index = settings.start === "selected" && selectedId
+    ? rows.findIndex(row => row.id === selectedId)
+    : rows.findIndex(eligible);
+  if (index < 0) return [];
+  // No wrap, and never borrow candidates from beyond this contiguous window.
+  return rows.slice(index, index + settings.size).filter(eligible);
 }
 
 export function readMatrixBatchPlan(projectId: string): MatrixBatchPlan | null {
@@ -72,8 +81,8 @@ export function activateMatrixBatch(sessionId: string) {
   window.dispatchEvent(new CustomEvent(MATRIX_BATCH_ACTIVATE, { detail: sessionId }));
 }
 
-export function newMatrixBatchPlan(project: MoriProject, settings: MatrixBatchSettings, selectedId: string | null, file: string | null): MatrixBatchPlan | null {
-  const ids = eligibleMatrixRows(project, settings, selectedId, file).slice(0, settings.size).map(row => row.id);
+export function newMatrixBatchPlan(project: MoriProject, settings: MatrixBatchSettings, selectedId: string | null, file: string | null, displayedRows: readonly MoriRow[] = project.rows): MatrixBatchPlan | null {
+  const ids = eligibleMatrixRows(project, settings, selectedId, file, displayedRows).map(row => row.id);
   if (!ids.length || !settings.sessionId) return null;
   return {
     id: crypto.randomUUID(), projectId: project.id, sessionId: settings.sessionId,

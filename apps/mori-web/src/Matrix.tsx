@@ -4,6 +4,7 @@ import { tr } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { MatrixBatchControls } from "./MatrixBatchControls.tsx";
+import { MATRIX_BATCH_EVENT, readMatrixBatchPlan } from "./matrix-batch.ts";
 import { KeyCaps } from "./Overlays.tsx";
 import { Marked } from "./Marked.tsx";
 import { checkRow, matchesFilter, statusOf, termPattern, type RowFilter } from "./insights.ts";
@@ -140,7 +141,7 @@ export function LineEditor({ value, onChange, className = "editor" }: { value: s
   );
 }
 
-function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; dupes: string[]; active: boolean; columns: ColumnDef[]; sideBySide: boolean }) {
+function LineRow({ row, dupes, active, columns, sideBySide, batchStatus }: { row: MoriRow; dupes: string[]; active: boolean; columns: ColumnDef[]; sideBySide: boolean; batchStatus: "waiting" | "paused" | null }) {
   const { project, actions, prefs, bindings, select, adopt, toggleLock, openPop, setColumn } = useApp();
   const character = prefs.charactersEnabled ? project.characters.find(c => c.id === row.characterId) : undefined;
   const status = statusOf(row);
@@ -154,7 +155,7 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
       title={`${label} — click to expand`}
       onClick={event => { event.stopPropagation(); if (isResizable(key)) setColumn(key, { collapsed: false }); }}
     >
-      {key === "id" ? <span className={`sdot ${status}`} title={`${row.id} · ${tr(STATUS_LABEL[status])}`} /> : has && <span className="cdot" style={{ background: color ?? "var(--text-3)" }} />}
+      {key === "id" ? <>{batchStatus ? <span className={`mori-matrix-row-batch-indicator ${batchStatus}`} title="AI translation queued" /> : <span className={`sdot ${status}`} title={`${row.id} · ${tr(STATUS_LABEL[status])}`} />}</> : has && <span className="cdot" style={{ background: color ?? "var(--text-3)" }} />}
     </div>
   );
 
@@ -172,6 +173,7 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
           <div key="id" className="c c-id" title={row.id}>
             <span className={`sdot ${status}`} title={tr(STATUS_LABEL[status])} />
             <span>{row.id}</span>
+            {batchStatus && <span className={`mori-matrix-row-batch-indicator ${batchStatus}`} role="status" title={batchStatus === "waiting" ? "Queued for AI translation" : "AI translation paused"} aria-label={batchStatus === "waiting" ? "Waiting for AI translation" : "AI translation paused"} />}
             {dupes.length > 0 && <span className="dup" title={`Same English as ${dupes.join(", ")}`}>={dupes.length}</span>}
           </div>
         );
@@ -213,6 +215,8 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
                   </button>
                 )}
               </>
+            ) : def.key === "ai" && batchStatus ? (
+              <span className="mori-matrix-row-batch-label"><span className={`mori-matrix-row-batch-indicator ${batchStatus}`} />{batchStatus === "waiting" ? "AI queued…" : "AI paused"}</span>
             ) : (
               <span className="empty">—</span>
             )}
@@ -255,7 +259,7 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
 
   return (
     <div
-      className={`row${active ? " active" : ""}${row.isLocked ? " locked" : ""}`}
+      className={`row${active ? " active" : ""}${row.isLocked ? " locked" : ""}${batchStatus === "waiting" ? " mori-batch-queued" : ""}`}
       data-row-id={row.id}
       onClick={event => {
         // Clicking the translation of another line opens its editor with the chosen selection.
@@ -279,6 +283,17 @@ function LineRow({ row, dupes, active, columns, sideBySide }: { row: MoriRow; du
 
 export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: boolean; onToggleSideBySide: () => void }) {
   const { project, view, setView, visible, activeId, prefs, setColumn, setPrefs, bindings, openPop, openModal, folded, toggleFold } = useApp();
+  const [batchPlan, setBatchPlan] = useState(() => readMatrixBatchPlan(project.id));
+  useEffect(() => {
+    setBatchPlan(readMatrixBatchPlan(project.id));
+    const onBatch = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === project.id) setBatchPlan(readMatrixBatchPlan(project.id));
+    };
+    window.addEventListener(MATRIX_BATCH_EVENT, onBatch);
+    return () => window.removeEventListener(MATRIX_BATCH_EVENT, onBatch);
+  }, [project.id]);
+  const queuedIds = useMemo(() => new Set(batchPlan?.stage === "running" || batchPlan?.stage === "paused"
+    ? batchPlan.ids.slice(batchPlan.cursor) : []), [batchPlan]);
   const matrixRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTimer = useRef<number | undefined>(undefined);
@@ -584,6 +599,7 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
                     dupes={(dupeIndex.get(row.source.trim()) ?? []).filter(id => id !== row.id)}
                     columns={columns}
                     sideBySide={sideBySide}
+                    batchStatus={queuedIds.has(row.id) ? (batchPlan?.stage === "paused" ? "paused" : "waiting") : null}
                   />
                 ))}
               </section>
