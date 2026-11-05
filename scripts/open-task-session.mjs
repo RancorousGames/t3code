@@ -8,6 +8,7 @@ import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as FSP from "node:fs/promises";
 import * as Path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -55,6 +56,97 @@ function exactRef(input) {
   return { board: Path.resolve(board), id };
 }
 
+/** Only reopen a conversation if the durable transcript index identifies a single owner. */
+function knownConversationForSession(home, sessionId) {
+  const database = Path.join(home, "userdata", "statev2.sqlite");
+  if (!FS.existsSync(database)) return null;
+  const db = new DatabaseSync(database, { readOnly: true });
+  try {
+    const rows = db.prepare(
+      "SELECT DISTINCT conversation_id FROM chatgpt_messages WHERE session_id = ? LIMIT 2",
+    ).all(sessionId);
+    return rows.length === 1 && UUID.test(rows[0].conversation_id)
+      ? rows[0].conversation_id : null;
+  } catch (error) {
+    if (/no such table/.test(String(error))) return null;
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+/** The server projection gives native projects without any existing threads a workspace. */
+function knownNativeProjects(home, boardName) {
+  const database = Path.join(home, "userdata", "statev2.sqlite");
+  if (!FS.existsSync(database)) return [];
+  const db = new DatabaseSync(database, { readOnly: true });
+  try {
+    return db.prepare(
+      "SELECT project_id AS projectId, title, workspace_root AS workspaceRoot, " +
+      "default_model_selection_json AS defaultModel FROM projection_projects WHERE deleted_at IS NULL",
+    ).all().filter((project) =>
+      project.title.replace(/[^a-z0-9]/gi, "").toLowerCase() === boardName);
+  } catch (error) {
+    if (/no such table|no such column/.test(String(error))) return [];
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+/** Resolve a native default only when the board maps to one existing T3 project. */
+async function nativeLaunchForBoard(board, kind, environmentId, native, home, exchange) {
+  const desiredDriver = kind === "claude" ? "claudeAgent" : "codex";
+  const projects = await native(
+    { action: "list", expectedEnvironmentId: environmentId }, { home, exchange },
+  );
+  const boardName = Path.basename(Path.dirname(board)).replace(/[^a-z0-9]/gi, "").toLowerCase();
+  const matches = (projects.threads ?? []).filter((thread) =>
+    thread.workspaceRoot && thread.projectId &&
+    thread.project?.replace(/[^a-z0-9]/gi, "").toLowerCase() === boardName,
+  );
+  const indexedProjects = knownNativeProjects(home, boardName);
+  const roots = [...new Map([
+    ...matches.map((thread) =>
+      [thread.projectId, { projectId: thread.projectId, workspaceRoot: thread.workspaceRoot }]),
+    ...indexedProjects.map((project) =>
+      [project.projectId, { projectId: project.projectId, workspaceRoot: project.workspaceRoot,
+        defaultModel: project.defaultModel }]),
+  ]).values()];
+  if (roots.length !== 1)
+    throw Error("Native task needs one identifiable T3 project for its TaskBoard; choose a workspace explicitly.");
+  const providers = await native(
+    { action: "providers", expectedEnvironmentId: projects.environmentId }, { home, exchange },
+  );
+  const ready = (providers.providers ?? []).filter((provider) =>
+    provider.driver === desiredDriver && provider.enabled && provider.installed &&
+    provider.status === "ready" && provider.available !== false,
+  );
+  const previous = matches.find((thread) =>
+    ready.some((provider) => provider.providerInstanceId === thread.providerInstanceId));
+  let defaultSelection = null;
+  try { defaultSelection = roots[0].defaultModel ? JSON.parse(roots[0].defaultModel) : null; }
+  catch { /* invalid saved preference must never guess an incompatible provider */ }
+  const selected = previous
+    ? ready.find((provider) => provider.providerInstanceId === previous.providerInstanceId)
+    : ready.find((provider) => provider.providerInstanceId ===
+        (defaultSelection?.instanceId ?? defaultSelection?.provider)) ??
+      (ready.length === 1 ? ready[0] : null);
+  if (!selected)
+    throw Error("No unique ready native provider for this task; choose a provider explicitly.");
+  const model = selected.models.find((entry) =>
+    entry.slug === previous?.modelSelection?.model)?.slug ??
+    selected.models.find((entry) =>
+      entry.slug === defaultSelection?.model)?.slug ??
+    selected.models.find((entry) => entry.isDefault)?.slug ??
+    (selected.models.length === 1 ? selected.models[0].slug : null);
+  if (!model) throw Error("No unambiguous native default model for this task.");
+  return {
+    runtime: kind, projectId: roots[0].projectId, workspaceRoot: roots[0].workspaceRoot,
+    providerInstanceId: selected.providerInstanceId,
+    modelSelection: { instanceId: selected.providerInstanceId, model },
+    runtimeMode: "approval-required",
+    environmentId: projects.environmentId,
+  };
+}
 function taskPrompt(task, { intent = "conversation", board } = {}) {
   const brief = task.live?.brief?.trim();
   const implementation = intent === "implement";
@@ -88,6 +180,7 @@ export async function openTaskSession(
     command = taskCommand,
     control,
     native = controlNativeThreads,
+    conversationLookup = knownConversationForSession,
   } = {},
 ) {
   const { board, id } = exactRef(input);
@@ -193,6 +286,25 @@ export async function openTaskSession(
 
     const claim = task.claimed_by;
     const taskRef = { board, id };
+    const reopenKnownConversation = async (oldSessionId) => {
+      const conversationId = await conversationLookup(home, oldSessionId);
+      if (!conversationId) return null;
+      // T3's open action deduplicates the canonical conversation URL even when
+      // the original session is hidden, archived, or no longer mounted.
+      const opened = await control({ action: "open", sessionId: conversationId }, { home, exchange });
+      if (opened.conversationId !== conversationId || !opened.sessionId)
+        throw Error("T3 did not acknowledge the exact recovered conversation.");
+      if (!input.background) {
+        const focused = await control({ action: "focus", sessionId: opened.sessionId }, { home, exchange });
+        if (focused.sessionId !== opened.sessionId)
+          throw Error("T3 did not acknowledge recovered session focus.");
+      }
+      // The historical claim remains until TaskBoard can atomically transfer it:
+      // releasing it here would allow another dispatcher to steal the task.
+      if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
+      return { taskRef, status: "opened", kind: "chatgpt", sessionId: opened.sessionId,
+        conversationId, created: false, claimRebindRequired: opened.sessionId !== oldSessionId };
+    };
     // "t3:" is a stable public ChatGPT session ID in newer Bootstrap flows
     // AND the legacy prefix for native threads. Resolve against actual T3
     // registries; the prefix alone must never decide which UI to open.
@@ -234,15 +346,21 @@ export async function openTaskSession(
         if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
         return { taskRef, status: "opened", kind: "chatgpt", sessionId, created: false };
       }
-      if (browserOnly)
-        throw Error("Claimed ChatGPT session not present; reconcile saved conversation before replacement.");
+      if (browserOnly) {
+        const recovered = await reopenKnownConversation(claimedId);
+        if (recovered) return recovered;
+        throw Error("Claimed ChatGPT session not present and no unique saved conversation is known; never create a duplicate.");
+      }
       const threadId = claimedId;
       const nativeList = await native(
         { action: "list", expectedEnvironmentId: input.environmentId },
         { home, exchange },
       );
-      if (!nativeList.threads?.some((thread) => thread.id === threadId))
-        throw Error("Claimed T3 session/thread not found; reconcile saved conversation before replacement.");
+      if (!nativeList.threads?.some((thread) => thread.id === threadId)) {
+        const recovered = await reopenKnownConversation(claimedId);
+        if (recovered) return recovered;
+        throw Error("Claimed T3 thread missing and no unique saved ChatGPT conversation is known; never create a duplicate.");
+      }
       const focused = await native(
         { action: "focus", threadId, expectedEnvironmentId: input.environmentId },
         { home, exchange },
@@ -358,16 +476,17 @@ export async function openTaskSession(
         created: true,
       };
     }
-    const configuration = input.native;
-    if (!configuration || configuration.runtime !== kind)
-      throw Error(
-        "Native tasks need explicit runtime, environment, workspace, provider and model configuration.",
-      );
+    const configuration = input.native ?? await nativeLaunchForBoard(
+      board, kind, input.environmentId, native, home, exchange,
+    );
+    if (configuration.runtime !== kind)
+      throw Error("Native task runtime does not match its selected kind.");
+    const nativeEnvironmentId = input.environmentId ?? configuration.environmentId;
     const clientRequestId = priorAttempt?.requestId ?? Crypto.randomUUID();
     let created;
     if (priorAttempt) {
       const listed = await native(
-        { action: "list", expectedEnvironmentId: input.environmentId },
+        { action: "list", expectedEnvironmentId: nativeEnvironmentId },
         { home, exchange },
       );
       if (!listed.threads?.some((thread) => thread.id === clientRequestId))
@@ -386,7 +505,7 @@ export async function openTaskSession(
       created = await native(
         {
           action: "create",
-          expectedEnvironmentId: input.environmentId,
+          expectedEnvironmentId: nativeEnvironmentId,
           ...configuration,
           title: task.title,
           clientRequestId,
@@ -400,7 +519,7 @@ export async function openTaskSession(
     await command(board, ["task", "claim", "--agent", `t3:${created.threadId}`, id]);
     if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
     await native(
-      { action: "focus", threadId: created.threadId, expectedEnvironmentId: input.environmentId },
+      { action: "focus", threadId: created.threadId, expectedEnvironmentId: nativeEnvironmentId },
       { home, exchange },
     );
     return { taskRef, status: "created", kind, threadId: created.threadId, created: true };

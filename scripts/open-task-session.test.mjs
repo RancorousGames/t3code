@@ -440,3 +440,125 @@ test("a released queue worker's old journal does not block a fresh reservation",
   assert.equal(queueIntent.queue_state, "working");
   assert.equal(ctx.task.claimed_by, "t3:fresh-session");
 });
+
+test("missing claimed guest reuses its indexed conversation and never sends a new prompt", async () => {
+  const ctx = await context();
+  ctx.task.claimed_by = "t3-browser:lost-session";
+  const calls = [];
+  const result = await openTaskSession(ctx.input, {
+    home: ctx.home, command: ctx.command,
+    conversationLookup: async (_home, sessionId) => {
+      assert.equal(sessionId, "lost-session");
+      return "11111111-1111-4111-8111-111111111111";
+    },
+    control: async (request) => {
+      calls.push(request);
+      if (request.action === "list") return { sessions: [] };
+      if (request.action === "open") return {
+        sessionId: "recovered", conversationId: request.sessionId, created: true,
+      };
+      if (request.action === "focus") return { sessionId: request.sessionId };
+      throw Error("Unexpected control request");
+    },
+    exchange: async () => { throw Error("Must not spawn another prompt"); },
+  });
+  assert.equal(result.status, "opened");
+  assert.equal(result.sessionId, "recovered");
+  assert.equal(result.claimRebindRequired, true);
+  assert.deepEqual(calls.map((call) => call.action), ["list", "open", "focus"]);
+});
+
+test("missing claimed session with ambiguous transcript refuses creation", async () => {
+  const ctx = await context();
+  ctx.task.claimed_by = "t3-browser:lost-session";
+  await assert.rejects(
+    openTaskSession(ctx.input, {
+      home: ctx.home, command: ctx.command,
+      conversationLookup: async () => null,
+      control: async () => ({ sessions: [] }),
+      exchange: async () => { throw Error("Must not spawn"); },
+    }),
+    /no unique saved conversation/,
+  );
+});
+
+test("native default selects the one matching project and provider without guessing a workspace", async () => {
+  const ctx = await context();
+  ctx.input.kind = "claude";
+  const requests = [];
+  const threadId = "33333333-3333-4333-8333-333333333333";
+  const native = async (request) => {
+    requests.push(request);
+    if (request.action === "list") return {
+      environmentId: "environment-1",
+      threads: [{ id: "existing", projectId: "44444444-4444-4444-8444-444444444444",
+        project: Path.basename(Path.dirname(ctx.board)), workspaceRoot: "D:\\Projects\\Board",
+        providerInstanceId: "claudeAgent", modelSelection: { model: "claude-sonnet" } }],
+    };
+    if (request.action === "providers") return {
+      providers: [{ driver: "claudeAgent", providerInstanceId: "claudeAgent",
+        installed: true, enabled: true, status: "ready", available: true,
+        models: [{ slug: "claude-sonnet", isDefault: true }] }],
+    };
+    if (request.action === "create") return { threadId };
+    if (request.action === "focus") return { threadId: request.threadId };
+    throw Error("Unexpected native action");
+  };
+  const result = await openTaskSession(ctx.input, {
+    home: ctx.home, command: ctx.command, native,
+    control: async () => ({ liveTaskStartKind: "claude" }),
+  });
+  assert.equal(result.status, "created");
+  assert.equal(ctx.task.claimed_by, "t3:" + threadId);
+  assert.equal(requests.find((call) => call.action === "create").workspaceRoot, "D:\\Projects\\Board");
+  assert.equal(requests.find((call) => call.action === "create").modelSelection.model, "claude-sonnet");
+});
+
+test("native project ambiguity stops before any thread creation", async () => {
+  const ctx = await context();
+  ctx.input.kind = "codex";
+  await assert.rejects(openTaskSession(ctx.input, {
+    home: ctx.home, command: ctx.command,
+    native: async ({ action }) => {
+      assert.equal(action, "list");
+      return { environmentId: "environment-1", threads: [] };
+    },
+    control: async () => ({ liveTaskStartKind: "codex" }),
+  }), /one identifiable T3 project/);
+});
+
+test("native default finds a registered project even before its first thread", async () => {
+  const ctx = await context();
+  ctx.input.kind = "codex";
+  const { DatabaseSync } = await import("node:sqlite");
+  const dataDir = Path.join(ctx.home, "userdata");
+  await FSP.mkdir(dataDir, { recursive: true });
+  const database = new DatabaseSync(Path.join(dataDir, "statev2.sqlite"));
+  database.exec("CREATE TABLE projection_projects (project_id TEXT, title TEXT, workspace_root TEXT, default_model_selection_json TEXT, deleted_at TEXT)");
+  database.prepare("INSERT INTO projection_projects VALUES (?, ?, ?, ?, NULL)").run(
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    Path.basename(Path.dirname(ctx.board)), "D:\\Projects\\Board",
+    JSON.stringify({ provider: "codex", model: "gpt-default" }),
+  );
+  database.close();
+  const calls = [];
+  const result = await openTaskSession(ctx.input, {
+    home: ctx.home, command: ctx.command,
+    control: async () => ({ liveTaskStartKind: "codex" }),
+    native: async (request) => {
+      calls.push(request);
+      if (request.action === "list") return { environmentId: "env-1", threads: [] };
+      if (request.action === "providers") return { providers: [{
+        providerInstanceId: "codex", driver: "codex", installed: true,
+        enabled: true, status: "ready", available: true,
+        models: [{ slug: "gpt-default", isDefault: true }],
+      }] };
+      if (request.action === "create") return { threadId: request.clientRequestId };
+      if (request.action === "focus") return { threadId: request.threadId };
+      throw Error("Unexpected action");
+    },
+  });
+  assert.equal(result.status, "created");
+  assert.equal(calls.find((call) => call.action === "create").workspaceRoot, "D:\\Projects\\Board");
+  assert.equal(calls.find((call) => call.action === "create").modelSelection.model, "gpt-default");
+});

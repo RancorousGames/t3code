@@ -31,6 +31,11 @@ interface RetiredGuestReceipt {
   boardRoot: string; taskId: string; queueRequest: string;
   requestId: string; sessionId: string;
 }
+interface ManagedWorkerWake {
+  boardRoot: string; taskId: string; requestId: string;
+  sessionId: string; conversationId: string;
+  beginAt: number; lastAttemptAt: number; active: boolean;
+}
 const ROOT_CANDIDATES = [
   process.env.T3CODE_REPO_ROOT,
   NodePath.resolve(import.meta.dirname, "..", "..", "..", ".."),
@@ -131,6 +136,10 @@ export class TaskBoardWorkCoordinator {
   private lastIdleReason: string | null = null;
   private pumpStartedAt: number | null = null;
   private lastPumpCompletedAt: number | null = null;
+  private readonly workerWakeJournal: string;
+  private readonly managedWorkerWakes = new Map<string, ManagedWorkerWake>();
+  private lastWorkerWakeScanAt = 0;
+  private workerWakeJournalReady = true;
 
   private retryKey(boardRoot: string, item: QueueItem): string {
     return rootKey(boardRoot) + "\0" + item.taskId + "\0" + item.queueRequest;
@@ -150,6 +159,39 @@ export class TaskBoardWorkCoordinator {
     // source-checkout run). Standalone CLI requests must use the same pipe.
     this.home = NodePath.resolve(stateDir, "..");
     this.retiredGuestDir = NodePath.join(stateDir, "task-retired-guests");
+    this.workerWakeJournal = NodePath.join(stateDir, "taskboard-managed-worker-wakes.json");
+    try {
+      const saved = JSON.parse(NodeFS.readFileSync(this.workerWakeJournal, "utf8")) as {
+        version?: number; rows?: ManagedWorkerWake[];
+      };
+      if (saved.version !== 1 || !Array.isArray(saved.rows)) throw Error("Unsupported worker wake journal");
+      for (const row of saved.rows) {
+        if (UUID.test(row.sessionId) && UUID.test(row.conversationId) &&
+            UUID.test(row.requestId) && Number.isFinite(row.beginAt) &&
+            typeof row.boardRoot === "string" && typeof row.taskId === "string")
+          this.managedWorkerWakes.set(row.sessionId, row);
+      }
+    } catch (error) {
+      if (NodeFS.existsSync(this.workerWakeJournal)) {
+        // An unreadable ownership journal must never be overwritten; without
+        // it we cannot distinguish auto Caffy from a user's manual monitor.
+        this.workerWakeJournalReady = false;
+        this.lastError = `Task worker wake journal needs inspection: ${String(error)}`;
+      }
+    }
+  }
+
+  private saveWorkerWakes() {
+    if (!this.workerWakeJournalReady) return;
+    const temporary = this.workerWakeJournal + ".tmp";
+    try {
+      NodeFS.writeFileSync(temporary, JSON.stringify({
+        version: 1, rows: [...this.managedWorkerWakes.values()],
+      }), { encoding: "utf8", flush: true });
+      NodeFS.renameSync(temporary, this.workerWakeJournal);
+    } finally {
+      if (NodeFS.existsSync(temporary)) NodeFS.rmSync(temporary, { force: true });
+    }
   }
 
   private projects(): Project[] {
@@ -281,6 +323,14 @@ export class TaskBoardWorkCoordinator {
       })),
       lastError: this.lastError,
       lastIdleReason: this.lastIdleReason,
+      managedWorkerWakes: [...this.managedWorkerWakes.values()].map(row => ({
+        taskId: row.taskId, sessionId: row.sessionId, active: row.active,
+        caffyStatus: (this.caffy.status(row.sessionId) as {paused?: boolean; lastError?: string | null} | null)
+          ? {
+            paused: (this.caffy.status(row.sessionId) as {paused?: boolean}).paused ?? false,
+            lastError: (this.caffy.status(row.sessionId) as {lastError?: string | null}).lastError ?? null,
+          } : null,
+      })),
       lastAdmissionAt: this.lastAdmissionAt === null ? null : new Date(this.lastAdmissionAt).toISOString(),
       lastAdmissionAttemptAt: this.lastAdmissionAttemptAt === null ? null : new Date(this.lastAdmissionAttemptAt).toISOString(),
       pumpBusy: this.busy,
@@ -660,6 +710,113 @@ export class TaskBoardWorkCoordinator {
     }
   }
 
+  /** A queued worker may answer once and leave its TaskBoard task unfinished.
+   * Use existing Caffy queued-idle wakes, rather than allocating a duplicate
+   * ChatGPT guest. Only exact, idle, assistant-responded queue-bound workers
+   * are eligible. Durable ownership means we never override manual Caffy and
+   * can stop only monitors that this coordinator created. */
+  private async reconcileManagedWorkerWakes(snapshots: QueueSnapshot[]): Promise<void> {
+    if (!this.workerWakeJournalReady || Date.now() - this.lastWorkerWakeScanAt < 30_000) return;
+    this.lastWorkerWakeScanAt = Date.now();
+    const currentClaims = snapshots.flatMap(board => board.items
+      .filter(item => item.state === "working" && item.sessionId &&
+        item.claimed && item.claimedBy === `t3:${item.sessionId}` &&
+        item.reservationId && !item.legacyOpenRig)
+      .map(item => ({boardRoot: board.boardRoot, item})));
+    for (const [id, wake] of this.managedWorkerWakes) {
+      const stillOwned = currentClaims.some(({boardRoot, item}) =>
+        id === item.sessionId && item.reservationId === wake.requestId &&
+        item.taskId === wake.taskId && rootKey(boardRoot) === rootKey(wake.boardRoot));
+      if (stillOwned) continue;
+      const monitor = this.caffy.status(id) as {
+        conversationId?: string; mode?: string;
+      } | null;
+      if (monitor?.conversationId === wake.conversationId && monitor.mode === "queued")
+        this.caffy.stop(id, "agent");
+      this.managedWorkerWakes.delete(id);
+      this.saveWorkerWakes();
+      return; // One durable cleanup per sweep.
+    }
+    if (!currentClaims.length) return;
+    const listed = await cli("node.exe", [
+      NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+    ], JSON.stringify({
+      action: "list", which: "all", includeHidden: true, home: this.home,
+    }), 25_000) as {
+      sessions?: Array<{
+        id: string; conversationId?: string | null; spawnRequestId?: string;
+        autoClose?: boolean; humanControlled?: boolean; autoCloseExempt?: boolean;
+        hidden?: boolean; closedAt?: unknown; lastRole?: string | null;
+        totalTurns?: number | null; activity?: string; status?: string;
+        statusObservedAt?: string; lastWorkingAt?: number | null;
+        bootstrapIdentity?: {state?: string; conversationId?: string | null};
+        binding?: {boundAt?: string; taskRef?: {board?: string; id?: string}};
+      }>; total?: number; hasMore?: boolean; incomplete?: boolean;
+    };
+    if (!Array.isArray(listed.sessions) || listed.hasMore || listed.incomplete ||
+        (listed.total !== undefined && listed.total !== listed.sessions.length)) return;
+    const now = Date.now();
+    const stopped = (this.caffy.status() as {
+      agentStops?: Array<{sessionId?: string; browserSessionId?: string; publicSessionId?: string}>;
+    }).agentStops ?? [];
+    for (const {boardRoot, item} of currentClaims) {
+      const session = listed.sessions.find(row => row.id === item.sessionId);
+      if (!session || !UUID.test(session.conversationId ?? "") ||
+          session.bootstrapIdentity?.state !== "registered" ||
+          (session.bootstrapIdentity.conversationId &&
+            session.bootstrapIdentity.conversationId !== session.conversationId) ||
+          session.spawnRequestId !== item.reservationId ||
+          session.binding?.taskRef?.id !== item.taskId ||
+          !session.binding?.taskRef?.board ||
+          rootKey(session.binding.taskRef.board) !== rootKey(boardRoot) ||
+          !session.autoClose || session.autoCloseExempt || session.humanControlled ||
+          session.hidden || session.closedAt != null ||
+          session.lastRole !== "assistant" || (session.totalTurns ?? 0) < 1 ||
+          session.activity !== "idle" ||
+          !["done_or_idle", "pending_or_stalled"].includes(session.status ?? "")) continue;
+      const observed = Date.parse(session.statusObservedAt ?? "");
+      const bound = Date.parse(session.binding.boundAt ?? "");
+      const activity = session.lastWorkingAt && session.lastWorkingAt > 0
+        ? Math.max(bound, session.lastWorkingAt) : bound;
+      if (!Number.isFinite(observed) || now - observed > 15_000 || observed > now + 1000 ||
+          !Number.isFinite(activity) || now - activity < 90_000) continue;
+      const id = session.id;
+      const journal = this.managedWorkerWakes.get(id);
+      if (journal && (journal.active || now - journal.lastAttemptAt < 90_000)) continue;
+      if (!journal && stopped.some(row =>
+        row.sessionId === id || row.browserSessionId === id || row.publicSessionId === id)) continue;
+      const existing = this.caffy.status(id) as {
+        mode?: string; conversationId?: string;
+      } | null;
+      if (existing && (!journal || existing.mode !== "queued" ||
+          existing.conversationId !== session.conversationId)) continue;
+      const wake: ManagedWorkerWake = journal ?? {
+        boardRoot, taskId: item.taskId, requestId: item.reservationId!,
+        sessionId: id, conversationId: session.conversationId!,
+        beginAt: now + 60_000, lastAttemptAt: now, active: false,
+      };
+      wake.lastAttemptAt = now;
+      this.managedWorkerWakes.set(id, wake);
+      this.saveWorkerWakes(); // Persist exact ownership before scheduling.
+      try {
+        if (!existing) {
+          await this.caffy.set({
+            sessionId: id, conversationId: wake.conversationId,
+            mode: "queued", onceOnly: false, keepAwake: true,
+            beginAt: Math.max(wake.beginAt, Date.now() + 30_000),
+          });
+        }
+        wake.active = true;
+        this.saveWorkerWakes();
+        this.lastIdleReason = `Queued Caffy now maintains unfinished ${item.taskId} in its existing T3 worker; idle work will be resumed when capacity permits.`;
+      } catch (error) {
+        this.lastError = `Automatic continuation for ${item.taskId}: ${String(error)}`;
+        this.saveWorkerWakes();
+      }
+      return; // Bound one guarded registration per sweep.
+    }
+  }
+
   /** Recover ONLY task spawns whose persisted first message definitely never
    * reached ChatGPT. UNKNOWN submissions remain untouched to avoid duplicates. */
   private async recoverConfirmedUnsent(snapshots: QueueSnapshot[]): Promise<void> {
@@ -809,6 +966,10 @@ export class TaskBoardWorkCoordinator {
         this.lastIdleReason = pending
           ? `${pending} queued TaskBoard tasks are not currently executable (readiness, dependencies, or user input).`
           : "No eligible tasks are queued in enabled TaskBoard projects.";
+        // Queue can be drained while unfinished workers sit idle. Maintain
+        // these exact existing workers via Caffy instead of creating duplicates.
+        try { await this.reconcileManagedWorkerWakes(snapshots); }
+        catch (error) { this.lastError = `Task worker continuation: ${String(error)}`; }
       }
       const nowForRetry = Date.now();
       const candidates = queued.filter(row =>
