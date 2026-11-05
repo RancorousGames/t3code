@@ -479,6 +479,14 @@ export function ChatGPTBrowserSidebarEntry({
     false,
     Schema.Boolean,
   );
+  const [selectedColors, setSelectedColors] = useLocalStorage(
+    `t3code:chatgpt-browser:color-filter:${environmentId ?? "unconnected"}`,
+    [] as string[],
+    Schema.Array(Schema.String),
+  );
+  const colorChoices = ["red", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
+  const toggleColor = (color: string, checked: boolean) =>
+    setSelectedColors((current) => checked ? [...new Set([...current, color])] : current.filter((item) => item !== color));
   const [verifiedWorkerSnapshot, setVerifiedWorkerSnapshot] = useLocalStorage(
     chatGPTVerifiedWorkerEvidenceKey(environmentId),
     [] as VerifiedChatGPTWorkerIdentity[],
@@ -1081,11 +1089,11 @@ export function ChatGPTBrowserSidebarEntry({
   const showingHidden = showHidden && hiddenSessions.length > 0;
   // Like Hidden, the Snoozed view falls back to active sessions once it empties.
   const showingSnoozed = !showingHidden && showSnoozed && snoozedSessions.length > 0;
-  const displayedSessions = showingHidden
+  const displayedSessions = (showingHidden
     ? hiddenSessions
     : sidebarVisibleSessions.filter((session) =>
         showingSnoozed ? isSnoozed(session) : !isSnoozed(session),
-      );
+      )).filter((session) => selectedColors.length === 0 || selectedColors.includes(session.borderColor ?? ""));
   const aiInterfaceSessions = displayedSessions.filter(isAIInterfaceSession);
   const groupedSessions = useMemo(() => {
     // Parked lists are global queues, not project/activity trees. Their order
@@ -2022,16 +2030,43 @@ export function ChatGPTBrowserSidebarEntry({
                   <Button
                     size="icon-xs"
                     variant="ghost-muted"
-                    aria-label={`ChatGPT view options${!showWorkers || hideUnloaded ? " (filtered)" : ""}`}
-                    title="View options"
+                    aria-label={`Filter ChatGPT sessions${selectedColors.length ? ` (${selectedColors.join(", ")})` : ""}`}
+                    title={selectedColors.length ? `Showing ${selectedColors.join(", ")} sessions — click to change filters` : "Filter sessions and view options"}
                     // Highlighted while the list differs from the default view.
-                    data-pressed={showWorkers && !hideUnloaded ? undefined : ""}
+                    data-pressed={showWorkers && !hideUnloaded && !selectedColors.length ? undefined : ""}
                   />
                 }
               >
                 <SlidersHorizontalIcon aria-hidden />
               </MenuTrigger>
               <MenuPopup align="end">
+                <MenuGroup>
+                  <MenuGroupLabel>Highlight colors</MenuGroupLabel>
+                  <MenuItem inset onClick={() => setSelectedColors([])} disabled={!selectedColors.length}>
+                    <MenuItemLabel>All colors</MenuItemLabel>
+                    {!selectedColors.length && <span className="ms-auto text-xs text-muted-foreground">✓</span>}
+                  </MenuItem>
+                  {colorChoices.map((color) => (
+                    <MenuCheckboxItem
+                      key={color}
+                      checked={selectedColors.includes(color)}
+                      onCheckedChange={(checked) => toggleColor(color, checked)}
+                      aria-label={`Show ${color} highlighted sessions`}
+                    >
+                      <span className="flex items-center gap-2 capitalize">
+                        <span className="size-2.5 rounded-full" style={{ backgroundColor: color }} aria-hidden />
+                        {color}
+                      </span>
+                    </MenuCheckboxItem>
+                  ))}
+                  <MenuItem inset onClick={() => {
+                    setSelectedColors([]);
+                    setShowWorkers(true);
+                    setHideUnloaded(false);
+                    setShowAIInterfaceSessions(false);
+                  }}><MenuItemLabel>Reset view filters</MenuItemLabel></MenuItem>
+                </MenuGroup>
+                <MenuSeparator />
                 <MenuGroup>
                   <MenuGroupLabel>View options</MenuGroupLabel>
                   <MenuCheckboxItem
