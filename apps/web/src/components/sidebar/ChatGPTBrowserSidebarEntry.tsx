@@ -100,6 +100,7 @@ import {
   type ChatGPTSessionActionId,
 } from "../../chatGPTSessionActions";
 import { deriveChatGPTSession } from "../../chatGPTSessionModel";
+import { useChatGPTLiveTasks, visibleReadyChatGPTLiveTasks } from "../../chatGPTLiveTasks";
 import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
 import { scheduleCaffyBegin } from "../../omniwork/chatGPTCaffyPauseResume";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
@@ -377,9 +378,9 @@ export function ChatGPTBrowserSidebarEntry({
   const requiredForDelivery = useChatGPTDeliveryMountRequests((state) => state.required);
   const navigate = useNavigate();
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
-  const erroredSessionsAtBottom = useOmniworkPreferences(
   const splitLayout = useSplitLayout(usePrimaryEnvironmentId());
   const displayedSessionIds = new Set(activeSessionId ? splitSessionIds(splitLayout) : []);
+  const erroredSessionsAtBottom = useOmniworkPreferences(
     (settings) => settings.erroredSessionsAtBottom,
   );
   const showWorkersWithSelectedParent = useOmniworkPreferences(
@@ -388,6 +389,7 @@ export function ChatGPTBrowserSidebarEntry({
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const autoMaintenancePaused = useChatGPTRecoverySettings().paused;
   const environmentId = usePrimaryEnvironmentId();
+  const readyTaskCount = visibleReadyChatGPTLiveTasks(useChatGPTLiveTasks()).length;
   const warmedIds = useWarmChatGPTSessionIds(environmentId);
   const forecast = useChatGPTWarmSessions((state) =>
     environmentId ? state.forecast[environmentId] : undefined,
@@ -1967,6 +1969,12 @@ export function ChatGPTBrowserSidebarEntry({
           <SlidersHorizontalIcon aria-hidden />
           <span>Sessions dashboard</span>
         </SidebarMenuButton>
+        {readyTaskCount > 0 && (
+          <button type="button" className="ml-7 rounded px-2 py-0.5 text-xs text-emerald-400 hover:bg-accent"
+            onClick={() => void navigate({ to: "/browser" })}>
+            Ready for you · {readyTaskCount}
+          </button>
+        )}
       </SidebarMenuItem>
       <SidebarMenuItem>
         {showingHidden || showingSnoozed ? (

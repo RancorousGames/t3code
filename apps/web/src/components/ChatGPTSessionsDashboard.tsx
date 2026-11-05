@@ -2,19 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import type { ChatGPTRegistrySession, EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-interface DashboardLiveTask {
-  taskId: string;
-  claimedBy: string;
-  liveState: "ready" | "in_session" | null;
-  boardRoot?: string;
-  project?: string;
-  withMe?: boolean;
-  laterUntil?: string;
-  taskTitle?: string;
-  liveBrief?: string;
-  liveEstMinutes?: number;
-  liveReadyAt?: string;
-}
+import { refreshChatGPTLiveTasks, useChatGPTLiveTasks, visibleReadyChatGPTLiveTasks, type ChatGPTLiveTask } from "../chatGPTLiveTasks";
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import { ArchiveIcon, Clock3Icon, SearchIcon } from "lucide-react";
@@ -98,31 +86,8 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
   const [expandedBuckets, setExpandedBuckets] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [liveTasks, setLiveTasks] = useState<readonly DashboardLiveTask[]>([]);
-  const [liveRefreshKey, setLiveRefreshKey] = useState(0);
+  const liveTasks = useChatGPTLiveTasks();
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const read = window.desktopBridge?.readTaskBoardWorkerClaims;
-    if (!read) return;
-    let disposed = false;
-    let inFlight = false;
-    const refresh = async () => {
-      if (inFlight || document.hidden) return;
-      inFlight = true;
-      try {
-        const claims = await read();
-        if (!disposed) setLiveTasks(claims.filter((claim) =>
-          claim.withMe || claim.liveState === "ready" || claim.liveState === "in_session"));
-      } catch {
-        // Do not replace the last-known queue with a fictitious empty task list.
-      } finally { inFlight = false; }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 60_000);
-    window.addEventListener("focus", refresh);
-    return () => { disposed = true; window.clearInterval(timer); window.removeEventListener("focus", refresh); };
-  }, [liveRefreshKey]);
 
   useEffect(() => {
     const refresh = () => {
@@ -158,6 +123,9 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
       snapshot: snapshots[session.id] ?? serverSnapshot,
       now,
       uncertainSend: hasUncertainChatGPTSend(environmentId, session.id),
+      readyForYou: liveTasks.some((task) => task.liveState === "ready" &&
+        [session.id.toLowerCase(), `t3-browser:${session.id.toLowerCase()}`, `t3:${session.id.toLowerCase()}`]
+          .includes(task.claimedBy)),
       lastWorkingAt: timeline[session.id]?.active ?? registryRecords.get(session.id)?.timeline?.active ?? 0,
       ...(saved ? { recovery: {
         attempts: saved.attempts ?? 0,
@@ -166,7 +134,7 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
         stoppedReason: saved.exhausted ? saved.reason : null,
       } } : {}),
     });
-  }), [projectedSessions, snapshots, timeline, registryRecords, recovery, environmentId, now]);
+  }), [projectedSessions, snapshots, timeline, registryRecords, recovery, environmentId, now, liveTasks]);
 
   const search = query.trim().toLocaleLowerCase();
   const projects = useMemo(() => [...new Set(rows.map((row) => row.session.project).filter(
@@ -288,14 +256,11 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
     if (task.laterUntil && Date.parse(task.laterUntil) > now) return false;
     return task.liveState !== null || task.withMe;
   }), [liveTasks, now]);
-  const readyLiveTasks = useMemo(() => visibleLiveTasks.filter((task) =>
-    task.liveState === "ready").sort((a, b) =>
-    Date.parse(a.liveReadyAt ?? "") - Date.parse(b.liveReadyAt ?? "") || a.taskId.localeCompare(b.taskId)),
-  [visibleLiveTasks]);
+  const readyLiveTasks = useMemo(() => visibleReadyChatGPTLiveTasks(visibleLiveTasks, now), [visibleLiveTasks, now]);
   const activeLiveTasks = visibleLiveTasks.filter((task) => task.liveState === "in_session");
   const unpreppedLiveTasks = visibleLiveTasks.filter((task) => task.withMe && !task.liveState);
 
-  const startLiveTask = async (task: DashboardLiveTask) => {
+  const startLiveTask = async (task: ChatGPTLiveTask, kind?: "chatgpt" | "claude" | "codex") => {
     if (!task.boardRoot || !window.desktopBridge?.openTaskBoardLiveSession || busyTaskId) {
       setFeedback("Opening live tasks requires the connected T3 desktop and a registered TaskBoard.");
       return;
@@ -304,6 +269,7 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
     try {
       const receipt = await window.desktopBridge.openTaskBoardLiveSession({
         boardRoot: task.boardRoot, taskId: task.taskId, environmentId,
+        ...(kind ? { kind } : {}),
       });
       if (receipt.status === "unknown" || receipt.status === "in_progress" ||
         receipt.status === "prompt_unknown") {
@@ -315,14 +281,14 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
       } else {
         setFeedback("No confirmed session focus. Inspect the task before retrying.");
       }
-      setLiveRefreshKey((value) => value + 1);
+      void refreshChatGPTLiveTasks(true);
     } catch (cause) {
       setFeedback("Open task: " + String(cause) + " Check its existing session before trying again.");
     } finally {
       setBusyTaskId(null);
     }
   };
-  const controlLiveTask = async (task: DashboardLiveTask, action: "later" | "clear", minutes = 60) => {
+  const controlLiveTask = async (task: ChatGPTLiveTask, action: "later" | "clear", minutes = 60) => {
     if (!task.boardRoot || !window.desktopBridge?.controlTaskBoardLiveSession || busyTaskId) {
       setFeedback("Changing live tasks requires the connected T3 desktop.");
       return;
@@ -333,7 +299,7 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
         boardRoot: task.boardRoot, taskId: task.taskId, action,
         ...(action === "later" ? { until: new Date(Date.now() + minutes * 60_000).toISOString() } : {}),
       });
-      setLiveRefreshKey((value) => value + 1);
+      void refreshChatGPTLiveTasks(true);
     } catch (cause) {
       setFeedback("Could not update TaskBoard: " + String(cause));
     } finally {
@@ -476,18 +442,21 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
             )}
           </header>
           {readyLiveTasks.length > 0 && <div className="grid gap-2 md:grid-cols-2">
-            {readyLiveTasks.slice(0, 4).map((task) => (
+            {readyLiveTasks.map((task) => (
               <article key={task.taskId} className="rounded-lg border border-l-[3px] border-l-emerald-500 border-border bg-card/75 p-2.5">
                 <div className="flex min-w-0 items-center gap-2">
                   <strong className="min-w-0 flex-1 truncate text-xs">{task.taskId} · {task.taskTitle ?? "Live task"}</strong>
                   {task.project && <span className="rounded border border-border px-1.5 text-2xs text-muted-foreground">{task.project}</span>}
                 </div>
-                {task.liveBrief && <p className="mt-1 line-clamp-2 text-xs text-foreground/85">{task.liveBrief}</p>}
+                {task.liveBrief && <p className="mt-1 whitespace-pre-wrap text-xs text-foreground/85">
+                  <span className="font-medium">Needs you for / prepped: </span>{task.liveBrief}
+                </p>}
                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-2xs text-muted-foreground">
                   {task.liveEstMinutes && <span>~{task.liveEstMinutes} min</span>}
                   {task.liveReadyAt && Number.isFinite(Date.parse(task.liveReadyAt)) &&
                     <span>Ready {relativeTime(Date.parse(task.liveReadyAt), now)}</span>}
-                  <span>{task.claimedBy ? "Session linked" : "Start new session"}</span>
+                  <span>{task.claimedBy.startsWith("t3-browser:") ? "ChatGPT" :
+                    task.claimedBy.startsWith("t3:") ? "T3 thread" : "New session (default kind)"}</span>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <Button size="xs" variant="secondary" disabled={busyTaskId !== null}
@@ -510,9 +479,7 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
               </article>
             ))}
           </div>}
-          {readyLiveTasks.length > 4 && (
-            <p className="mt-2 text-xs text-muted-foreground">{readyLiveTasks.length - 4} additional ready tasks; start one to free space.</p>
-          )}
+
           {(activeLiveTasks.length > 0 || unpreppedLiveTasks.length > 0) && (
             <div className="mt-2 divide-y divide-border/60 border-t border-border/60">
               {activeLiveTasks.map((task) => (
@@ -529,6 +496,18 @@ export function ChatGPTSessionsDashboard({ environmentId }: { environmentId: Env
                   <span className="min-w-0 flex-1 truncate">{task.taskId} · {task.taskTitle ?? "Live task"}</span>
                   <Button size="xs" variant="ghost" disabled={busyTaskId !== null}
                     onClick={() => void startLiveTask(task)}>Start with me</Button>
+                  <select aria-label={`Start ${task.taskId} using`} defaultValue="" disabled={busyTaskId !== null}
+                    className="h-7 max-w-24 rounded-md border border-border bg-background px-1 text-xs"
+                    onChange={(event) => {
+                      const kind = event.currentTarget.value as "chatgpt" | "claude" | "codex";
+                      if (kind) void startLiveTask(task, kind);
+                      event.currentTarget.value = "";
+                    }}>
+                    <option value="" disabled>Kind ▾</option>
+                    <option value="chatgpt">ChatGPT</option>
+                    <option value="claude">Claude</option>
+                    <option value="codex">Codex</option>
+                  </select>
                 </div>
               ))}
             </div>

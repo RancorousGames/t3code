@@ -47,6 +47,7 @@ export function projectChatGPTDashboardSession(input: {
   snapshot: unknown;
   now: number;
   uncertainSend?: boolean;
+  readyForYou?: boolean;
   recovery?: RawChatGPTSessionSignals["recovery"];
   lastWorkingAt?: number;
 }): ChatGPTDashboardSession {
@@ -70,6 +71,7 @@ export function projectChatGPTDashboardSession(input: {
     ...(session.snoozedUntil !== undefined ? { snoozedUntil: session.snoozedUntil } : {}),
     ...(input.recovery ? { recovery: input.recovery } : {}),
     uncertainSend: input.uncertainSend === true,
+    readyForYou: input.readyForYou === true,
     completionValid: !!validChatGPTCompletion(
       session.completion,
       snapshot?.url ?? null,

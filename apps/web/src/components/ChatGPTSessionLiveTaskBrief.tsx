@@ -1,18 +1,8 @@
-﻿import type { EnvironmentId } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { Button } from "./ui/button";
+import { useChatGPTLiveTasks } from "../chatGPTLiveTasks";
 
-interface LiveTaskClaim {
-  taskId: string;
-  claimedBy: string;
-  liveState: "ready" | "in_session" | null;
-  taskTitle?: string;
-  liveBrief?: string;
-  liveEstMinutes?: number;
-  liveReadyAt?: string;
-}
-
-/** TaskBoard is authoritative; this surface only reads a brief already bound to the session. */
+/** A task brief is pinned only when this exact session owns the live task. */
 export function ChatGPTSessionLiveTaskBrief({
   environmentId: _environmentId,
   sessionId,
@@ -24,43 +14,11 @@ export function ChatGPTSessionLiveTaskBrief({
   taskId: string | null;
   onPrefill: (text: string) => void;
 }) {
-  const [claim, setClaim] = useState<LiveTaskClaim | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    const read = window.desktopBridge?.readTaskBoardWorkerClaims;
-    if (!read) return;
-    let disposed = false;
-    let running = false;
-    const refresh = async () => {
-      if (running || document.hidden) return;
-      running = true;
-      try {
-        const result = await read();
-        if (disposed) return;
-        // A task ID alone is insufficient if another session owns the claim.
-        const bound = result.find((item) => item.taskId === taskId &&
-          [sessionId.toLowerCase(), `t3-browser:${sessionId.toLowerCase()}`].includes(item.claimedBy)) ??
-          result.find((item) => !taskId &&
-            [sessionId.toLowerCase(), `t3-browser:${sessionId.toLowerCase()}`].includes(item.claimedBy));
-        setClaim(bound?.liveState ? bound : null);
-        setError(null);
-      } catch (cause) {
-        if (!disposed) setError(String(cause));
-      } finally {
-        running = false;
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 60_000);
-    window.addEventListener("focus", refresh);
-    return () => { disposed = true; window.clearInterval(timer); window.removeEventListener("focus", refresh); };
-  }, [sessionId, taskId]);
-
-  if (!claim) return error && taskId ? (
-    <p role="status" className="shrink-0 px-5 py-2 text-xs text-muted-foreground">
-      TaskBoard briefing temporarily unavailable. {error}
-    </p>
-  ) : null;
+  const claims = useChatGPTLiveTasks();
+  const owners = [sessionId.toLowerCase(), `t3-browser:${sessionId.toLowerCase()}`, `t3:${sessionId.toLowerCase()}`];
+  const claim = claims.find((item) => item.taskId === taskId && owners.includes(item.claimedBy)) ??
+    claims.find((item) => !taskId && owners.includes(item.claimedBy));
+  if (!claim?.liveState) return null;
   const age = claim.liveReadyAt ? Date.parse(claim.liveReadyAt) : NaN;
   const ageMinutes = Number.isFinite(age) ? Math.max(0, Math.floor((Date.now() - age) / 60_000)) : null;
   return (

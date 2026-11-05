@@ -20,6 +20,7 @@ import type { ChatGPTActivityAge } from "./components/sidebar/chatGPTActivity";
 export type ChatGPTSessionActivity = "working" | "idle" | "interrupted" | "failed" | "unknown";
 export type ChatGPTSessionAttention =
   | "none"
+  | "ready_for_you"
   | "question"
   | "error"
   | "recovery_stopped"
@@ -73,6 +74,8 @@ export interface RawChatGPTSessionSignals {
   unloaded?: boolean | undefined;
   browserUnavailable?: boolean | undefined;
   uncertainSend?: boolean | undefined;
+  /** Set only from the owning TaskBoard live task, never page text. */
+  readyForYou?: boolean | undefined;
   completionValid?: boolean | undefined;
   recovery?: Partial<ChatGPTSessionRecovery> | undefined;
   timeline?: ChatGPTSessionTimeline | null | undefined;
@@ -175,6 +178,8 @@ export function deriveChatGPTSession(
   // The browser can have a recoverable transport error and a simultaneous
   // uncertain send. Never let a lower-priority DOM observation hide the send.
   if (raw.uncertainSend) attention = "unconfirmed_send";
+  if (raw.readyForYou && (attention === "none" || attention === "question"))
+    attention = "ready_for_you";
   if (status === "conversation_full" && activity !== "working") activity = "idle";
 
   const residency: ChatGPTSessionResidency = raw.hidden
@@ -202,7 +207,7 @@ export function deriveChatGPTSession(
       ? null
       : raw.completionValid
         ? "completed"
-        : attention !== "none" || activity === "interrupted" || activity === "failed"
+        : (attention !== "none" && attention !== "ready_for_you") || activity === "interrupted" || activity === "failed"
           ? "needs_you"
           : residency === "snoozed"
             ? "snoozed"

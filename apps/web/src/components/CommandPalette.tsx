@@ -264,6 +264,7 @@ import { readPullRequestListPreferences } from "~/components/pullRequest/pullReq
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
 import { deriveChatGPTSession } from "../chatGPTSessionModel";
+import { refreshChatGPTLiveTasks, useChatGPTLiveTasks, visibleReadyChatGPTLiveTasks } from "../chatGPTLiveTasks";
 import { availableChatGPTSessionActions, runChatGPTSessionAction } from "../chatGPTSessionActions";
 import { runChatGPTSessionControl } from "../chatGPTSessionControl";
 import { ChatGPTSessionIcon } from "./sidebar/ChatGPTSessionIcon";
@@ -472,6 +473,7 @@ function OpenCommandPaletteDialog(props: {
     setSessionSnooze,
     setSessionHidden,
   } = useChatGPTBrowserSessions(primaryEnvironmentId);
+  const liveReadyTasks = visibleReadyChatGPTLiveTasks(useChatGPTLiveTasks());
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -1238,6 +1240,36 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+
+  if (window.desktopBridge?.openTaskBoardLiveSession && primaryEnvironmentId) {
+    const openLiveTask = async (task: (typeof liveReadyTasks)[number]) => {
+      if (!task.boardRoot) return;
+      const receipt = await window.desktopBridge!.openTaskBoardLiveSession!({
+        boardRoot: task.boardRoot, taskId: task.taskId, environmentId: primaryEnvironmentId,
+      });
+      await refreshChatGPTLiveTasks(true);
+      if (receipt.sessionId) {
+        await navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: receipt.sessionId } });
+      }
+      // Native threads are focused by the desktop open-task handler.
+    };
+    if (liveReadyTasks[0]) actionItems.push({
+      kind: "action",
+      value: "action:live-task-next",
+      searchTerms: ["start next live task", "ready for you", "taskboard"],
+      title: "Start next live task",
+      icon: <ChatGPTSessionIcon />,
+      run: () => openLiveTask(liveReadyTasks[0]!),
+    });
+    for (const task of liveReadyTasks) actionItems.push({
+      kind: "action",
+      value: `action:live-task:${task.taskId}`,
+      searchTerms: ["start", "live task", "taskboard", task.taskId, task.project ?? ""],
+      title: `Start: ${task.taskTitle ?? task.taskId}`,
+      icon: <ChatGPTSessionIcon />,
+      run: () => openLiveTask(task),
+    });
+  }
 
   if (window.desktopBridge && primaryEnvironmentId) {
     actionItems.push({
