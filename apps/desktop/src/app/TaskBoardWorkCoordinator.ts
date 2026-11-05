@@ -105,6 +105,7 @@ export class TaskBoardWorkCoordinator {
   private readonly retiredGuestDir: string;
   private lastUnstartedGuestCheckAt = 0;
   private readonly rejectedUnstartedGuests = new Map<string, number>();
+  private lastAbandonedStartCheckAt = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private busy = false;
@@ -242,7 +243,7 @@ export class TaskBoardWorkCoordinator {
       reservations,
       quarantined: quarantined.map(row => ({
         boardRoot: row.boardRoot, taskId: row.taskId, requestId: row.requestId,
-        reason: "Unconfirmed startup exceeded the recovery window; not retried or counted against capacity",
+        reason: "Unconfirmed startup quarantined; after 30 minutes without a live matching T3 session it is safely returned to Queue. Does not count against capacity.",
       })),
       lastError: this.lastError,
       queued: this.snapshots.reduce((n, board) => n + board.items.filter(item =>
@@ -451,6 +452,69 @@ export class TaskBoardWorkCoordinator {
     }
   }
 
+  /** A Starting entry without a live T3 session is permanently stranded by the
+   * original UNKNOWN-spawn rule. After the in-flight request is far beyond its
+   * timeout, reconcile against the complete T3 registry before returning it to
+   * Queue. Never resubmit or clear an unconfirmed request directly. */
+  private async recoverQuarantinedStarts(snapshots: QueueSnapshot[]): Promise<void> {
+    if (Date.now() - this.lastAbandonedStartCheckAt < 60_000) return;
+    this.lastAbandonedStartCheckAt = Date.now();
+    const now = Date.now();
+    const stranded = snapshots.flatMap(board => board.items
+      .filter(item => item.state === "starting" && item.reservationId &&
+        UUID.test(item.queueRequest) && !item.legacyOpenRig && !item.claimed &&
+        item.readiness && now - this.startingSince(board.boardRoot, item) >= 30 * 60_000)
+      .map(item => ({boardRoot: board.boardRoot, item})));
+    if (!stranded.length) return;
+    const listed = await cli("node.exe", [
+      NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+    ], JSON.stringify({
+      action: "list", which: "all", includeHidden: true, home: this.home,
+    }), 25_000) as {sessions?: Array<{
+      id: string; spawnRequestId?: string;
+      binding?: {taskRef?: {board?: string; id?: string}};
+    }>; hasMore?: boolean; incomplete?: boolean; total?: number};
+    if (!Array.isArray(listed.sessions) || listed.hasMore || listed.incomplete ||
+        (listed.total !== undefined && listed.total !== listed.sessions.length)) {
+      throw new Error("Stale Starting recovery requires a complete T3 session registry");
+    }
+    for (const {boardRoot, item} of stranded) {
+      const matches = listed.sessions.filter(session =>
+        session.spawnRequestId === item.reservationId ||
+        (session.binding?.taskRef?.id === item.taskId && session.binding?.taskRef?.board &&
+          rootKey(session.binding.taskRef.board) === rootKey(boardRoot)));
+      if (matches.length !== 0) {
+        // A live created guest still owns this queue request. If its durable
+        // correlation matches, repair the claim atomically instead of
+        // creating a duplicate. Ambiguous/mismatched guests stay quarantined.
+        if (matches.length === 1 &&
+            matches[0]?.spawnRequestId === item.reservationId &&
+            matches[0]?.binding?.taskRef?.id === item.taskId &&
+            matches[0]?.binding?.taskRef?.board &&
+            rootKey(matches[0].binding.taskRef.board) === rootKey(boardRoot) &&
+            UUID.test(matches[0].id)) {
+          await this.taskCommand(boardRoot, [
+            "task", "queue", "working", item.taskId,
+            "--queue-request", item.queueRequest,
+            "--request-id", item.reservationId!,
+            "--session-id", matches[0].id,
+          ]);
+          await this.readQueues();
+        }
+        return;
+      }
+      await this.taskCommand(boardRoot, [
+        "task", "queue", "abandon", item.taskId,
+        "--queue-request", item.queueRequest,
+        "--request-id", item.reservationId!,
+        "--reason", "30-minute Starting request has no live T3 spawn/session in complete registry; returned to Queue.",
+        "--verified-no-live-session",
+      ]);
+      await this.readQueues();
+      return; // At most one task per recovery sweep.
+    }
+  }
+
   /** Recover ONLY task spawns whose persisted first message definitely never
    * reached ChatGPT. UNKNOWN submissions remain untouched to avoid duplicates. */
   private async recoverConfirmedUnsent(snapshots: QueueSnapshot[]): Promise<void> {
@@ -526,6 +590,8 @@ export class TaskBoardWorkCoordinator {
         if (!readyQueued || !freeCapacity) {
           try {
             await this.recoverUnstartedGuests(snapshots);
+            snapshots = this.snapshots;
+            await this.recoverQuarantinedStarts(snapshots);
             snapshots = this.snapshots;
           } catch (error) {
             this.lastError = `Unstarted guest recovery: ${String(error)}`;
