@@ -1,7 +1,8 @@
 import { type EnvironmentId } from "@t3tools/contracts";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo } from "react";
-import { openChatGPTGuestByUser } from "../browser/chatGPTGuestHibernation";
+import { clearChatGPTGuestUserOpened, openChatGPTGuestByUser } from "../browser/chatGPTGuestHibernation";
+import { closeLeaf, readSplitLayout, reconcileSplitLayout, replaceLeaf, saveSplitLayout, splitLeaf, splitSessionIds, useSplitLayout, type SplitNode } from "../chatGPTSplitLayout";
 import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
 
 import { PreviewView } from "../components/preview/PreviewView";
@@ -30,8 +31,72 @@ import { usePrimaryEnvironmentId } from "../state/environments";
 function ChatGPTBrowserRoute() {
   const environmentId = usePrimaryEnvironmentId();
   const { browserSessionId } = Route.useParams();
-  const { sessions } = useChatGPTBrowserSessions(environmentId);
+  const { sessions, createSession } = useChatGPTBrowserSessions(environmentId);
+  const navigate = useNavigate();
+  const layout = useSplitLayout(environmentId);
   const session = sessions.find((entry) => entry.id === browserSessionId);
+  const available = useMemo(() => new Set(sessions.filter((s) => !s.hidden).map((s) => s.id)), [sessions]);
+  useEffect(() => {
+    if (environmentId && available.has(browserSessionId))
+      reconcileSplitLayout(environmentId, available, browserSessionId);
+  }, [environmentId, browserSessionId, available]);
+  useEffect(() => {
+    if (!environmentId || available.has(browserSessionId)) return;
+    let remaining = readSplitLayout(environmentId);
+    if (!remaining) return;
+    for (const id of splitSessionIds(remaining))
+      if (!available.has(id)) remaining = remaining && closeLeaf(remaining, id);
+    if (!remaining) return;
+    saveSplitLayout(environmentId, remaining);
+    void navigate({ to: "/browser/$browserSessionId",
+      params: { browserSessionId: splitSessionIds(remaining)[0]! } });
+  }, [environmentId, browserSessionId, available, navigate]);
+  const tree = environmentId && session && !session.hidden
+    ? layout && splitSessionIds(layout).includes(browserSessionId)
+      ? layout : { id: "initial", sessionId: browserSessionId } as SplitNode
+    : null;
+  const choose = (id: string) => void navigate({
+    to: "/browser/$browserSessionId", params: { browserSessionId: id },
+  });
+  const visibleIds = splitSessionIds(tree);
+  useEffect(() => {
+    const onNativeInteraction = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (id && id !== browserSessionId && visibleIds.includes(id)) choose(id);
+    };
+    window.addEventListener("t3:chatgpt-page-interaction", onNativeInteraction);
+    return () => window.removeEventListener("t3:chatgpt-page-interaction", onNativeInteraction);
+  }, [browserSessionId, visibleIds.join("|")]);
+  const update = (next: SplitNode | null, primary: string) => {
+    if (!environmentId) return;
+    saveSplitLayout(environmentId, next);
+    if (primary !== browserSessionId) choose(primary);
+  };
+  const release = (id: string) => {
+    if (!environmentId) return;
+    clearChatGPTGuestUserOpened(id);
+    clearChatGPTGuestUserOpened(JSON.stringify([
+      environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId,
+    ]));
+  };
+  const split = (id: string, direction: "row" | "column") => {
+    if (!tree) return;
+    const next = sessions.find((s) => !s.hidden && !visibleIds.includes(s.id))?.id
+      ?? createSession(undefined, { explicitlyUserCreated: true });
+    update(splitLeaf(tree, id, next, direction), browserSessionId);
+  };
+  const replace = (id: string, next: string) => {
+    if (!tree || visibleIds.includes(next)) return;
+    update(replaceLeaf(tree, id, next), id === browserSessionId ? next : browserSessionId);
+    release(id);
+  };
+  const close = (id: string) => {
+    if (!tree) return;
+    const next = closeLeaf(tree, id);
+    if (!next) return;
+    update(next, id === browserSessionId ? splitSessionIds(next)[0]! : browserSessionId);
+    release(id);
+  };
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden">
@@ -43,11 +108,11 @@ function ChatGPTBrowserRoute() {
           The integrated browser is available in the desktop app.
         </div>
       ) : environmentId && session && !session.hidden ? (
-        <ChatGPTBrowserView
-          key={`${environmentId}:${session.id}`}
-          environmentId={environmentId}
-          sessionId={session.id}
-        />
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          {tree && <SplitPane node={tree} environmentId={environmentId}
+            primaryId={browserSessionId} sessions={sessions.filter((s) => !s.hidden)}
+            onSelect={choose} onSplit={split} onReplace={replace} onClose={close} />}
+        </div>
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           {environmentId
@@ -61,12 +126,60 @@ function ChatGPTBrowserRoute() {
   );
 }
 
+function SplitPane({
+  node, environmentId, primaryId, sessions, onSelect, onSplit, onReplace, onClose,
+}: {
+  node: SplitNode;
+  environmentId: EnvironmentId;
+  primaryId: string;
+  sessions: readonly { id: string; title: string }[];
+  onSelect: (id: string) => void;
+  onSplit: (id: string, direction: "row" | "column") => void;
+  onReplace: (id: string, next: string) => void;
+  onClose: (id: string) => void;
+}) {
+  if ("children" in node) return <div className={`flex min-h-0 min-w-0 flex-1 ${node.direction === "row" ? "flex-row" : "flex-col"}`}>
+    {node.children.map((child) => <SplitPane key={child.id} node={child} environmentId={environmentId}
+      primaryId={primaryId} sessions={sessions} onSelect={onSelect}
+      onSplit={onSplit} onReplace={onReplace} onClose={onClose} />)}
+  </div>;
+  const primary = primaryId === node.sessionId;
+  const splitMode = splitSessionIds(readSplitLayout(environmentId)).length > 1;
+  const available = sessions.some((s) => s.id === node.sessionId);
+  return <section className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border ${primary ? "border-primary" : "border-border"}`}
+    onPointerDownCapture={() => { if (!primary) onSelect(node.sessionId); }}>
+    <div className="flex h-8 shrink-0 items-center gap-1 bg-muted/40 px-1 text-xs">
+      <button type="button" aria-label="Make primary ChatGPT pane"
+        className={`rounded px-1 ${primary ? "font-bold text-primary" : "text-muted-foreground"}`}
+        onClick={() => onSelect(node.sessionId)}>{primary ? "●" : "○"}</button>
+      <select aria-label="Session in pane" className="min-w-0 flex-1 truncate bg-transparent"
+        value={node.sessionId} onChange={(e) => onReplace(node.sessionId, e.target.value)}>
+        {sessions.map((s) => <option key={s.id} value={s.id}
+          disabled={s.id !== node.sessionId && splitSessionIds(readSplitLayout(environmentId)).includes(s.id)}>{s.title}</option>)}
+      </select>
+      <button type="button" title="Split left / right" aria-label="Split pane vertically"
+        className="rounded px-1 hover:bg-muted" onClick={() => onSplit(node.sessionId, "row")}>◫</button>
+      <button type="button" title="Split top / bottom" aria-label="Split pane horizontally"
+        className="rounded px-1 hover:bg-muted" onClick={() => onSplit(node.sessionId, "column")}>⬓</button>
+      {splitMode && <button type="button" title="Close split" aria-label="Close pane"
+        className="rounded px-1 hover:bg-muted" onClick={() => onClose(node.sessionId)}>×</button>}
+    </div>
+    {available ? <ChatGPTBrowserView key={node.sessionId} environmentId={environmentId}
+      sessionId={node.sessionId} primary={primary} splitMode={splitMode} /> :
+      <div className="p-3 text-sm">Session unavailable.</div>}
+  </section>;
+}
+
 function ChatGPTBrowserView({
   environmentId,
   sessionId,
+  primary,
+  splitMode,
 }: {
   readonly environmentId: EnvironmentId;
   readonly sessionId: string;
+  readonly primary: boolean;
+  readonly splitMode: boolean;
 }) {
   const threadRef = useMemo(
     () => chatGPTBrowserThreadRef(environmentId, sessionId),
@@ -78,9 +191,9 @@ function ChatGPTBrowserView({
   // Apply the configured default once, then lock each session's own selection.
   // Agent replies, page navigation and login observations never change the view.
   useEffect(() => {
-    if (override === "default") setOverride(defaultView);
-  }, [defaultView, override, setOverride]);
-  const view = resolveChatGPTView(defaultView, override);
+    if (override === "default" && !splitMode) setOverride(defaultView);
+  }, [defaultView, override, setOverride, splitMode]);
+  const view = splitMode ? "browser" : resolveChatGPTView(defaultView, override);
   const persistentChromium = isPersistentChatGPTSessionOptedIn(sessionId);
 
   // Session view can render the SQLite transcript without a browser guest.
@@ -117,7 +230,7 @@ function ChatGPTBrowserView({
       for (const delay of [0, 120, 350, 800, 1500]) {
         const timer = setTimeout(() => {
           timers.delete(timer);
-          if (cancelled || focused || !window.location.pathname.includes(sessionId)) return;
+          if (cancelled || focused || !primary) return;
           const state = readThreadPreviewState(threadRef);
           const tabId = state.snapshot?.tabId;
           if (!tabId) return;
@@ -155,11 +268,11 @@ function ChatGPTBrowserView({
       window.removeEventListener("t3:focus-chatgpt-composer", onRequest);
       for (const timer of timers) clearTimeout(timer);
     };
-  }, [threadRef, sessionId, view, persistentChromium]);
+  }, [threadRef, sessionId, view, persistentChromium, primary]);
   useEffect(() => {
     const toggle = (event: KeyboardEvent) => {
       if (
-        !(event.ctrlKey || event.metaKey) ||
+        !primary || !(event.ctrlKey || event.metaKey) ||
         !event.shiftKey ||
         event.altKey ||
         event.key.toLowerCase() !== "b"
@@ -170,7 +283,7 @@ function ChatGPTBrowserView({
     };
     window.addEventListener("keydown", toggle);
     return () => window.removeEventListener("keydown", toggle);
-  }, [view, setOverride]);
+  }, [view, setOverride, primary, splitMode]);
 
   const viewSwitcher = (
     <>
@@ -198,7 +311,7 @@ function ChatGPTBrowserView({
       <ChatGPTDuplicateConversationBanner environmentId={environmentId} sessionId={sessionId} />
       {/* Native WebContentsView draws above React: the switcher belongs in the
           Chromium toolbar, not over the browser pixels or in a second row. */}
-      {!(persistentChromium && view === "browser") && (
+      {!splitMode && !(persistentChromium && view === "browser") && (
         <div className="flex shrink-0 justify-end gap-1 border-b border-border bg-background px-3 py-1">
           {viewSwitcher}
         </div>
@@ -209,7 +322,7 @@ function ChatGPTBrowserView({
             <DedicatedChatGPTBrowser
               environmentId={environmentId}
               sessionId={sessionId}
-              toolbarActions={viewSwitcher}
+              toolbarActions={splitMode ? undefined : viewSwitcher}
             />
           ) : null
         ) : (
