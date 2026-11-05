@@ -32,6 +32,7 @@ export interface TaskBoardInboxTask {
   depends_on?: string[];
   review_status?: "open" | "resolved" | null;
   review_round?: number | null;
+  live?: { state?: "ready" | "in_session" | null; brief?: string | null } | null;
   created?: string;
   path?: string;
   description?: string;
@@ -88,11 +89,12 @@ export function taskBoardPendingEntries(
   for (const task of snapshot.tasks) {
     if (!task.id || !task.title || task.archived) continue;
     const openReview = task.review_status === "open";
+    const liveReady = !complete(task) && task.live?.state === "ready";
     const pendingQuestion =
       !complete(task) && (task.kind === "for_user" || task.attention?.includes("needs-user"));
-    if (!pendingQuestion && !openReview) continue;
+    if (!pendingQuestion && !openReview && !liveReady) continue;
     // Native Review remains visible while open, even when its task is Done.
-    if (pendingQuestion && !openReview &&
+    if (pendingQuestion && !openReview && !liveReady &&
       !(task.depends_on ?? []).every((id) => {
         const dependency = byId.get(id);
         return dependency !== undefined && complete(dependency);
@@ -107,9 +109,10 @@ export function taskBoardPendingEntries(
       sourceId: task.id,
       boardRoot: snapshot.boardRoot,
       title: task.title,
-      body: task.question?.prompt || task.description || "Open this item in TaskBoard to review.",
+      body: liveReady ? (task.live?.brief || "Ready to work together. Open this task to start its session.") :
+        task.question?.prompt || task.description || "Open this item in TaskBoard to review.",
       ...(task.created ? { createdAt: task.created } : {}),
-      state: "pending", // Projected only from the source task; never an approval or local snooze.
+      state: liveReady ? "ready_for_you" : "pending", // Derived only from TaskBoard, not a second approval.
       requiresAction: true,
       ...(openReview
         ? {
