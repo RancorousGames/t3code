@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off globalTimers:off -- Sandboxed guest preload, no Effect runtime.
 export const CHATGPT_PAGE_PUSH_CHANNEL = "preview:chatgpt-page-push";
-export const CHATGPT_PUSH_DEBOUNCE_MS = 300;
-export const CHATGPT_PUSH_MIN_INTERVAL_MS = 1_000;
+export const CHATGPT_PUSH_DEBOUNCE_MS = 150;
+export const CHATGPT_PUSH_MIN_INTERVAL_MS = 800;
 
 export function installChatGPTPagePushObserver(
   doc: Document,

@@ -55,10 +55,10 @@ import {
   type ChatGPTActivityState,
 } from "./chatGPTActivity";
 
-// A guest preload pushes DOM-change hints at most once per second. The slow
+// Guest DOM changes push status updates; the slow
 // probe heartbeat remains necessary to detect blank or hung renderers.
 const BROWSER_HEARTBEAT_MS = 30_000;
-const ACTIVE_HEARTBEAT_MS = 5_000;
+const ACTIVE_HEARTBEAT_MS = 30_000;
 const UNHEALTHY_HEARTBEAT_MS = 10_000;
 const WORKING_HEARTBEAT_MS = 30_000;
 
