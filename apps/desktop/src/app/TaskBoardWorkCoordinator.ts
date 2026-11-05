@@ -106,6 +106,7 @@ export class TaskBoardWorkCoordinator {
   private lastUnstartedGuestCheckAt = 0;
   private readonly rejectedUnstartedGuests = new Map<string, number>();
   private lastAbandonedStartCheckAt = 0;
+  private lastReleasedWorkerCheckAt = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private busy = false;
@@ -515,6 +516,78 @@ export class TaskBoardWorkCoordinator {
     }
   }
 
+  /** TaskBoard may release an abandoned worker claim back to AI Ready while
+   * its historical queue receipt still says Working. A never-bootstrapped old
+   * guest is not an active owner; return that exact intent to Queue only after
+   * checking the complete T3 registry for a still-working session. */
+  private async recoverReleasedWorkers(snapshots: QueueSnapshot[]): Promise<void> {
+    if (Date.now() - this.lastReleasedWorkerCheckAt < 30_000) return;
+    this.lastReleasedWorkerCheckAt = Date.now();
+    const candidates = snapshots.flatMap(board => board.items
+      .filter(item => item.state === "working" && item.readiness && !item.claimed &&
+        item.sessionId && UUID.test(item.sessionId) && item.reservationId &&
+        UUID.test(item.queueRequest) && !item.legacyOpenRig)
+      .map(item => ({boardRoot: board.boardRoot, item})));
+    if (!candidates.length) return;
+    const listed = await cli("node.exe", [
+      NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+    ], JSON.stringify({
+      action: "list", which: "all", includeHidden: true, home: this.home,
+    }), 25_000) as {sessions?: Array<{
+      id: string; spawnRequestId?: string; status?: string; activity?: string;
+      statusObservedAt?: string; conversationId?: string | null;
+      bootstrapIdentity?: {state?: string; conversationId?: string | null};
+      binding?: {boundAt?: string; taskRef?: {board?: string; id?: string}};
+      lastRole?: string | null; lastWorkingAt?: number | null; totalTurns?: number | null;
+    }>; total?: number; hasMore?: boolean; incomplete?: boolean};
+    if (!Array.isArray(listed.sessions) || listed.hasMore || listed.incomplete ||
+        (listed.total !== undefined && listed.total !== listed.sessions.length)) return;
+    const now = Date.now();
+    for (const {boardRoot, item} of candidates) {
+      const matching = listed.sessions.filter(s =>
+        s.id === item.sessionId ||
+        (s.binding?.taskRef?.id === item.taskId && s.binding?.taskRef?.board &&
+          rootKey(s.binding.taskRef.board) === rootKey(boardRoot)));
+      if (matching.length > 1) continue; // Another guest may still own this task.
+      const session = matching[0];
+      // A newly allocated guest might not have appeared in the registry yet.
+      // Without a matching live guest, require an old durable spawn journal
+      // before treating its absence as conclusive.
+      if (!session && now - this.startingSince(boardRoot, item) < 30 * 60_000) continue;
+      if (session) {
+        const bound = Date.parse(session.binding?.boundAt ?? "");
+        const observed = Date.parse(session.statusObservedAt ?? "");
+        if (session.id !== item.sessionId ||
+            session.spawnRequestId !== item.reservationId ||
+            session.binding?.taskRef?.id !== item.taskId ||
+            !session.binding?.taskRef?.board ||
+            rootKey(session.binding.taskRef.board) !== rootKey(boardRoot) ||
+            session.bootstrapIdentity?.state !== "awaiting_marker" ||
+            session.conversationId || session.bootstrapIdentity.conversationId ||
+            session.lastRole != null ||
+            (session.lastWorkingAt != null && session.lastWorkingAt > 0) ||
+            (session.totalTurns != null && session.totalTurns > 0) ||
+            !["new", "unavailable"].includes(session.status ?? "") ||
+            session.activity === "working" ||
+            !Number.isFinite(bound) || now - bound < 30 * 60_000 ||
+            !Number.isFinite(observed) || observed > now + 1000 ||
+            now - observed > 15_000) continue;
+      }
+      // The old guest is absent or was never mounted/bootstrapped. The
+      // TaskBoard claim is already released; no active worker is displaced.
+      await this.taskCommand(boardRoot, [
+        "task", "queue", "requeue-released", item.taskId,
+        "--queue-request", item.queueRequest,
+        "--request-id", item.reservationId!,
+        "--session-id", item.sessionId!,
+        "--reason", "Released AI Ready task has no active or bootstrapped T3 worker; Queue recovered.",
+        "--verified-old-session-inactive",
+      ]);
+      await this.readQueues();
+      return;
+    }
+  }
+
   /** Recover ONLY task spawns whose persisted first message definitely never
    * reached ChatGPT. UNKNOWN submissions remain untouched to avoid duplicates. */
   private async recoverConfirmedUnsent(snapshots: QueueSnapshot[]): Promise<void> {
@@ -597,6 +670,9 @@ export class TaskBoardWorkCoordinator {
           snapshots = this.snapshots;
           try { await this.recoverQuarantinedStarts(snapshots); }
           catch (error) { this.lastError = `Starting recovery: ${String(error)}`; }
+          snapshots = this.snapshots;
+          try { await this.recoverReleasedWorkers(snapshots); }
+          catch (error) { this.lastError = `Released worker recovery: ${String(error)}`; }
           snapshots = this.snapshots;
         }
       }
