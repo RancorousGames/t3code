@@ -79,7 +79,9 @@ describe("fresh ChatGPT session direct-submit delivery", () => {
     expect(serializedPrompt).toBeDefined();
     const handoff = JSON.parse(serializedPrompt!) as string;
     expect(handoff).toContain('Bootstrap(role="personal", given_id="' + publicId + '")');
-    expect(handoff).toContain("Your own T3 browser session ID: " + publicId);
+    expect(handoff).toContain("Do not print T3_ID or T3_TITLE");
+    expect(handoff).not.toContain("[T3_ID:" + publicId + "]");
+    expect(handoff).not.toContain("title=");
     expect(handoff).not.toContain('given_id="session"');
   });
 
