@@ -588,14 +588,16 @@ export class TaskBoardWorkCoordinator {
             !item.claimed && !item.legacyOpenRig && UUID.test(item.queueRequest)));
         const freeCapacity = (await this.caffy.capacity().catch(() => null))?.admissible ?? false;
         if (!readyQueued || !freeCapacity) {
-          try {
-            await this.recoverUnstartedGuests(snapshots);
-            snapshots = this.snapshots;
-            await this.recoverQuarantinedStarts(snapshots);
-            snapshots = this.snapshots;
-          } catch (error) {
+          try { await this.recoverUnstartedGuests(snapshots); }
+          catch (error) {
+            // A guest whose native draft cannot be verified must not prevent
+            // independent orphaned Starting requests from recovering.
             this.lastError = `Unstarted guest recovery: ${String(error)}`;
           }
+          snapshots = this.snapshots;
+          try { await this.recoverQuarantinedStarts(snapshots); }
+          catch (error) { this.lastError = `Starting recovery: ${String(error)}`; }
+          snapshots = this.snapshots;
         }
       }
       // Old ambiguous starts remain in TaskBoard for exact-request recovery,
