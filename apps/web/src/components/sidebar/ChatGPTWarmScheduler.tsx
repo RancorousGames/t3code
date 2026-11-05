@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
+import { visibleSplitSessionIds } from "../../chatGPTSplitLayout";
 import { inspectBrowserSession } from "../../chatGPTSessionControl";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { useParams } from "@tanstack/react-router";
@@ -159,7 +160,7 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
           .filter(({ session, status }) => eligibleIds.has(session.id) && status.residency !== "unknown")
           .map(({ session }) => ({
             id: session.id,
-            selected: session.id === selectedId,
+            selected: session.id === selectedId || (selectedId !== undefined && visibleSplitSessionIds(environmentId).has(session.id)),
             deliveryPending: pendingGuestIds.current.has(session.id),
             keepLoaded: keepLoadedIds.has(session.id),
             caffyDueSoon: imminentCaffyIds.has(session.id),
@@ -320,7 +321,7 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
         ) ?? 0;
         return {
           id: session.id,
-          selected: session.id === selectedId,
+          selected: session.id === selectedId || (selectedId !== undefined && visibleSplitSessionIds(environmentId).has(session.id)),
           deliveryPending: pendingGuestIds.current.has(session.id),
           keepLoaded: keepLoadedIds.has(session.id),
           caffyDueSoon: imminentCaffyIds.has(session.id),

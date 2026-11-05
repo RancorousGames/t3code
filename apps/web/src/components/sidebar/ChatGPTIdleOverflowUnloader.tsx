@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { visibleSplitSessionIds } from "../../chatGPTSplitLayout";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { readChatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import type { BrowserSession } from "../../chatGPTBrowserSessions";
@@ -96,7 +97,7 @@ export function ChatGPTIdleOverflowUnloader({
           const lastWorking = getLocalStorageItem(
             chatGPTBrowserLastWorkingKey(environmentId, session.id), Schema.Number,
           ) ?? 0;
-          return session.id !== selectedId &&
+          return session.id !== selectedId && !(selectedId && visibleSplitSessionIds(environmentId).has(session.id)) &&
             !imminentCaffyIds.has(session.id) &&
             !deliveryRequests[`${environmentId}:${session.id}`] &&
             !hasUncertainChatGPTSend(environmentId, session.id) &&
@@ -126,7 +127,8 @@ export function ChatGPTIdleOverflowUnloader({
             if (!safeToUnload(evaluated.result ?? null, probe.url)) continue;
             // Do not use an earlier React selection snapshot if the route changed.
             if (disposed || imminentCaffyIds.has(session.id) ||
-                window.location.pathname.endsWith(`/${session.id}`)) continue;
+                (window.location.href.includes("/browser/") &&
+                  visibleSplitSessionIds(environmentId).has(session.id))) continue;
             await bridge({ operation: "close", identity: nativeIdentity });
             clearChatGPTGuestUserOpened(session.id);
             clearChatGPTGuestUserOpened(JSON.stringify([
@@ -153,7 +155,8 @@ export function ChatGPTIdleOverflowUnloader({
             const expectedUrl = nav?._tag === "Success" ? nav.url : null;
             if (!safeToUnload(observation, expectedUrl)) continue;
             if (disposed || imminentCaffyIds.has(session.id) ||
-                window.location.pathname.endsWith(`/${session.id}`)) continue;
+                (window.location.href.includes("/browser/") &&
+                  visibleSplitSessionIds(environmentId).has(session.id))) continue;
             evictVerifiedIdleChatGPTGuest(stableKey);
             overflow--;
           }

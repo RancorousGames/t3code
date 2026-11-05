@@ -208,6 +208,7 @@ import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedSt
 import type { ChatGPTPageSnapshot } from "../../chatGPTPageSnapshot";
 import { useStore } from "zustand";
 
+import { splitSessionIds, useSplitLayout } from "../../chatGPTSplitLayout";
 const VerifiedWorkerEvidenceSchema = Schema.Array(
   Schema.Struct({
     sessionId: Schema.String,
@@ -377,6 +378,8 @@ export function ChatGPTBrowserSidebarEntry({
   const navigate = useNavigate();
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
   const erroredSessionsAtBottom = useOmniworkPreferences(
+  const splitLayout = useSplitLayout(usePrimaryEnvironmentId());
+  const displayedSessionIds = new Set(activeSessionId ? splitSessionIds(splitLayout) : []);
     (settings) => settings.erroredSessionsAtBottom,
   );
   const showWorkersWithSelectedParent = useOmniworkPreferences(
@@ -2739,7 +2742,8 @@ export function ChatGPTBrowserSidebarEntry({
                               return (
                                 <div
                                   data-chatgpt-selected-session={activeSessionId === session.id}
-                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${activeSessionId === session.id ? "ring-1 ring-inset ring-primary/70" : ""}`}
+                                  data-chatgpt-visible-pane={displayedSessionIds.has(session.id)}
+                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${activeSessionId === session.id ? "ring-2 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
                                   onContextMenu={(event) => {
                                     event.preventDefault();
                                     void showSessionContextMenu(session.id, {

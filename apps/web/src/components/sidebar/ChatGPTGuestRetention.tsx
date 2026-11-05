@@ -1,6 +1,7 @@
 import { useParams } from "@tanstack/react-router";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { splitSessionIds, useSplitLayout } from "../../chatGPTSplitLayout";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -147,6 +148,8 @@ export function ChatGPTGuestRetention({
   const deliveryRequests = useChatGPTDeliveryMountRequests((state) => state.required);
   const managerIds = useOpenRigManagerChatGPTSessions(environmentId);
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
+  const splitLayout = useSplitLayout(environmentId);
+  const displayedSessionIds = new Set(activeSessionId ? splitSessionIds(splitLayout) : []);
   const touchedAt = useChatGPTGuestHibernation((state) => state.touchedAt);
   const manuallyUnloaded = useChatGPTGuestHibernation((state) => state.manuallyUnloaded);
   const autoEvicted = useChatGPTGuestHibernation((state) => state.autoEvicted);
@@ -191,7 +194,7 @@ export function ChatGPTGuestRetention({
       sessions.map((session) => session.id),
       loadAllStartup && warmCount >= sessions.length,
     );
-    if (activeSessionId) plan.activatedIds.add(activeSessionId);
+    for (const id of displayedSessionIds) plan.activatedIds.add(id);
     for (const id of uncertainOwners) plan.activatedIds.add(id);
     // A previously streaming response gets its exact guest remounted once.
     // This never sends Continue, nor bypasses UNKNOWN-send or snooze.
@@ -205,10 +208,12 @@ export function ChatGPTGuestRetention({
   );
 
   useEffect(() => {
-    if (!isElectron || !environmentId || !activeSessionId) return;
-    const thread = chatGPTBrowserThreadRef(environmentId, activeSessionId);
-    touchChatGPTGuest(JSON.stringify([environmentId, thread.threadId]));
-  }, [environmentId, activeSessionId]);
+    if (!isElectron || !environmentId) return;
+    for (const id of displayedSessionIds) {
+      const thread = chatGPTBrowserThreadRef(environmentId, id);
+      touchChatGPTGuest(JSON.stringify([environmentId, thread.threadId]));
+    }
+  }, [environmentId, [...displayedSessionIds].join("|")]);
 
   useEffect(() => {
     if (!isElectron) return;
@@ -250,7 +255,7 @@ export function ChatGPTGuestRetention({
     const candidates = sessions.flatMap((session) => {
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
-      if (autoEvicted?.[key] && activeSessionId !== session.id &&
+      if (autoEvicted?.[key] && !displayedSessionIds.has(session.id) &&
           !deliveryRequests[`${environmentId}:${session.id}`] &&
           !imminentCaffyIds.has(session.id)) return [];
       const recentUseAt = Math.max(
@@ -275,7 +280,7 @@ export function ChatGPTGuestRetention({
           !manuallyUnloaded[key] &&
           !session.hidden &&
           !(session.snoozedUntil && session.snoozedUntil > now)) ||
-        activeSessionId === session.id ||
+        displayedSessionIds.has(session.id) ||
         (userOpened?.[key] === true &&
           !session.hidden && !(session.snoozedUntil && session.snoozedUntil > now)) ||
         (!!session.borderColor && (!longIdle || withinLongIdle)) ||
@@ -312,7 +317,7 @@ export function ChatGPTGuestRetention({
       const priority = (key: string) => {
         const id = sessions.find((session) =>
           JSON.stringify([environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId]) === key)?.id;
-        if (id === activeSessionId) return 0;
+        if (id && displayedSessionIds.has(id)) return 0;
         if (id && deliveryRequests[`${environmentId}:${id}`]) return 1;
         return protectedKeys.has(key) ? 2 : 3;
       };
@@ -322,7 +327,10 @@ export function ChatGPTGuestRetention({
       ? JSON.stringify([environmentId, chatGPTBrowserThreadRef(environmentId, activeSessionId).threadId])
       : null;
     const userKeys = ranked
-      .filter(({ key }) => userOpened?.[key] === true || key === selectedKey)
+      .filter(({ key }) => userOpened?.[key] === true || key === selectedKey ||
+        [...displayedSessionIds].some((id) => key === JSON.stringify([
+          environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId,
+        ])))
       .map(({ key }) => key);
     const manual = new Set(userKeys);
     const automatic = ranked.filter(({ key }) => !manual.has(key));
@@ -335,6 +343,7 @@ export function ChatGPTGuestRetention({
     ])];
   }, [
     activeSessionId,
+    [...displayedSessionIds].join("|"),
     environmentId,
     managerIds,
     sessions,
@@ -405,7 +414,7 @@ export function ChatGPTGuestRetention({
             key={session.id}
             environmentId={environmentId}
             sessionId={session.id}
-            selected={activeSessionId === session.id}
+            selected={displayedSessionIds.has(session.id)}
             suspended={false}
             quiet
           />

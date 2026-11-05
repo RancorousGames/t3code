@@ -121,7 +121,7 @@ function handleHostEvent(event: PersistentChatGPTHostEvent): void {
   }
   if (event.type === "interaction") {
     void owner.webContents
-      .executeJavaScript(`window.dispatchEvent(new Event("t3:chatgpt-page-interaction"))`, false)
+      .executeJavaScript(`window.dispatchEvent(new CustomEvent("t3:chatgpt-page-interaction", { detail: ${JSON.stringify(event.sessionId)} }))`, false)
       .catch(() => undefined);
     return;
   }
@@ -201,9 +201,7 @@ export function showDirectChatGPTOverlay(input: {
   const hwnd = Number(sourceHwnd);
   if (!Number.isSafeInteger(hwnd) || sourcePid(hwnd) !== hostPid)
     throw new Error("Detached Chromium source HWND no longer matches its host");
-  for (const [id, item] of sources) {
-    if (id !== sessionId && item.owner === owner) hideDirectChatGPTOverlay(id);
-  }
+  // Split panes share an owner; presenting one must not conceal another.
   hideDirectChatGPTOverlay(sessionId);
 
   const ownerHwnd = Number(owner.getNativeWindowHandle().readBigUInt64LE(0));

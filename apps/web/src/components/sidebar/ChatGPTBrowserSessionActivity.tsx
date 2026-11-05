@@ -5,6 +5,7 @@ import { CircleIcon, GlobeIcon, LoaderCircleIcon, MoonIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useBrowserSurfaceStore } from "../../browser/browserSurfaceStore";
+import { visibleSplitSessionIds } from "../../chatGPTSplitLayout";
 import {
   chatGPTGuestTouchedAt,
   hibernateChatGPTGuest,
@@ -225,7 +226,8 @@ export function useChatGPTBrowserSessionActivity(
       let next: ChatGPTActivityState = "unknown";
       let reason: string | null = "the browser page is not attached";
       // Only real display counts as use: recovery probes also hold surface activity.
-      const visible = useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible === true;
+      const visible = useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible === true ||
+        (window.location.href.includes("/browser/") && visibleSplitSessionIds(environmentId).has(sessionId));
       const hibernated = isChatGPTGuestHibernated(runtimeTabId);
       // Hibernation only happens while not working, so idle is the last truth.
       if (hibernated) {
@@ -396,7 +398,7 @@ export function useChatGPTBrowserSessionActivity(
         !hibernated &&
         shouldHibernateChatGPTGuest({
           visible,
-          protected: caffyImminent,
+          protected: caffyImminent || visible,
           longIdle,
           onConversation: isOnConversation(),
           activity: next,
@@ -447,7 +449,8 @@ export function useChatGPTBrowserSessionActivity(
           !imminentCaffySessionIds(
             session ? [session] : [], readVerifiedT3CaffyOverview(), Date.now(),
           ).has(sessionId) &&
-          useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible !== true
+          useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible !== true &&
+          !(window.location.href.includes("/browser/") && visibleSplitSessionIds(environmentId).has(sessionId))
         ) {
           hibernateChatGPTGuest(runtimeTabId);
           next = "idle";
