@@ -9,7 +9,7 @@ import { MATRIX_BATCH_EVENT, activateMatrixBatch, eligibleMatrixRows, newMatrixB
 
 const PRESETS = [5, 20, 100, 300];
 export function MatrixBatchControls() {
-  const { project, activeRow, view, go, toast } = useApp();
+  const { project, activeRow, view, setView, select, go, toast } = useApp();
   const [settings, setSettings] = useState(() => readMatrixBatchSettings(project.id));
   const [plan, setPlan] = useState(() => readMatrixBatchPlan(project.id));
   const [open, setOpen] = useState(false);
@@ -95,11 +95,17 @@ export function MatrixBatchControls() {
     saveMatrixBatchPlan({ ...plan, stage, error: stage === "running" ? undefined : plan.error });
     if (stage === "running") activateMatrixBatch(plan.sessionId);
   };
+  const reviewDrafts = () => {
+    setView({ filter: "draft", query: "", file: null, term: null, speaker: "any" });
+    const first = plan?.ids.find(id => project.rows.some(row => row.id === id && row.ai?.trim()));
+    if (first) select(first);
+  };
   return <div className="mori-matrix-batch-controls">
     {plan && <span className="mori-matrix-batch-progress" role="status">
-      {plan.stage === "paused" ? "Paused · " : plan.stage === "stopped" ? "Stopped · " : plan.stage === "done" ? "Done · " : "Translating "}
+      {plan.stage === "paused" ? "Paused · " : plan.stage === "stopped" ? "Stopped · " : plan.stage === "done" ? "AI drafts saved · " : "Translating "}
       {plan.cursor}/{plan.ids.length}{plan.skipped ? ` · ${plan.skipped} skipped` : ""}
     </span>}
+    {plan?.stage === "done" && <button type="button" className="btn sm outline" onClick={reviewDrafts}>Review drafts</button>}
     {plan?.stage === "running" && <button type="button" className="btn sm outline" onClick={() => changeStage("paused")}>Pause</button>}
     {plan?.stage === "paused" && <button type="button" className="btn sm outline" onClick={() => changeStage("running")}>Resume</button>}
     {busy && <button type="button" className="btn sm outline" onClick={() => { activateMatrixBatch(plan!.sessionId); go("chatgpt"); }}>View chat</button>}

@@ -265,10 +265,10 @@ export function useChatBatchWorker(input: {
         const newlySkipped = pending.planCursorEnd > currentPlan.cursor ? pending.planSkipped ?? 0 : 0;
         updatePlan({ ...currentPlan, cursor, skipped: currentPlan.skipped + newlySkipped,
           stage: completed && currentPlan.stage === "running" ? "done" : currentPlan.stage, error: undefined });
-        if (completed && currentPlan.stage === "running") notify("Translation queue finished.", "success");
+        if (completed && currentPlan.stage === "running") notify(`Saved ${cursor - currentPlan.skipped - newlySkipped} AI drafts. Review them in Matrix → Draft only.`, "success");
       }
       updateJob(null);
-      if (merged.added && !pending.planId) notify(`${merged.added} more AI ${merged.added === 1 ? "translation" : "translations"} just added`, "success");
+      if (merged.added && !pending.planId) notify(`${merged.added} new AI ${merged.added === 1 ? "draft" : "drafts"} saved in Matrix → Draft only.`, "success");
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Could not save ChatGPT drafts.";
       updateJob({ ...pending, stage: "failed", error: message });
