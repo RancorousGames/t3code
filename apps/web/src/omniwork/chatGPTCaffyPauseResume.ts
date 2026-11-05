@@ -11,7 +11,7 @@ export async function scheduleCaffyBegin(
   options?: {
     /** Suspend existing Caffy idle wakes while the stop action is in flight. */
     suspendWake?: () => Promise<unknown>;
-    /** Re-enable the monitor after the future begin time has been saved. */
+    /** Restore the original monitor if Stop or deadline persistence fails. */
     resumeWake?: () => Promise<unknown>;
   },
 ): Promise<boolean> {
@@ -28,9 +28,10 @@ export async function scheduleCaffyBegin(
   }
   try {
     await stopGeneration();
+    // Saving a future deadline also unpauses the monitor durably in the
+    // desktop scheduler. No second IPC (which may fail) is needed here.
     await saveSchedule(beginAt);
     saved = true;
-    if (options?.resumeWake) await options.resumeWake();
   } catch (error) {
     // If stop/scheduling failed, restore the original monitor state.
     // Once the future schedule is saved, NEVER issue an early wake.

@@ -24,7 +24,24 @@ describe("Caffy pause and delayed resume", () => {
         resumeWake: async () => { events.push("resume-caffy"); },
       },
     );
-    expect(events).toEqual(["pause-caffy", "stop", "save-future-deadline", "resume-caffy"]);
+    expect(events).toEqual(["pause-caffy", "stop", "save-future-deadline"]);
+  });
+
+  it("does not depend on a second IPC resume after saving the delayed wake", async () => {
+    const events: string[] = [];
+    await scheduleCaffyBegin(
+      123456, true,
+      async () => { events.push("stop"); },
+      async () => { events.push("save-and-activate"); },
+      {
+        suspendWake: async () => { events.push("pause"); },
+        resumeWake: async () => {
+          events.push("legacy-resume");
+          throw new Error("IPC disconnected after save");
+        },
+      },
+    );
+    expect(events).toEqual(["pause", "stop", "save-and-activate"]);
   });
 
   it("does not schedule when the stop button could not be activated", async () => {

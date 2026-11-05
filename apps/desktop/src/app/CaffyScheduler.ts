@@ -500,6 +500,8 @@ export class CaffyScheduler {
     if (row.conversationId !== conversationId)
       throw new Error("Delayed start requires the same registered conversation.");
     if (row.rebootOperationId) throw new Error("A reboot is awaiting reconciliation.");
+    if (at !== null && this.legacyConflict(row.sessionId, row.conversationId))
+      throw new Error("Legacy OmniHub monitor owns this session; cannot resume T3 Caffy.");
     if (at === null && row.onceOnly && row.mode === "idle" &&
         row.beginAt !== null && row.beginAt !== undefined && row.lastWakeAt === null) {
       return { cleared: true, stopped: this.stop(sessionId).stopped };
@@ -521,6 +523,13 @@ export class CaffyScheduler {
     row.beginAt = at;
     row.pendingWake = true;
     row.pendingReason = "manual";
+    if (at !== null) {
+      // The renderer first pauses the live monitor while clicking Stop.
+      // Persist the future deadline AND the resumed scheduler atomically, so
+      // a lost follow-up IPC cannot leave Caffy permanently paused.
+      row.paused = false;
+      row.lastError = null;
+    }
     this.save();
     if (at === null) void this.pump();
     return row;
@@ -827,7 +836,10 @@ export class CaffyScheduler {
       ![row.sessionId, row.browserSessionId, row.publicSessionId]
         .some(id => !!id && workingIds.has(canonical(id))) &&
       (row.pendingMessageId !== null ||
-        (row.lastWakeAt !== null && now - row.lastWakeAt < 120_000))).length;
+        // A recent successful wake reserves a short activation grace period,
+        // except when its session has explicitly been paused until later.
+        ((row.beginAt == null || row.beginAt <= now) &&
+          row.lastWakeAt !== null && now - row.lastWakeAt < 120_000))).length;
     const taskReserved = this.taskReservations.filter(row =>
       !row.sessionId || !workingIds.has(canonical(row.sessionId))).length;
     const totalReserved = reserved + extraReserved + taskReserved;
