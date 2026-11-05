@@ -946,6 +946,8 @@ export class CaffyScheduler {
     const data = reply.data as { sessions?: Array<WorkCapacitySessionIdentity & {
       activity?: string; status?: string; statusObservedAt?: string;
       binding?: { boundAt?: string };
+      lastRole?: string | null;
+      bootstrapIdentity?: {state?: string};
     }>; total?: number; hasMore?: boolean; incomplete?: boolean };
     if (!Array.isArray(data.sessions) || data.hasMore || data.incomplete ||
         (data.total !== undefined && data.total !== data.sessions.length)) return unavailable("T3 inventory incomplete");
@@ -1000,9 +1002,18 @@ export class CaffyScheduler {
       if (!row.sessionId) return row.holdUntil === undefined || now < row.holdUntil;
       const id = canonical(row.sessionId);
       if (workingIds.has(id)) return false; // already counted as active
-      const bound = Date.parse(sessionsById.get(id)?.binding?.boundAt ?? "");
+      const session = sessionsById.get(id);
+      const bound = Date.parse(session?.binding?.boundAt ?? "");
+      // A guest that already replied or bootstrapped has completed its startup
+      // reservation; count it only while actively generating. Holding it for
+      // another three minutes falsely blocks newly queued work.
+      if (session?.bootstrapIdentity?.state === "registered" ||
+          session?.lastRole === "assistant") return false;
+      // Keep a never-started guest reserved until the coordinator can retire it
+      // at five minutes, with a short close/reconcile margin. Releasing at
+      // three minutes let late starts push the total above the configured cap.
       return Number.isFinite(bound) && bound <= now + 1000 &&
-        now - bound < 180_000; // recent, still-starting TaskBoard guest
+        now - bound < 6 * 60_000;
     }).length;
     const totalReserved = reserved + extraReserved + taskReserved;
     const used = workingIds.size + totalReserved;

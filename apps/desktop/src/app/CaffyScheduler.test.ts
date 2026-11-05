@@ -43,6 +43,7 @@ function fixture() {
     id: string; conversationId: string; bootstrapIdentity: {
       state: string; publicId: string; conversationId: string;
     }; hidden?: boolean; status?: string; activity?: string; statusObservedAt?: string;
+    lastRole?: string; binding?: {boundAt?: string};
   }> = [];
   let guardedRead = false;
   let retirementCount = 0;
@@ -115,6 +116,29 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       expect(actual).toMatchObject({
         working: 1, reserved: 0, used: 1, available: 2, admissible: true,
       });
+    } finally { c.close(); f.dispose(); }
+  });
+  it("keeps never-started guests reserved until retirement, but releases bootstrapped idle guests", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const recent = new Date(Date.now() - 4 * 60_000).toISOString();
+      f.setRoster([
+        { id: SESSION, conversationId: ORIGINAL,
+          bootstrapIdentity: {state: "awaiting_marker", publicId: SESSION, conversationId: ORIGINAL},
+          status: "new", activity: "idle", statusObservedAt: new Date().toISOString(),
+          binding: {boundAt: recent} },
+      ]);
+      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION}], true);
+      c.reportWorkingSnapshot([], "sidebar");
+      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 1});
+      f.setRoster([
+        { id: SESSION, conversationId: ORIGINAL,
+          bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+          status: "done_or_idle", activity: "idle", statusObservedAt: new Date().toISOString(),
+          lastRole: "assistant", binding: {boundAt: recent} },
+      ]);
+      expect(await c.capacity()).toMatchObject({working: 0, reserved: 0, used: 0, available: 3});
     } finally { c.close(); f.dispose(); }
   });
   it("shows a durable crossed-out marker only after an agent stop, clearing it on reconfiguration", async () => {

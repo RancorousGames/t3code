@@ -57,7 +57,7 @@ const RESERVATION_LEASE_SECONDS = 180;
 const STARTING_HOLD_MS = 5 * 60_000;
 const STARTING_RECHECK_MS = 45_000;
 // A guest stuck at the original prompt must not monopolize a queue item for hours.
-const UNSTARTED_GUEST_GRACE_MS = 10 * 60_000;
+const UNSTARTED_GUEST_GRACE_MS = 5 * 60_000;
 const PUMP_INTERVAL_MS = 15_000;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
