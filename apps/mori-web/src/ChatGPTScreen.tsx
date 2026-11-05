@@ -12,6 +12,7 @@ import { inspectChatGPTPage, type PageInspection } from "../../web/src/chatGPTSe
 import { CHATGPT_ACTIVITY_EXPRESSION } from "../../web/src/components/sidebar/chatGPTActivity.ts";
 import { buildChatGPTSessionContextMenu, buildChatGPTProjectContextMenu } from "../../web/src/chatGPTSessionContextMenu.ts";
 import { useChatBatchWorker } from "./useChatBatchWorker.ts";
+import { MATRIX_BATCH_ACTIVATE } from "./matrix-batch.ts";
 
 type Guest = HTMLElement & {
   getURL: () => string;
@@ -352,6 +353,15 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
     project, prefs, actions, activeId, focusRowId: activeRow?.id ?? null, guestRef: view, readyIdRef: loadedRef,
     toast, openSession: choose,
   });
+  useEffect(() => {
+    const activate = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (sessionsRef.current.some(session => session.id === id && session.projectId === project.id)) choose(id);
+      else toast("The selected ChatGPT session is unavailable. Choose another in Matrix.");
+    };
+    window.addEventListener(MATRIX_BATCH_ACTIVATE, activate);
+    return () => window.removeEventListener(MATRIX_BATCH_ACTIVATE, activate);
+  }, [project.id, toast]);
 
   const move = (id: string, overId: string, asParent: boolean) => {
     const relevant = sessionsRef.current.filter(s => s.projectId === project.id);
@@ -603,7 +613,7 @@ export function ChatGPTScreen({ compact = false }: { compact?: boolean }) {
         onAssignGroup={(id, group) => patchOne(id, s => ({ ...s, project: group === "Other" ? undefined : group }))}
         onDoubleClick={quickSnooze} onUnsnooze={unsnooze}
         onRunBatch={() => { void worker.run(); }}
-        batchStatus={worker.status} batchPending={!!worker.job}
+        batchStatus={worker.plan?.stage === "running" ? `Translating ${worker.plan.cursor}/${worker.plan.ids.length} · ${worker.status || "queue active"}` : worker.plan?.stage === "paused" ? `Queue paused ${worker.plan.cursor}/${worker.plan.ids.length} · ${worker.plan.error ?? worker.status}` : worker.status} batchPending={!!worker.job || worker.plan?.stage === "running" || worker.plan?.stage === "paused"}
         batchCount={worker.draftable.length}
         batchBusy={worker.sending} />}
       {worker.job && worker.job.stage !== "ready" && <div className="mori-ai-batch-floating" role="status">

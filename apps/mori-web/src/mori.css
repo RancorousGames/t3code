@@ -880,3 +880,34 @@ mark.ins{background:var(--moss-bg);color:var(--moss);border-radius:3px}
 .mori-ai-status-glyph{display:grid;place-items:center;width:16px;height:16px;border:1.5px solid currentColor;border-radius:50%;font-size:11px;font-weight:800;line-height:1;flex:none}
 .mori-ai-session[data-age="invalid"] .mori-ai-handle,.mori-ai-session[data-age="invalid"] .mori-ai-row-title{color:#fda4af}
 .mori-ai-session[data-age="interrupted"] .mori-ai-handle,.mori-ai-session[data-age="interrupted"] .mori-ai-row-title{color:#fb923c}
+
+/* Persistent ChatGPT guest: keep the same webview while navigating Matrix, AI Chats and split view. */
+.mori-workspace{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
+.mori-persistent-chat{display:none;min-width:0;min-height:0;overflow:hidden;background:#090b0e}
+.main.mori-chat-full .mori-workspace{display:none}
+.main.mori-chat-full .mori-persistent-chat{display:flex;flex:1}
+.main.mori-matrix-split{display:grid;min-height:0}
+.main.mori-matrix-split .mori-persistent-chat{display:flex;min-height:0}
+.main.mori-matrix-split .mori-workspace{min-width:0}
+.main.mori-matrix-split .matrix-split-divider{min-height:0}
+.matrix-content.side-by-side{grid-template-columns:minmax(0,1fr)}
+.mori-matrix-batch-controls{display:flex;align-items:center;gap:5px;min-width:0}
+.mori-matrix-batch-progress{font-size:11px;color:var(--text-2);white-space:nowrap}
+.mori-matrix-batch-trigger{position:relative;display:flex;gap:2px}
+.mori-matrix-batch-popover{position:absolute;right:0;top:calc(100% + 7px);z-index:35;display:flex;flex-direction:column;gap:8px;width:300px;max-width:calc(100vw - 24px);padding:14px;border:1px solid var(--line-3);border-radius:8px;background:var(--bg-1);box-shadow:0 12px 30px #0008;font-size:12px;color:var(--text)}
+.mori-matrix-batch-popover label{display:flex;align-items:center;gap:8px;min-height:26px}
+.mori-matrix-batch-popover input[type=radio]{accent-color:var(--moss)}
+.mori-matrix-batch-popover select,.mori-matrix-batch-popover input[type=number]{background:var(--bg-3);color:var(--text);border:1px solid var(--line-3);border-radius:5px;padding:6px 7px;min-width:0;width:100%}
+.mori-matrix-batch-popover input[type=number]{width:85px}
+.mori-matrix-batch-popover small{color:var(--text-3)}
+.mori-batch-label{font-size:11px;color:var(--text-3);margin-top:4px}
+.mori-matrix-batch-sizes{display:flex;gap:4px;flex-wrap:wrap}
+.mori-matrix-batch-sizes button{flex:1;min-height:29px;background:var(--bg-3);color:var(--text);border-radius:5px;border:1px solid var(--line-3)}
+.mori-matrix-batch-sizes button.selected{background:var(--moss-3);border-color:var(--moss-2)}
+.main .toolbar{flex-wrap:wrap;height:auto;min-height:52px;padding-top:5px;padding-bottom:5px}
+
+.mori-row-batch-backdrop{position:fixed;inset:0;z-index:50;cursor:default}
+.mori-row-batch-menu{position:fixed;z-index:51;width:192px;padding:4px;background:var(--bg-1);border:1px solid var(--line-3);box-shadow:0 8px 24px #0008;border-radius:6px}
+.mori-row-batch-menu button{display:block;text-align:left;width:100%;padding:8px 10px;color:var(--text);font-size:12px;border-radius:4px}
+.mori-row-batch-menu button:hover:not(:disabled){background:var(--bg-3)}
+.mori-row-batch-menu button:disabled{opacity:.45}

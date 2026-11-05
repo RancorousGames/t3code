@@ -3,8 +3,8 @@ import { useApp } from "./app-context.ts";
 import { tr } from "./ui-localization.ts";
 import { Icon } from "./Icons.tsx";
 import { Inspector } from "./Inspector.tsx";
+import { MatrixBatchControls } from "./MatrixBatchControls.tsx";
 import { KeyCaps } from "./Overlays.tsx";
-import { ChatGPTScreen } from "./ChatGPTScreen.tsx";
 import { Marked } from "./Marked.tsx";
 import { checkRow, matchesFilter, statusOf, termPattern, type RowFilter } from "./insights.ts";
 import { editFinalText, type MoriRow } from "./model.ts";
@@ -301,8 +301,6 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
       writeWorkspace(project.id, { scrollTop: el.scrollTop, scrollLeft: el.scrollLeft });
     }, 150);
   };
-  const splitRef = useRef<HTMLDivElement>(null);
-  const [browserWidth, setBrowserWidth] = useState(46);
   const inspectorVisible = prefs.inspectorOpen && !sideBySide;
   const columns = sideBySide ? COLUMN_DEFS.filter(def => ["id", "src", "tr", "st"].includes(def.key)) : shownColumns(prefs);
   const captureRef = useRef<HTMLButtonElement>(null);
@@ -465,6 +463,7 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
           <input id="mori-find" value={view.query} placeholder="Find in lines" onChange={event => setView({ query: event.target.value })} />
           {bindings.find && <KeyCaps binding={bindings.find} />}
         </label>
+        <MatrixBatchControls />
         {prefs.charactersEnabled && <button
           type="button"
           className={`btn${view.speaker !== "any" ? " on" : ""}`}
@@ -500,8 +499,8 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
         </button>}
       </div>
 
-      <div ref={splitRef} className={`matrix-content${sideBySide ? " side-by-side" : ""}`}
-        style={{ gridTemplateColumns: sideBySide ? `minmax(0, ${100 - browserWidth}fr) 8px minmax(0, ${browserWidth}fr)` : inspectorVisible ? "minmax(0, 1fr) 336px" : "minmax(0, 1fr)" }}>
+      <div className={`matrix-content${sideBySide ? " side-by-side" : ""}`}
+        style={{ gridTemplateColumns: inspectorVisible ? "minmax(0, 1fr) 336px" : "minmax(0, 1fr)" }}>
       <div ref={scrollRef} className="scroll" onMouseUp={onMouseUp} onScroll={() => { if (capture) setCapture(null); saveScroll(); }}>
         <div
           ref={matrixRef}
@@ -592,25 +591,6 @@ export function MatrixScreen({ sideBySide, onToggleSideBySide }: { sideBySide: b
           })}
         </div>
       </div>
-      {sideBySide && <>
-        <div className="matrix-split-divider" role="separator" tabIndex={0}
-          aria-label="Resize Matrix and ChatGPT panes" aria-orientation="vertical"
-          aria-valuemin={30} aria-valuemax={55} aria-valuenow={browserWidth}
-          title="Drag to resize; use arrow keys when focused"
-          onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
-          onPointerMove={event => {
-            if (!event.currentTarget.hasPointerCapture(event.pointerId) || !splitRef.current) return;
-            const bounds = splitRef.current.getBoundingClientRect();
-            setBrowserWidth(Math.max(30, Math.min(55, 100 * (bounds.right - event.clientX) / bounds.width)));
-          }}
-          onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
-          onKeyDown={event => {
-            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-            event.preventDefault();
-            setBrowserWidth(width => Math.max(30, Math.min(55, width + (event.key === "ArrowLeft" ? 3 : -3))));
-          }} />
-        <div className="matrix-chat-pane"><ChatGPTScreen compact /></div>
-      </>}
       {inspectorVisible && <Inspector />}
       </div>
       {capture && (

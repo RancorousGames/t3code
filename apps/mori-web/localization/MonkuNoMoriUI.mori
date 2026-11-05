@@ -57,6 +57,15 @@
       "note": "src/TermModal.tsx:147 (jsx-text)"
     },
     {
+      "id": "ui.faf198a1d7dbd3",
+      "source": "· {0} skipped",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:101 (jsx-expression)"
+    },
+    {
       "id": "ui.d92acb96893e3b",
       "source": "· Current edits saved at {0}",
       "ai": "",
@@ -171,7 +180,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:153 (jsx-attribute:title); src/Matrix.tsx:516 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:154 (jsx-attribute:title); src/Matrix.tsx:517 (jsx-attribute:title)"
     },
     {
       "id": "ui.216aa96b96f47a",
@@ -207,7 +216,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:572 (jsx-expression)"
+      "note": "src/Matrix.tsx:573 (jsx-expression)"
     },
     {
       "id": "ui.f8a7b8805c7152",
@@ -225,7 +234,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:169 (ui-call:notify)"
+      "note": "src/useChatBatchWorker.ts:271 (ui-call:notify)"
     },
     {
       "id": "ui.f142c9cd381872",
@@ -234,7 +243,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:572 (jsx-expression)"
+      "note": "src/Matrix.tsx:573 (jsx-expression)"
     },
     {
       "id": "ui.dd095ff1fc2d0a",
@@ -261,7 +270,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:253 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:360 (ui-branch)"
     },
     {
       "id": "ui.03c7ed08ce05bd",
@@ -306,7 +315,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:72 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:73 (object-property:label)"
     },
     {
       "id": "ui.508fe49743f3b7",
@@ -315,7 +324,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:73 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:74 (object-property:label)"
     },
     {
       "id": "ui.b1670980fd628c",
@@ -324,7 +333,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:507 (ui-branch)"
+      "note": "src/Matrix.tsx:508 (ui-branch)"
+    },
+    {
+      "id": "ui.a01a88699003a0",
+      "source": "A ChatGPT reply is still being tracked; resolve it in AI Chats first.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:73 (ui-call:toast)"
     },
     {
       "id": "ui.e5f14376a23af8",
@@ -378,7 +396,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:288 (ui-branch); src/ImportWizard.tsx:367 (jsx-text); src/Matrix.tsx:622 (jsx-text)"
+      "note": "src/ImportWizard.tsx:288 (ui-branch); src/ImportWizard.tsx:367 (jsx-text); src/Matrix.tsx:605 (jsx-text)"
     },
     {
       "id": "ui.8143aa12e22ea9",
@@ -504,7 +522,7 @@
       "final": "AIブラウザーのURL",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:563 (jsx-attribute:aria-label); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:573 (jsx-attribute:aria-label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.4b62311150d1c9",
@@ -522,7 +540,7 @@
       "final": "AIチャット",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:547 (jsx-attribute:aria-label); src/Sidebar.tsx:99 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:557 (jsx-attribute:aria-label); src/Sidebar.tsx:99 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.356716972ceae3",
@@ -540,7 +558,7 @@
       "final": "AI下書き",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:79 (version-label); src/Matrix.tsx:34 (object-getter:label); src/Popovers.tsx:140 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:79 (version-label); src/Matrix.tsx:35 (object-getter:label); src/Popovers.tsx:140 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.af0d24c1255397",
@@ -579,13 +597,31 @@
       "note": "src/Chrome.tsx:122 (ui-branch)"
     },
     {
+      "id": "ui.55bc9968161e53",
+      "source": "AI session",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:132 (jsx-text)"
+    },
+    {
+      "id": "ui.fc8d2dc83944c4",
+      "source": "AI Translation",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:114 (jsx-text)"
+    },
+    {
       "id": "ui.a52ace420f2175",
       "source": "All",
       "ai": "",
       "final": "すべて",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:43 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:44 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.2f2b467abeb011",
@@ -639,7 +675,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:618 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:601 (jsx-attribute:title)"
     },
     {
       "id": "ui.8890f264bb0dcc",
@@ -756,7 +792,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:254 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:361 (ui-branch)"
     },
     {
       "id": "ui.531ffbfcfe3713",
@@ -766,6 +802,33 @@
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
       "note": "src/AIChatsSidebar.tsx:270 (jsx-expression)"
+    },
+    {
+      "id": "ui.8cfe32a04155c2",
+      "source": "Batch size",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:125 (jsx-text)"
+    },
+    {
+      "id": "ui.d806724cf94fcc",
+      "source": "Batch translation options",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:110 (jsx-attribute:aria-label)"
+    },
+    {
+      "id": "ui.79860cf2fd31c2",
+      "source": "Batch translation settings",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:113 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f1021b9fb9c695",
@@ -819,7 +882,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:481 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:491 (ui-call:toast)"
     },
     {
       "id": "ui.8f60d3fc26a628",
@@ -882,7 +945,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:567 (ui-return)"
+      "note": "src/MoriApp.tsx:587 (ui-return)"
     },
     {
       "id": "ui.1405a63e8a78b8",
@@ -927,7 +990,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:160 (jsx-text); src/ChatGPTScreen.tsx:24 (object-getter:label)"
+      "note": "src/AIChatsSidebar.tsx:160 (jsx-text); src/ChatGPTScreen.tsx:25 (object-getter:label)"
     },
     {
       "id": "ui.0e82374d0d2d3c",
@@ -936,7 +999,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:148 (ui-variable:message)"
+      "note": "src/useChatBatchWorker.ts:207 (ui-variable:message)"
     },
     {
       "id": "ui.9656c950b53b38",
@@ -945,7 +1008,7 @@
       "final": "ChatGPTは応答を生成中です。それでも再読み込みしますか？",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:312 (ui-call:confirm); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:313 (ui-call:confirm); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.9a66349131370d",
@@ -954,7 +1017,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:424 (ui-call:confirm)"
+      "note": "src/ChatGPTScreen.tsx:434 (ui-call:confirm)"
     },
     {
       "id": "ui.50184312565462",
@@ -963,7 +1026,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:550 (jsx-attribute:aria-label)"
+      "note": "src/ChatGPTScreen.tsx:560 (jsx-attribute:aria-label); src/MatrixBatchControls.tsx:133 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.f3e19cfec3c41a",
@@ -972,7 +1035,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:251 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:358 (ui-branch)"
     },
     {
       "id": "ui.8fec81657ba8eb",
@@ -981,7 +1044,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:613 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:623 (jsx-text)"
     },
     {
       "id": "ui.58d5d42460ebeb",
@@ -1017,7 +1080,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:551 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:561 (jsx-text)"
     },
     {
       "id": "ui.7b19645ad2b69e",
@@ -1080,7 +1143,7 @@
       "final": "Claude",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:27 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:28 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.3b7ea51793e9d9",
@@ -1146,13 +1209,22 @@
       "note": "src/AIChatsSidebar.tsx:248 (jsx-attribute:title)"
     },
     {
+      "id": "ui.9e59f8c28ac048",
+      "source": "Close row menu",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:145 (jsx-attribute:aria-label)"
+    },
+    {
       "id": "ui.e503367c41c06b",
       "source": "Close session",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:410 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:420 (object-property:label)"
     },
     {
       "id": "ui.af53d419e54d90",
@@ -1188,7 +1260,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:533 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:534 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.2dc2308a0f0d67",
@@ -1206,7 +1278,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:532 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:533 (jsx-attribute:title)"
     },
     {
       "id": "ui.b085369075ac56",
@@ -1242,7 +1314,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:478 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:479 (jsx-attribute:title)"
     },
     {
       "id": "ui.9aec0c12c412d8",
@@ -1251,7 +1323,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:479 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:480 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.459a23a5980fd5",
@@ -1350,7 +1422,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:408 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:418 (object-property:label)"
     },
     {
       "id": "ui.3ab7e46c2b553d",
@@ -1368,7 +1440,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:171 (ui-variable:message)"
+      "note": "src/useChatBatchWorker.ts:273 (ui-variable:message)"
     },
     {
       "id": "ui.51abf739617c70",
@@ -1377,7 +1449,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:542 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:552 (ui-call:toast)"
     },
     {
       "id": "ui.79874911a25970",
@@ -1386,7 +1458,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:495 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:505 (ui-call:toast)"
     },
     {
       "id": "ui.4759498ac2a719",
@@ -1443,6 +1515,15 @@
       "note": "localization/seed.ja.json:1 (seed)"
     },
     {
+      "id": "ui.5ac92256988e74",
+      "source": "Current file",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:123 (jsx-text)"
+    },
+    {
       "id": "ui.533b58fa63ed14",
       "source": "Current run finishes or times out automatically",
       "ai": "",
@@ -1450,6 +1531,15 @@
       "status": "pending",
       "sourceFile": "src/CodexTranslationPanel.tsx",
       "note": "src/CodexTranslationPanel.tsx:71 (jsx-attribute:title)"
+    },
+    {
+      "id": "ui.494ca78f7374e4",
+      "source": "Custom",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:128 (jsx-text)"
     },
     {
       "id": "ui.fd8b8dae442166",
@@ -1557,7 +1647,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:80 (version-label); src/Matrix.tsx:33 (object-getter:label); src/Popovers.tsx:139 (object-getter:label)"
+      "note": "src/Inspector.tsx:80 (version-label); src/Matrix.tsx:34 (object-getter:label); src/Popovers.tsx:139 (object-getter:label)"
     },
     {
       "id": "ui.599fc58fd0f769",
@@ -1584,7 +1674,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:614 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:624 (jsx-text)"
     },
     {
       "id": "ui.da53d14d2018a0",
@@ -1593,7 +1683,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:244 (ui-call:confirm)"
+      "note": "src/useChatBatchWorker.ts:348 (ui-call:confirm)"
     },
     {
       "id": "ui.48845bff334a50",
@@ -1632,6 +1722,15 @@
       "note": "src/Dialogs.tsx:122 (jsx-attribute:label); src/Dialogs.tsx:249 (jsx-text); src/Inspector.tsx:138 (jsx-text); src/TermModal.tsx:170 (jsx-text)"
     },
     {
+      "id": "ui.308c27a3e8cf63",
+      "source": "Done ·",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:100 (jsx-expression)"
+    },
+    {
       "id": "ui.c9725b8c9e108f",
       "source": "Done: replaced in",
       "ai": "",
@@ -1656,7 +1755,7 @@
       "final": "下書きのみ",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:40 (label-map); src/Matrix.tsx:45 (object-getter:label); src/Reference.tsx:407 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:41 (label-map); src/Matrix.tsx:46 (object-getter:label); src/Reference.tsx:407 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e9a88691df3595",
@@ -1719,7 +1818,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:542 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:543 (jsx-attribute:title)"
     },
     {
       "id": "ui.59af4ccc9a80ad",
@@ -1727,8 +1826,8 @@
       "ai": "",
       "final": "",
       "status": "pending",
-      "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:597 (jsx-attribute:title)"
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:535 (jsx-attribute:title)"
     },
     {
       "id": "ui.5117d3a44045cf",
@@ -1755,7 +1854,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
-      "note": "src/MoriApp.tsx:524 (jsx-text)"
+      "note": "src/MoriApp.tsx:523 (jsx-text)"
     },
     {
       "id": "ui.851bbd2bc78977",
@@ -1792,6 +1891,15 @@
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
       "note": "src/Inspector.tsx:140 (jsx-text)"
+    },
+    {
+      "id": "ui.947a3ddf8fe496",
+      "source": "eligible ·",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:137 (jsx-text)"
     },
     {
       "id": "ui.c6c094bc0054f9",
@@ -1836,7 +1944,7 @@
       "final": "英語",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:32 (object-getter:label); src/Popovers.tsx:138 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:492 (jsx-text); src/TermModal.tsx:68 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:33 (object-getter:label); src/Popovers.tsx:138 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:492 (jsx-text); src/TermModal.tsx:68 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.b0743af92dedfb",
@@ -1863,7 +1971,7 @@
       "final": "有効なHTTPまたはHTTPSのURLを入力してください。",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:296 (ui-call:toast); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:297 (ui-call:toast); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.48ac254ed2a2c3",
@@ -1872,7 +1980,16 @@
       "final": "URLを入力...",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:564 (jsx-attribute:placeholder); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:574 (jsx-attribute:placeholder); localization/seed.ja.json:1 (seed)"
+    },
+    {
+      "id": "ui.09c9636507117f",
+      "source": "Entire project",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:122 (jsx-text)"
     },
     {
       "id": "ui.458c1fed574354",
@@ -1881,7 +1998,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:74 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:75 (object-property:label)"
     },
     {
       "id": "ui.abaa6c6eecb051",
@@ -2106,7 +2223,25 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:91 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:113 (ui-call:toast)"
+    },
+    {
+      "id": "ui.238680dc727dd6",
+      "source": "Finish or stop the Matrix translation queue first.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/useChatBatchWorker.ts",
+      "note": "src/useChatBatchWorker.ts:109 (ui-call:toast)"
+    },
+    {
+      "id": "ui.96a3d1cf0bc4b5",
+      "source": "First untranslated line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:118 (jsx-text)"
     },
     {
       "id": "ui.5ec9391b203c8c",
@@ -2160,7 +2295,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:557 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:567 (jsx-text)"
     },
     {
       "id": "ui.f6ece80b88d6df",
@@ -2169,7 +2304,7 @@
       "final": "Gemini",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:26 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:27 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.5201a39b08bfe6",
@@ -2259,7 +2394,7 @@
       "final": "Google AI Studio",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:25 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:26 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.3b65573942ac93",
@@ -2349,7 +2484,7 @@
       "final": "Grok",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:28 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:29 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.6e567a29800219",
@@ -2493,7 +2628,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:493 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:494 (jsx-attribute:title)"
     },
     {
       "id": "ui.5eaf4cfeb16f08",
@@ -2520,7 +2655,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:221 (ui-variable:message)"
+      "note": "src/useChatBatchWorker.ts:324 (ui-variable:message)"
     },
     {
       "id": "ui.5d64f839bd1c36",
@@ -2538,7 +2673,7 @@
       "final": "日本語",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:35 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/TermModal.tsx:71 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:36 (object-getter:label); src/Reference.tsx:140 (jsx-text); src/TermModal.tsx:71 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.a62cf07e0f035c",
@@ -2700,7 +2835,7 @@
       "final": "行",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:30 (object-getter:label); src/Popovers.tsx:136 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:31 (object-getter:label); src/Popovers.tsx:136 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.a3a88a55dd50fa",
@@ -2745,7 +2880,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:386 (jsx-text); src/Reference.tsx:426 (jsx-text)"
+      "note": "src/ImportWizard.tsx:386 (jsx-text); src/MatrixBatchControls.tsx:140 (jsx-text); src/Reference.tsx:426 (jsx-text)"
     },
     {
       "id": "ui.3b26a5427458ed",
@@ -2753,8 +2888,8 @@
       "ai": "",
       "final": "",
       "status": "pending",
-      "sourceFile": "src/Reference.tsx",
-      "note": "src/Reference.tsx:140 (jsx-text); src/Reference.tsx:405 (jsx-text)"
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:130 (jsx-text); src/Reference.tsx:140 (jsx-text); src/Reference.tsx:405 (jsx-text)"
     },
     {
       "id": "ui.acf932d9f0e496",
@@ -2826,7 +2961,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:398 (ui-branch)"
+      "note": "src/ChatGPTScreen.tsx:408 (ui-branch)"
     },
     {
       "id": "ui.198f0f7c0d5a1d",
@@ -2844,7 +2979,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:245 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:246 (jsx-attribute:title)"
     },
     {
       "id": "ui.14493f5f5470ed",
@@ -2862,7 +2997,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:94 (jsx-text); src/Matrix.tsx:47 (object-getter:label)"
+      "note": "src/Inspector.tsx:94 (jsx-text); src/Matrix.tsx:48 (object-getter:label)"
     },
     {
       "id": "ui.7979b7fe8fb10d",
@@ -2871,7 +3006,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:231 (jsx-expression)"
+      "note": "src/Matrix.tsx:232 (jsx-expression)"
     },
     {
       "id": "ui.15297923dfdf89",
@@ -3123,7 +3258,7 @@
       "final": "新規",
       "status": "translated",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:277 (jsx-text); src/ChatGPTScreen.tsx:556 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/AIChatsSidebar.tsx:277 (jsx-text); src/ChatGPTScreen.tsx:566 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.4708d98a07ebcf",
@@ -3159,7 +3294,7 @@
       "final": "新しいチャット",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:553 (jsx-expression); src/ChatGPTScreen.tsx:591 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:563 (jsx-expression); src/ChatGPTScreen.tsx:601 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.00f01db712bb3f",
@@ -3177,7 +3312,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/AIChatsSidebar.tsx",
-      "note": "src/AIChatsSidebar.tsx:163 (jsx-attribute:title); src/AIChatsSidebar.tsx:163 (jsx-attribute:aria-label); src/ChatGPTScreen.tsx:556 (jsx-attribute:title)"
+      "note": "src/AIChatsSidebar.tsx:163 (jsx-attribute:title); src/AIChatsSidebar.tsx:163 (jsx-attribute:aria-label); src/ChatGPTScreen.tsx:566 (jsx-attribute:title)"
     },
     {
       "id": "ui.5d6167ef4766f7",
@@ -3213,7 +3348,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:439 (ui-call:prompt)"
+      "note": "src/ChatGPTScreen.tsx:449 (ui-call:prompt)"
     },
     {
       "id": "ui.374ebe96c9b16f",
@@ -3249,7 +3384,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:474 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:484 (ui-call:toast)"
     },
     {
       "id": "ui.d6a2ad7e85635f",
@@ -3258,7 +3393,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:590 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:600 (jsx-text)"
     },
     {
       "id": "ui.9dc15423f1e8ac",
@@ -3286,6 +3421,15 @@
       "status": "pending",
       "sourceFile": "src/MoriApp.tsx",
       "note": "src/MoriApp.tsx:240 (ui-call:toast)"
+    },
+    {
+      "id": "ui.25625ac83b530e",
+      "source": "No eligible untranslated lines in this scope.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:79 (ui-call:toast)"
     },
     {
       "id": "ui.b87c858242a566",
@@ -3339,7 +3483,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:554 (jsx-text)"
+      "note": "src/Matrix.tsx:555 (jsx-text)"
     },
     {
       "id": "ui.ee7bc80b93e945",
@@ -3420,7 +3564,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:417 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:427 (ui-call:toast)"
+    },
+    {
+      "id": "ui.c04717cd046547",
+      "source": "No sessions — open AI Chats",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:134 (jsx-text)"
     },
     {
       "id": "ui.31366b3b2c60c3",
@@ -3456,7 +3609,7 @@
       "final": "原文ファイルなし",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:104 (jsx-expression); src/Matrix.tsx:565 (ui-branch); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:104 (jsx-expression); src/Matrix.tsx:566 (ui-branch); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e624562fd557be",
@@ -3511,15 +3664,6 @@
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
       "note": "src/Reference.tsx:185 (jsx-text)"
-    },
-    {
-      "id": "ui.80b35e0792e81a",
-      "source": "No unlocked, untranslated English lines are available.",
-      "ai": "",
-      "final": "",
-      "status": "pending",
-      "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:98 (ui-call:toast)"
     },
     {
       "id": "ui.c2dba10649df57",
@@ -3720,6 +3864,15 @@
       "note": "src/Chrome.tsx:102 (jsx-text)"
     },
     {
+      "id": "ui.9d2d602c35fbb7",
+      "source": "One or more lines are no longer eligible for a new AI draft.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/useChatBatchWorker.ts",
+      "note": "src/useChatBatchWorker.ts:122 (ui-call:toast)"
+    },
+    {
       "id": "ui.7849b5e475c5ee",
       "source": "One table of every line",
       "ai": "",
@@ -3771,7 +3924,16 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:95 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:117 (ui-call:toast)"
+    },
+    {
+      "id": "ui.4dd8905ff61164",
+      "source": "Open a ChatGPT session in AI Chats first.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:76 (ui-call:toast)"
     },
     {
       "id": "ui.3c05a6e868666d",
@@ -3780,7 +3942,7 @@
       "final": "AIサイトを開く",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:574 (jsx-attribute:title); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:584 (jsx-attribute:title); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.0f488b78644538",
@@ -3789,7 +3951,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:612 (jsx-text)"
+      "note": "src/ChatGPTScreen.tsx:622 (jsx-text)"
     },
     {
       "id": "ui.7bbcc271052055",
@@ -3798,7 +3960,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:557 (jsx-attribute:title)"
+      "note": "src/ChatGPTScreen.tsx:567 (jsx-attribute:title)"
     },
     {
       "id": "ui.b205bb47f81a30",
@@ -3807,7 +3969,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:406 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:416 (object-property:label)"
     },
     {
       "id": "ui.6d444a3b7ba681",
@@ -3843,7 +4005,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:486 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:487 (jsx-attribute:title)"
     },
     {
       "id": "ui.8f838ebe56bdd4",
@@ -3888,7 +4050,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:517 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:527 (ui-call:toast)"
     },
     {
       "id": "ui.efc6b5a427c3af",
@@ -3907,6 +4069,33 @@
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
       "note": "src/ImportWizard.tsx:361 (jsx-attribute:placeholder)"
+    },
+    {
+      "id": "ui.858e4ba7a29fd3",
+      "source": "Pause",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:103 (jsx-text)"
+    },
+    {
+      "id": "ui.55f203dfe47637",
+      "source": "Pause or stop the existing translation queue first.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:71 (ui-call:toast)"
+    },
+    {
+      "id": "ui.535c6639e33e07",
+      "source": "Paused ·",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:100 (jsx-expression)"
     },
     {
       "id": "ui.6ce21ccdb95b86",
@@ -3942,7 +4131,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:250 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:357 (ui-branch)"
     },
     {
       "id": "ui.3cf43df19d0fa1",
@@ -4080,6 +4269,24 @@
       "note": "src/Reference.tsx:568 (jsx-text)"
     },
     {
+      "id": "ui.e758e9f3bdbdb8",
+      "source": "queue active",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:616 (ui-branch)"
+    },
+    {
+      "id": "ui.2a67f01b476315",
+      "source": "Queue paused {0}/{1} · {2}",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:616 (ui-branch)"
+    },
+    {
       "id": "ui.10072b997d12aa",
       "source": "Quick export",
       "ai": "",
@@ -4140,7 +4347,7 @@
       "final": "再読み込み",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:570 (jsx-attribute:title); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:580 (jsx-attribute:title); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.0a5439ac4f4ad2",
@@ -4149,7 +4356,7 @@
       "final": "AIブラウザーを再読み込み",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:570 (jsx-attribute:aria-label); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:580 (jsx-attribute:aria-label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.79d8f4e57b1b0c",
@@ -4185,7 +4392,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:407 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:417 (object-property:label)"
     },
     {
       "id": "ui.6e3f216dd39de6",
@@ -4266,7 +4473,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:515 (ui-call:prompt)"
+      "note": "src/ChatGPTScreen.tsx:525 (ui-call:prompt)"
     },
     {
       "id": "ui.95e154398a4bc0",
@@ -4355,8 +4562,17 @@
       "ai": "",
       "final": "",
       "status": "pending",
-      "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:595 (jsx-attribute:aria-label)"
+      "sourceFile": "src/MoriApp.tsx",
+      "note": "src/MoriApp.tsx:533 (jsx-attribute:aria-label)"
+    },
+    {
+      "id": "ui.28ea5042b27b82",
+      "source": "Resolve the failed ChatGPT batch in AI Chats before resuming.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:91 (ui-call:toast)"
     },
     {
       "id": "ui.a76e13b9839270",
@@ -4384,6 +4600,15 @@
       "status": "pending",
       "sourceFile": "src/Reference.tsx",
       "note": "src/Reference.tsx:446 (ui-call:confirm)"
+    },
+    {
+      "id": "ui.d640c7421da066",
+      "source": "Resume",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:104 (jsx-text)"
     },
     {
       "id": "ui.aff0766a5290e1",
@@ -4509,7 +4734,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:174 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:175 (jsx-attribute:title)"
     },
     {
       "id": "ui.b4f9b3025c7d2c",
@@ -4638,6 +4863,15 @@
       "note": "src/Reference.tsx:513 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
+      "id": "ui.b073f6c68ef872",
+      "source": "Scope",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:120 (jsx-text)"
+    },
+    {
       "id": "ui.415155739590b1",
       "source": "Search everything",
       "ai": "",
@@ -4719,6 +4953,24 @@
       "note": "src/MoriApp.tsx:483 (jsx-text)"
     },
     {
+      "id": "ui.e0a702db9cb19f",
+      "source": "selected · 5 per request",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:137 (jsx-text)"
+    },
+    {
+      "id": "ui.5a1ae20e50938f",
+      "source": "Selected line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:116 (jsx-text)"
+    },
+    {
       "id": "ui.257ef4ccd82ffb",
       "source": "Selected: {0}",
       "ai": "",
@@ -4734,7 +4986,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:252 (ui-branch)"
+      "note": "src/useChatBatchWorker.ts:359 (ui-branch)"
     },
     {
       "id": "ui.b8ed5279e897be",
@@ -4752,7 +5004,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/useChatBatchWorker.ts",
-      "note": "src/useChatBatchWorker.ts:146 (ui-call:toast)"
+      "note": "src/useChatBatchWorker.ts:205 (ui-call:toast)"
     },
     {
       "id": "ui.ddcd0de4c3ccaa",
@@ -4761,7 +5013,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:486 (ui-call:toast)"
+      "note": "src/ChatGPTScreen.tsx:496 (ui-call:toast)"
     },
     {
       "id": "ui.742ab447c91df1",
@@ -4878,7 +5130,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:494 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:495 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.49f775fe066210",
@@ -4950,7 +5202,7 @@
       "final": "サイト",
       "status": "translated",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:574 (jsx-text); localization/seed.ja.json:1 (seed)"
+      "note": "src/ChatGPTScreen.tsx:584 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.5263293fc20264",
@@ -4968,7 +5220,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:456 (ui-call:prompt)"
+      "note": "src/ChatGPTScreen.tsx:466 (ui-call:prompt)"
     },
     {
       "id": "ui.748abe03ef42c2",
@@ -4977,7 +5229,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:528 (ui-call:prompt)"
+      "note": "src/ChatGPTScreen.tsx:538 (ui-call:prompt)"
     },
     {
       "id": "ui.88096584e4a882",
@@ -5058,7 +5310,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
-      "note": "src/ImportWizard.tsx:661 (jsx-text); src/Inspector.tsx:107 (jsx-attribute:title); src/Matrix.tsx:31 (object-getter:label); src/Matrix.tsx:424 (ui-variable:speakerLabel); src/Popovers.tsx:137 (object-getter:label)"
+      "note": "src/ImportWizard.tsx:661 (jsx-text); src/Inspector.tsx:107 (jsx-attribute:title); src/Matrix.tsx:32 (object-getter:label); src/Matrix.tsx:424 (ui-variable:speakerLabel); src/Popovers.tsx:137 (object-getter:label)"
     },
     {
       "id": "ui.e4b4a287e93f68",
@@ -5094,7 +5346,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:488 (jsx-text)"
+      "note": "src/Matrix.tsx:489 (jsx-text)"
     },
     {
       "id": "ui.9b66106890a843",
@@ -5122,6 +5374,15 @@
       "status": "pending",
       "sourceFile": "src/ImportWizard.tsx",
       "note": "src/ImportWizard.tsx:614 (jsx-text)"
+    },
+    {
+      "id": "ui.eb3f51dc872678",
+      "source": "Start from",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:115 (jsx-text)"
     },
     {
       "id": "ui.1c84f1c021fca1",
@@ -5167,6 +5428,24 @@
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
       "note": "src/Matrix.tsx:432 (jsx-attribute:aria-label)"
+    },
+    {
+      "id": "ui.97abe276f050da",
+      "source": "Stop previous queue",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:138 (jsx-text)"
+    },
+    {
+      "id": "ui.800f60fda83f40",
+      "source": "Stopped ·",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:100 (jsx-expression)"
     },
     {
       "id": "ui.ccca93dfe16f4c",
@@ -5355,7 +5634,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:327 (ui-call:confirm)"
+      "note": "src/ChatGPTScreen.tsx:328 (ui-call:confirm)"
     },
     {
       "id": "ui.2221524edb7d5e",
@@ -5410,6 +5689,15 @@
       "status": "pending",
       "sourceFile": "src/CodexTranslationPanel.tsx",
       "note": "src/CodexTranslationPanel.tsx:46 (ui-call:setStatus)"
+    },
+    {
+      "id": "ui.ef3c465c1a8bd1",
+      "source": "The selected ChatGPT session is unavailable. Choose another in Matrix.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:360 (ui-call:toast)"
     },
     {
       "id": "ui.0f5dda71fe7429",
@@ -5499,7 +5787,7 @@
       "final": "未完了",
       "status": "translated",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:44 (object-getter:label); localization/seed.ja.json:1 (seed)"
+      "note": "src/Matrix.tsx:45 (object-getter:label); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.e8f585eec943d0",
@@ -5517,7 +5805,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:625 (jsx-text)"
+      "note": "src/Matrix.tsx:608 (jsx-text)"
     },
     {
       "id": "ui.9c46b38e241584",
@@ -5544,7 +5832,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:485 (jsx-attribute:aria-label)"
+      "note": "src/Matrix.tsx:486 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.456a73bbcefb1d",
@@ -5553,7 +5841,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/ChatGPTScreen.tsx",
-      "note": "src/ChatGPTScreen.tsx:75 (object-property:label)"
+      "note": "src/ChatGPTScreen.tsx:76 (object-property:label)"
     },
     {
       "id": "ui.c2c8b72e302ec7",
@@ -5565,13 +5853,22 @@
       "note": "src/Reference.tsx:86 (jsx-text); localization/seed.ja.json:1 (seed)"
     },
     {
+      "id": "ui.011b02e01bc035",
+      "source": "Tracking discarded; this queue cannot resume automatically.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/useChatBatchWorker.ts",
+      "note": "src/useChatBatchWorker.ts:351 (object-property:error)"
+    },
+    {
       "id": "ui.8fe147696fbf47",
       "source": "Translate",
       "ai": "",
       "final": "翻訳",
       "status": "translated",
-      "sourceFile": "src/Sidebar.tsx",
-      "note": "src/Sidebar.tsx:89 (explicit-translation); localization/seed.ja.json:1 (seed)"
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:108 (jsx-text); src/MatrixBatchControls.tsx:139 (jsx-text); src/Sidebar.tsx:89 (explicit-translation); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.08a2c579ad3da9",
@@ -5583,6 +5880,15 @@
       "note": "src/AIChatsSidebar.tsx:270 (jsx-expression)"
     },
     {
+      "id": "ui.74846724936249",
+      "source": "Translate next 5",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:150 (jsx-text)"
+    },
+    {
       "id": "ui.92b788c239b20b",
       "source": "Translate selected line",
       "ai": "",
@@ -5590,6 +5896,15 @@
       "status": "pending",
       "sourceFile": "src/CodexTranslationPanel.tsx",
       "note": "src/CodexTranslationPanel.tsx:64 (jsx-text)"
+    },
+    {
+      "id": "ui.5dda3f9700e014",
+      "source": "Translate this line",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:149 (jsx-text)"
     },
     {
       "id": "ui.5e3fcd841f2c7e",
@@ -5601,13 +5916,22 @@
       "note": "src/AIChatsSidebar.tsx:268 (jsx-attribute:title)"
     },
     {
+      "id": "ui.c93cf724f97b6c",
+      "source": "Translate using saved batch settings",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:107 (jsx-attribute:title)"
+    },
+    {
       "id": "ui.abbc13c13e35c8",
       "source": "Translated",
       "ai": "",
       "final": "",
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:40 (label-map); src/Matrix.tsx:46 (object-getter:label); src/Reference.tsx:406 (jsx-text); src/Sidebar.tsx:80 (explicit-translation)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:41 (label-map); src/Matrix.tsx:47 (object-getter:label); src/Reference.tsx:406 (jsx-text); src/Sidebar.tsx:80 (explicit-translation)"
     },
     {
       "id": "ui.74841e5f8b07a2",
@@ -5615,8 +5939,17 @@
       "ai": "",
       "final": "",
       "status": "pending",
-      "sourceFile": "src/shortcuts.ts",
-      "note": "src/shortcuts.ts:21 (label-map); src/shortcuts.ts:22 (label-map); src/shortcuts.ts:23 (label-map); src/shortcuts.ts:24 (label-map); src/shortcuts.ts:25 (label-map)"
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:100 (jsx-expression); src/shortcuts.ts:21 (label-map); src/shortcuts.ts:22 (label-map); src/shortcuts.ts:23 (label-map); src/shortcuts.ts:24 (label-map); src/shortcuts.ts:25 (label-map)"
+    },
+    {
+      "id": "ui.20f7bd7894c4ce",
+      "source": "Translating {0}/{1} · {2}",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/ChatGPTScreen.tsx",
+      "note": "src/ChatGPTScreen.tsx:616 (ui-branch)"
     },
     {
       "id": "ui.6fbd766b1a71cc",
@@ -5628,6 +5961,15 @@
       "note": "localization/seed.ja.json:1 (seed)"
     },
     {
+      "id": "ui.b598e00d153a98",
+      "source": "Translation candidates changed. Review the queue.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/useChatBatchWorker.ts",
+      "note": "src/useChatBatchWorker.ts:123 (object-property:error)"
+    },
+    {
       "id": "ui.743957bbd62bca",
       "source": "Translation engine: Codex Luna 6",
       "ai": "",
@@ -5635,6 +5977,24 @@
       "status": "pending",
       "sourceFile": "src/CodexTranslationPanel.tsx",
       "note": "src/CodexTranslationPanel.tsx:58 (jsx-text)"
+    },
+    {
+      "id": "ui.fbd9c74fb99a35",
+      "source": "Translation queue finished.",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/useChatBatchWorker.ts",
+      "note": "src/useChatBatchWorker.ts:268 (ui-call:notify)"
+    },
+    {
+      "id": "ui.05db7e2f43d9b1",
+      "source": "Translation scope",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:121 (jsx-attribute:aria-label)"
     },
     {
       "id": "ui.4ba5c6645965bf",
@@ -5652,7 +6012,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:554 (jsx-text)"
+      "note": "src/Matrix.tsx:555 (jsx-text)"
     },
     {
       "id": "ui.5bc5c6a24e44c6",
@@ -5661,7 +6021,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:135 (jsx-attribute:placeholder)"
+      "note": "src/Matrix.tsx:136 (jsx-attribute:placeholder)"
     },
     {
       "id": "ui.14d33bd014e6b4",
@@ -5670,7 +6030,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:188 (jsx-expression); src/Matrix.tsx:423 (ui-variable:speakerLabel); src/Popovers.tsx:72 (jsx-text); src/Popovers.tsx:127 (jsx-text)"
+      "note": "src/Matrix.tsx:189 (jsx-expression); src/Matrix.tsx:423 (ui-variable:speakerLabel); src/Popovers.tsx:72 (jsx-text); src/Popovers.tsx:127 (jsx-text)"
     },
     {
       "id": "ui.d24c41ae530aa2",
@@ -5688,7 +6048,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:245 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:246 (jsx-attribute:title)"
     },
     {
       "id": "ui.94798842ac921e",
@@ -5724,7 +6084,7 @@
       "final": "未翻訳",
       "status": "translated",
       "sourceFile": "src/Inspector.tsx",
-      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:40 (label-map); localization/seed.ja.json:1 (seed)"
+      "note": "src/Inspector.tsx:12 (label-map); src/Matrix.tsx:41 (label-map); localization/seed.ja.json:1 (seed)"
     },
     {
       "id": "ui.c2bedec15fcdfe",
@@ -5805,7 +6165,7 @@
       "final": "",
       "status": "pending",
       "sourceFile": "src/Matrix.tsx",
-      "note": "src/Matrix.tsx:208 (jsx-attribute:title)"
+      "note": "src/Matrix.tsx:209 (jsx-attribute:title)"
     },
     {
       "id": "ui.651b3da9836889",
@@ -5869,6 +6229,15 @@
       "status": "pending",
       "sourceFile": "src/Inspector.tsx",
       "note": "src/Inspector.tsx:280 (jsx-attribute:title)"
+    },
+    {
+      "id": "ui.ba61723884c4ab",
+      "source": "View chat",
+      "ai": "",
+      "final": "",
+      "status": "pending",
+      "sourceFile": "src/MatrixBatchControls.tsx",
+      "note": "src/MatrixBatchControls.tsx:105 (jsx-text)"
     },
     {
       "id": "ui.1e85dc470fd0f3",
@@ -6170,6 +6539,7 @@
     "src/AIChatsSidebar.tsx",
     "src/ImportWizard.tsx",
     "src/TermModal.tsx",
+    "src/MatrixBatchControls.tsx",
     "src/Reference.tsx",
     "src/Inspector.tsx",
     "src/MoriApp.tsx",
@@ -6194,5 +6564,5 @@
     "src/main.tsx",
     "src/Overlays.tsx"
   ],
-  "lastModified": "2026-11-04T13:34:14.552Z"
+  "lastModified": "2026-11-05T03:15:50.079Z"
 }

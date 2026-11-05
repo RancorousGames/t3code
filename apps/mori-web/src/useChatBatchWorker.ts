@@ -6,6 +6,8 @@ import { chatGPTWebviewAutomation } from "../../web/src/chatGPTWebviewAutomation
 import { CHAT_BATCH_SIZE, chooseChatBatch, makeChatBatch, mergeChatBatchDrafts, parseChatBatchAnswer, type ChatBatchRequest } from "./chat-batches.ts";
 import { notify } from "./Notifications.tsx";
 import { nativeMori } from "./backend.ts";
+import { MATRIX_BATCH_EVENT, readMatrixBatchPlan, saveMatrixBatchPlan, type MatrixBatchPlan } from "./matrix-batch.ts";
+import { canDraft } from "./ai-batch.ts";
 import type { MoriProject } from "./model.ts";
 import type { MoriPrefs } from "./prefs.ts";
 import type { MoriActions } from "./store.ts";
@@ -24,6 +26,9 @@ type PendingJob = {
   error?: string | undefined;
   invalidResponseFingerprint?: string | undefined;
   invalidResponseSince?: number | undefined;
+  planId?: string;
+  planCursorEnd?: number;
+  planSkipped?: number;
 };
 
 const storageKey = (id: string) => `mori.ai-chat.batch:${id}`;
@@ -60,6 +65,9 @@ export function useChatBatchWorker(input: {
 }) {
   const { project, prefs, actions, activeId, focusRowId, guestRef, readyIdRef, toast, openSession } = input;
   const [job, setJob] = useState<PendingJob | null>(() => restore(project.id));
+  const [plan, setPlan] = useState<MatrixBatchPlan | null>(() => readMatrixBatchPlan(project.id));
+  const planRef = useRef(plan);
+  const dispatching = useRef(false);
   const [sending, setSending] = useState(false);
   const [checking, setChecking] = useState(false);
   const jobRef = useRef(job);
@@ -68,6 +76,11 @@ export function useChatBatchWorker(input: {
   const applying = useRef(false);
   const inFlight = useRef(false);
   const draftable = chooseChatBatch(project, CHAT_BATCH_SIZE, focusRowId);
+  const updatePlan = useCallback((next: MatrixBatchPlan) => {
+    planRef.current = next;
+    setPlan(next);
+    saveMatrixBatchPlan(next);
+  }, []);
 
   const updateJob = useCallback((next: PendingJob | null) => {
     jobRef.current = next;
@@ -80,9 +93,22 @@ export function useChatBatchWorker(input: {
     const next = restore(project.id);
     jobRef.current = next;
     setJob(next);
+    planRef.current = readMatrixBatchPlan(project.id);
+    setPlan(planRef.current);
+    const onChange = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== project.id) return;
+      planRef.current = readMatrixBatchPlan(project.id);
+      setPlan(planRef.current);
+    };
+    window.addEventListener(MATRIX_BATCH_EVENT, onChange);
+    return () => window.removeEventListener(MATRIX_BATCH_EVENT, onChange);
   }, [project.id]);
 
-  const run = async () => {
+  const run = async (chunk?: { ids: string[]; planId: string; cursorEnd: number; skipped: number }) => {
+    if (!chunk && (planRef.current?.stage === "running" || planRef.current?.stage === "paused")) {
+      toast("Finish or stop the Matrix translation queue first.");
+      return;
+    }
     if (sending || jobRef.current) {
       toast("Finish or discard the current ChatGPT translation batch first.");
       return;
@@ -91,7 +117,12 @@ export function useChatBatchWorker(input: {
       toast("Open a ChatGPT session and wait for its composer to become ready.");
       return;
     }
-    if (!draftable.length) { toast("No unlocked, untranslated English lines are available."); return; }
+    const rows = chunk ? chunk.ids.map(id => projectRef.current.rows.find(row => row.id === id)) : draftable;
+    if (!rows.length || rows.some(row => !row || !canDraft(row) || row.ai?.trim())) {
+      toast("One or more lines are no longer eligible for a new AI draft.");
+      if (chunk && planRef.current?.id === chunk.planId) updatePlan({ ...planRef.current, stage: "paused", error: "Translation candidates changed. Review the queue." });
+      return;
+    }
     const guest = guestRef.current;
     const sessionId = activeId;
     setSending(true);
@@ -105,7 +136,7 @@ export function useChatBatchWorker(input: {
       if (expected === null && !isChatGPTHomeUrl(current.url)) {
         throw Error("Open a ChatGPT conversation before starting this batch.");
       }
-      const request = makeChatBatch(project, prefs, draftable, sessionId, crypto.randomUUID());
+      const request = makeChatBatch(projectRef.current, prefs, rows.filter((row): row is NonNullable<typeof row> => !!row), sessionId, crypto.randomUUID());
       const host = nativeMori();
       // Snapshot actual files before sending; a failed local write must not
       // accidentally create an untraceable ChatGPT request.
@@ -117,7 +148,8 @@ export function useChatBatchWorker(input: {
       if (readyIdRef.current !== sessionId || guestRef.current !== guest) {
         throw Error("Session changed while preparing; no message was submitted.");
       }
-      prepared = { request, conversationId: expected, folder: fileReceipt.folder, stage: "staged" };
+      prepared = { request, conversationId: expected, folder: fileReceipt.folder, stage: "staged",
+        ...(chunk ? { planId: chunk.planId, planCursorEnd: chunk.cursorEnd, planSkipped: chunk.skipped } : {}) };
       updateJob(prepared);
       const runtimeId = VIEW(sessionId);
       const expiresAt = Date.now() + 8_000;
@@ -174,9 +206,43 @@ export function useChatBatchWorker(input: {
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "ChatGPT batch submission failed.";
       if (prepared) updateJob({ ...prepared, stage: prepared.stage === "unknown" ? "unknown" : "failed", error: message });
+      if (chunk && planRef.current?.id === chunk.planId) updatePlan({ ...planRef.current, stage: "paused", error: message });
       toast(message);
     } finally { setSending(false); }
   };
+
+  // Advance only after a verified response has been saved. A staged or uncertain
+  // send stays attached to the exact request and is never automatically replayed.
+  useEffect(() => {
+    if (plan?.stage !== "running") return;
+    const advance = async () => {
+      const current = planRef.current;
+      if (!current || current.stage !== "running" || dispatching.current ||
+        sending || jobRef.current || activeId !== current.sessionId ||
+        !guestRef.current || readyIdRef.current !== current.sessionId) return;
+      const selected: string[] = [];
+      let skipped = 0;
+      let end = current.cursor;
+      while (end < current.ids.length && selected.length < CHAT_BATCH_SIZE) {
+        const id = current.ids[end++]!;
+        const row = projectRef.current.rows.find(candidate => candidate.id === id);
+        if (!row || !canDraft(row) || row.ai?.trim()) skipped++;
+        else selected.push(id);
+      }
+      if (!selected.length) {
+        const finished = end >= current.ids.length;
+        updatePlan({ ...current, cursor: end, skipped: current.skipped + skipped,
+          stage: finished ? "done" : "running" });
+        return;
+      }
+      dispatching.current = true;
+      try { await run({ ids: selected, planId: current.id, cursorEnd: end, skipped }); }
+      finally { dispatching.current = false; }
+    };
+    const first = window.setTimeout(() => { void advance(); }, 900);
+    const interval = window.setInterval(() => { void advance(); }, 2500);
+    return () => { window.clearTimeout(first); window.clearInterval(interval); };
+  }, [plan?.id, plan?.cursor, plan?.stage, activeId, sending]);
 
   // Valid JSON is accepted as AI drafts automatically. The source snapshot
   // is verified before all proposals are merged in one project update.
@@ -192,11 +258,21 @@ export function useChatBatchWorker(input: {
         const proposals = pending.proposals;
         actions.updateProject(current => mergeChatBatchDrafts(current, request, proposals).project);
       }
+      const currentPlan = planRef.current;
+      if (pending.planId && currentPlan?.id === pending.planId && pending.planCursorEnd !== undefined) {
+        const cursor = Math.max(currentPlan.cursor, pending.planCursorEnd);
+        const completed = cursor >= currentPlan.ids.length;
+        const newlySkipped = pending.planCursorEnd > currentPlan.cursor ? pending.planSkipped ?? 0 : 0;
+        updatePlan({ ...currentPlan, cursor, skipped: currentPlan.skipped + newlySkipped,
+          stage: completed && currentPlan.stage === "running" ? "done" : currentPlan.stage, error: undefined });
+        if (completed && currentPlan.stage === "running") notify("Translation queue finished.", "success");
+      }
       updateJob(null);
-      if (merged.added) notify(`${merged.added} more AI ${merged.added === 1 ? "translation" : "translations"} just added`, "success");
+      if (merged.added && !pending.planId) notify(`${merged.added} more AI ${merged.added === 1 ? "translation" : "translations"} just added`, "success");
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Could not save ChatGPT drafts.";
       updateJob({ ...pending, stage: "failed", error: message });
+      if (pending.planId && planRef.current?.id === pending.planId) updatePlan({ ...planRef.current, stage: "paused", error: message });
       notify(message, "warning");
     } finally {
       applying.current = false;
@@ -247,6 +323,7 @@ export function useChatBatchWorker(input: {
         }
         const message = cause instanceof Error ? cause.message : "Invalid ChatGPT JSON response.";
         updateJob({ ...pending, stage: "failed", error: message });
+        if (pending.planId && planRef.current?.id === pending.planId) updatePlan({ ...planRef.current, stage: "paused", error: message });
         notify(message, "warning");
       }
     } catch { /* Navigation or guest teardown; don't resend. */ }
@@ -270,6 +347,9 @@ export function useChatBatchWorker(input: {
     if (jobRef.current.stage === "sent" || jobRef.current.stage === "unknown") {
       if (!window.confirm("Discard tracking for this batch? The ChatGPT conversation and any response will remain in the browser.")) return;
     }
+    if (jobRef.current.planId && planRef.current?.id === jobRef.current.planId) {
+      updatePlan({ ...planRef.current, stage: "stopped", error: "Tracking discarded; this queue cannot resume automatically." });
+    }
     updateJob(null);
   };
 
@@ -281,7 +361,7 @@ export function useChatBatchWorker(input: {
     job.error ?? "Batch failed";
 
   return {
-    job, status, sending, checking, draftable,
+    job, plan, status, sending, checking, draftable,
     run, check, discard,
     resume: () => job?.request.sessionId && openSession(job.request.sessionId),
   };

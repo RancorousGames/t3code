@@ -41,6 +41,7 @@ export function MoriApp() {
   const [screen, setScreen] = useState<Screen>("matrix");
   // Optional copy/paste fallback; never replaces the normal Matrix workflow.
   const [matrixSplit, setMatrixSplit] = useState(() => localStorage.getItem("mori.matrix.side-by-side") === "true");
+  const [splitWidth, setSplitWidth] = useState(46);
   useEffect(() => { localStorage.setItem("mori.matrix.side-by-side", String(matrixSplit)); }, [matrixSplit]);
   const [view, setViewState] = useState<ViewFilters>(DEFAULT_VIEW);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -511,9 +512,8 @@ export function MoriApp() {
     : screen === "characters" && prefs.charactersEnabled ? <CharactersScreen />
     : screen === "glossary" && prefs.glossaryEnabled ? <GlossaryScreen />
     : screen === "context" ? <ContextScreen />
-    : screen === "chatgpt" ? <ChatGPTScreen />
     : screen === "project" ? <ProjectScreen key={value.project.id} />
-    : <SettingsScreen />;
+    : screen === "chatgpt" ? null : <SettingsScreen />;
 
   return (
     <AppContext.Provider value={value}>
@@ -523,9 +523,31 @@ export function MoriApp() {
         {fileDragOver && <div className="mori-global-drop">Drop files to add to {value.project.name}</div>}
         <div className="body">
           <Sidebar />
-          <main className="main">
-            {value.notice && <div className="notice" role="alert">{value.notice}</div>}
-            {workspace}
+          <main className={`main${screen === "matrix" && matrixSplit ? " mori-matrix-split" : ""}${screen === "chatgpt" ? " mori-chat-full" : ""}`}
+            style={screen === "matrix" && matrixSplit ? { gridTemplateColumns: `minmax(0, ${100 - splitWidth}fr) 8px minmax(0, ${splitWidth}fr)` } : undefined}>
+            <div className="mori-workspace">
+              {value.notice && <div className="notice" role="alert">{value.notice}</div>}
+              {workspace}
+            </div>
+            {screen === "matrix" && matrixSplit && <div className="matrix-split-divider" role="separator" tabIndex={0}
+              aria-label="Resize Matrix and ChatGPT panes" aria-orientation="vertical"
+              aria-valuemin={30} aria-valuemax={55} aria-valuenow={splitWidth}
+              title="Drag to resize; use arrow keys when focused"
+              onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
+              onPointerMove={event => {
+                if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                const bounds = event.currentTarget.parentElement?.getBoundingClientRect();
+                if (bounds) setSplitWidth(Math.max(30, Math.min(55, 100 * (bounds.right - event.clientX) / bounds.width)));
+              }}
+              onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+              onKeyDown={event => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                setSplitWidth(width => Math.max(30, Math.min(55, width + (event.key === "ArrowLeft" ? 3 : -3))));
+              }} />}
+            <div className="mori-persistent-chat">
+              <ChatGPTScreen compact={screen === "matrix" && matrixSplit} />
+            </div>
           </main>
         </div>
         <StatusBar />
