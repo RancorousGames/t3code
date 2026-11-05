@@ -48,16 +48,24 @@ export function installChatGPTPagePushObserver(
     });
     onChange();
   };
-  if (doc.documentElement) attach();
-  else doc.addEventListener("DOMContentLoaded", attach, { once: true });
-  // SPA route transitions can replace main without a preload rerun.
-  // A cheap selector check is sufficient; all heavy probes are pushed/heartbeat.
-  const rebind = window.setInterval(attach, 5_000);
+  // React may replace <main> during SPA navigation without a document load.
+  // Inspect only connectivity for ordinary subtree changes; rebind immediately
+  // when the observed root is detached instead of waiting for a timer.
+  const rootObserver = new MutationObserver(() => {
+    if (!target?.isConnected || target === doc.documentElement) attach();
+  });
+  const start = () => {
+    if (!doc.documentElement) return;
+    rootObserver.observe(doc.documentElement, { subtree: true, childList: true });
+    attach();
+  };
+  if (doc.documentElement) start();
+  else doc.addEventListener("DOMContentLoaded", start, { once: true });
   const dispose = () => {
     disposed = true;
     observer.disconnect();
-    window.clearInterval(rebind);
-    doc.removeEventListener("DOMContentLoaded", attach);
+    rootObserver.disconnect();
+    doc.removeEventListener("DOMContentLoaded", start);
     if (handle !== undefined) scheduler.clearTimeout(handle);
     handle = undefined;
   };

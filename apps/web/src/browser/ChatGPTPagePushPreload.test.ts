@@ -50,6 +50,23 @@ describe("read-only ChatGPT guest mutation watcher", () => {
     }
   });
 
+  it("rebinds immediately when SPA navigation replaces the conversation root", async () => {
+    const send = vi.fn();
+    const dispose = installChatGPTPagePushObserver(dom.window.document, dom.window.location, send);
+    try {
+      await vi.advanceTimersByTimeAsync(150);
+      expect(send).toHaveBeenCalledTimes(1);
+      dom.window.document.querySelector("main")!.replaceWith(dom.window.document.createElement("main"));
+      await vi.advanceTimersByTimeAsync(800);
+      expect(send).toHaveBeenCalledTimes(2);
+      dom.window.document.querySelector("main")!.appendChild(dom.window.document.createElement("span"));
+      await vi.advanceTimersByTimeAsync(800);
+      expect(send).toHaveBeenCalledTimes(3);
+    } finally {
+      dispose();
+    }
+  });
+
   it("does not watch unrelated origins or emit after disposal", async () => {
     const send = vi.fn();
     const noop = installChatGPTPagePushObserver(dom.window.document,
