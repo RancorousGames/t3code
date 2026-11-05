@@ -29,9 +29,11 @@ export function DedicatedChatGPTBrowser({
   environmentId,
   sessionId,
   toolbarActions,
+  primary = true,
 }: {
   readonly environmentId: EnvironmentId;
   readonly sessionId: string;
+  readonly primary?: boolean;
   /** Session/Browser switcher shares this row with Chromium navigation controls. */
   readonly toolbarActions?: ReactNode;
 }) {
@@ -84,14 +86,14 @@ export function DedicatedChatGPTBrowser({
 
   useEffect(() => {
     const unsubscribe = window.desktopBridge?.onMenuAction((action) => {
-      if (action === "chatgpt.find") {
+      if (primary && action === "chatgpt.find") {
         setFindOpen(true);
         requestAnimationFrame(() => findInputRef.current?.focus());
       }
     });
     const onKey = (event: KeyboardEvent) => {
       if (
-        (event.ctrlKey || event.metaKey) &&
+        primary && (event.ctrlKey || event.metaKey) &&
         !event.shiftKey &&
         !event.altKey &&
         event.key.toLowerCase() === "f"
@@ -107,7 +109,7 @@ export function DedicatedChatGPTBrowser({
       unsubscribe?.();
       window.removeEventListener("keydown", onKey);
     };
-  }, [findOpen]);
+  }, [findOpen, primary]);
 
   useEffect(() => {
     if (!findOpen || !stableBridge || !findText) {

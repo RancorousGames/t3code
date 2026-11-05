@@ -322,6 +322,7 @@ function ChatGPTBrowserView({
             <DedicatedChatGPTBrowser
               environmentId={environmentId}
               sessionId={sessionId}
+              primary={primary}
               toolbarActions={splitMode ? undefined : viewSwitcher}
             />
           ) : null
