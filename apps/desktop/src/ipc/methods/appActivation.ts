@@ -37,6 +37,7 @@ export const caffyControl = DesktopIpc.makeIpcMethod({
     workingSessionIds: Schema.optional(Schema.Array(Schema.String)),
     workingReporterId: Schema.optional(Schema.String),
     lifecycleReason: Schema.optional(Schema.Literals(["closed", "hidden", "snoozed", "missing"])),
+    stopInitiator: Schema.optional(Schema.Literal("user")),
     beginAt: Schema.optional(Schema.NullOr(Schema.Number)),
     rebootMinutes: Schema.optional(Schema.NullOr(Schema.Number)),
   }),

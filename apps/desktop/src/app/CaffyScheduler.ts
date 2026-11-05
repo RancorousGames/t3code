@@ -44,7 +44,20 @@ export interface CaffyConfig {
   rebootOperationId?: string | null;
   rebootOldConversationId?: string | null;
 }
-interface CaffyStore { version: 2; entries: CaffyConfig[]; keepT3Busy: boolean; maxWorking: number; shutdownWhenIdle?: boolean }
+export interface AgentStoppedCaffy {
+  sessionId: string;
+  browserSessionId?: string | undefined;
+  publicSessionId?: string | undefined;
+  stoppedAt: number;
+}
+interface CaffyStore {
+  version: 2;
+  entries: CaffyConfig[];
+  keepT3Busy: boolean;
+  maxWorking: number;
+  shutdownWhenIdle?: boolean;
+  agentStops?: AgentStoppedCaffy[];
+}
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const WAKE_TEXT = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
 const CLOCK = 10_000;
@@ -60,6 +73,7 @@ const valid = (row: CaffyConfig): boolean =>
 export class CaffyScheduler {
   private readonly file: string;
   private readonly entries = new Map<string, CaffyConfig>();
+  private readonly agentStops = new Map<string, AgentStoppedCaffy>();
   private keepT3Busy = false;
   private maxWorking = 6;
   private shutdownWhenIdle = false;
@@ -111,6 +125,11 @@ export class CaffyScheduler {
       const saved = JSON.parse(NodeFS.readFileSync(this.file, "utf8")) as CaffyStore;
       if (saved.version === 2 && Array.isArray(saved.entries)) {
         for (const row of saved.entries) if (valid(row)) this.entries.set(row.sessionId, row);
+        for (const mark of saved.agentStops ?? []) {
+          if (mark && UUID.test(mark.sessionId) && Number.isFinite(mark.stoppedAt) &&
+              Date.now() - mark.stoppedAt < 7 * 24 * 60 * 60_000)
+            this.agentStops.set(mark.sessionId, mark);
+        }
         this.keepT3Busy = saved.keepT3Busy === true;
         this.shutdownWhenIdle = saved.shutdownWhenIdle === true;
         if (Number.isInteger(saved.maxWorking) && saved.maxWorking >= 1 && saved.maxWorking <= 100)
@@ -158,6 +177,7 @@ export class CaffyScheduler {
     try {
       NodeFS.writeFileSync(tmp, JSON.stringify({
         version: 2, entries: [...this.entries.values()],
+        agentStops: [...this.agentStops.values()].slice(-128),
         keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
         shutdownWhenIdle: this.shutdownWhenIdle,
       } satisfies CaffyStore), { encoding: "utf8", flush: true });
@@ -388,6 +408,7 @@ export class CaffyScheduler {
     if (sessionId) return this.lookup(sessionId) ?? null;
     return {
       entries: [...this.entries.values()],
+      agentStops: [...this.agentStops.values()],
       keepT3Busy: this.keepT3Busy,
       maxWorking: this.maxWorking,
       shutdownWhenIdle: this.shutdownWhenIdle,
@@ -482,6 +503,12 @@ export class CaffyScheduler {
       throw new Error("Scheduled start must be in the next 90 days.");
     const prior = this.lookup(input.sessionId) ??
       [...this.entries.values()].find(row => row.conversationId === input.conversationId);
+    // A fresh manual Caffy setup supersedes any earlier "agent stopped" marker.
+    for (const [key, mark] of this.agentStops) {
+      if ([mark.sessionId, mark.browserSessionId, mark.publicSessionId].some(id =>
+          id === input.sessionId || id === canonicalId || id === identity?.id))
+        this.agentStops.delete(key);
+    }
     if (prior?.pendingMessageId &&
         (prior.conversationId !== input.conversationId || prior.sessionId !== canonicalId))
       throw new Error("Existing wake delivery needs reconciliation before changing its recipient identity.");
@@ -544,13 +571,29 @@ export class CaffyScheduler {
    * may be retried or automatically remounted after close / hide / snooze.
    * The outbox keeps an audit of any attempted but uncertain sends.
    */
-  retire(sessionId: string, reason: "closed" | "hidden" | "snoozed" | "missing" | "stopped") {
+  retire(
+    sessionId: string,
+    reason: "closed" | "hidden" | "snoozed" | "missing" | "stopped",
+    stopInitiator: "user" | "agent" = "agent",
+  ) {
     const row = this.lookup(sessionId);
     const ids = row
       ? [...new Set([sessionId, row.sessionId, row.browserSessionId, row.publicSessionId]
           .filter((id): id is string => !!id))]
       : [sessionId];
-    if (row) this.entries.delete(row.sessionId);
+    if (row) {
+      this.entries.delete(row.sessionId);
+      if (reason === "stopped" && stopInitiator === "agent") {
+        this.agentStops.set(row.sessionId, {
+          sessionId: row.sessionId,
+          browserSessionId: row.browserSessionId,
+          publicSessionId: row.publicSessionId,
+          stoppedAt: Date.now(),
+        });
+      } else if (reason === "stopped") {
+        this.agentStops.delete(row.sessionId);
+      }
+    }
     const detail = `Recipient ${reason}; Caffy delivery retired.`;
     const cancelled = this.deliveries.retireRecipient(ids, row?.conversationId ?? null,
       detail, reason === "snoozed" || reason === "hidden" || reason === "stopped");
@@ -562,8 +605,8 @@ export class CaffyScheduler {
     return { stopped: !!row, cancelled };
   }
 
-  stop(sessionId: string) {
-    const { stopped } = this.retire(sessionId, "stopped");
+  stop(sessionId: string, initiator: "user" | "agent" = "agent") {
+    const { stopped } = this.retire(sessionId, "stopped", initiator);
     return { stopped };
   }
 

@@ -18,7 +18,15 @@ export interface T3CaffyEntry {
   pendingMessageId?: string | null;
 }
 
+export interface T3CaffyAgentStop {
+  sessionId: string;
+  browserSessionId?: string;
+  publicSessionId?: string;
+  stoppedAt: number;
+}
+
 export interface T3CaffyOverview {
+  agentStops?: T3CaffyAgentStop[];
   maxWorking: number;
   keepT3Busy: boolean;
   shutdownWhenIdle: boolean;
@@ -67,7 +75,14 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
           typeof entry.paused === "boolean" &&
           (entry.expiresAt === null || typeof entry.expiresAt === "number"),
         );
+        const rawAgentStops = "agentStops" in data ? data.agentStops : null;
+        const agentStops: T3CaffyAgentStop[] = Array.isArray(rawAgentStops)
+          ? rawAgentStops.filter((mark): mark is T3CaffyAgentStop =>
+              !!mark && typeof mark === "object" &&
+              typeof mark.sessionId === "string" && Number.isFinite(mark.stoppedAt))
+          : [];
         lastVerifiedOverview = {
+          agentStops,
           maxWorking: data.maxWorking,
           keepT3Busy: data.keepT3Busy,
           shutdownWhenIdle: data.shutdownWhenIdle,

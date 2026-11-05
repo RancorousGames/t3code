@@ -84,6 +84,28 @@ const monitor = (scheduler: CaffyScheduler) =>
   scheduler.status(SESSION) as CaffyConfig | null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
+  it("shows a durable crossed-out marker only after an agent stop, clearing it on reconfiguration", async () => {
+    const f = fixture();
+    try {
+      const stopped = f.open();
+      expect(stopped.stop(SESSION).stopped).toBe(true);
+      expect((stopped.status() as { agentStops: Array<{ sessionId: string; publicSessionId?: string }> }).agentStops)
+        .toMatchObject([{ sessionId: SESSION, publicSessionId: SESSION }]);
+      stopped.close();
+
+      const restarted = f.open();
+      expect((restarted.status() as { agentStops: unknown[] }).agentStops).toHaveLength(1);
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+      }]);
+      await restarted.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle", keepAwake: false });
+      expect((restarted.status() as { agentStops: unknown[] }).agentStops).toHaveLength(0);
+      restarted.stop(SESSION, "user");
+      expect((restarted.status() as { agentStops: unknown[] }).agentStops).toHaveLength(0);
+      restarted.close();
+    } finally { f.dispose(); }
+  });
   it("preserves settings through a conversation change and only rebinds with positive evidence", async () => {
     const f = fixture();
     const c = f.open();

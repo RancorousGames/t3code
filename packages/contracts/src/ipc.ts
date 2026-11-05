@@ -1921,6 +1921,7 @@ export interface DesktopBridge {
     workingSessionIds?: readonly string[];
     workingReporterId?: string;
     lifecycleReason?: "closed" | "hidden" | "snoozed" | "missing";
+    stopInitiator?: "user";
     beginAt?: number | null;
     rebootMinutes?: number | null;
   }) => Promise<unknown>;

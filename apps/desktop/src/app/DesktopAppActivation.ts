@@ -445,7 +445,7 @@ export const make = Effect.gen(function* () {
             : action === "retire"
               ? caffy.retire(request.sessionId ?? "", request.lifecycleReason ?? "closed")
             : action === "stop"
-              ? caffy.stop(request.sessionId ?? "")
+              ? caffy.stop(request.sessionId ?? "", request.stopInitiator ?? "agent")
             : action === "pause" || action === "resume"
               ? caffy.pause(request.sessionId ?? "", action === "pause")
             : action === "startup"

@@ -594,6 +594,15 @@ export function ChatGPTBrowserSidebarEntry({
     }
     return entries;
   }, [caffyOverview, clockNow]);
+  const agentStoppedCaffy = useMemo(() => {
+    const entries = new Map<string, { stoppedAt: number }>();
+    for (const stop of caffyOverview?.agentStops ?? []) {
+      entries.set(stop.sessionId, stop);
+      if (stop.browserSessionId) entries.set(stop.browserSessionId, stop);
+      if (stop.publicSessionId) entries.set(stop.publicSessionId, stop);
+    }
+    return entries;
+  }, [caffyOverview]);
   const [menuFeedback, setMenuFeedback] = useState<string | null>(null);
   const [menuDialog, setMenuDialog] = useState<ChatGPTSessionMenuDialogState | null>(null);
   const [keepAwakeFeedback, setKeepAwakeFeedback] = useState<string | null>(null);
@@ -2756,6 +2765,10 @@ export function ChatGPTBrowserSidebarEntry({
                               };
                               const needsAnswer = pendingQuestionIds.has(session.id);
                               const caffyMonitor = activeCaffyMonitors.get(session.id);
+                              const caffyAgentStop = caffyMonitor ? undefined : agentStoppedCaffy.get(session.id);
+                              const caffyStoppedLabel = caffyAgentStop
+                                ? `Caffy stopped by agent at ${new Date(caffyAgentStop.stoppedAt).toLocaleString()} — no further wakes scheduled`
+                                : null;
                               const caffyLabel = caffyMonitor
                                 ? `Caffy: ${caffyMonitor.mode === "queued" ? "Queued wake on idle" :
                                     caffyMonitor.mode === "idle" ? "Wake on idle" :
@@ -2798,6 +2811,9 @@ export function ChatGPTBrowserSidebarEntry({
                                     </div>
                                     {caffyLabel && (
                                       <div className="text-sky-400/90">{caffyLabel}</div>
+                                    )}
+                                    {caffyStoppedLabel && (
+                                      <div className="text-red-400/90">{caffyStoppedLabel}</div>
                                     )}
                                     <div className="text-foreground/75">
                                       {isVerifiedManager ? "Manager · " : ""}
@@ -3115,6 +3131,15 @@ export function ChatGPTBrowserSidebarEntry({
                                                       : "text-sky-400"}`}
                                                 >
                                                   <title>{caffyLabel}</title>
+                                                </CaffyCoffeePotIcon>
+                                              )}
+                                              {caffyStoppedLabel && (
+                                                <CaffyCoffeePotIcon
+                                                  stopped
+                                                  aria-label={caffyStoppedLabel}
+                                                  className="size-3.5 shrink-0 text-red-400"
+                                                >
+                                                  <title>{caffyStoppedLabel}</title>
                                                 </CaffyCoffeePotIcon>
                                               )}
                                               {Number.isFinite(session.snoozedUntil) &&
