@@ -11,6 +11,7 @@ import {
   DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
   DesktopAppActivationRequest,
   type DesktopAppActivationResponse,
+  type CapacityMessageRequest, type CapacityMessageReceipt,
 } from "@t3tools/contracts";
 import { resolveDesktopAppControlAddress } from "@t3tools/shared/desktopAppControl";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -314,6 +315,7 @@ export class DesktopAppActivation extends Context.Service<
     readonly caffyControl: (
       request: Extract<DesktopAppActivationRequest, { type: "caffy" }>,
     ) => Effect.Effect<unknown>;
+    readonly capacityMessage: (request: CapacityMessageRequest) => Effect.Effect<CapacityMessageReceipt>;
   }
 >()("@t3tools/desktop/app/DesktopAppActivation") {}
 
@@ -541,6 +543,7 @@ export const make = Effect.gen(function* () {
       if (!response.ok) throw new Error(response.message);
       return "data" in response ? response.data : null;
     }),
+    capacityMessage: (request) => Effect.promise(() => caffy.capacityMessage(request)),
     start: Effect.acquireRelease(
       Effect.tryPromise({
         try: () =>

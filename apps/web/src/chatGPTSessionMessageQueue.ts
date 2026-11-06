@@ -105,7 +105,7 @@ export function queueChatGPTSessionMessage(
   text: string,
   conversationId: string | null,
   stableMessageId?: string,
-  options?: { condition?: "when_idle" | "wait_for_slot"; maxActiveWorkers?: number },
+  options?: { condition?: "when_idle" | "wait_for_slot" },
 ) {
   const key = keyFor(environmentId, sessionId);
   const body = text.trim();
@@ -113,14 +113,6 @@ export function queueChatGPTSessionMessage(
     throw new Error("A message must be between 1 and 29,800 characters.");
   if (stableMessageId && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(stableMessageId))
     throw new Error("A stable queue ID must be a UUID.");
-  if (
-    options?.condition === "wait_for_slot" &&
-    options.maxActiveWorkers !== undefined &&
-    (!Number.isSafeInteger(options.maxActiveWorkers) ||
-      options.maxActiveWorkers < 1 ||
-      options.maxActiveWorkers > 100)
-  )
-    throw new Error("Max active workers must be 1–100.");
   const id = stableMessageId ?? randomUUID();
   const queue = readQueue(key);
   const previous = queue.find((row) => row.id === id);
@@ -128,8 +120,7 @@ export function queueChatGPTSessionMessage(
     if (
       previous.text !== body ||
       previous.conversationId !== conversationId ||
-      (previous.condition ?? "when_idle") !== (options?.condition ?? "when_idle") ||
-      (previous.maxActiveWorkers ?? null) !== (options?.maxActiveWorkers ?? null)
+      (previous.condition ?? "when_idle") !== (options?.condition ?? "when_idle")
     )
       throw new Error("Stable queued message ID conflicts with an existing message.");
     return id; // An UNKNOWN queue/write receipt cannot submit a second answer.
@@ -142,14 +133,24 @@ export function queueChatGPTSessionMessage(
       text: body,
       conversationId,
       ...(options?.condition ? { condition: options.condition } : {}),
-      ...(options?.maxActiveWorkers ? { maxActiveWorkers: options.maxActiveWorkers } : {}),
       state: "queued",
       createdAt: time,
       updatedAt: time,
     },
   ]);
-  // Do not wake a blank/new guest until OpenRig actually admits its slot.
-  if (options?.condition !== "wait_for_slot") wakeChatGPTBrowserSession(environmentId, sessionId);
+  // Register priority with the T3 capacity ledger immediately, even if this
+  // session-view component unmounts. Dispatch itself remains guarded by the
+  // durable per-session FIFO and its exact original message ID.
+  if (options?.condition === "wait_for_slot") {
+    const capacity = window.desktopBridge?.chatGPTCapacityMessage;
+    if (capacity) void capacity({
+      action: "claim", messageId: id, sessionId, conversationId,
+    }).then(receipt => {
+      if (!readQueue(key).some(row => row.id === id && row.state === "queued") &&
+          ["admitted", "waiting"].includes(receipt.status))
+        void capacity({action: "release", messageId: id, reason: "pre_submit_aborted"});
+    }).catch(() => { /* The background queue driver retries this exact ID. */ });
+  } else wakeChatGPTBrowserSession(environmentId, sessionId);
   return id;
 }
 
@@ -244,10 +245,9 @@ export async function deliverNextChatGPTSessionMessage(
       const capacity = window.desktopBridge?.chatGPTCapacityMessage;
       if (!capacity) return;
       let result = await capacity({action:"status",messageId:next.id});
-      if (result.status === "unavailable") result = await capacity({
+      if (result.status === "unavailable" || result.status === "waiting") result = await capacity({
         action:"claim",messageId:next.id,sessionId,
         conversationId:next.conversationId,
-        ...(next.maxActiveWorkers ? {maxActiveWorkers:next.maxActiveWorkers} : {}),
       });
       if (result.status !== "admitted") return;
       if (readQueue(key).find(row=>row.id===next.id)?.state!=="queued") {
@@ -307,19 +307,18 @@ export async function deliverNextChatGPTSessionMessage(
       writeQueue(key, queue);
       return;
     }
-    // Capacity is a delivery condition, not another work queue. T3 keeps
-    // the original stable message ID until OpenRig atomically admits it.
+    // Capacity is a delivery condition, not a second scheduler. T3 keeps
+    // the original stable message ID until its own shared ledger admits it.
     if (next.condition === "wait_for_slot") {
       const request = window.desktopBridge?.chatGPTCapacityMessage;
-      if (!request) return; // No local OpenRig: never silently bypass the ceiling.
+      if (!request) return; // T3 main process unavailable: never bypass the ceiling.
       let claim = await request({ action: "status", messageId: next.id });
-      if (claim.status === "unavailable") {
+      if (claim.status === "unavailable" || claim.status === "waiting") {
         claim = await request({
           action: "claim",
           messageId: next.id,
           sessionId,
           conversationId: next.conversationId,
-          ...(next.maxActiveWorkers ? { maxActiveWorkers: next.maxActiveWorkers } : {}),
         });
       }
       if (claim.status !== "admitted") return;
@@ -353,7 +352,7 @@ export async function deliverNextChatGPTSessionMessage(
                   state: "needs_attention" as const,
                   updatedAt: Date.now(),
                   detail:
-                    "Capacity submit receipt unknown. Inspect original OpenRig reservation before retrying.",
+                    "Capacity submit receipt unknown. Inspect the original T3 reservation before retrying.",
                 }
               : row,
           ),
@@ -513,8 +512,8 @@ export function useChatGPTSessionQueueDriver(
         // Consume only this exact post-submit verified idle transition.
         releaseDeliveredCapacity(environmentId, sessionId, event);
       }
-      // A slot becoming free elsewhere is also a legitimate admission trigger.
-      // OpenRig arbitrates concurrent claims; no renderer capacity count.
+      // A slot becoming free elsewhere is also an admission trigger.
+      // T3's single capacity ledger arbitrates concurrent claims.
       if (
         event.sessionId === sessionId ||
         queue.some((item) => item.state === "queued" && item.condition === "wait_for_slot")
@@ -531,11 +530,15 @@ export function useChatGPTSessionQueueDriver(
       }
     };
     window.addEventListener("t3:chatgpt-recovery-state-changed", onRecovery);
-    // Other OpenRig workers can release capacity without emitting a local T3
-    // idle event. Retry admission only while a Wait-for-slot item is pending;
-    // this does not poll ChatGPT or schedule a Caffy wake.
-    const admissionRetry = queue.some((row) => row.state === "queued" &&
-      row.condition === "wait_for_slot") ? window.setInterval(drain, 5_000) : null;
+    // Another worker can free a slot without emitting a local idle event.
+    // Also retry release using the already verified idle receipt when the T3
+    // registry was temporarily unavailable. Do not send a second user turn.
+    const admissionRetry = queue.some(row => row.condition === "wait_for_slot" &&
+      (row.state === "queued" || (row.state === "delivered" && !row.capacityReleasedAt)))
+      ? window.setInterval(() => {
+          drain();
+          releaseDeliveredCapacity(environmentId, sessionId);
+        }, 5_000) : null;
     return () => {
       unsubscribeIdle();
       if (admissionRetry !== null) window.clearInterval(admissionRetry);

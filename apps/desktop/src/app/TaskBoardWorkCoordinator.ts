@@ -305,7 +305,12 @@ export class TaskBoardWorkCoordinator {
   private syncReservations(inventoryReady: boolean) {
     this.caffy.setTaskReservations(this.reservations().map(row => ({
       requestId: row.requestId, sessionId: row.sessionId,
-      ...(row.holdUntil === undefined ? {} : {holdUntil: row.holdUntil}),
+      // Starting is an unresolved potentially-created worker. Expiring its
+      // temporary UI quarantine must NOT free an admission seat before the
+      // exact request is reconciled and safely retired. Otherwise delayed
+      // startup can reactivate and cause >2/2 automatic workers.
+      ...(row.state === "starting" || row.holdUntil === undefined
+        ? {} : {holdUntil: row.holdUntil}),
     })), inventoryReady);
   }
 
@@ -970,17 +975,19 @@ export class TaskBoardWorkCoordinator {
         // The previous lease never reached Starting, so no spawn was authorized.
         // Give unloaded queued-Caffy recipients first use of a newly free slot.
         if (this.caffy.hasPendingQueuedWakes) return;
-        // A fresh CAS reservation is safe and replaces the expired request ID.
-        const capacity = await this.caffy.capacity().catch(() => ({ admissible: false }));
-        if (!capacity.admissible) return;
+        // The TaskBoard and Caffy queues share one atomic admission gate.
         const requestId = NodeCrypto.randomUUID();
-        await this.taskCommand(next.boardRoot, [
-          "task", "queue", "reserve", next.item.taskId,
-          "--queue-request", next.item.queueRequest,
-          "--request-id", requestId,
-          "--lease-seconds", String(RESERVATION_LEASE_SECONDS),
-        ]);
-        await this.startReserved(next.boardRoot, next.item, requestId);
+        if (!(await this.caffy.acquireAutomaticAdmission(requestId))) return;
+        try {
+          await this.taskCommand(next.boardRoot, [
+            "task", "queue", "reserve", next.item.taskId,
+            "--queue-request", next.item.queueRequest,
+            "--request-id", requestId,
+            "--lease-seconds", String(RESERVATION_LEASE_SECONDS),
+          ]);
+          await this.readQueues();
+          await this.startReserved(next.boardRoot, next.item, requestId);
+        } finally { this.caffy.releaseAutomaticAdmission(requestId); }
         return;
       }
 
@@ -1017,39 +1024,47 @@ export class TaskBoardWorkCoordinator {
           this.lastIdleReason = "An earlier queued Caffy wake has dispatch priority.";
           return;
         }
-        const capacity = await this.caffy.capacity().catch(() => null);
-        if (!capacity?.admissible) {
-          this.lastIdleReason = capacity?.reason ?? "Capacity inventory unavailable; dispatch fails closed.";
+        const requestId = NodeCrypto.randomUUID();
+        if (!(await this.caffy.acquireAutomaticAdmission(requestId))) {
+          const capacity = await this.caffy.capacity().catch(() => null);
+          this.lastIdleReason = this.caffy.hasPriorityCapacityMessage()
+            ? "A user Queue on capacity message takes priority over TaskBoard."
+            : capacity?.reason ?? "Capacity inventory unavailable; dispatch fails closed.";
+          // An idle-but-unfinished task still owns a capacity lease; resume
+          // that exact existing guest, never spawn another to fill its seat.
+          this.scheduleWorkerWakeMaintenance(snapshots);
           return;
         }
-        const requestId = NodeCrypto.randomUUID();
         this.lastAdmissionAttemptAt = Date.now();
         try {
-          await this.taskCommand(candidate.boardRoot, [
-            "task", "queue", "reserve", candidate.item.taskId,
-            "--queue-request", candidate.item.queueRequest,
-            "--request-id", requestId,
-            "--lease-seconds", String(RESERVATION_LEASE_SECONDS),
-          ]);
-        } catch (error) {
-          // No spawn can occur before TaskBoard's atomic reservation. Refresh
-          // the authoritative state after an uncertain CAS; never assume that
-          // a timed-out write failed, or fabricate a replacement request.
-          const refreshed = await this.readQueues();
-          const current = refreshed.find(board => rootKey(board.boardRoot) === rootKey(candidate.boardRoot))
-            ?.items.find(item => item.taskId === candidate.item.taskId);
-          if (current?.state === "queued" && current.queueRequest === candidate.item.queueRequest &&
-              current.readiness && !current.claimed) {
-            this.backoffDefiniteFailure(candidate.boardRoot, candidate.item,
-              `Queue reservation did not succeed: ${String(error)}`);
-            this.lastError = `Task ${candidate.item.taskId}: reservation could not be obtained; other eligible tasks will be tried.`;
+          try {
+            await this.taskCommand(candidate.boardRoot, [
+              "task", "queue", "reserve", candidate.item.taskId,
+              "--queue-request", candidate.item.queueRequest,
+              "--request-id", requestId,
+              "--lease-seconds", String(RESERVATION_LEASE_SECONDS),
+            ]);
+          } catch (error) {
+            // An uncertain CAS cannot be replayed. Reconcile exact durable
+            // state before trying another candidate.
+            const refreshed = await this.readQueues();
+            const current = refreshed.find(board => rootKey(board.boardRoot) === rootKey(candidate.boardRoot))
+              ?.items.find(item => item.taskId === candidate.item.taskId);
+            if (current?.state === "queued" && current.queueRequest === candidate.item.queueRequest &&
+                current.readiness && !current.claimed) {
+              this.backoffDefiniteFailure(candidate.boardRoot, candidate.item,
+                `Queue reservation did not succeed: ${String(error)}`);
+              this.lastError = `Task ${candidate.item.taskId}: reservation could not be obtained; other eligible tasks will be tried.`;
+            }
+            continue;
           }
-          continue;
-        }
-        this.syncReservations(true);
-        this.lastIdleReason = null;
-        await this.startReserved(candidate.boardRoot, candidate.item, requestId);
-        return; // One selection at a time; capacity is sampled again next pump.
+          await this.readQueues();
+          this.lastIdleReason = null;
+          await this.startReserved(candidate.boardRoot, candidate.item, requestId);
+          return;
+        } finally {
+          this.caffy.releaseAutomaticAdmission(requestId);
+        } // Only one new automatic worker per pump.
       }
       // Repair only a recent, definitively unsent original prompt after all
       // eligible new queued work has had admission priority. Any wake may

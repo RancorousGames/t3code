@@ -2,10 +2,11 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import { CHATGPT_CAPACITY_MESSAGE_CHANNEL } from "../channels.ts";
-import { requestCapacityMessage } from "../../app/ChatGPTCapacityMessageClient.ts";
+import * as DesktopAppActivation from "../../app/DesktopAppActivation.ts";
 import type { CapacityMessageRequest } from "@t3tools/contracts";
 
-/** Renderer cannot select a URL, credentials, or arbitrary OpenRig action. */
+/** Session-view capacity is admitted by the SAME T3 scheduler as TaskBoard,
+ * independently of Keep T3 Busy. No remote OpenRig capacity ledger. */
 export const chatGPTCapacityMessageIpc = DesktopIpc.makeIpcMethod({
   channel: CHATGPT_CAPACITY_MESSAGE_CHANNEL,
   payload: Schema.Unknown,
@@ -29,6 +30,7 @@ export const chatGPTCapacityMessageIpc = DesktopIpc.makeIpcMethod({
       )
     )
       throw new Error("Unsupported capacity action");
-    return yield* Effect.promise(() => requestCapacityMessage(input as CapacityMessageRequest));
+    const activation = yield* DesktopAppActivation.DesktopAppActivation;
+    return yield* activation.capacityMessage(input as CapacityMessageRequest);
   }),
 });

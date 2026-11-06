@@ -4,7 +4,10 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeCP from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
+import type {
+  CapacityMessageReceipt, CapacityMessageRequest,
+  DesktopAppActivationRequest, DesktopAppActivationResponse,
+} from "@t3tools/contracts";
 import type { ChatGPTDeliveryQueue, DeliveryRecord } from "./ChatGPTDeliveryQueue.ts";
 import { sessionWorkCapacityIdentityResolver, type WorkCapacitySessionIdentity } from "./sessionWorkCapacityIdentity.ts";
 import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
@@ -37,6 +40,8 @@ export interface CaffyConfig {
   beginAt?: number | null;
   /** Only idle and queued modes support automated context reboot. */
   autoRebootMinutes?: number | null;
+  /** An admitted queued monitor retains one automatic slot until stopped. */
+  capacityHeld?: boolean;
   /** First verified working observation or completed Caffy wake. */
   lastActivatedAt?: number | null;
   lastRebootAt?: number | null;
@@ -50,9 +55,15 @@ export interface AgentStoppedCaffy {
   publicSessionId?: string | undefined;
   stoppedAt: number;
 }
+interface LocalCapacityClaim {
+  messageId: string; sessionId: string; conversationId: string | null;
+  state: "waiting" | "admitted" | "submitted" | "uncertain";
+  createdAt: number; submittedAt: number | null;
+}
 interface CaffyStore {
   version: 2;
   entries: CaffyConfig[];
+  capacityClaims?: LocalCapacityClaim[];
   keepT3Busy: boolean;
   maxWorking: number;
   shutdownWhenIdle?: boolean;
@@ -82,6 +93,9 @@ export class CaffyScheduler {
   private shutdownError: string | null = null;
   private readonly shutdownPC: () => void;
   private readonly workingReports = new Map<string, { observedAt: number; ids: Set<string> }>();
+  private readonly automaticAdmissions = new Set<string>();
+  private readonly capacityClaims = new Map<string, LocalCapacityClaim>();
+  private admissionGate: Promise<void> = Promise.resolve();
   private taskReservations: Array<{requestId: string; sessionId: string | null; holdUntil?: number}> = [];
   private taskBoardInventoryReady = false;
   private started = false;
@@ -125,6 +139,13 @@ export class CaffyScheduler {
       const saved = JSON.parse(NodeFS.readFileSync(this.file, "utf8")) as CaffyStore;
       if (saved.version === 2 && Array.isArray(saved.entries)) {
         for (const row of saved.entries) if (valid(row)) this.entries.set(row.sessionId, row);
+        for (const claim of saved.capacityClaims ?? []) {
+          if (claim && UUID.test(claim.messageId) && UUID.test(claim.sessionId) &&
+              (claim.conversationId === null || UUID.test(claim.conversationId)) &&
+              ["waiting", "admitted", "submitted", "uncertain"].includes(claim.state) &&
+              Number.isFinite(claim.createdAt))
+            this.capacityClaims.set(claim.messageId, claim);
+        }
         for (const mark of saved.agentStops ?? []) {
           if (mark && UUID.test(mark.sessionId) && Number.isFinite(mark.stoppedAt) &&
               Date.now() - mark.stoppedAt < 7 * 24 * 60 * 60_000)
@@ -144,12 +165,12 @@ export class CaffyScheduler {
     });
     this.deliveries.setDispatchAdmission(async record => {
       const row = this.lookup(record.sessionId);
-      if (!row || row.pendingMessageId !== record.messageId || row.mode !== "queued")
-        return true;
-      if (!this.keepT3Busy || row.paused) return false;
+      if (!row || row.pendingMessageId !== record.messageId) return true;
+      if (row.paused || (row.mode === "queued" && !this.keepT3Busy)) return false;
       const snapshot = await this.capacity().catch(() => null);
-      // The outstanding queued wake already reserves one slot in 'used'.
-      // A later manual spawn may exceed the capacity: defer without cancelling.
+      // An already admitted wake may finish its exact pending send, but a
+      // preexisting oversubscription must not authorize additional Caffy
+      // activations. TaskBoard and Caffy use the same global cap.
       return snapshot?.unknown === 0 && snapshot.used <= snapshot.limit;
     });
   }
@@ -177,6 +198,7 @@ export class CaffyScheduler {
     try {
       NodeFS.writeFileSync(tmp, JSON.stringify({
         version: 2, entries: [...this.entries.values()],
+        capacityClaims: [...this.capacityClaims.values()],
         agentStops: [...this.agentStops.values()].slice(-128),
         keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
         shutdownWhenIdle: this.shutdownWhenIdle,
@@ -409,6 +431,10 @@ export class CaffyScheduler {
     return {
       entries: [...this.entries.values()],
       agentStops: [...this.agentStops.values()],
+      capacityClaims: [...this.capacityClaims.values()].map(row => ({
+        messageId: row.messageId, state: row.state,
+        sessionId: row.sessionId, createdAt: row.createdAt,
+      })),
       keepT3Busy: this.keepT3Busy,
       maxWorking: this.maxWorking,
       shutdownWhenIdle: this.shutdownWhenIdle,
@@ -553,6 +579,7 @@ export class CaffyScheduler {
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
       beginAt: input.beginAt !== undefined ? input.beginAt : prior?.beginAt ?? null,
       autoRebootMinutes: ["idle", "queued"].includes(input.mode) ? prior?.autoRebootMinutes ?? null : null,
+      capacityHeld: input.mode === "queued" ? (prior?.capacityHeld ?? false) : false,
       lastActivatedAt: prior?.lastActivatedAt ?? null,
       lastRebootAt: prior?.lastRebootAt ?? null,
       rebootOperationId: prior?.rebootOperationId ?? null,
@@ -781,6 +808,10 @@ export class CaffyScheduler {
     if (!paused && this.legacyConflict(row.sessionId, row.conversationId))
       throw new Error("Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.");
     row.paused = paused;
+    // Pausing relinquishes any automatic continuation lease unless a prompt
+    // is already in-flight. On resume it must reacquire through the gate.
+    if (paused && row.mode === "queued" && row.pendingMessageId === null)
+      row.capacityHeld = false;
     this.save();
     this.backupConfiguration();
     if (!paused) { this.deliveries.resumeAllowed(); void this.pump(); }
@@ -928,14 +959,14 @@ export class CaffyScheduler {
 
   async capacity(extraReserved = 0): Promise<{
     observedAt: string; limit: number; working: number; reserved: number;
-    unknown: number; used: number; available: number;
+    workingIds: string[]; unknown: number; used: number; available: number;
     admissible: boolean; reason: string | null;
   }> {
     const policy = this.keepT3Busy;
     const unavailable = (reason: string) => ({
       observedAt: new Date().toISOString(), limit: this.maxWorking,
-      working: 0, reserved: extraReserved + this.taskReservations.length, unknown: 1,
-      used: this.maxWorking, available: 0, admissible: false, reason,
+      working: 0, workingIds: [], reserved: extraReserved + this.taskReservations.length,
+      unknown: 1, used: this.maxWorking, available: 0, admissible: false, reason,
     });
     const reply = await this.request({
       version: 1, requestId: NodeCrypto.randomUUID(),
@@ -962,72 +993,57 @@ export class CaffyScheduler {
       return Number.isFinite(observed) && observed <= now + 1000 && now - observed <= 15_000 &&
         (s.activity === "working" || s.status === "working");
     }).map(s => s.id).filter((id): id is string => !!id).map(canonical));
-    // Header reports can outlive a tab's actual activity, particularly when
-    // several T3 windows report disjoint historical green borders. A fresh
-    // authoritative idle observation supersedes the header's stale ID; an
-    // unobserved or unreadable session stays conservatively counted.
-    const observedById = new Map(data.sessions
-      .filter(s => !!s.id).map(s => [canonical(s.id!), s]));
-    for (const report of this.workingReports.values()) {
-      for (const id of report.ids) {
-        const resolved = canonical(id);
-        const session = observedById.get(resolved);
-        const observed = Date.parse(session?.statusObservedAt ?? "");
-        const fresh = Number.isFinite(observed) && observed <= now + 1000 &&
-          now - observed <= 15_000;
-        const knownIdle = fresh && session?.activity === "idle" &&
-          ["new", "done_or_idle", "pending_or_stalled", "waiting_for_input"]
-            .includes(session.status ?? "");
-        if (!knownIdle) workingIds.add(resolved);
-      }
-    }
+    // The sidebar and this admission check must agree: both consume this
+    // exact canonical union of fresh live header reports and registry activity.
+    // Never override a green sidebar report with an unrelated idle snapshot.
+    for (const report of this.workingReports.values())
+      for (const id of report.ids) workingIds.add(canonical(id));
     // A newly queued message may not yet be reflected as 'working' by T3.
     // Count it as a provisional slot, or one pump could enqueue 6+ wakes.
-    const reserved = [...this.entries.values()].filter(row =>
-      row.mode === "queued" &&
-      ![row.sessionId, row.browserSessionId, row.publicSessionId]
-        .some(id => !!id && workingIds.has(canonical(id))) &&
-      (row.pendingMessageId !== null ||
-        // A recent successful wake reserves a short activation grace period,
-        // except when its session has explicitly been paused until later.
-        ((row.beginAt == null || row.beginAt <= now) &&
-          row.lastWakeAt !== null && now - row.lastWakeAt < 120_000))).length;
-    // A TaskBoard "Working" transition means a guest UUID was allocated, NOT
-    // that the first prompt has started. Keep its launch slot occupied until
-    // the guest becomes an observed worker; otherwise each slow browser load
-    // lets the coordinator spawn another task and exceed the configured cap.
-    // Bound this grace period: old idle/failed task sessions are not capacity.
-    const sessionsById = new Map(data.sessions.filter(s => !!s.id).map(s => [canonical(s.id!), s]));
-    const taskReserved = this.taskReservations.filter(row => {
-      if (!row.sessionId) return row.holdUntil === undefined || now < row.holdUntil;
-      const id = canonical(row.sessionId);
-      if (workingIds.has(id)) return false; // already counted as active
-      const session = sessionsById.get(id);
-      const bound = Date.parse(session?.binding?.boundAt ?? "");
-      // A guest that already replied or bootstrapped has completed its startup
-      // reservation; count it only while actively generating. Holding it for
-      // another three minutes falsely blocks newly queued work.
-      if (session?.bootstrapIdentity?.state === "registered" ||
-          session?.lastRole === "assistant") return false;
-      // Keep a never-started guest reserved until the coordinator can retire it
-      // at five minutes, with a short close/reconcile margin. Releasing at
-      // three minutes let late starts push the total above the configured cap.
-      return Number.isFinite(bound) && bound <= now + 1000 &&
-        now - bound < 6 * 60_000;
-    }).length;
-    const totalReserved = reserved + extraReserved + taskReserved;
+    const heldIds = new Set(workingIds);
+    let unboundReserved = 0;
+    // A queued wake remains an automatic obligation until explicitly stopped:
+    // freeing its slot at the end of a turn allowed it to resume alongside
+    // newly spawned workers and exceed the configured limit.
+    for (const row of this.entries.values()) {
+      if (row.expiresAt !== null && row.expiresAt <= now && !row.pendingMessageId) continue;
+      // All automatic Caffy wakes, including periodic monitors, are part of
+      // this same ledger. Periodic activity has only a bounded startup lease;
+      // queued workers retain their seat until stopped.
+      const queuedHeld = row.mode === "queued" &&
+        (row.capacityHeld ?? (row.lastWakeAt !== null));
+      const recentWake = row.mode !== "queued" && row.lastWakeAt !== null &&
+        now - row.lastWakeAt < 120_000;
+      if (row.pendingMessageId !== null ||
+          (!row.paused && (queuedHeld || recentWake)))
+        heldIds.add(canonical(row.sessionId));
+    }
+    // An admitted session-view message uses this same ledger, independent of
+    // Keep T3 Busy. A waiting message has priority but doesn't consume a seat.
+    for (const claim of this.capacityClaims.values()) {
+      if (claim.state !== "waiting") heldIds.add(canonical(claim.sessionId));
+    }
+    // TaskBoard Working is a durable claim, not proof of active generation.
+    // Preserve that capacity lease until completion/claim release rather than
+    // releasing it at Bootstrap and racing a later Caffy continuation.
+    for (const row of this.taskReservations) {
+      if (row.sessionId) heldIds.add(canonical(row.sessionId));
+      else if (row.holdUntil === undefined || now < row.holdUntil) unboundReserved++;
+    }
+    const totalReserved = heldIds.size - workingIds.size +
+      unboundReserved + extraReserved + this.automaticAdmissions.size;
     const used = workingIds.size + totalReserved;
     if (!this.taskBoardInventoryReady) {
       return {
         observedAt: new Date(now).toISOString(), limit: this.maxWorking,
-        working: workingIds.size, reserved: totalReserved, unknown: 1,
+        working: workingIds.size, workingIds: [...workingIds], reserved: totalReserved, unknown: 1,
         used: this.maxWorking, available: 0, admissible: false,
         reason: "TaskBoard queue reservation inventory unavailable",
       };
     }
     return {
       observedAt: new Date(now).toISOString(), limit: this.maxWorking,
-      working: workingIds.size, reserved: totalReserved, unknown: 0,
+      working: workingIds.size, workingIds: [...workingIds], reserved: totalReserved, unknown: 0,
       used, available: Math.max(0, this.maxWorking - used),
       admissible: policy && used < this.maxWorking,
       reason: !policy ? "Keep T3 Busy disabled" : used < this.maxWorking ? null : "At capacity",
@@ -1079,6 +1095,145 @@ export class CaffyScheduler {
     } finally {
       this.shutdownChecking = false;
     }
+  }
+
+  private async admissionExclusive<T>(check: () => Promise<T>): Promise<T> {
+    const previous = this.admissionGate;
+    let unlock!: () => void;
+    this.admissionGate = new Promise<void>(resolve => { unlock = resolve; });
+    await previous;
+    try { return await check(); }
+    finally { unlock(); }
+  }
+
+  /** User-queued session-view messages outrank TaskBoard and automatic Caffy.
+   * The queue is durable, so this also survives renderer/window restarts.
+   */
+  hasPriorityCapacityMessage(): boolean {
+    return [...this.capacityClaims.values()].some(row => row.state === "waiting");
+  }
+
+  async capacityMessage(input: CapacityMessageRequest): Promise<CapacityMessageReceipt> {
+    if (!UUID.test(input.messageId)) throw new Error("Invalid capacity message UUID");
+    return await this.admissionExclusive(async () => {
+      const messageId = input.messageId;
+      const receipt = (status: CapacityMessageReceipt["status"], reason?: string): CapacityMessageReceipt =>
+        ({ messageId, status, ...(reason ? {reason} : {}) });
+      let claim = this.capacityClaims.get(messageId);
+      if (input.action === "claim") {
+        if (!UUID.test(input.sessionId) ||
+            (input.conversationId !== null && !UUID.test(input.conversationId)))
+          throw new Error("Invalid capacity claim identity.");
+        // Historical Session-view messages may have a per-message OpenRig
+        // limit. T3 ignores it; the global T3 limit is now the sole policy.
+        if (claim && (claim.sessionId !== input.sessionId ||
+            claim.conversationId !== input.conversationId))
+          throw new Error("Capacity message UUID already belongs to another session.");
+        if (!claim) {
+          claim = {
+            messageId, sessionId: input.sessionId,
+            conversationId: input.conversationId,
+            state: "waiting", createdAt: Date.now(), submittedAt: null,
+          };
+          this.capacityClaims.set(messageId, claim);
+          this.save();
+        }
+      }
+      if (!claim) return receipt("unavailable", "No durable T3 capacity message with this ID.");
+      if (input.action === "release") {
+        if (input.reason === "pre_submit_aborted" &&
+            (claim.state === "waiting" || claim.state === "admitted")) {
+          this.capacityClaims.delete(messageId); this.save();
+          return receipt("released");
+        }
+        if (input.reason !== "assistant_idle_verified" ||
+            !["submitted", "uncertain"].includes(claim.state) ||
+            claim.submittedAt === null)
+          return receipt("held", "Capacity lease may have been submitted; exact post-submit idle proof is required.");
+        const response = await this.request({
+          version: 1, requestId: NodeCrypto.randomUUID(), type: "chatgpt.sessions",
+          action: "list", which: "all", includeHidden: true,
+        }).catch(() => null);
+        const data = response?.ok && "data" in response && response.data &&
+          typeof response.data === "object" ? response.data as {
+            sessions?: Array<{
+              id?: string; conversationId?: string; activity?: string; status?: string;
+              statusObservedAt?: string; lastRole?: string;
+            }>; hasMore?: boolean; incomplete?: boolean;
+          } : null;
+        const session = !data?.hasMore && !data?.incomplete
+          ? data?.sessions?.find(row => row.id === claim.sessionId) : null;
+        const observed = Date.parse(session?.statusObservedAt ?? "");
+        if (!session || session.activity !== "idle" ||
+            !["done_or_idle", "waiting_for_input"].includes(session.status ?? "") ||
+            session.lastRole !== "assistant" ||
+            (claim.conversationId && claim.conversationId !== session.conversationId) ||
+            !Number.isFinite(observed) || observed <= claim.submittedAt ||
+            observed > Date.now() + 1000 || Date.now() - observed > 15_000)
+          return receipt("held", "Awaiting verified assistant idle in the exact conversation.");
+        this.capacityClaims.delete(messageId); this.save();
+        return receipt("released");
+      }
+      if (input.action === "submit") {
+        if (claim.state === "submitted") return receipt("submitted");
+        if (claim.state !== "admitted") return receipt("held", "This message has not been admitted.");
+        claim.state = "submitted"; claim.submittedAt = Date.now(); this.save();
+        return receipt("submitted");
+      }
+      if (input.action === "uncertain") {
+        if (claim.state === "submitted" || claim.state === "admitted") {
+          claim.state = "uncertain"; this.save();
+        }
+        return receipt("uncertain");
+      }
+      if (claim.state === "admitted" || claim.state === "submitted" || claim.state === "uncertain")
+        return receipt(claim.state === "admitted" ? "admitted" :
+          claim.state === "submitted" ? "submitted" : "uncertain");
+      if (input.action === "status") return receipt("waiting");
+      // FIFO: once an older user's message is queued, other capacity requests
+      // cannot jump ahead, and no TaskBoard/Caffy admission can race this gate.
+      const oldest = [...this.capacityClaims.values()]
+        .filter(row => row.state === "waiting")
+        .sort((a, b) => a.createdAt - b.createdAt)[0];
+      if (oldest !== claim) return receipt("waiting", "An earlier user message has priority.");
+      if ([...this.capacityClaims.values()].some(row =>
+        row.messageId !== claim.messageId && row.sessionId === claim.sessionId &&
+        row.state !== "waiting"))
+        return receipt("waiting", "Another message is already using this session.");
+      const snapshot = await this.capacity().catch(() => null);
+      if (!snapshot || snapshot.unknown !== 0 || snapshot.used >= snapshot.limit)
+        return receipt("waiting", snapshot?.reason ?? "Waiting for T3 capacity.");
+      claim.state = "admitted"; this.save();
+      return receipt("admitted");
+    });
+  }
+
+  /** TaskBoard and Caffy share a single atomic gate, not separate racy reads.
+   * For an already-held queued session, a continuation reuses its existing slot.
+   */
+  async acquireAutomaticAdmission(
+    ticket: string, sessionId?: string, allowWhenBusyDisabled = false,
+  ): Promise<boolean> {
+    return await this.admissionExclusive(async () => {
+      if (!this.keepT3Busy && !allowWhenBusyDisabled) return false;
+      const alreadyHeld = !!sessionId && (
+        this.taskReservations.some(row => row.sessionId === sessionId) ||
+        [...this.entries.values()].some(row => row.mode === "queued" &&
+          row.sessionId === sessionId &&
+          (row.capacityHeld ?? (row.lastWakeAt !== null))));
+      if (!alreadyHeld && this.hasPriorityCapacityMessage()) return false;
+      const available = await this.capacity().catch(() => null);
+      if (!available || available.unknown !== 0) return false;
+      if ((!alreadyHeld && (available.used >= available.limit ||
+            (!this.keepT3Busy && !allowWhenBusyDisabled))) ||
+          (alreadyHeld && available.used > available.limit)) return false;
+      if (!alreadyHeld) this.automaticAdmissions.add(ticket);
+      return true;
+    });
+  }
+
+  releaseAutomaticAdmission(ticket: string): void {
+    this.automaticAdmissions.delete(ticket);
   }
 
   private async hasCapacity(): Promise<boolean> {
@@ -1171,7 +1326,11 @@ export class CaffyScheduler {
           this.save();
           continue;
         }
-        if (row.mode === "queued" && !(await this.hasCapacity().catch(() => false))) continue;
+        const wakeTicket = `wake:${row.sessionId}:${row.conversationId}`;
+        if (!(await this.acquireAutomaticAdmission(
+          wakeTicket, row.sessionId, row.mode !== "queued",
+        ))) continue;
+        try {
         // A cold or errored session cannot pass a live guarded read until
         // it has been mounted. Enqueue from the exact registry binding so
         // the *existing* T3 delivery queue will mount/recover it. The guarded
@@ -1208,6 +1367,7 @@ export class CaffyScheduler {
         row.pendingMessageId = messageId;
         row.pendingWake = false;
         row.pendingReason = null;
+        if (row.mode === "queued") row.capacityHeld = true;
         this.save();
         try {
           this.deliveries.enqueue({
@@ -1218,6 +1378,9 @@ export class CaffyScheduler {
           // Keep the ID pinned; the journal might already contain it.
           row.lastError = String(error);
           this.save();
+        }
+        } finally {
+          this.releaseAutomaticAdmission(wakeTicket);
         }
       }
     } finally {

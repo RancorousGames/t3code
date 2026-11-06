@@ -138,11 +138,6 @@ export function ChatGPTSessionCockpit({
     "queue" as "queue" | "steer" | "capacity",
     Schema.Literals(["queue", "steer", "capacity"]),
   );
-  const [maxActiveWorkers, setMaxActiveWorkers] = useLocalStorage(
-    `t3code:chatgpt-browser:capacity-workers:v1:${environmentId}:${sessionId}`,
-    4,
-    Schema.Number,
-  );
   const [teamOpen, setTeamOpen] = useLocalStorage(
     `t3code:chatgpt-browser:team-open:v1:${environmentId}:${sessionId}`,
     true,
@@ -546,12 +541,12 @@ export function ChatGPTSessionCockpit({
           draft,
           target,
           undefined,
-          mode === "capacity" ? { condition: "wait_for_slot", maxActiveWorkers } : undefined,
+          mode === "capacity" ? { condition: "wait_for_slot" } : undefined,
         );
         setDraft("");
         setMessage(
           mode === "capacity"
-            ? `Waiting for an idle session and fewer than ${maxActiveWorkers} active workers.`
+            ? "Queued for the next T3 capacity slot. Priority over TaskBoard; works with Keep Busy off."
             : "Queued. It will send when the exact session becomes idle and readable.",
         );
         return;
@@ -1042,7 +1037,7 @@ export function ChatGPTSessionCockpit({
                     onClick={() => setMode("capacity")}
                     disabled={!window.desktopBridge?.chatGPTCapacityMessage}
                   >
-                    Wait for slot
+                    Queue on capacity
                   </Button>
                   <Button
                     type="button"
@@ -1058,7 +1053,7 @@ export function ChatGPTSessionCockpit({
                   {mode === "queue"
                     ? "Waits for idle"
                     : mode === "capacity"
-                      ? "Idle + capacity available"
+                      ? "Priority over TaskBoard · works with Keep Busy off"
                       : "Immediate · interrupts current reply"}
                 </span>
               </div>
@@ -1069,27 +1064,15 @@ export function ChatGPTSessionCockpit({
                   : mode === "queue"
                     ? "Queue"
                     : mode === "capacity"
-                      ? "Wait for slot"
+                      ? "Queue on capacity"
                       : "Steer"}
               </Button>
             </div>
             {mode === "capacity" && (
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                Max working agents
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={maxActiveWorkers}
-                  className="w-16 rounded border border-input bg-background px-1 py-0.5"
-                  onChange={(event) => {
-                    const number = Number(event.target.value);
-                    if (Number.isSafeInteger(number) && number >= 1 && number <= 100)
-                      setMaxActiveWorkers(number);
-                  }}
-                />
-                <span>Global OpenRig capacity, shared with TaskBoard.</span>
-              </label>
+              <p className="text-xs text-muted-foreground">
+                Uses the shared T3 working-agent limit, ahead of TaskBoard and Caffy.
+                Queue on capacity operates even when Keep T3 Busy is off.
+              </p>
             )}
             {pendingMessages.length > 0 && (
               <div
