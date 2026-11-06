@@ -200,6 +200,7 @@ function createDurableNativePage(sessionId, partition) {
   return {
     webContents: view.webContents,
     isDestroyed: () => disposed || view.webContents.isDestroyed(),
+    isCarrierVisible: () => !carrier.isDestroyed() && carrier.isVisible(),
     getNativeWindowHandle: () => carrier.getNativeWindowHandle(),
     getBounds: () => carrier.getBounds(),
     // Takes desktop DIP. Twice, because Chromium converts using the monitor the
@@ -711,8 +712,10 @@ async function handle(req, res) {
       return send(res, 200, { stopped: true });
     }
     if (req.method === "POST" && pathname === "/sessions/close") {
-      const { sessionId } = await readJson(req);
+      const { sessionId, automatic } = await readJson(req);
       const entry = sessions.get(sessionId);
+      if (automatic === true && entry?.window.isCarrierVisible())
+        throw new Error("Cannot automatically unload a visible ChatGPT session.");
       if (entry && !entry.window.isDestroyed()) {
         entry.window.destroy();
         sessions.delete(sessionId);

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { visibleSplitSessionIds } from "../../chatGPTSplitLayout";
+import { isChatGPTSessionBeingViewed } from "../../browser/chatGPTViewingProtection";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { readChatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import type { BrowserSession } from "../../chatGPTBrowserSessions";
@@ -12,6 +12,7 @@ import {
   chatGPTGuestKey,
   clearChatGPTGuestUserOpened,
   evictVerifiedIdleChatGPTGuest,
+  useChatGPTGuestHibernation,
 } from "../../browser/chatGPTGuestHibernation";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
 import { nativeChatGPTPageStatus } from "../../browser/nativeChatGPTWarmSession";
@@ -97,7 +98,13 @@ export function ChatGPTIdleOverflowUnloader({
           const lastWorking = getLocalStorageItem(
             chatGPTBrowserLastWorkingKey(environmentId, session.id), Schema.Number,
           ) ?? 0;
-          return session.id !== selectedId && !(selectedId && visibleSplitSessionIds(environmentId).has(session.id)) &&
+          const key = JSON.stringify([
+            environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId,
+          ]);
+          const userOpened = useChatGPTGuestHibernation.getState().userOpened[key] === true;
+          return session.id !== selectedId && !isChatGPTSessionBeingViewed(environmentId, session.id) &&
+            // Explicitly opened sessions are exempt from the automatic cap until snoozed/unloaded.
+            (!userOpened || (session.snoozedUntil ?? 0) > now) &&
             !imminentCaffyIds.has(session.id) &&
             !deliveryRequests[`${environmentId}:${session.id}`] &&
             !hasUncertainChatGPTSend(environmentId, session.id) &&
@@ -126,10 +133,9 @@ export function ChatGPTIdleOverflowUnloader({
             }) as { result?: Observed };
             if (!safeToUnload(evaluated.result ?? null, probe.url)) continue;
             // Do not use an earlier React selection snapshot if the route changed.
-            if (disposed || imminentCaffyIds.has(session.id) ||
-                (window.location.href.includes("/browser/") &&
-                  visibleSplitSessionIds(environmentId).has(session.id))) continue;
-            await bridge({ operation: "close", identity: nativeIdentity });
+            if (disposed || !eligible(session) ||
+                isChatGPTSessionBeingViewed(environmentId, session.id)) continue;
+            await bridge({ operation: "close", identity: nativeIdentity, automatic: true });
             clearChatGPTGuestUserOpened(session.id);
             clearChatGPTGuestUserOpened(JSON.stringify([
               environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId,
@@ -154,9 +160,8 @@ export function ChatGPTIdleOverflowUnloader({
               : null;
             const expectedUrl = nav?._tag === "Success" ? nav.url : null;
             if (!safeToUnload(observation, expectedUrl)) continue;
-            if (disposed || imminentCaffyIds.has(session.id) ||
-                (window.location.href.includes("/browser/") &&
-                  visibleSplitSessionIds(environmentId).has(session.id))) continue;
+            if (disposed || !eligible(session) ||
+                isChatGPTSessionBeingViewed(environmentId, session.id)) continue;
             evictVerifiedIdleChatGPTGuest(stableKey);
             overflow--;
           }

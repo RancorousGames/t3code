@@ -355,8 +355,9 @@ export type PersistentChatGPTRequest =
   | { operation: "visibility"; sessionId: string; visible: boolean }
   | { operation: "input"; sessionId: string; input: Record<string, unknown> }
   | { operation: "evaluate"; sessionId: string; expression: string }
+  | { operation: "close"; sessionId: string; automatic?: boolean }
   | {
-      operation: "status" | "snapshot" | "probe" | "close" | "reload" | "back" | "forward";
+      operation: "status" | "snapshot" | "probe" | "reload" | "back" | "forward";
       sessionId: string;
       environmentId?: string;
       profileId?: string;
@@ -399,8 +400,9 @@ export type PersistentChatGPTViewRequest =
       findNext?: boolean;
       forward?: boolean;
     }
+  | { operation: "close"; identity: PersistentChatGPTViewIdentity; automatic?: boolean }
   | {
-      operation: "stop_find" | "probe" | "snapshot" | "close" | "reload" | "back" | "forward";
+      operation: "stop_find" | "probe" | "snapshot" | "reload" | "back" | "forward";
       identity: PersistentChatGPTViewIdentity;
     };
 
@@ -462,6 +464,11 @@ export async function persistentChatGPTViewRequest(
         profileId: identity.profileId,
       });
     case "close":
+      return persistentChatGPTRequest({
+        operation: "close",
+        sessionId: identity.sessionId,
+        automatic: input.automatic === true,
+      });
     case "reload":
     case "back":
     case "forward":

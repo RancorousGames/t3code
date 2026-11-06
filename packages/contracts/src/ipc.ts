@@ -1874,7 +1874,13 @@ export interface DesktopBridge {
           identity: { sessionId: string; environmentId: string; profileId: string };
         }
       | {
-          operation: "probe" | "snapshot" | "close" | "reload" | "back" | "forward";
+          operation: "close";
+          identity: { sessionId: string; environmentId: string; profileId: string };
+          /** Automatic memory eviction must refuse a page currently being viewed. */
+          automatic?: boolean;
+        }
+      | {
+          operation: "probe" | "snapshot" | "reload" | "back" | "forward";
           identity: { sessionId: string; environmentId: string; profileId: string };
         },
   ) => Promise<unknown>;

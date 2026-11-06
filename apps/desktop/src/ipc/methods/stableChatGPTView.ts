@@ -99,6 +99,7 @@ const Request = Schema.Union([
   Schema.Struct({
     operation: Schema.Literal("close"),
     identity: Identity,
+    automatic: Schema.optional(Schema.Boolean),
   }),
 ]);
 
@@ -269,6 +270,8 @@ export const stableChatGPTViewRequestIpc = DesktopIpc.makeIpcMethod({
         } else if (input.operation === "evaluate") {
           return { result: await registry.evaluate(identity.sessionId, input.expression) };
         } else if (input.operation === "close") {
+          if (input.automatic && registry.snapshot(identity.sessionId).visible)
+            throw new Error("Cannot automatically unload a visible ChatGPT session.");
           registry.close(identity.sessionId);
         }
         return input.operation === "close"
