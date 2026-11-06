@@ -2589,7 +2589,8 @@ function OpenCommandPaletteDialog(props: {
       event.keyCode !== 229 &&
       (command === "chat.new" ||
         command === "chat.newLocal" ||
-        command === "chat.newWithoutProject");
+        command === "chat.newWithoutProject" ||
+        command === "chatgpt.newSession");
     const matchingItem =
       isJump || isNewThread
         ? displayedGroups
