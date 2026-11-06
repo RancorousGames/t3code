@@ -5,6 +5,7 @@ import {
   observeSpawnAutoCloseActivity,
   readSpawnAutoCloseIdleSince,
   spawnAutoCloseCandidate,
+  spawnAutoCloseFinishedTaskCandidate,
 } from "./chatGPTSpawnAutoClose";
 
 const now = Date.parse("2026-11-05T06:00:00Z");
@@ -58,6 +59,36 @@ describe("explicit spawn auto-close", () => {
     expect(readSpawnAutoCloseIdleSince("pc", worker.id, store)).toBeNull();
     observeSpawnAutoCloseActivity("pc", { ...worker, autoClose: false }, "idle", now, store);
     expect(readSpawnAutoCloseIdleSince("pc", worker.id, store)).toBeNull();
+  });
+
+  it("closes an unmounted finished TaskBoard worker even if its final idle observation was lost", () => {
+    const createdAt = now - 5 * SPAWN_AUTO_CLOSE_IDLE_MS;
+    const claimed = {
+      ...worker,
+      binding: {
+        seatId: null, role: "worker" as const, parentSessionId: null,
+        taskRef: { board: "B:\\GDrive\\jjj\\Tasks", id: "T3-0248" },
+        boundAt: new Date(createdAt).toISOString(), boundBy: "omcp_spawn" as const,
+      },
+    };
+    const finished = {
+      taskId: "T3-0248", claimedBy: "", column: "done",
+      completedAt: now - SPAWN_AUTO_CLOSE_IDLE_MS, liveState: null,
+      boardRoot: "B:/GDrive/jjj/Tasks",
+    };
+    const candidate = (session: BrowserSession = claimed, tasks = [finished], lastWorkingAt: number | null = now - 2 * SPAWN_AUTO_CLOSE_IDLE_MS) =>
+      spawnAutoCloseFinishedTaskCandidate([session], session, tasks, undefined, now, lastWorkingAt);
+    expect(candidate()).toMatchObject({
+      taskIds: ["T3-0248"], reason: "auto-close-finished-task", dueAt: now,
+    });
+    expect(candidate(claimed, [{ ...finished, completedAt: now - SPAWN_AUTO_CLOSE_IDLE_MS + 1 }])).toBeNull();
+    expect(candidate(claimed, [{ ...finished, column: "in-progress" }])).toBeNull();
+    expect(candidate(claimed, [{ ...finished, boardRoot: "B:/Other/Tasks" }])).toBeNull();
+    expect(candidate(claimed, [finished], now - 5_000)).toBeNull();
+    expect(candidate({ ...claimed, humanControlled: true })).toBeNull();
+    expect(candidate({ ...claimed, autoClose: false })).toBeNull();
+    expect(candidate({ ...claimed, borderColor: "blue" })).toBeNull();
+    expect(candidate({ ...claimed, binding: undefined })).toBeNull();
   });
 
   it("protects selected, human-owned, highlighted, snoozed and parenting sessions", () => {

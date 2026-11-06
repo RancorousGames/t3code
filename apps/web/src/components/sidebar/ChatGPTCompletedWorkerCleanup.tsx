@@ -19,6 +19,7 @@ import {
   clearSpawnAutoCloseIdleSince,
   readSpawnAutoCloseIdleSince,
   spawnAutoCloseCandidate,
+  spawnAutoCloseFinishedTaskCandidate,
 } from "../../chatGPTSpawnAutoClose";
 import { isChatGPTGuestHibernated } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
@@ -100,23 +101,40 @@ export function ChatGPTCompletedWorkerCleanup({
         worker: (typeof initial)[number],
         ownedClaims: typeof claims,
         at: number,
-      ) => spawnAutoCloseCandidate(
-        sessions, worker, selectedBrowserSessionId(), at,
-        readSpawnAutoCloseIdleSince(environmentId, worker.id),
-      ) ?? completedWorkerCandidate(
-        sessions, worker, ownedClaims, trustedManagers, selectedBrowserSessionId(),
-        at, creationEvidence(worker.id),
+      ) => trustedManagers?.has(worker.id) ? null : (
+        spawnAutoCloseCandidate(
+          sessions, worker, selectedBrowserSessionId(), at,
+          readSpawnAutoCloseIdleSince(environmentId, worker.id),
+        ) ?? completedWorkerCandidate(
+          sessions, worker, ownedClaims, trustedManagers, selectedBrowserSessionId(),
+          at, creationEvidence(worker.id),
+        )
       );
+      const finishedTaskFallbackFor = (
+        sessions: readonly (typeof initial)[number][],
+        worker: (typeof initial)[number],
+        ownedClaims: typeof claims,
+        at: number,
+      ) => trustedManagers?.has(worker.id) ? null :
+        spawnAutoCloseFinishedTaskCandidate(
+          sessions, worker, ownedClaims, selectedBrowserSessionId(), at,
+          creationEvidence(worker.id).lastWorkingAt ?? null,
+        );
       for (const worker of initial) {
         if (unmounted) return;
         const originalCandidate = candidateFor(initial, worker, claims, Date.now());
-        if (!originalCandidate || hasUncertainChatGPTSend(environmentId, worker.id)) continue;
+        const finishedFallback = finishedTaskFallbackFor(initial, worker, claims, Date.now());
+        if ((!originalCandidate && !finishedFallback) ||
+            hasUncertainChatGPTSend(environmentId, worker.id)) continue;
 
         const status = await inspectBrowserSession(environmentId, worker);
         // The host can report "unloaded" for a deferred guest. Its status
         // contract is being widened in another owned recovery change.
         const observedStatus: string = status.status;
         if (isPersistentChatGPTSessionOptedIn(worker.id)) {
+          // A task completion alone cannot close an unknown native host; it
+          // must have affirmative live idle and composer proof.
+          if (!originalCandidate) continue;
           // Native browser owners cannot be inferred from preview snapshots.
           // Only close a genuinely idle, positively inspected exact owner.
           if (!["done_or_idle", "waiting_for_input"].includes(observedStatus) ||
@@ -169,6 +187,9 @@ export function ChatGPTCompletedWorkerCleanup({
           Schema.String,
         );
         const conversationId = chatGPTConversationIdFromUrl(cachedUrl);
+        const registeredId = worker.bootstrapIdentity?.state === "registered"
+          ? worker.bootstrapIdentity.conversationId
+          : null;
 
         // A cold worker has no mounted composer. Before deleting its T3 slot,
         // require a canonical persisted conversation URL, no guest, no pending
@@ -190,13 +211,35 @@ export function ChatGPTCompletedWorkerCleanup({
               snapshot.navStatus._tag === "Success" &&
               chatGPTConversationIdFromUrl(snapshot.navStatus.url) === conversationId);
 
+        // The legacy webview can disappear without being marked hibernated.
+        // In that case the idle clock never started, so use ONLY an explicitly
+        // opted-in worker's exact, completed TaskBoard assignment, never an
+        // arbitrary unavailable/error state. No guest, exact stable conversation
+        // identity and an expired grace period are all mandatory.
+        const finishedColdClose =
+          !!finishedFallback &&
+          observedStatus === "unavailable" &&
+          status.statusReason === "Embedded ChatGPT webview is not mounted." &&
+          noMountedGuest &&
+          typeof registeredId === "string" &&
+          !!chatGPTConversationIdFromUrl(`https://chatgpt.com/c/${registeredId}`) &&
+          (conversationId === null || conversationId === registeredId) &&
+          (snapshot === null || (
+            preview.activeTabId === snapshot.tabId &&
+            (snapshot.navStatus._tag !== "Success" ||
+              chatGPTConversationIdFromUrl(snapshot.navStatus.url) === registeredId)
+          ));
+        const allowedColdClose = coldClose || finishedColdClose;
+        const closeCandidate = originalCandidate ?? (finishedColdClose ? finishedFallback : null);
+
         const liveClose =
+          !!originalCandidate &&
           snapshot !== null &&
           (status.status === "done_or_idle" || status.status === "waiting_for_input") &&
           status.activity === "idle" &&
           status.uiColor !== "interrupted" &&
           !!status.observedGuestUrl;
-        if (!liveClose && !coldClose) continue;
+        if (!liveClose && !allowedColdClose) continue;
 
         try {
           // Recheck the entire claim set, role, timers, exemptions and session
@@ -209,7 +252,10 @@ export function ChatGPTCompletedWorkerCleanup({
             unmounted ||
             !current ||
             JSON.stringify(current) !== JSON.stringify(worker) ||
-            !candidateFor(currentSessions, current, refreshedClaims, Date.now())
+            !(candidateFor(currentSessions, current, refreshedClaims, Date.now()) ??
+              (finishedColdClose
+                ? finishedTaskFallbackFor(currentSessions, current, refreshedClaims, Date.now())
+                : null))
           ) continue;
 
           if (liveClose) {
@@ -225,7 +271,7 @@ export function ChatGPTCompletedWorkerCleanup({
             });
           }
 
-          if (coldClose) {
+          if (allowedColdClose) {
             const latest = await inspectBrowserSession(environmentId, current);
             if (
               latest.status !== status.status ||
@@ -247,7 +293,7 @@ export function ChatGPTCompletedWorkerCleanup({
             (snapshot !== null
               ? latestPreview.sessions[snapshot.tabId] !== snapshot
               : Object.keys(latestPreview.sessions).length !== 0) ||
-            (coldClose &&
+            (allowedColdClose &&
               (getLocalStorageItem(
                 chatGPTBrowserLastUrlKey(environmentId, current.id),
                 Schema.String,
@@ -273,9 +319,9 @@ export function ChatGPTCompletedWorkerCleanup({
           clearSpawnAutoCloseIdleSince(environmentId, current.id);
           console.info("[ChatGPT completed-worker cleanup]", {
             sessionId: current.id,
-            taskIds: originalCandidate.taskIds,
-            dueAt: originalCandidate.dueAt,
-            reason: originalCandidate.reason,
+            taskIds: closeCandidate?.taskIds,
+            dueAt: closeCandidate?.dueAt,
+            reason: closeCandidate?.reason,
           });
           return;
         } catch (error) {
