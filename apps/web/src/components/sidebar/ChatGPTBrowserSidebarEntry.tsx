@@ -1063,11 +1063,14 @@ export function ChatGPTBrowserSidebarEntry({
   const visibleWorkerCount = sidebarVisibleSessions.filter((session) =>
     hideableWorkerIds.has(session.id),
   ).length;
-  // Count every working session before applying Hide Workers to sidebar rows.
-  const activeSessionCount = sessions.filter(
-    (session) => activities[session.id]?.age === "working",
-  ).length;
-  // The same exact working IDs shown in the header gate backend auto-admission.
+  // The header displays the SAME canonical T3 capacity result used for
+  // automatic admission. Local observations are inputs to that one ledger,
+  // never a second independent count (especially after webview resets).
+  const [sharedCapacity, setSharedCapacity] = useState<{
+    working: number; limit: number; unknown: number;
+  } | null>(null);
+  const activeSessionCount = sharedCapacity?.unknown === 0 ? sharedCapacity.working : null;
+  // Report live sidebar activity to the canonical backend ledger.
   const workingSessionIds = sessions.filter(session => activities[session.id]?.age === "working")
     .map(session => session.id);
   const workingIdsKey = workingSessionIds.join(",");
@@ -1078,12 +1081,27 @@ export function ChatGPTBrowserSidebarEntry({
     let disposed = false;
     let busy = false;
     const send = async () => {
-      if (disposed || busy || !environmentId ||
-          (sessions.length > 0 && !sessions.every(s => activities[s.id]))) return;
+      if (disposed || busy || !environmentId) return;
+      // Unloaded and reconnecting guests may have no local activity hook yet.
+      // Still publish every known green ID; T3's canonical roster contributes
+      // independent working observations and admission fails closed if missing.
       busy = true;
       try {
         await report({ action: "working_snapshot", workingSessionIds, workingReporterId });
-      } catch { /* Backend fails closed when this live count is unavailable. */ }
+        const answer = await report({ action: "capacity" });
+        if (disposed) return;
+        if (answer && typeof answer === "object" &&
+            "working" in answer && typeof answer.working === "number" &&
+            "limit" in answer && typeof answer.limit === "number" &&
+            "unknown" in answer && typeof answer.unknown === "number") {
+          setSharedCapacity({
+            working: answer.working, limit: answer.limit, unknown: answer.unknown,
+          });
+        } else setSharedCapacity(null);
+      } catch {
+        // Do not show a misleading zero if the canonical counter is unavailable.
+        if (!disposed) setSharedCapacity(null);
+      }
       finally { busy = false; }
     };
     void send();
@@ -1091,8 +1109,9 @@ export function ChatGPTBrowserSidebarEntry({
     return () => { disposed = true; window.clearInterval(timer); };
   }, [workingIdsKey, workingReporterId, allSessionIdsKey, environmentId, Object.keys(activities).length]);
   // This is the T3 work-admission limit, distinct from the warm-webview ceiling.
-  const workCapacity = caffyOverview?.maxWorking ?? null;
-  const belowWorkCapacity = workCapacity !== null && activeSessionCount < workCapacity;
+  const workCapacity = sharedCapacity?.limit ?? caffyOverview?.maxWorking ?? null;
+  const belowWorkCapacity = workCapacity !== null && activeSessionCount !== null &&
+    activeSessionCount < workCapacity;
   const snoozedSessions = visibleSessions.filter(isSnoozed);
   const showingHidden = showHidden && hiddenSessions.length > 0;
   // Like Hidden, the Snoozed view falls back to active sessions once it empties.
@@ -2013,13 +2032,13 @@ export function ChatGPTBrowserSidebarEntry({
                 ? "text-sky-500 dark:text-sky-400"
                 : "text-lime-500 dark:text-lime-400"}`}
               aria-label={workCapacity !== null
-                ? `${activeSessionCount} of ${workCapacity} active ChatGPT session capacity`
-                : `${activeSessionCount} active ChatGPT sessions`}
+                ? `${activeSessionCount ?? "Unknown"} of ${workCapacity} active ChatGPT session capacity`
+                : `${activeSessionCount ?? "Unknown"} active ChatGPT sessions`}
               title={workCapacity !== null
-                ? `${activeSessionCount}/${workCapacity} active sessions / T3 automatic work capacity (includes hidden workers). Manual sessions can exceed capacity.`
-                : `${activeSessionCount} active ChatGPT sessions (T3 capacity unavailable)`}
+                ? `${activeSessionCount ?? "?"}/${workCapacity} canonical T3 working sessions / automatic work limit (includes hidden workers). Manual Start now may exceed capacity.`
+                : "Canonical T3 working-session count unavailable; automatic admission is paused."}
             >
-              {activeSessionCount}
+              {activeSessionCount ?? "?"}
             </span>
             <ChatGPTAccountToggle environmentId={environmentId} />
             <Button
