@@ -54,6 +54,8 @@ export async function controlSessions(
     "experimental_evaluate",
     "bootstrap_title",
     "ask_user",
+    "request_attention",
+    "attention_status",
     "send",
     "reconcile_send",
     "enqueue",
@@ -109,6 +111,16 @@ export async function controlSessions(
     throw new Error("bootstrap_title requires a UUID sessionId and safe 3-80 character proposedTitle.");
   if (input.proposedTitle !== undefined && input.action !== "bootstrap_title")
     throw new Error("proposedTitle only applies to bootstrap_title.");
+  if (input.action === "request_attention" &&
+      (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
+       !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? "") ||
+       typeof input.message !== "string" || !input.message.trim() || input.message.length > 1000))
+    throw new Error("request_attention requires exact sessionId, attentionId and 1-1000 character message.");
+  if (input.action === "attention_status" &&
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? ""))
+    throw new Error("attention_status requires exact attentionId.");
+  if (!["request_attention", "attention_status"].includes(input.action) && input.attentionId !== undefined)
+    throw new Error("attentionId requires request_attention or attention_status.");
   if (input.action === "ask_user") {
     if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
         !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.questionId ?? "") ||
@@ -318,6 +330,10 @@ export async function controlSessions(
     ...(input.action === "marker_probe" ? { marker: input.marker } : {}),
     ...(input.action === "experimental_evaluate" ? { expression: input.expression } : {}),
     ...(input.action === "bootstrap_title" ? { proposedTitle: input.proposedTitle } : {}),
+    ...(["request_attention", "attention_status"].includes(input.action)
+      ? { attentionId: input.attentionId,
+          ...(input.action === "request_attention" ? { message: input.message } : {}) }
+      : {}),
     ...(input.action === "ask_user" ? { questionId: input.questionId, question: input.question,
       ...(input.options ? { options: input.options } : {}),
       ...(input.allowCustom !== undefined ? { allowCustom: input.allowCustom } : {}) } : {}),

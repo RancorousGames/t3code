@@ -169,6 +169,8 @@ export const DesktopAppActivationRequest = Schema.Union([
       "experimental_evaluate",
       "bootstrap_title",
       "ask_user",
+      "request_attention",
+      "attention_status",
       "send",
       "reconcile_send",
       "enqueue",
@@ -198,6 +200,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     marker: Schema.optional(Schema.String),
     // Explicit local experiment in one exact ChatGPT guest; never used by delivery queue.
     expression: Schema.optional(Schema.String),
+    attentionId: Schema.optional(NativeOperationId),
     questionId: Schema.optional(NativeOperationId),
     question: Schema.optional(Schema.String),
     options: Schema.optional(Schema.Array(Schema.String)),

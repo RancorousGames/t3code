@@ -64,6 +64,7 @@ import {
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
+import { AgentAttentionToast, requestAgentAttention, readAgentAttention } from "./AgentAttentionToast";
 import { chatGPTCloseStatus } from "../../chatGPTCloseStatus";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import {
@@ -869,6 +870,26 @@ export function DesktopAppActivationCoordinator() {
               requestId: request.requestId,
               ok: true,
               data: { action: "bootstrap_title", sessionId: id, applied: accepted },
+            };
+          }
+          if (request.action === "request_attention") {
+            const id = request.sessionId;
+            const attentionId = request.attentionId;
+            if (!id || !attentionId || !request.message ||
+                !sessionSnapshot.some((s) => s.id === id || s.bootstrapIdentity?.publicId === id))
+              throw new Error("Attention requires an existing exact T3 session, request ID and message.");
+            const entry = requestAgentAttention(attentionId, id, request.message);
+            return {
+              version: 1, requestId: request.requestId, ok: true,
+              data: { action: "request_attention", attentionId: entry.id, status: entry.status },
+            };
+          }
+          if (request.action === "attention_status") {
+            if (!request.attentionId) throw new Error("Attention request ID required.");
+            const entry = readAgentAttention(request.attentionId);
+            return {
+              version: 1, requestId: request.requestId, ok: true,
+              data: { action: "attention_status", found: !!entry, ...(entry ?? {}) },
             };
           }
           if (request.action === "ask_user") {
@@ -2224,7 +2245,9 @@ export function DesktopAppActivationCoordinator() {
         (request.action === "list" ||
           request.action === "close_status" ||
           request.action === "bootstrap_title" ||
-          request.action === "ask_user")
+          request.action === "ask_user" ||
+          request.action === "request_attention" ||
+          request.action === "attention_status")
       ) {
         void run().catch(() => undefined);
         return;
@@ -2284,5 +2307,42 @@ export function DesktopAppActivationCoordinator() {
     };
   }, [activation, ready, primaryEnvironment?.environmentId]);
 
-  return null;
+  return <AgentAttentionToast onDismiss={(attention) => {
+    const environmentId = primaryEnvironment?.environmentId;
+    if (!environmentId) return;
+    const session = readChatGPTBrowserSessions(environmentId).find(
+      (entry) => entry.id === attention.sessionId ||
+        entry.bootstrapIdentity?.publicId === attention.sessionId,
+    );
+    if (!session) return;
+    const conversationId = session.bootstrapIdentity?.conversationId ??
+      chatGPTConversationIdFromUrl(getLocalStorageItem(
+        chatGPTBrowserLastUrlKey(environmentId, session.id), Schema.String,
+      ));
+    if (!conversationId) return;
+    // User-triggered dismissal becomes a guarded, durable one-off to the exact
+    // existing conversation. A cold guest stays queued rather than being typed into a wrong tab.
+    void window.desktopBridge?.appActivation?.enqueueChatGPT({
+      messageId: attention.id, sessionId: session.id, conversationId,
+      body: `[T3 attention request ${attention.id}] User dismissed the request for direct
+attention: "${attention.message}". Do not notify again. Put the unresolved question
+on the ORIGINAL TaskBoard task using task ask-user, or request verification in
+the Review Inbox if implementation is finished.`,
+    }).catch((error: unknown) =>
+      console.warn("[Agent attention] Could not queue dismissal notice", error),
+    );
+  }} openSession={(sessionId) => {
+    const environmentId = primaryEnvironment?.environmentId;
+    if (!environmentId) return false;
+    const entry = readChatGPTBrowserSessions(environmentId).find(
+      (session) => session.id === sessionId || session.bootstrapIdentity?.publicId === sessionId,
+    );
+    if (entry) {
+      setSessionHidden(entry.id, false);
+      setSessionSnooze([entry.id], null);
+      void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: entry.id } });
+      return true;
+    }
+    return false;
+  }} />;
 }
