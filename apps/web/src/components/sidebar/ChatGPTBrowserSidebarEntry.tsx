@@ -101,8 +101,8 @@ import {
 } from "../../chatGPTSessionActions";
 import { deriveChatGPTSession } from "../../chatGPTSessionModel";
 import { useChatGPTLiveTasks, visibleReadyChatGPTLiveTasks } from "../../chatGPTLiveTasks";
-import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
 import { useChatGPTReadyNudge } from "../../chatGPTReadyNudge";
+import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
 import { scheduleCaffyBegin } from "../../omniwork/chatGPTCaffyPauseResume";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
 import {
@@ -209,8 +209,8 @@ import type { BrowserSession } from "../../chatGPTBrowserSessions";
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import type { ChatGPTPageSnapshot } from "../../chatGPTPageSnapshot";
 import { useStore } from "zustand";
-
 import { splitSessionIds, useSplitLayout } from "../../chatGPTSplitLayout";
+
 const VerifiedWorkerEvidenceSchema = Schema.Array(
   Schema.Struct({
     sessionId: Schema.String,
@@ -2773,7 +2773,7 @@ export function ChatGPTBrowserSidebarEntry({
                                 <div
                                   data-chatgpt-selected-session={activeSessionId === session.id}
                                   data-chatgpt-visible-pane={displayedSessionIds.has(session.id)}
-                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${activeSessionId === session.id ? "ring-2 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
+                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
                                   onContextMenu={(event) => {
                                     event.preventDefault();
                                     void showSessionContextMenu(session.id, {
