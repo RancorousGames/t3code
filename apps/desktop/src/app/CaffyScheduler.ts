@@ -9,7 +9,6 @@ import type {
   DesktopAppActivationRequest, DesktopAppActivationResponse,
 } from "@t3tools/contracts";
 import type { ChatGPTDeliveryQueue, DeliveryRecord } from "./ChatGPTDeliveryQueue.ts";
-import { sessionWorkCapacityIdentityResolver, type WorkCapacitySessionIdentity } from "./sessionWorkCapacityIdentity.ts";
 import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 
 type Mode = "idle" | "periodic" | "queued" | "startup";
@@ -171,7 +170,8 @@ export class CaffyScheduler {
       // An already admitted wake may finish its exact pending send, but a
       // preexisting oversubscription must not authorize additional Caffy
       // activations. TaskBoard and Caffy use the same global cap.
-      return snapshot?.unknown === 0 && snapshot.used <= snapshot.limit;
+      return snapshot?.unknown === 0 &&
+        snapshot.used + snapshot.reserved <= snapshot.limit;
     });
   }
 
@@ -963,90 +963,67 @@ export class CaffyScheduler {
     admissible: boolean; reason: string | null;
   }> {
     const policy = this.keepT3Busy;
-    const unavailable = (reason: string) => ({
-      observedAt: new Date().toISOString(), limit: this.maxWorking,
-      working: 0, workingIds: [], reserved: extraReserved + this.taskReservations.length,
-      unknown: 1, used: this.maxWorking, available: 0, admissible: false, reason,
-    });
-    const reply = await this.request({
-      version: 1, requestId: NodeCrypto.randomUUID(),
-      type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
-    }).catch(() => null);
-    if (!reply?.ok || !("data" in reply) || !reply.data || typeof reply.data !== "object")
-      return unavailable("T3 inventory unavailable");
-    const data = reply.data as { sessions?: Array<WorkCapacitySessionIdentity & {
-      activity?: string; status?: string; statusObservedAt?: string;
-      binding?: { boundAt?: string };
-      lastRole?: string | null;
-      bootstrapIdentity?: {state?: string};
-    }>; total?: number; hasMore?: boolean; incomplete?: boolean };
-    if (!Array.isArray(data.sessions) || data.hasMore || data.incomplete ||
-        (data.total !== undefined && data.total !== data.sessions.length)) return unavailable("T3 inventory incomplete");
     const now = Date.now();
     for (const [reporter, state] of this.workingReports)
       if (now - state.observedAt > 25_000) this.workingReports.delete(reporter);
-    if (this.workingReports.size === 0)
-      return unavailable("Live ChatGPT working-session count unavailable");
-    const canonical = sessionWorkCapacityIdentityResolver(data.sessions);
-    const workingIds = new Set(data.sessions.filter(s => {
-      const observed = Date.parse(s.statusObservedAt ?? "");
-      return Number.isFinite(observed) && observed <= now + 1000 && now - observed <= 15_000 &&
-        (s.activity === "working" || s.status === "working");
-    }).map(s => s.id).filter((id): id is string => !!id).map(canonical));
-    // The sidebar and this admission check must agree: both consume this
-    // exact canonical union of fresh live header reports and registry activity.
-    // Never override a green sidebar report with an unrelated idle snapshot.
+
+    // Exactly the green rows reported by the ChatGPT list sidebar.
+    // Neither TaskBoard ownership, Caffy monitors, startup reservations nor
+    // the separately polled session registry may change the displayed usage.
+    const workingIds = new Set<string>();
     for (const report of this.workingReports.values())
-      for (const id of report.ids) workingIds.add(canonical(id));
-    // A newly queued message may not yet be reflected as 'working' by T3.
-    // Count it as a provisional slot, or one pump could enqueue 6+ wakes.
-    const heldIds = new Set(workingIds);
-    let unboundReserved = 0;
-    // A queued wake remains an automatic obligation until explicitly stopped:
-    // freeing its slot at the end of a turn allowed it to resume alongside
-    // newly spawned workers and exceed the configured limit.
-    for (const row of this.entries.values()) {
-      if (row.expiresAt !== null && row.expiresAt <= now && !row.pendingMessageId) continue;
-      // All automatic Caffy wakes, including periodic monitors, are part of
-      // this same ledger. Periodic activity has only a bounded startup lease;
-      // queued workers retain their seat until stopped.
-      const queuedHeld = row.mode === "queued" &&
-        (row.capacityHeld ?? (row.lastWakeAt !== null));
-      const recentWake = row.mode !== "queued" && row.lastWakeAt !== null &&
-        now - row.lastWakeAt < 120_000;
-      if (row.pendingMessageId !== null ||
-          (!row.paused && (queuedHeld || recentWake)))
-        heldIds.add(canonical(row.sessionId));
-    }
-    // An admitted session-view message uses this same ledger, independent of
-    // Keep T3 Busy. A waiting message has priority but doesn't consume a seat.
-    for (const claim of this.capacityClaims.values()) {
-      if (claim.state !== "waiting") heldIds.add(canonical(claim.sessionId));
-    }
-    // TaskBoard Working is a durable claim, not proof of active generation.
-    // Preserve that capacity lease until completion/claim release rather than
-    // releasing it at Bootstrap and racing a later Caffy continuation.
-    for (const row of this.taskReservations) {
-      if (row.sessionId) heldIds.add(canonical(row.sessionId));
-      else if (row.holdUntil === undefined || now < row.holdUntil) unboundReserved++;
-    }
-    const totalReserved = heldIds.size - workingIds.size +
-      unboundReserved + extraReserved + this.automaticAdmissions.size;
-    const used = workingIds.size + totalReserved;
-    if (!this.taskBoardInventoryReady) {
-      return {
-        observedAt: new Date(now).toISOString(), limit: this.maxWorking,
-        working: workingIds.size, workingIds: [...workingIds], reserved: totalReserved, unknown: 1,
-        used: this.maxWorking, available: 0, admissible: false,
-        reason: "TaskBoard queue reservation inventory unavailable",
-      };
-    }
-    return {
+      for (const id of report.ids) workingIds.add(id);
+    const used = workingIds.size;
+    const observed = {
       observedAt: new Date(now).toISOString(), limit: this.maxWorking,
-      working: workingIds.size, workingIds: [...workingIds], reserved: totalReserved, unknown: 0,
-      used, available: Math.max(0, this.maxWorking - used),
-      admissible: policy && used < this.maxWorking,
-      reason: !policy ? "Keep T3 Busy disabled" : used < this.maxWorking ? null : "At capacity",
+      working: used, workingIds: [...workingIds], used,
+      available: Math.max(0, this.maxWorking - used),
+    };
+    if (this.workingReports.size === 0) return {
+      ...observed, reserved: 0, unknown: 1, admissible: false,
+      reason: "Live ChatGPT sidebar green-session count unavailable",
+    };
+
+    // Separate *admission protection* from capacity USAGE. Only pending
+    // delivery/start attempts may temporarily withhold a future slot. A
+    // TaskBoard task remaining Working while its agent is idle or unavailable
+    // does not reserve capacity. Expired attempts must not block indefinitely.
+    const pendingIds = new Set<string>();
+    const pendingRequests = new Set<string>();
+    let unboundPending = 0;
+    for (const row of this.entries.values()) {
+      // Paused Caffy configuration cannot autonomously start generation.
+      // In particular an old failed/paused delivery isn't a phantom seat.
+      if (!row.paused && row.pendingMessageId !== null)
+        pendingIds.add(row.sessionId);
+    }
+    for (const claim of this.capacityClaims.values()) {
+      if (claim.state !== "waiting") pendingIds.add(claim.sessionId);
+    }
+    for (const row of this.taskReservations) {
+      if (row.holdUntil === undefined || row.holdUntil <= now) continue;
+      pendingRequests.add(row.requestId);
+      if (row.sessionId) pendingIds.add(row.sessionId);
+      else unboundPending++;
+    }
+    for (const id of workingIds) pendingIds.delete(id);
+    // The same new TaskBoard start is represented by its admission ticket
+    // and its atomic TaskBoard reservation. Count it only once.
+    const unpairedAdmissions = [...this.automaticAdmissions]
+      .filter(ticket => !pendingRequests.has(ticket)).length;
+    const reserved = pendingIds.size + unboundPending +
+      extraReserved + unpairedAdmissions;
+    const admissionUsed = used + reserved;
+    if (!this.taskBoardInventoryReady) return {
+      ...observed, reserved, unknown: 1, admissible: false,
+      reason: "TaskBoard queue admission inventory unavailable",
+    };
+    return {
+      ...observed, reserved, unknown: 0,
+      admissible: policy && admissionUsed < this.maxWorking,
+      reason: !policy ? "Keep T3 Busy disabled" :
+        used >= this.maxWorking ? "At capacity" :
+        admissionUsed >= this.maxWorking ? "Pending starts or deliveries" : null,
     };
   }
 
@@ -1201,7 +1178,8 @@ export class CaffyScheduler {
         row.state !== "waiting"))
         return receipt("waiting", "Another message is already using this session.");
       const snapshot = await this.capacity().catch(() => null);
-      if (!snapshot || snapshot.unknown !== 0 || snapshot.used >= snapshot.limit)
+      if (!snapshot || snapshot.unknown !== 0 ||
+          snapshot.used + snapshot.reserved >= snapshot.limit)
         return receipt("waiting", snapshot?.reason ?? "Waiting for T3 capacity.");
       claim.state = "admitted"; this.save();
       return receipt("admitted");
@@ -1217,16 +1195,16 @@ export class CaffyScheduler {
     return await this.admissionExclusive(async () => {
       if (!this.keepT3Busy && !allowWhenBusyDisabled) return false;
       const alreadyHeld = !!sessionId && (
-        this.taskReservations.some(row => row.sessionId === sessionId) ||
-        [...this.entries.values()].some(row => row.mode === "queued" &&
-          row.sessionId === sessionId &&
-          (row.capacityHeld ?? (row.lastWakeAt !== null))));
+        this.taskReservations.some(row => row.sessionId === sessionId &&
+          row.holdUntil !== undefined && row.holdUntil > Date.now()) ||
+        [...this.entries.values()].some(row => row.sessionId === sessionId &&
+          row.pendingMessageId !== null));
       if (!alreadyHeld && this.hasPriorityCapacityMessage()) return false;
       const available = await this.capacity().catch(() => null);
       if (!available || available.unknown !== 0) return false;
-      if ((!alreadyHeld && (available.used >= available.limit ||
-            (!this.keepT3Busy && !allowWhenBusyDisabled))) ||
-          (alreadyHeld && available.used > available.limit)) return false;
+      const admissionUsed = available.used + available.reserved;
+      if ((!alreadyHeld && admissionUsed >= available.limit) ||
+          (alreadyHeld && admissionUsed > available.limit)) return false;
       if (!alreadyHeld) this.automaticAdmissions.add(ticket);
       return true;
     });

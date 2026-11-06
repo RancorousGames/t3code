@@ -86,17 +86,40 @@ const monitor = (scheduler: CaffyScheduler) =>
   scheduler.status(SESSION) as CaffyConfig | null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
-  it("counts non-TaskBoard workers while expiring an unresolved Starting hold", async () => {
+  it("reports exactly the green sidebar count while separately guarding a pending start", async () => {
     const f = fixture();
     const c = f.open();
     try {
       c.reportWorkingSnapshot([SESSION, ORIGINAL], "browser");
       c.setTaskReservations([{ requestId: WAKE, sessionId: null, holdUntil: Date.now() + 60_000 }]);
       const held = await c.capacity();
-      expect(held).toMatchObject({ limit: 3, working: 2, reserved: 1, used: 3, available: 0, admissible: false });
+      expect(held).toMatchObject({ limit: 3, working: 2, reserved: 1, used: 2, available: 1, admissible: false });
       c.setTaskReservations([{ requestId: WAKE, sessionId: null, holdUntil: Date.now() - 1 }]);
       const expired = await c.capacity();
       expect(expired).toMatchObject({ limit: 3, working: 2, reserved: 0, used: 2, available: 1, admissible: true });
+    } finally { c.close(); f.dispose(); }
+  });
+  it("ignores registry working signals and ten stale TaskBoard claims when the sidebar has no green sessions", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      monitor(c)!.pendingMessageId = null;
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+        status: "working", activity: "working", statusObservedAt: new Date().toISOString(),
+      }]);
+      c.policy({keepT3Busy: true, maxWorking: 2});
+      c.reportWorkingSnapshot([], "sidebar");
+      c.setTaskReservations(Array.from({length: 10}, (_, i) => ({
+        requestId: `stale-${i}`, sessionId: `old-worker-${i}`,
+      })), true);
+      expect(await c.capacity()).toMatchObject({
+        working: 0, workingIds: [], used: 0, reserved: 0, available: 2,
+        admissible: true,
+      });
+      expect(await c.acquireAutomaticAdmission("fresh-task")).toBe(true);
+      c.releaseAutomaticAdmission("fresh-task");
     } finally { c.close(); f.dispose(); }
   });
   it("counts sidebar green workers as authoritative even when an old registry snapshot says idle", async () => {
@@ -115,7 +138,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       });
     } finally { c.close(); f.dispose(); }
   });
-  it("retains a task worker seat until the TaskBoard claim is released, not just until Bootstrap", async () => {
+  it("ignores stale Working ownership but separately guards a genuinely pending startup", async () => {
     const f = fixture();
     const c = f.open();
     try {
@@ -128,7 +151,10 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       }]);
       c.reportWorkingSnapshot([], "sidebar");
       c.setTaskReservations([{requestId: WAKE, sessionId: SESSION}], true);
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 1});
+      expect(await c.capacity()).toMatchObject({working: 0, reserved: 0, used: 0, available: 3});
+      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION,
+        holdUntil: Date.now() + 90_000}], true);
+      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 0, available: 3});
       c.setTaskReservations([], true);
       expect(await c.capacity()).toMatchObject({working: 0, reserved: 0, used: 0});
     } finally { c.close(); f.dispose(); }
@@ -158,7 +184,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       c.policy({keepT3Busy: false});
       expect(await c.capacityMessage({...claim, messageId: nextUserId}))
         .toMatchObject({status: "waiting"});
-      expect(await c.capacity()).toMatchObject({reserved: 1, used: 1});
+      expect(await c.capacity()).toMatchObject({reserved: 1, used: 0});
       expect(await c.capacityMessage({action: "release", messageId: userId,
         reason: "pre_submit_aborted"})).toMatchObject({status: "released"});
       expect(await c.capacityMessage({...claim, messageId: nextUserId}))
@@ -174,7 +200,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
         restarted.setTaskReservations([], true);
         expect(await restarted.capacityMessage({action: "status", messageId: nextUserId}))
           .toMatchObject({status: "submitted"});
-        expect(await restarted.capacity()).toMatchObject({used: 1});
+        expect(await restarted.capacity()).toMatchObject({used: 0, reserved: 1});
       } finally { restarted.close(); }
     } finally { c.close(); f.dispose(); }
   });
@@ -198,7 +224,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       });
     } finally { c.close(); f.dispose(); }
   });
-  it("keeps never-started and bootstrapped task guests reserved until TaskBoard releases their claim", async () => {
+  it("never counts even bootstrapped TaskBoard ownership as green usage", async () => {
     const f = fixture();
     const c = f.open();
     try {
@@ -210,17 +236,19 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
           status: "new", activity: "idle", statusObservedAt: new Date().toISOString(),
           binding: {boundAt: recent} },
       ]);
-      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION}], true);
+      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION,
+        holdUntil: Date.now() + 90_000}], true);
       c.reportWorkingSnapshot([], "sidebar");
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 1});
+      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 0, available: 3});
       f.setRoster([
         { id: SESSION, conversationId: ORIGINAL,
           bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
           status: "done_or_idle", activity: "idle", statusObservedAt: new Date().toISOString(),
           lastRole: "assistant", binding: {boundAt: recent} },
       ]);
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 1, available: 2});
-      c.setTaskReservations([], true);
+      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 0, available: 3});
+      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION,
+        holdUntil: Date.now() - 1}], true);
       expect(await c.capacity()).toMatchObject({working: 0, reserved: 0, used: 0, available: 3});
     } finally { c.close(); f.dispose(); }
   });

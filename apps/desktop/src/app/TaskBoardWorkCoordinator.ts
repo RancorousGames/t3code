@@ -125,6 +125,7 @@ export class TaskBoardWorkCoordinator {
   private lastPromptRecoveryAt = 0;
   private readonly promptRecoveryAttempts = new Map<string, number>();
   private readonly startingFirstSeen = new Map<string, number>();
+  private readonly admittedStarts = new Map<string, number>();
   private readonly startingLastAttempt = new Map<string, number>();
   // A definite rejection is safe to retry, but it must not monopolize the
   // first Queue position. Unknown/possibly-created spawns are NEVER retried.
@@ -302,16 +303,41 @@ export class TaskBoardWorkCoordinator {
     }));
   }
 
+  private workingStartupHoldUntil(boardRoot: string, taskId: string, requestId: string): number {
+    // The spawn journal predates the transition to Working and survives T3
+    // restarts. An old Working claim is NOT a capacity reservation. Only the
+    // first five minutes of a verified original startup need admission safety.
+    const hash = NodeCrypto.createHash("sha256")
+      .update(rootKey(boardRoot) + "\0" + taskId).digest("hex");
+    const path = NodePath.join(this.home, "userdata", "task-open-locks", `${hash}.json`);
+    try {
+      const row = JSON.parse(NodeFS.readFileSync(path, "utf8")) as {requestId?: string};
+      if (row.requestId === requestId)
+        return NodeFS.statSync(path).mtimeMs + STARTING_HOLD_MS;
+    } catch { /* No durable receipt for this exact attempt. */ }
+    // The in-process admission also covers the short interval before the
+    // spawn journal is written, without resurrecting old claims after reboot.
+    return (this.admittedStarts.get(requestId) ?? -STARTING_HOLD_MS) + STARTING_HOLD_MS;
+  }
+
   private syncReservations(inventoryReady: boolean) {
-    this.caffy.setTaskReservations(this.reservations().map(row => ({
-      requestId: row.requestId, sessionId: row.sessionId,
-      // Starting is an unresolved potentially-created worker. Expiring its
-      // temporary UI quarantine must NOT free an admission seat before the
-      // exact request is reconciled and safely retired. Otherwise delayed
-      // startup can reactivate and cause >2/2 automatic workers.
-      ...(row.state === "starting" || row.holdUntil === undefined
-        ? {} : {holdUntil: row.holdUntil}),
-    })), inventoryReady);
+    const now = Date.now();
+    for (const [requestId, at] of this.admittedStarts)
+      if (now - at >= STARTING_HOLD_MS) this.admittedStarts.delete(requestId);
+    const pending = this.reservations().flatMap(row => {
+      const until = row.state === "reserved"
+        ? Date.parse(row.expiresAt ?? "")
+        : row.state === "starting"
+          ? row.holdUntil ?? 0
+          : this.workingStartupHoldUntil(row.boardRoot, row.taskId, row.requestId);
+      // Expired startup and ordinary Working task ownership must not consume
+      // the live green-session count or permanently block queued tasks.
+      if (!Number.isFinite(until) || until <= now) return [];
+      return [{
+        requestId: row.requestId, sessionId: row.sessionId, holdUntil: until,
+      }];
+    });
+    this.caffy.setTaskReservations(pending, inventoryReady);
   }
 
   status() {
@@ -398,6 +424,7 @@ export class TaskBoardWorkCoordinator {
   }
 
   private async startReserved(boardRoot: string, item: QueueItem, requestId: string) {
+    this.admittedStarts.set(requestId, Date.now());
     await this.taskCommand(boardRoot, [
       "task", "queue", "starting", item.taskId, "--request-id", requestId,
     ]);
@@ -968,7 +995,8 @@ export class TaskBoardWorkCoordinator {
           // workers since the reservation was made. Never move Reserved to
           // Starting if actual workers + all reservations now exceed the cap.
           const capacity = await this.caffy.capacity().catch(() => null);
-          if (!capacity || capacity.unknown > 0 || capacity.used > capacity.limit) return;
+          if (!capacity || capacity.unknown > 0 ||
+              capacity.used + capacity.reserved > capacity.limit) return;
           await this.startReserved(next.boardRoot, next.item, next.item.reservationId!);
           return;
         }
