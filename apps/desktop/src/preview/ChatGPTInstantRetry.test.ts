@@ -72,6 +72,18 @@ describe("instant ChatGPT provider Retry", () => {
     watcher.dispose();
   });
 
+  it("clicks an aria-labelled retry on a generic provider error", async () => {
+    const dom = create('<div role="alert">Something went wrong <button aria-label="Retry"><svg></svg></button></div>');
+    const button = dom.window.document.querySelector("button")!;
+    const click = vi.spyOn(button, "click");
+    const watcher = installChatGPTInstantRetry(
+      dom.window as unknown as Window & typeof globalThis, dom.window.document,
+    );
+    await Promise.resolve();
+    expect(click).toHaveBeenCalledOnce();
+    watcher.dispose();
+  });
+
   it("ignores other Retry buttons and hidden timeout notices", async () => {
     const dom = create(
       '<div role="alert" hidden>Message delivery timed out. Please <button>Try again</button>.</div>' +

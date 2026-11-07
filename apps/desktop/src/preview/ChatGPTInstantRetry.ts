@@ -34,8 +34,12 @@ export function installChatGPTInstantRetry(win: Window & typeof globalThis, doc:
       if (parent.closest('.markdown,.prose,[data-markdown-text-style="assistant-message"]'))
         return false;
       const content = (parent.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (/^Message delivery timed out\.\s*Please try again\.?$/i.test(content) ||
-          /^Could not load this ChatGPT conversation\.?\s*(?:Retry|Try again)\.?$/i.test(content))
+      if (/^(?:Message delivery timed out|Could not load this ChatGPT conversation|Something went wrong|An error occurred|There was an error|Network error|Failed to load (?:conversation|response)|Unable to load (?:conversation|response))[.!]?\s*(?:(?:Please )?(?:Retry|Try again)[.!]?)?$/i.test(content))
+        return visible(parent);
+      // ChatGPT also renders transient retry controls in an error alert without
+      // an exact message; do not accept arbitrary Retry buttons in page content.
+      if (parent.matches('[role="alert"], [data-state="error"]') &&
+          /(?:error|failed|timed out|went wrong|unable to load|retry)/i.test(content))
         return visible(parent);
       if (content.length > 180) break;
     }
@@ -46,7 +50,8 @@ export function installChatGPTInstantRetry(win: Window & typeof globalThis, doc:
     if (disposed || !/^\/(?:g\/[^/]+\/)?c\/[0-9a-f-]{36}\/?$/i.test(win.location.pathname))
       return;
     for (const button of doc.querySelectorAll("button,[role='button']")) {
-      if (attempted.has(button) || !/^(?:try again|retry)$/i.test(button.textContent?.trim() ?? "") ||
+      const label = (button.getAttribute("aria-label") || button.textContent || "").trim();
+      if (attempted.has(button) || !/^(?:try again|retry)$/i.test(label) ||
           !eligible(button)) continue;
       const remaining = 1_000 - (Date.now() - lastClickAt);
       if (remaining > 0) {
