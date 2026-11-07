@@ -84,6 +84,7 @@ import {
   useLocalStorage,
 } from "../../hooks/useLocalStorage";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
+import { restoreChatGPTSessionUrl } from "../../chatGPTSessionUrlRestore";
 import { runChatGPTSessionControl, hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import { readLocalApi } from "../../localApi";
 import {
@@ -1497,6 +1498,16 @@ export function ChatGPTBrowserSidebarEntry({
           },
         );
         if (!result.ok) throw new Error(result.message ?? "Session action unavailable.");
+      } else if (action === "url:restore") {
+        const result = await restoreChatGPTSessionUrl(
+          environmentId, session, activities[sessionId]?.age === "working",
+        );
+        if (session.hidden) setSessionHidden(sessionId, false);
+        await navigate({
+          to: "/browser/$browserSessionId",
+          params: { browserSessionId: sessionId },
+        });
+        setMenuFeedback(`Restored ChatGPT URL from ${result.source === "history" ? "ChatGPT history" : "saved session evidence"}.`);
       } else if (action.startsWith("copy:")) {
         const url =
           getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String) ??
