@@ -550,17 +550,11 @@ export function ChatGPTBrowserSidebarEntry({
   const resetWebviews = async () => {
     const bridge = window.desktopBridge?.persistentChatGPTRequest;
     if (!bridge || resettingWebviews) return;
-    const message =
-      "Reset all ChatGPT webviews? This terminates every live Chromium page and starts a fresh browser host. " +
-      "Saved conversations and sign-ins remain, but unsent drafts, uploads, and in-progress replies may be lost.";
-    const approved = await (
-      readLocalApi()?.dialogs.confirm(message, { variant: "destructive" }) ??
-      Promise.resolve(window.confirm(message))
-    );
-    if (!approved) return;
     setResettingWebviews(true);
     try {
-      await bridge({ operation: "reset_host" });
+      // Main shows an OS modal above the separately owned Chromium windows.
+      const result = await bridge({ operation: "confirm_reset_host" }) as { reset?: boolean } | null;
+      if (result?.reset !== true) return;
       window.dispatchEvent(new Event("t3:chatgpt-webviews-reset"));
       setMenuFeedback("ChatGPT webviews reset. The selected page is reconnecting.");
     } catch (error) {
