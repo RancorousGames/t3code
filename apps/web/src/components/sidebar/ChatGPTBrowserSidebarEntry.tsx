@@ -2004,6 +2004,22 @@ export function ChatGPTBrowserSidebarEntry({
         )}
       </SidebarMenuItem>
       <SidebarMenuItem>
+        <SidebarMenuButton
+          role="switch"
+          aria-checked={caffyOverview?.keepT3Busy ?? false}
+          aria-label={`Keep T3 Busy: ${caffyOverview ? (caffyOverview.keepT3Busy ? "on" : "off") : "unavailable"}`}
+          title="Allow automatic TaskBoard jobs and queued Caffy wakes within the working capacity."
+          disabled={!caffyOverview || viewPolicyBusy}
+          onClick={() => void updateViewCaffyPolicy({ keepT3Busy: !caffyOverview!.keepT3Busy })}
+        >
+          <BotIcon aria-hidden />
+          <span className="flex-1">Keep T3 Busy</span>
+          <span className={`ms-auto text-2xs font-semibold ${caffyOverview?.keepT3Busy ? "text-emerald-500" : "text-muted-foreground"}`}>
+            {caffyOverview ? (caffyOverview.keepT3Busy ? "ON" : "OFF") : "—"}
+          </span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      <SidebarMenuItem>
         {showingHidden || showingSnoozed ? (
           // Hidden and Snoozed are alternate lists; this row replaces the header
           // while one is shown.
