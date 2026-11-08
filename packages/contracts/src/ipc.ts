@@ -2193,6 +2193,7 @@ export interface DesktopBridge {
     profileId?: string;
     query?: string;
     mode?: "recent" | "bootstrap";
+    conversationUrl?: string;
   }) => Promise<readonly { conversationId: string; title: string; url: string }[]>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   onSnapShotEvent: (listener: (event: DesktopSnapShotEvent) => void) => () => void;

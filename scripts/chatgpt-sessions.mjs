@@ -114,10 +114,15 @@ export async function controlSessions(
     (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
       (input.proposedTitle !== undefined &&
         (typeof input.proposedTitle !== "string" || input.proposedTitle.length > 80 ||
-          /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle)))))
-    throw new Error("bootstrap_discover requires a UUID and optional safe title.");
+          /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle))) ||
+      (input.conversationUrl !== undefined &&
+        (typeof input.conversationUrl !== "string" ||
+          !/^https:\/\/chatgpt\.com\/c\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.conversationUrl)))))
+    throw new Error("bootstrap_discover requires a UUID, optional safe title and exact canonical conversation URL.");
   if (input.proposedTitle !== undefined && !["bootstrap_title", "bootstrap_discover"].includes(input.action))
     throw new Error("proposedTitle requires bootstrap_title or bootstrap_discover.");
+  if (input.conversationUrl !== undefined && input.action !== "bootstrap_discover")
+    throw new Error("conversationUrl requires bootstrap_discover.");
   if (input.action === "request_attention" &&
       (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? "") ||
@@ -337,6 +342,7 @@ export async function controlSessions(
     ...(input.action === "marker_probe" ? { marker: input.marker } : {}),
     ...(input.action === "experimental_evaluate" ? { expression: input.expression } : {}),
     ...(["bootstrap_title", "bootstrap_discover"].includes(input.action) ? { proposedTitle: input.proposedTitle } : {}),
+    ...(input.action === "bootstrap_discover" && input.conversationUrl ? { conversationUrl: input.conversationUrl } : {}),
     ...(["request_attention", "attention_status"].includes(input.action)
       ? { attentionId: input.attentionId,
           ...(input.action === "request_attention" ? { message: input.message } : {}) }

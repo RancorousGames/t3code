@@ -3,6 +3,7 @@
 export type ExternalBootstrapRequest = {
   id: string;
   title?: string;
+  conversationUrl?: string;
   nextAttemptAt: number;
   attempts: number;
   lastError?: string;
@@ -12,6 +13,11 @@ export type ExternalBootstrapRequest = {
 const key = (environmentId: string) =>
   `t3code:chatgpt-external-bootstrap:v1:${environmentId}`;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const EXACT_CHAT_URL = /^https:\/\/chatgpt\.com\/c\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+
+export function isExactExternalChatGPTUrl(url: string): boolean {
+  return EXACT_CHAT_URL.test(url);
+}
 
 export function readExternalBootstrapRequests(environmentId: string): ExternalBootstrapRequest[] {
   try {
@@ -23,6 +29,8 @@ export function readExternalBootstrapRequests(environmentId: string): ExternalBo
       typeof entry.nextAttemptAt === "number" && Number.isFinite(entry.nextAttemptAt) &&
       typeof entry.attempts === "number" && entry.attempts >= 0 &&
       (entry.title === undefined || typeof entry.title === "string") &&
+      (entry.conversationUrl === undefined ||
+        (typeof entry.conversationUrl === "string" && isExactExternalChatGPTUrl(entry.conversationUrl))) &&
       (entry.failed === undefined || typeof entry.failed === "boolean")
     ).slice(-50);
   } catch { return []; }
@@ -33,15 +41,22 @@ function write(environmentId: string, requests: ExternalBootstrapRequest[]): voi
 }
 
 export function enqueueExternalBootstrapRequest(
-  environmentId: string, id: string, title?: string,
+  environmentId: string, id: string, title?: string, conversationUrl?: string,
 ): void {
-  if (!UUID.test(id)) return;
+  if (!UUID.test(id)) throw new Error("External registration requires a Bootstrap UUID.");
+  if (conversationUrl && !isExactExternalChatGPTUrl(conversationUrl))
+    throw new Error("External registration requires an exact https://chatgpt.com/c/<uuid> URL.");
   const requests = readExternalBootstrapRequests(environmentId);
-  const existing = requests.find((entry) => entry.id === id);
-  if (existing && !existing.failed) return;
-  const next = requests.filter((entry) => entry.id !== id);
-  next.push({ id: id.toLowerCase(), ...(title ? { title } : {}),
-    nextAttemptAt: Date.now() + 30_000, attempts: 0 });
+  const existing = requests.find((entry) => entry.id === id.toLowerCase());
+  if (existing?.conversationUrl && conversationUrl && existing.conversationUrl !== conversationUrl)
+    throw new Error("This Bootstrap ID already has a different pending conversation.");
+  if (existing && !existing.failed && (!conversationUrl || existing.conversationUrl)) return;
+  const next = requests.filter((entry) => entry.id !== id.toLowerCase());
+  const displayTitle = existing?.title ?? title;
+  const targetUrl = conversationUrl ?? existing?.conversationUrl;
+  next.push({ id: id.toLowerCase(), ...(displayTitle ? { title: displayTitle } : {}),
+    ...(targetUrl ? { conversationUrl: targetUrl } : {}),
+    nextAttemptAt: Date.now() + (conversationUrl ? 0 : 30_000), attempts: 0 });
   write(environmentId, next);
 }
 

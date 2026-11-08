@@ -198,6 +198,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     state: Schema.optional(Schema.Literals(["hidden", "unhidden", "closed"])),
     sessionId: Schema.optional(Schema.String),
     proposedTitle: Schema.optional(Schema.String),
+    conversationUrl: Schema.optional(Schema.String),
     marker: Schema.optional(Schema.String),
     // Explicit local experiment in one exact ChatGPT guest; never used by delivery queue.
     expression: Schema.optional(Schema.String),

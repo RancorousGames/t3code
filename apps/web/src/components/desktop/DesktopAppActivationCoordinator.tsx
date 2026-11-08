@@ -199,7 +199,8 @@ export function DesktopAppActivationCoordinator() {
       const matches: Array<{ url: string; conversationId: string; profileId: string }> = [];
       for (const profileId of [PRIMARY_CHATGPT_PROFILE_ID, SECONDARY_CHATGPT_PROFILE_ID]) {
         try {
-          const hits = await search({ environmentId, profileId, query: pending.id, mode: "bootstrap" });
+          const hits = await search({ environmentId, profileId, query: pending.id,
+            mode: "bootstrap", ...(pending.conversationUrl ? { conversationUrl: pending.conversationUrl } : {}) });
           for (const hit of hits) {
             if (chatGPTConversationIdFromUrl(hit.url) === hit.conversationId)
               matches.push({ ...hit, profileId });
@@ -924,15 +925,20 @@ export function DesktopAppActivationCoordinator() {
           if (request.action === "bootstrap_discover") {
             const id = request.sessionId?.toLowerCase();
             if (!id) throw new Error("External Bootstrap requires a session UUID.");
-            const alreadyPresent = sessionSnapshot.some((session) =>
+            const owner = sessionSnapshot.find((session) =>
               session.id.toLowerCase() === id ||
               session.bootstrapIdentity?.publicId?.toLowerCase() === id);
+            const alreadyPresent = !!owner;
+            if (owner && request.conversationUrl && owner.bootstrapIdentity?.conversationId &&
+                request.conversationUrl !== `https://chatgpt.com/c/${owner.bootstrapIdentity.conversationId}`)
+              throw new Error("This Bootstrap ID is registered to a different conversation.");
             if (!alreadyPresent)
-              enqueueExternalBootstrapRequest(environmentId, id, request.proposedTitle);
+              enqueueExternalBootstrapRequest(environmentId, id, request.proposedTitle, request.conversationUrl);
             return {
               version: 1, requestId: request.requestId, ok: true,
               data: { action: "bootstrap_discover", sessionId: id,
-                queued: !alreadyPresent, alreadyPresent },
+                queued: !alreadyPresent, alreadyPresent,
+                registered: owner?.bootstrapIdentity?.state === "registered" },
             };
           }
           if (request.action === "bootstrap_title") {
