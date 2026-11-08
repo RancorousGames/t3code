@@ -58,6 +58,15 @@ import {
   runChatGPTSessionControl,
 } from "../../chatGPTSessionControl";
 import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
+import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
+import { restoreChatGPTSessionUrl } from "../../chatGPTSessionUrlRestore";
+import { publicChatGPTSessionId, publicChatGPTParentId } from "../../chatGPTBootstrapIdentity";
+import { inspectPersistentChatGPTPage } from "../../browser/inspectPersistentChatGPTPage";
+import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
+import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
+import { isChatGPTGuestHibernated, hibernateChatGPTGuest } from "../../browser/chatGPTGuestHibernation";
+import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
+import { useChatGPTWarmSessions, toggleKeepLoadedChatGPTSession } from "../../omniwork/chatGPTWarmSessionPolicy";
 import { readChatGPTProviderActivity } from "../../chatGPTProviderActivity";
 import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
 import {
@@ -125,6 +134,13 @@ export function DesktopAppActivationCoordinator() {
     setSessionArchived,
     setSessionHidden,
     setSessionSnooze,
+    renameSession,
+    setSessionProject,
+    setSessionParent,
+    setSessionBinding,
+    setSessionWorker,
+    setSessionVerification,
+    setSessionBorderColor,
     finalizeRollover,
     suggestBootstrapTitle,
     registerBootstrapMarker,
@@ -2113,7 +2129,7 @@ export function DesktopAppActivationCoordinator() {
                   },
                   // A WaitForSlot message is merely queued; a hibernated or blank
                   // guest must not be awakened until the global capacity gate admits.
-                  capabilities: loaded ? ["ReadHistory", "Submit"] : ["Submit"],
+                  capabilities: loaded ? ["ReadHistory", "Submit", "RemoteControl"] : ["Submit", "RemoteControl"],
                   deliveryModes: loaded
                     ? ["WhenIdle", "WaitForSlot", "Steer"]
                     : ["WhenIdle", "WaitForSlot"],
@@ -2191,7 +2207,268 @@ export function DesktopAppActivationCoordinator() {
               : null;
           const work = response?.work;
           if (work && work.environmentId === environmentId) {
+            // A phone control targets the exact published browser slot, not the
+            // desktop's selected tab. The desktop remains the owner of UI state.
+            const executePhoneControl = async () => {
+              try {
+                const id = work.browserSessionId;
+                const sessions = readChatGPTBrowserSessions(environmentId);
+                const entry = sessions.find((s) => s.id === id);
+                if (!id || !entry || !work.command)
+                  throw new Error("Exact T3 browser session unavailable.");
+                const options = (work.options ?? {}) as Record<string, unknown>;
+                const str = (name: string) => typeof options[name] === "string" ? options[name] as string : null;
+                const bool = (name: string) => typeof options[name] === "boolean" ? options[name] as boolean : null;
+                const number = (name: string) => typeof options[name] === "number" &&
+                  Number.isFinite(options[name]) ? options[name] as number : null;
+                const caffy = window.desktopBridge?.caffyControl;
+                const command = work.command;
+                const stopPhoneGeneration = async () => {
+                  const expression = `(() => {
+                    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+                    if (!(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return false;
+                    stop.click(); return true;
+                  })()`;
+                  let stopped = false;
+                  if (isPersistentChatGPTSessionOptedIn(id)) {
+                    stopped = await inspectPersistentChatGPTPage<boolean>(environmentId, id, expression) === true;
+                  } else {
+                    const ref = chatGPTBrowserThreadRef(environmentId, id);
+                    const preview = readThreadPreviewState(ref);
+                    const tabId = preview.activeTabId;
+                    const runtimeId = tabId && preview.serverEpoch
+                      ? previewRuntimeTabId(ref, preview.serverEpoch, tabId) : null;
+                    if (runtimeId && !isChatGPTGuestHibernated(runtimeId))
+                      stopped = await chatGPTWebviewAutomation.evaluate(runtimeId, { expression }) === true;
+                  }
+                  if (!stopped) throw new Error("No active Stop generation button on this session.");
+                };
+                if (command === "status") {
+                  const url = getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id), Schema.String) ??
+                    entry.archive?.conversationUrl ?? null;
+                  const caffyState = caffy
+                    ? await caffy({ action: "status", sessionId: id }).catch(() => null) : null;
+                  return { ok: true as const, data: {
+                    id: publicChatGPTSessionId(entry),
+                    browserId: id, title: entry.title,
+                    conversationId: chatGPTConversationIdFromUrl(url) ?? entry.bootstrapIdentity?.conversationId ?? null,
+                    url, parentId: publicChatGPTParentId(sessions, entry),
+                    project: entry.project ?? null,
+                    role: entry.binding?.role ?? (entry.markedAsWorkerAt ? "worker" : "personal"),
+                    binding: entry.binding ?? null, verificationPending: !!entry.verificationPending,
+                    borderColor: entry.borderColor ?? null,
+                    keepLoaded: useChatGPTWarmSessions.getState().keepLoadedIds.has(id),
+                    caffy: caffyState,
+                    otherSessions: sessions.filter((s) => s.id !== id).map((s) => ({
+                      id: publicChatGPTSessionId(s), title: s.title,
+                    })),
+                    projects: [...new Set(sessions.map((s) => s.project).filter((p): p is string => !!p))],
+                  }};
+                }
+                if (command === "verification") {
+                  const value = bool("value");
+                  if (value === null) throw new Error("Verification flag required.");
+                  setSessionVerification(id, value);
+                } else if (command === "worker") {
+                  const value = bool("value");
+                  if (value === null || entry.binding?.role === "manager")
+                    throw new Error("Worker toggle unavailable for this session.");
+                  setSessionWorker(id, value);
+                  if (entry.binding) setSessionBinding(id, {
+                    ...entry.binding, role: value ? "worker" : "personal",
+                    boundAt: new Date().toISOString(), boundBy: "user",
+                  });
+                } else if (command === "binding_clear") {
+                  setSessionBinding(id, null);
+                } else if (command === "binding_update") {
+                  const role = str("role") ?? entry.binding?.role ?? "personal";
+                  if (!["worker", "personal"].includes(role) && entry.binding?.role !== "manager")
+                    throw new Error("Binding role must be worker or personal.");
+                  const seatId = str("seatId")?.trim() || entry.binding?.seatId || null;
+                  const board = str("taskBoard")?.trim();
+                  const taskId = str("taskId")?.trim();
+                  if (seatId && seatId.length > 160 ||
+                    board && board.length > 200 || taskId && taskId.length > 120)
+                    throw new Error("Binding value too long.");
+                  if (!!board !== !!taskId)
+                    throw new Error("TaskBoard board and task ID are both required.");
+                  setSessionBinding(id, {
+                    seatId,
+                    role: entry.binding?.role === "manager" ? "manager" : role as "worker" | "personal",
+                    parentSessionId: entry.parentSessionId ?? null,
+                    taskRef: board && taskId ? { board, id: taskId } : null,
+                    boundAt: new Date().toISOString(),
+                    boundBy: "user",
+                  });
+                } else if (command === "project") {
+                  const project = str("value");
+                  if (project !== null && project.length > 140)
+                    throw new Error("Project name too long.");
+                  setSessionProject(id, project?.trim() || null);
+                } else if (command === "parent") {
+                  const parent = str("value");
+                  const target = parent ? sessions.find((s) => publicChatGPTSessionId(s) === parent || s.id === parent) : undefined;
+                  if (parent && !target) throw new Error("Parent T3 session unavailable.");
+                  if (target) {
+                    let ancestor = target;
+                    const seen = new Set<string>();
+                    while (ancestor.parentSessionId && !seen.has(ancestor.id)) {
+                      if (ancestor.parentSessionId === id) throw new Error("Cannot create a parent cycle.");
+                      seen.add(ancestor.id);
+                      ancestor = sessions.find((s) => s.id === ancestor.parentSessionId) ?? ancestor;
+                      if (ancestor.id === id) throw new Error("Cannot create a parent cycle.");
+                    }
+                  }
+                  setSessionParent(id, target?.id ?? null);
+                } else if (command === "highlight") {
+                  const color = str("value");
+                  if (color !== null && !["red", "orange", "yellow", "green", "blue", "purple", "pink"].includes(color))
+                    throw new Error("Unknown highlight color.");
+                  setSessionBorderColor(id, color);
+                } else if (command === "rename") {
+                  const title = str("value")?.trim();
+                  if (!title || title.length > 180) throw new Error("Invalid title.");
+                  renameSession(id, title);
+                } else if (command === "restore_url") {
+                  const result = await restoreChatGPTSessionUrl(environmentId, entry, false);
+                  return { ok: true as const, data: { url: result.url, source: result.source } };
+                } else if (command === "reboot") {
+                  const receipt = await beginSidebarReboot({
+                    environmentId, sessionId: id,
+                    prompt: `Resume your previous work in this same T3 browser session (${entry.title}). Review the relevant TaskBoard task and project instructions and continue.`,
+                  });
+                  return { ok: true as const, data: { status: receipt.status, requestId: receipt.operationId } };
+                } else if (command === "keep_loaded") {
+                  const desired = bool("value");
+                  if (desired === null) throw new Error("Keep loaded setting required.");
+                  if (useChatGPTWarmSessions.getState().keepLoadedIds.has(id) !== desired)
+                    toggleKeepLoadedChatGPTSession(id);
+                } else if (command === "reload") {
+                  await runChatGPTSessionControl({
+                    environmentId, sessions, action: "reload", sessionId: id, force: false,
+                  });
+                } else if (command === "stop") {
+                  await stopPhoneGeneration();
+                } else if (command === "unload") {
+                  if (hasUncertainChatGPTSend(environmentId, id))
+                    throw new Error("Resolve the session's uncertain send before unloading.");
+                  const snapshot = await runChatGPTSessionControl({
+                    environmentId, sessions, action: "snapshot", sessionId: id,
+                  }) as { status?: string };
+                  if (snapshot?.status !== "backed_up_empty")
+                    throw new Error("Unload requires an empty composer and verified draft snapshot.");
+                  if (isPersistentChatGPTSessionOptedIn(id)) {
+                    const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+                    if (!bridge) throw new Error("Native browser unavailable.");
+                    await bridge({operation: "close", identity: {
+                      environmentId, sessionId: id, profileId: chatGPTSessionProfileId(entry),
+                    }});
+                  } else {
+                    const ref = chatGPTBrowserThreadRef(environmentId, id);
+                    const preview = readThreadPreviewState(ref);
+                    const runtimeId = preview.activeTabId && preview.serverEpoch
+                      ? previewRuntimeTabId(ref, preview.serverEpoch, preview.activeTabId) : null;
+                    if (!runtimeId) throw new Error("No loaded preview for this session.");
+                    hibernateChatGPTGuest(runtimeId, true);
+                  }
+                } else if (command === "close") {
+                  if (closingSessionsRef.current.has(id)) throw new Error("Session is already closing.");
+                  const checked = await runChatGPTSessionControl({
+                    environmentId, sessions, action: "change_state", state: "closed", sessionId: id,
+                  }) as { action?: string; sessionId?: string; state?: string };
+                  if (checked.action !== "change_state" || checked.sessionId !== id || checked.state !== "closed")
+                    throw new Error("T3 refused to close the session.");
+                  closingSessionsRef.current.add(id);
+                  try {
+                    const ref = chatGPTBrowserThreadRef(environmentId, id);
+                    for (const preview of Object.values(readThreadPreviewState(ref).sessions)) {
+                      beginPreviewSessionClose(ref, preview.tabId);
+                      try {
+                        const result = await closeChatGPTPreview({
+                          environmentId, input: { threadId: ref.threadId, tabId: preview.tabId },
+                        });
+                        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+                      } catch (cause) {
+                        cancelPreviewSessionClose(ref, preview, preview.tabId);
+                        throw cause;
+                      }
+                    }
+                    clearThreadPreviewState(ref);
+                    if (isPersistentChatGPTSessionOptedIn(id)) {
+                      const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+                      if (!bridge) throw new Error("Native Chromium close unavailable.");
+                      await bridge({ operation: "close", identity: {
+                        environmentId, sessionId: id, profileId: chatGPTSessionProfileId(entry),
+                      }});
+                    }
+                    flushSync(() => removeSession(id, "desktop-IPC-request"));
+                    removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id));
+                    removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, id));
+                  } finally {
+                    closingSessionsRef.current.delete(id);
+                  }
+                } else if (command.startsWith("caffy_")) {
+                  if (!caffy) throw new Error("T3 Caffy controls unavailable.");
+                  if (command === "caffy_set") {
+                    const mode = str("mode");
+                    if (!mode || !["idle", "periodic", "queued", "startup"].includes(mode))
+                      throw new Error("Unknown Caffy mode.");
+                    await caffy({ action: "set", sessionId: id,
+                      mode: mode as "idle" | "periodic" | "queued" | "startup",
+                      ...(number("durationMinutes") === null ? {} : {durationMinutes: number("durationMinutes")!}),
+                      ...(number("intervalMinutes") === null ? {} : {intervalMinutes: number("intervalMinutes")!}),
+                      ...(bool("onceOnly") === null ? {} : {onceOnly: bool("onceOnly")!}),
+                      startup: bool("startup") ?? mode === "startup", keepAwake: true,
+                    });
+                  } else if (command === "caffy_stop") {
+                    await caffy({ action: "stop", sessionId: id, stopInitiator: "user" });
+                  } else if (command === "caffy_pause" || command === "caffy_resume") {
+                    await caffy({ action: command === "caffy_pause" ? "pause" : "resume", sessionId: id });
+                  } else if (command === "caffy_startup") {
+                    const enabled = bool("value");
+                    if (enabled === null) throw new Error("Startup setting required.");
+                    await caffy({ action: "startup", sessionId: id, startup: enabled });
+                  } else if (command === "caffy_begin") {
+                    const beginAt = number("beginAt");
+                    if (beginAt !== null && (beginAt < Date.now() || beginAt > Date.now() + 7 * 86_400_000))
+                      throw new Error("Begin time must be within 7 days.");
+                    // Match T3's "Pause work and resume in" semantics:
+                    // suppress the Caffy idle wake before stopping a live reply.
+                    const working = beginAt !== null &&
+                      readChatGPTProviderActivity(environmentId, id) === "working";
+                    const currentMonitor = working
+                      ? await caffy({ action: "status", sessionId: id }).catch(() => null)
+                      : null;
+                    const shouldSuspend = working && currentMonitor &&
+                      typeof currentMonitor === "object" && "paused" in currentMonitor &&
+                      currentMonitor.paused !== true;
+                    if (shouldSuspend)
+                      await caffy({ action: "pause", sessionId: id });
+                    try {
+                      if (working) await stopPhoneGeneration();
+                      await caffy({ action: "begin_in", sessionId: id, beginAt });
+                    } finally {
+                      if (shouldSuspend)
+                        await caffy({ action: "resume", sessionId: id });
+                    }
+                  } else if (command === "caffy_reboot") {
+                    const minutes = number("value");
+                    if (minutes !== null && ![30, 60, 120].includes(minutes))
+                      throw new Error("Unknown auto-reboot interval.");
+                    await caffy({ action: "auto_reboot", sessionId: id, rebootMinutes: minutes });
+                  } else if (command === "caffy_wake") {
+                    await caffy({ action: "wake", sessionId: id });
+                  } else throw new Error("Unknown Caffy action.");
+                } else throw new Error("Unsupported T3 session command.");
+                window.dispatchEvent(new Event("t3:agent-provider-refresh"));
+                return { ok: true as const, data: { applied: command } };
+              } catch (cause) {
+                return { ok: false as const, code: "Unavailable" as const,
+                  message: cause instanceof Error ? cause.message : "T3 control failed." };
+              }
+            };
             const result =
+              work.action === "control" ? await executePhoneControl() :
               work.action === "create"
                 ? await executeProviderBrowserCreate(environmentId, work, createSession)
                 : work.action === "load"

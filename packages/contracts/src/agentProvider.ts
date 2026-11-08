@@ -62,6 +62,7 @@ export const AgentProviderV1Capability = Schema.Literals([
   "Desktop.Focus",
   "Desktop.View",
   "Desktop.NativeInput",
+  "RemoteControl",
 ]);
 export type AgentProviderV1Capability = typeof AgentProviderV1Capability.Type;
 
@@ -163,7 +164,9 @@ export const AgentProviderV1DesktopWork = Schema.Struct({
   environmentId: OpaqueId,
   browserSessionId: Schema.optional(OpaqueId),
   expectedConversationId: Schema.optional(OpaqueId),
-  action: Schema.Literals(["history", "submit", "create", "visibility", "load"]),
+  action: Schema.Literals(["history", "submit", "create", "visibility", "load", "control"]),
+  command: Schema.optional(Schema.String),
+  options: Schema.optional(Schema.Unknown),
   visibility: Schema.optional(
     Schema.Struct({
       hidden: Schema.optional(Schema.Boolean),

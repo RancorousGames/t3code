@@ -2434,6 +2434,45 @@ export const layerWsRpc = (
                 ),
               });
             }
+            if (request.method === "sessions.controls" || request.method === "sessions.control") {
+              const p = request.params as {
+                expectedEnvironmentId?: string;
+                session?: { provider?: string; id?: string };
+                command?: string;
+                options?: unknown;
+              } | null;
+              if (!p || p.expectedEnvironmentId !== environmentId)
+                return error("EnvironmentChanged", "Remote session control targets another environment.");
+              const id = p.session?.id;
+              const read = request.method === "sessions.controls";
+              const command = read ? "status" : p.command;
+              const allowed = new Set([
+                "status", "close", "unload", "reload", "keep_loaded", "reboot", "stop", "restore_url",
+                "verification", "worker", "binding_clear", "binding_update", "project", "parent",
+                "highlight", "rename", "caffy_set", "caffy_stop", "caffy_pause",
+                "caffy_resume", "caffy_startup", "caffy_begin", "caffy_reboot",
+                "caffy_wake",
+              ]);
+              if (p.session?.provider !== "t3" || !id || id.startsWith("thread:") ||
+                  !command || !allowed.has(command) ||
+                  (p.options !== undefined && (!p.options || typeof p.options !== "object" ||
+                    Array.isArray(p.options) ||
+                    Object.entries(p.options).length > 16 ||
+                    Object.entries(p.options).some(([key, value]) =>
+                      key.length > 40 ||
+                      (value !== null && typeof value !== "boolean" &&
+                        !(typeof value === "number" && Number.isSafeInteger(value)) &&
+                        !(typeof value === "string" && value.length <= 500))))))
+                return error("InvalidInput", "Invalid T3 browser control request.");
+              const result = yield* Effect.promise(() => dispatchBrowserWork(
+                environmentId, id, null, "control", undefined,
+                { command, controlOptions: p.options ?? {} },
+              ));
+              if (!result)
+                return error("TimeoutUnknown", "Desktop control outcome unconfirmed; inspect before retrying.");
+              if (!result.ok) return error(result.code, result.message);
+              return reply(read ? result.data : { state: "Delivered", data: result.data });
+            }
             if (request.method === "sessions.visibility") {
               const p = request.params as {
                 expectedEnvironmentId?: string;

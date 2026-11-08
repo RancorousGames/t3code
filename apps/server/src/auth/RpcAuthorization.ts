@@ -292,6 +292,7 @@ const requiredScopesForRpcCall = (
       "sessions.list",
       "sessions.get",
       "sessions.history",
+      "sessions.controls",
       "sessions.updates",
       "sessions.subscribe",
       "sessions.queue",
