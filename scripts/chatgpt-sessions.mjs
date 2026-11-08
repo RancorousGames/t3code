@@ -53,6 +53,7 @@ export async function controlSessions(
     "marker_probe",
     "experimental_evaluate",
     "bootstrap_title",
+    "bootstrap_discover",
     "ask_user",
     "request_attention",
     "attention_status",
@@ -109,8 +110,14 @@ export async function controlSessions(
       input.proposedTitle.length < 3 || input.proposedTitle.length > 80 ||
       /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle)))
     throw new Error("bootstrap_title requires a UUID sessionId and safe 3-80 character proposedTitle.");
-  if (input.proposedTitle !== undefined && input.action !== "bootstrap_title")
-    throw new Error("proposedTitle only applies to bootstrap_title.");
+  if (input.action === "bootstrap_discover" &&
+    (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
+      (input.proposedTitle !== undefined &&
+        (typeof input.proposedTitle !== "string" || input.proposedTitle.length > 80 ||
+          /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle)))))
+    throw new Error("bootstrap_discover requires a UUID and optional safe title.");
+  if (input.proposedTitle !== undefined && !["bootstrap_title", "bootstrap_discover"].includes(input.action))
+    throw new Error("proposedTitle requires bootstrap_title or bootstrap_discover.");
   if (input.action === "request_attention" &&
       (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? "") ||
@@ -329,7 +336,7 @@ export async function controlSessions(
     action: input.action,
     ...(input.action === "marker_probe" ? { marker: input.marker } : {}),
     ...(input.action === "experimental_evaluate" ? { expression: input.expression } : {}),
-    ...(input.action === "bootstrap_title" ? { proposedTitle: input.proposedTitle } : {}),
+    ...(["bootstrap_title", "bootstrap_discover"].includes(input.action) ? { proposedTitle: input.proposedTitle } : {}),
     ...(["request_attention", "attention_status"].includes(input.action)
       ? { attentionId: input.attentionId,
           ...(input.action === "request_attention" ? { message: input.message } : {}) }

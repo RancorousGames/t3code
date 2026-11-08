@@ -16,7 +16,13 @@ import { flushSync } from "react-dom";
 
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
 import { sendInitialChatGPTPrompt } from "../../chatGPTBrowserAutomation";
-import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
+import { chatGPTSessionProfileId, PRIMARY_CHATGPT_PROFILE_ID, SECONDARY_CHATGPT_PROFILE_ID } from "../../chatGPTAccountProfiles";
+import {
+  enqueueExternalBootstrapRequest,
+  readExternalBootstrapRequests,
+  resolveExternalBootstrapRequest,
+  retryExternalBootstrapRequest,
+} from "../../chatGPTExternalBootstrapDiscovery";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
 import { warmMissingNativeChatGPT } from "../../browser/nativeChatGPTWarmSession";
 import { resolveWarmChatGPTConversationUrl } from "../../omniwork/chatGPTWarmConversationUrl";
@@ -32,6 +38,7 @@ import {
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserRemovalAuditKey,
   chatGPTBrowserThreadRef,
+  findExistingChatGPTConversation,
 } from "../../chatGPTBrowserSessions";
 import {
   setLocalStorageItem,
@@ -153,6 +160,88 @@ export function DesktopAppActivationCoordinator() {
     primaryEnvironment?.environmentId ?? null,
   );
   const idleEnvironmentId = primaryEnvironment?.environmentId;
+  const externalBootstrapBusyRef = useRef(false);
+  const discoverExternalBootstrap = useEffectEvent(async () => {
+    const environmentId = primaryEnvironment?.environmentId;
+    if (!environmentId || externalBootstrapBusyRef.current ||
+        !getChatGPTSessionPersistedStore(environmentId).persist.hasHydrated()) return;
+    const pending = readExternalBootstrapRequests(environmentId).find(
+      (item) => !item.failed && item.nextAttemptAt <= Date.now(),
+    );
+    if (!pending) return;
+    externalBootstrapBusyRef.current = true;
+    try {
+      const current = readChatGPTBrowserSessions(environmentId);
+      if (current.some((session) =>
+        session.id.toLowerCase() === pending.id ||
+        session.bootstrapIdentity?.publicId?.toLowerCase() === pending.id)) {
+        resolveExternalBootstrapRequest(environmentId, pending.id);
+        return;
+      }
+      const search = window.desktopBridge?.searchChatGPTHistory;
+      if (!search) throw new Error("Native ChatGPT history search is unavailable.");
+      const matches: Array<{ url: string; conversationId: string; profileId: string }> = [];
+      for (const profileId of [PRIMARY_CHATGPT_PROFILE_ID, SECONDARY_CHATGPT_PROFILE_ID]) {
+        try {
+          const hits = await search({ environmentId, profileId, query: pending.id, mode: "bootstrap" });
+          for (const hit of hits) {
+            if (chatGPTConversationIdFromUrl(hit.url) === hit.conversationId)
+              matches.push({ ...hit, profileId });
+          }
+        } catch {
+          // A signed-out profile or busy search must not prevent trying the other account.
+        }
+      }
+      if (matches.length !== 1) throw new Error(
+        matches.length ? "Bootstrap ID matched multiple ChatGPT accounts." :
+          "The exact Bootstrap marker was not found in ChatGPT history.",
+      );
+      const hit = matches[0]!;
+      const latest = readChatGPTBrowserSessions(environmentId);
+      const existing = latest.find((session) =>
+        session.bootstrapIdentity?.conversationId === hit.conversationId &&
+        chatGPTSessionProfileId(session) === hit.profileId) ??
+        findExistingChatGPTConversation(latest.filter((session) =>
+          chatGPTSessionProfileId(session) === hit.profileId), hit.url, (sessionId) => {
+          const saved = getLocalStorageItem(
+            chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String);
+          return saved;
+        });
+      if (existing) {
+        // Never reassign a browser seat already claimed by another Bootstrap ID.
+        if (existing.bootstrapIdentity?.publicId &&
+            existing.bootstrapIdentity.publicId !== pending.id)
+          throw new Error("The matching conversation already belongs to another T3 identity.");
+        registerBootstrapMarker(existing.id, {
+          conversationId: hit.conversationId, markerId: pending.id,
+          ...(pending.title ? { proposedTitle: pending.title } : {}),
+        });
+      } else {
+        // Import the existing cloud chat without focusing, navigating a live tab or sending.
+        const id = createSession(pending.title ?? "ChatGPT from phone", {
+          initialConversationUrl: hit.url, profileId: hit.profileId,
+        });
+        registerBootstrapMarker(id, {
+          conversationId: hit.conversationId, markerId: pending.id,
+          ...(pending.title ? { proposedTitle: pending.title } : {}),
+        });
+      }
+      resolveExternalBootstrapRequest(environmentId, pending.id);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      retryExternalBootstrapRequest(environmentId, pending.id, message);
+      console.warn("[ChatGPT external Bootstrap] Discovery pending:", pending.id, message);
+    } finally {
+      externalBootstrapBusyRef.current = false;
+    }
+  });
+  useEffect(() => {
+    if (!idleEnvironmentId) return;
+    const timer = window.setInterval(() => { void discoverExternalBootstrap(); }, 5_000);
+    void discoverExternalBootstrap();
+    return () => window.clearInterval(timer);
+  }, [idleEnvironmentId]);
+
   useEffect(() => {
     // Desktop-main outbox can be populated while a guest is unloaded. Mounting
     // must be proactively requested; otherwise awaitingGuest stays true forever
@@ -814,6 +903,20 @@ export function DesktopAppActivationCoordinator() {
               requestId: request.requestId,
               ok: true,
               data: { action: "focus", sessionId: target.id, acknowledged: true },
+            };
+          }
+          if (request.action === "bootstrap_discover") {
+            const id = request.sessionId?.toLowerCase();
+            if (!id) throw new Error("External Bootstrap requires a session UUID.");
+            const alreadyPresent = sessionSnapshot.some((session) =>
+              session.id.toLowerCase() === id ||
+              session.bootstrapIdentity?.publicId?.toLowerCase() === id);
+            if (!alreadyPresent)
+              enqueueExternalBootstrapRequest(environmentId, id, request.proposedTitle);
+            return {
+              version: 1, requestId: request.requestId, ok: true,
+              data: { action: "bootstrap_discover", sessionId: id,
+                queued: !alreadyPresent, alreadyPresent },
             };
           }
           if (request.action === "bootstrap_title") {
@@ -2245,6 +2348,7 @@ export function DesktopAppActivationCoordinator() {
         (request.action === "list" ||
           request.action === "close_status" ||
           request.action === "bootstrap_title" ||
+          request.action === "bootstrap_discover" ||
           request.action === "ask_user" ||
           request.action === "request_attention" ||
           request.action === "attention_status")

@@ -139,13 +139,46 @@ async function searchInGuest(window: BrowserWindow, query: string): Promise<Hist
   throw new Error("ChatGPT search returned no verifiable result DOM.");
 }
 
+/** Confirm an external Bootstrap ID in an assistant reply, never a title or user quote.
+ * The utility is the only guest navigated; existing T3 browser tabs stay untouched. */
+async function verifyBootstrapHit(window: BrowserWindow, hit: HistoryHit, markerId: string): Promise<boolean> {
+  await window.loadURL(hit.url);
+  if (window.isDestroyed()) return false;
+  const expression = `(() => {
+    const marker = "[T3_ID:" + "MARKER_REPLACE" + "]";
+    const replies = document.querySelectorAll(
+      '[data-message-author-role="assistant"],[data-content-search-unit-key$=":assistant"],[data-markdown-text-style="assistant-message"]'
+    );
+    return [...replies].some((node) =>
+      node.textContent?.toLowerCase().includes(marker.toLowerCase()));
+  })()`.replace("MARKER_REPLACE", markerId);
+  for (let attempt = 0; attempt < 24; attempt++) {
+    await delay(250);
+    if (await window.webContents.executeJavaScript(expression, false)) return true;
+  }
+  return false;
+}
+
+async function discoverBootstrapInGuest(window: BrowserWindow, markerId: string): Promise<HistoryHit[]> {
+  let candidates: HistoryHit[] = [];
+  try { candidates = await searchInGuest(window, markerId); }
+  catch { /* Search UI may not index new conversations yet; inspect recent links. */ }
+  if (!candidates.length) candidates = await recentInGuest(window);
+  for (const hit of candidates.slice(0, 12)) {
+    try {
+      if (await verifyBootstrapHit(window, hit, markerId)) return [hit];
+    } catch { /* One inaccessible chat must not import the wrong conversation. */ }
+  }
+  return [];
+}
+
 export const searchChatGPTHistoryIpc = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CHATGPT_HISTORY_SEARCH_CHANNEL,
   payload: Schema.Struct({
     environmentId: Schema.String,
     profileId: Schema.optional(Schema.String),
     query: Schema.optional(Schema.String),
-    mode: Schema.optional(Schema.Literal("recent")),
+    mode: Schema.optional(Schema.Literals(["recent", "bootstrap"])),
   }),
   result: Schema.Array(Schema.Struct({
     conversationId: Schema.String,
@@ -154,7 +187,8 @@ export const searchChatGPTHistoryIpc = DesktopIpc.makeIpcMethod({
   })),
   handler: Effect.fn("desktop.ipc.chatgpt.historySearch")(function* ({ environmentId, profileId, query, mode }) {
     const term = (query ?? "").trim();
-    if ((mode !== "recent" && (term.length < 2 || term.length > 150)) ||
+    if ((mode === "bootstrap" && !UUID.test(term)) ||
+        (mode !== "recent" && (term.length < 2 || term.length > 150)) ||
         !environmentId || environmentId.length > 200)
       return yield* Effect.fail(new Error("Invalid history search query or environment."));
     if (activeSearch) return yield* Effect.tryPromise(() => Promise.reject(new Error("ChatGPT history search already running.")));
@@ -184,7 +218,9 @@ export const searchChatGPTHistoryIpc = DesktopIpc.makeIpcMethod({
       } catch { event.preventDefault(); }
     });
     if (guest.cleanup) clearTimeout(guest.cleanup);
-    activeSearch = mode === "recent" ? recentInGuest(guest.window) : searchInGuest(guest.window, term);
+    activeSearch = mode === "recent" ? recentInGuest(guest.window)
+      : mode === "bootstrap" ? discoverBootstrapInGuest(guest.window, term)
+      : searchInGuest(guest.window, term);
     try {
       return yield* Effect.tryPromise(() => activeSearch!);
     } finally {

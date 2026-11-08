@@ -642,7 +642,8 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         )
           throw new Error("Only an exact canonical ChatGPT conversation URL may seed a session.");
         const owner = findExistingChatGPTConversation(
-          readChatGPTBrowserSessions(environmentId),
+          readChatGPTBrowserSessions(environmentId).filter((session) =>
+            !metadata.profileId || (session.profileId ?? PRIMARY_CHATGPT_PROFILE_ID) === metadata.profileId),
           metadata.initialConversationUrl,
           (id) => getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id), Schema.String),
         );
