@@ -73,6 +73,7 @@ import { persistentChatGPTRequestIpc } from "./methods/persistentChatGPTBrowser.
 import { stableChatGPTViewRequestIpc } from "./methods/stableChatGPTView.ts";
 import { readChatGPTBootstrapTitleIpc } from "./methods/chatGPTBootstrapTitle.ts";
 import { readTaskBoardWorkerClaimsIpc } from "./methods/taskBoardWorkerClaims.ts";
+import { readTaskBoardProjectsIpc } from "./methods/taskBoardProjectCatalog.ts";
 import {
   openTaskBoardLiveSessionIpc,
   controlTaskBoardLiveSessionIpc,
@@ -139,6 +140,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(persistentChatGPTRequestIpc);
   yield* ipc.handle(stableChatGPTViewRequestIpc);
   yield* ipc.handle(readTaskBoardWorkerClaimsIpc);
+  yield* ipc.handle(readTaskBoardProjectsIpc);
   yield* ipc.handle(openTaskBoardLiveSessionIpc);
   yield* ipc.handle(openTaskBoardLinkIpc);
   yield* ipc.handle(openFirefoxLinkIpc);

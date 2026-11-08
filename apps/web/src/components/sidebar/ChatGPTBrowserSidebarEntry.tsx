@@ -58,7 +58,14 @@ import {
   type ChatGPTSessionSortActivity,
   type ChatGPTSessionSortMode,
   type ChatGPTPermanentProject,
+  withTaskBoardPermanentProjects,
 } from "../../chatGPTSessionGrouping";
+import {
+  sameChatGPTActivityOrder,
+  snapshotChatGPTActivityOrder,
+  stabilizeChatGPTActivityOrder,
+  type ChatGPTActivityOrderSnapshot,
+} from "../../chatGPTActivityOrderStability";
 import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { searchChatGPTSessionCatalog } from "../../chatGPTSessionSearch";
@@ -189,6 +196,7 @@ import {
   chatGPTSidebarProjectTitles,
 } from "./chatGPTSidebarVisuals";
 import { useOpenRigManagerChatGPTSessions } from "./useOpenRigManagerChatGPTSessions";
+import { useTaskBoardChatGPTProjects } from "./useTaskBoardChatGPTProjects";
 import {
   managerRoleSnapshotKey,
   readManagerRoleSnapshot,
@@ -528,14 +536,19 @@ export function ChatGPTBrowserSidebarEntry({
     [] as ChatGPTPermanentProject[],
     Schema.Array(Schema.Struct({ key: Schema.String, title: Schema.String })),
   );
+  const taskBoardProjects = useTaskBoardChatGPTProjects(environmentId);
+  const allPermanentProjects = useMemo(
+    () => withTaskBoardPermanentProjects(permanentProjects, taskBoardProjects),
+    [permanentProjects, taskBoardProjects],
+  );
   const [groupLabels, setGroupLabels] = useLocalStorage(
     `t3code:chatgpt-browser:group-labels:${environmentId ?? "unconnected"}`,
     [] as ChatGPTPermanentProject[],
     Schema.Array(Schema.Struct({ key: Schema.String, title: Schema.String })),
   );
   const permanentProjectKeys = useMemo(
-    () => new Set(permanentProjects.map((project) => project.key)),
-    [permanentProjects],
+    () => new Set(allPermanentProjects.map((project) => project.key)),
+    [allPermanentProjects],
   );
   const previousSelected = useRef(activeSessionId);
   const sidebarMountedAt = useRef(Date.now());
@@ -797,8 +810,8 @@ export function ChatGPTBrowserSidebarEntry({
     [environmentId, projects],
   );
   const recognizedGroups = useMemo(
-    () => groupChatGPTSessions(sessions, registeredProjects, permanentProjects),
-    [sessions, registeredProjects, permanentProjects],
+    () => groupChatGPTSessions(sessions, registeredProjects, allPermanentProjects, taskBoardProjects),
+    [sessions, registeredProjects, allPermanentProjects, taskBoardProjects],
   );
   const projectTitles = useMemo(
     () => chatGPTSidebarProjectTitles(sessions, recognizedGroups),
@@ -1121,7 +1134,7 @@ export function ChatGPTBrowserSidebarEntry({
         showingSnoozed ? isSnoozed(session) : !isSnoozed(session),
       )).filter((session) => selectedColors.length === 0 || selectedColors.includes(session.borderColor ?? ""));
   const aiInterfaceSessions = displayedSessions.filter(isAIInterfaceSession);
-  const groupedSessions = useMemo(() => {
+  const rawGroupedSessions = useMemo(() => {
     // Parked lists are global queues, not project/activity trees. Their order
     // is the time the user parked them, independent of their wake-up deadline.
     if (showingHidden || showingSnoozed) {
@@ -1151,10 +1164,11 @@ export function ChatGPTBrowserSidebarEntry({
       registeredProjects,
       showingHidden ? "started" : sortMode,
       groupingActivity as Readonly<Record<string, ChatGPTSessionSortActivity>>,
-      permanentProjects,
+      allPermanentProjects,
       freshPinnedIds[0],
       erroredSessionsAtBottom,
       clockNow,
+      taskBoardProjects,
     );
     const filtered = filterChatGPTWorkerGroups(
       groups,
@@ -1203,7 +1217,11 @@ export function ChatGPTBrowserSidebarEntry({
       registeredProjects,
       "started",
       activities as Readonly<Record<string, ChatGPTSessionSortActivity>>,
-      permanentProjects,
+      allPermanentProjects,
+      undefined,
+      true,
+      clockNow,
+      taskBoardProjects,
     ).flatMap((group) => group.rows);
     return prioritizeFreshManualSession(
       prioritizePendingChatGPTQuestions(
@@ -1228,7 +1246,8 @@ export function ChatGPTBrowserSidebarEntry({
     showingSnoozed,
     sortMode,
     activities,
-    permanentProjects,
+    allPermanentProjects,
+    taskBoardProjects,
     activeSessionId,
     freshPinnedIds,
     hideableWorkerIds,
@@ -1240,6 +1259,20 @@ export function ChatGPTBrowserSidebarEntry({
     environmentId,
     sortActivityById,
   ]);
+  const [activityOrderSnapshot, setActivityOrderSnapshot] = useState<ChatGPTActivityOrderSnapshot | null>(null);
+  const activityOrderContext = JSON.stringify([
+    environmentId, sortMode, showingHidden, showingSnoozed, hideUnloaded,
+    showWorkers, showAIInterfaceSessions, erroredSessionsAtBottom,
+    selectedColors, pendingQuestionIds, freshPinnedIds, sessions.map((session) => session.id),
+  ]);
+  const groupedSessions = stabilizeChatGPTActivityOrder(
+    rawGroupedSessions, activityOrderSnapshot, activityOrderContext, sortActivityById,
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Preserve the last committed visual order across asynchronous status probes.
+  useLayoutEffect(() => {
+    const next = snapshotChatGPTActivityOrder(groupedSessions, activityOrderContext, sortActivityById);
+    setActivityOrderSnapshot((previous) => sameChatGPTActivityOrder(previous, next) ? previous : next);
+  }, [groupedSessions, activityOrderContext, sortActivityById]);
   const searchResults = useMemo(
     () =>
       searchChatGPTSessionCatalog({
@@ -1372,7 +1405,7 @@ export function ChatGPTBrowserSidebarEntry({
     const projects = [
       ...new Set([
         ...registeredProjects.map((project) => project.title),
-        ...permanentProjects.map((project) => project.title),
+        ...allPermanentProjects.map((project) => project.title),
         ...sessions.map((entry) => entry.project).filter((project): project is string => !!project),
       ]),
     ].sort((a, b) => a.localeCompare(b));
@@ -1845,7 +1878,7 @@ export function ChatGPTBrowserSidebarEntry({
       }
       const existing = [
         ...registeredProjects.map((project) => project.title),
-        ...permanentProjects.map((project) => project.title),
+        ...allPermanentProjects.map((project) => project.title),
         ...sessions
           .map((session) => session.project)
           .filter((project): project is string => !!project),

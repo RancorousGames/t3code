@@ -1976,6 +1976,12 @@ export interface DesktopBridge {
     action: "later" | "clear";
     until?: string;
   }) => Promise<{ applied: true }>;
+  /** Registered TaskBoard project identities and their task-ID prefixes. */
+  readTaskBoardProjects?: () => Promise<readonly {
+    key: string;
+    title: string;
+    prefixes: readonly string[];
+  }[]>;
   readTaskBoardWorkerClaims?: () => Promise<
     readonly {
       taskId: string;

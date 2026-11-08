@@ -18,6 +18,31 @@ export interface ChatGPTPermanentProject {
   readonly key: string;
   readonly title: string;
 }
+export interface ChatGPTTaskBoardProject extends ChatGPTPermanentProject {
+  readonly prefixes: readonly string[];
+}
+
+/** Task IDs provide stronger evidence than title-word heuristics. */
+export function withTaskBoardPermanentProjects(
+  pinned: readonly ChatGPTPermanentProject[],
+  boards: readonly ChatGPTTaskBoardProject[],
+): ChatGPTPermanentProject[] {
+  const names = new Set(boards.map((board) => projectTitleIdentity(board.title)));
+  return [...boards, ...pinned.filter((project) => !names.has(projectTitleIdentity(project.title)))];
+}
+
+export function matchChatGPTTaskBoardProject(
+  title: string,
+  boards: readonly ChatGPTTaskBoardProject[],
+): ChatGPTTaskBoardProject | null {
+  const matches = title.matchAll(/(?:^|[^A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,11}-)\d+(?![A-Za-z0-9])/g);
+  for (const match of matches) {
+    const prefix = match[1]!.toUpperCase();
+    const owners = boards.filter((board) => board.prefixes.some((p) => p.toUpperCase() === prefix));
+    if (owners.length === 1) return owners[0]!;
+  }
+  return null;
+}
 export interface ChatGPTSidebarGroup {
   readonly key: string | null;
   readonly title: string | null;
@@ -25,6 +50,8 @@ export interface ChatGPTSidebarGroup {
 }
 
 type Assignment = { key: string; title: string };
+const projectTitleIdentity = (name: string): string =>
+  name.toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 /** Task verbs/status labels are not project identities. Keep this scoped to
  * inferred single-word names and old inferred hints; real registered/pinned
@@ -214,6 +241,7 @@ export function groupChatGPTSessions(
   sessions: readonly BrowserSession[],
   projects: readonly ChatGPTGroupingProject[],
   permanentProjects: readonly ChatGPTPermanentProject[] = [],
+  taskBoardProjects: readonly ChatGPTTaskBoardProject[] = [],
 ): ChatGPTSidebarGroup[] {
   const enriched = applyConfirmedChatGPTSessionMetadata(sessions);
   const nameGroups = discoverNameGroups(enriched, projects);
@@ -221,9 +249,19 @@ export function groupChatGPTSessions(
   const parentById = chatGPTParentIndex(enriched);
   const assignments = new Map<string, Assignment | null>();
   const visiting = new Set<string>();
+  const registeredAssignment = (project: ChatGPTGroupingProject): Assignment => {
+    const board = taskBoardProjects.find((entry) =>
+      projectTitleIdentity(entry.title) === projectTitleIdentity(project.title),
+    );
+    return board ? { key: board.key, title: board.title }
+      : { key: `project:${project.id}`, title: project.title };
+  };
 
   const assignOwn = (session: BrowserSession): Assignment | null => {
     const hint = session.project?.trim();
+    // Exact TaskBoard IDs win even over old auto-saved "Other" or stale hints.
+    const taskBoard = matchChatGPTTaskBoardProject(session.title, taskBoardProjects);
+    if (taskBoard) return { key: taskBoard.key, title: taskBoard.title };
     if (hint?.toLowerCase() === "other") return null;
     // A user-permanent project wins over transient name grouping when the
     // title truly matches. Explicit session.project metadata is never changed.
@@ -249,12 +287,12 @@ export function groupChatGPTSessions(
         readable(project.title).toLowerCase() === readable(hint).toLowerCase() ||
         pathKey(project.workspaceRoot) === pathKey(hint),
       );
-      if (registered) return { key: `project:${registered.id}`, title: registered.title };
+      if (registered) return registeredAssignment(registered);
       // Earlier automatic grouping persisted "Implement" / "Investigate"
       // as project hints. Ignore these stale hints and reclassify by the title.
       if (!isGenericChatGPTProjectName(hint)) {
         const project = matchRegisteredProject(hint, projects);
-        if (project) return { key: `project:${project.id}`, title: project.title };
+        if (project) return registeredAssignment(project);
         return { key: `hint:${hint.toLowerCase()}`, title: readable(hint) };
       }
     }
@@ -264,7 +302,7 @@ export function groupChatGPTSessions(
     const strong = direct && nameScore(session.title, direct) >= 20;
     const name = [...nameGroups].find(([, candidate]) => candidate.ids.has(session.id));
     if (name && !strong) return { key: `name:${name[0]}`, title: name[1].title };
-    if (direct) return { key: `project:${direct.id}`, title: direct.title };
+    if (direct) return registeredAssignment(direct);
     return name ? { key: `name:${name[0]}`, title: name[1].title } : null;
   };
   const resolve = (session: BrowserSession): Assignment | null => {
@@ -370,7 +408,8 @@ export type ChatGPTSessionSortActivity = {
     | "unloaded"
     | "unloaded-recent"
     | "unloaded-working"
-    | "inactive";
+    | "inactive"
+    | "snoozed";
   readonly lastWorkingAt: number;
   /** Includes verified work and deliberate user interaction, even while unloaded. */
   readonly lastActivityAt?: number;
@@ -384,8 +423,9 @@ export function layoutChatGPTSessions(
   selectedSessionId?: string,
   erroredSessionsAtBottom = true,
   now = Date.now(),
+  taskBoardProjects: readonly ChatGPTTaskBoardProject[] = [],
 ): ChatGPTSidebarGroup[] {
-  if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects);
+  if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects, taskBoardProjects);
   void selectedSessionId;
   const rank: Record<ChatGPTSessionSortActivity["age"], number> = {
     working: 0,
@@ -394,6 +434,7 @@ export function layoutChatGPTSessions(
     "unloaded-recent": 1,
     inactive: 2,
     unloaded: 2,
+    snoozed: 2,
     unknown: 2,
     interrupted: 3,
     "delivery-timeout": 3,
@@ -546,7 +587,7 @@ export function layoutChatGPTSessions(
     ...activeRows,
     ...remainingRows.filter(({ session }) => isRecentlyActive(session)),
   ];
-  const originalGroups = groupChatGPTSessions(enriched, projects, permanentProjects);
+  const originalGroups = groupChatGPTSessions(enriched, projects, permanentProjects, taskBoardProjects);
   const assignedGroup = new Map(
     originalGroups.flatMap((group) =>
       group.rows.map(({ session }) => [session.id, group] as const),

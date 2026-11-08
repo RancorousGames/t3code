@@ -5,6 +5,8 @@ import {
   groupChatGPTSessions,
   layoutChatGPTSessions,
   matchRegisteredProject,
+  matchChatGPTTaskBoardProject,
+  withTaskBoardPermanentProjects,
 } from "./chatGPTSessionGrouping";
 
 const projects = [
@@ -166,6 +168,45 @@ describe("ChatGPT session project grouping", () => {
     expect(groups.find((group) => group.title === "Wartribes")
       ?.rows.map((row) => row.session.id)).toEqual(["one", "two"]);
     expect(groups.some((group) => ["Implement", "Investigate"].includes(group.title ?? ""))).toBe(false);
+  });
+
+  it("creates permanent TaskBoard projects and assigns title task IDs by board prefix", () => {
+    const taskBoards = [
+      { key: "taskboard:wartribes", title: "Wartribes", prefixes: ["WT-", "WTE-"] },
+      { key: "taskboard:t3code", title: "t3code", prefixes: ["T3-", "T3E-"] },
+      { key: "taskboard:orderofthefallen", title: "Order of the Fallen", prefixes: ["OTF-"] },
+    ];
+    const permanent = withTaskBoardPermanentProjects(
+      [{ key: "hint:wartribes", title: "Wartribes" }],
+      taskBoards,
+    );
+    expect(permanent.filter((p) => p.title === "Wartribes")).toHaveLength(1);
+    const sessions = [
+      { id: "wt", title: "Implement WT-0461 one-click tour", project: "Implement" },
+      { id: "wte", title: "WTE-0004 Folio infrastructure" },
+      { id: "t3", title: "Investigate T3-0235", project: "Other" },
+      { id: "otf", title: "Order of the Fallen OTF-0819 expedition" },
+      { id: "wt-lower", title: "test wt-0999 fix", project: "Investigate" },
+      { id: "prefix-collision", title: "SWT-0032 unrelated" },
+      { id: "non-id", title: "WT-general design" },
+      { id: "registered-path", title: "General combat improvements", project: "D:/Wartribes" },
+    ];
+    const groups = groupChatGPTSessions(sessions, projects, permanent, taskBoards);
+    const map = new Map(groups.flatMap((g) => g.rows.map((row) => [row.session.id, g.key])));
+    expect(map.get("wt")).toBe("taskboard:wartribes");
+    expect(map.get("wte")).toBe("taskboard:wartribes");
+    expect(map.get("wt-lower")).toBe("taskboard:wartribes");
+    expect(map.get("t3")).toBe("taskboard:t3code");
+    expect(map.get("otf")).toBe("taskboard:orderofthefallen");
+    expect(map.get("prefix-collision")).toBe("other");
+    expect(map.get("non-id")).toBe("other");
+    expect(map.get("registered-path")).toBe("taskboard:wartribes");
+    expect(withTaskBoardPermanentProjects(
+      [{ key: "pin:old-t3", title: "T3 Code" }], taskBoards,
+    ).filter((p) => p.key === "taskboard:t3code")).toHaveLength(1);
+    expect(matchChatGPTTaskBoardProject("WT-0461", taskBoards)?.title).toBe("Wartribes");
+    expect(matchChatGPTTaskBoardProject("T3-0235", taskBoards)?.title).toBe("t3code");
+    expect(matchChatGPTTaskBoardProject("SWT-0461", taskBoards)).toBeNull();
   });
 
   it("matches T3's registered project names or workspace directories", () => {

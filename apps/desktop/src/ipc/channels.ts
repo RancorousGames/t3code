@@ -54,6 +54,7 @@ export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL = "desktop:private-chatgpt-draft-snapshot";
 export const TASKBOARD_WORKER_CLAIMS_CHANNEL = "desktop:taskboard-worker-claims";
+export const TASKBOARD_PROJECTS_CHANNEL = "desktop:taskboard-projects";
 export const TASKBOARD_LIVE_SESSION_OPEN_CHANNEL = "desktop:taskboard-live-session-open";
 export const TASKBOARD_LIVE_SESSION_CONTROL_CHANNEL = "desktop:taskboard-live-session-control";
 export const TASKBOARD_HUMAN_INBOX_CHANNEL = "desktop:taskboard-human-inbox";
