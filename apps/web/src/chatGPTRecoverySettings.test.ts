@@ -2,12 +2,10 @@
 // @ts-expect-error jsdom's runtime types are not installed in this workspace.
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { readRecoveryExperiment, saveRecoveryExperiment, setRecoveryExperimentEnabled, subscribeRecoveryExperiment } from "./chatGPTRecoveryExperiment";
 import {
   CHATGPT_RECOVERY_INTERVAL_BOUNDS,
   DEFAULT_CHATGPT_RECOVERY_SETTINGS,
   readChatGPTRecoverySettings,
-  subscribeChatGPTRecoverySettings,
   updateChatGPTRecoverySettings,
   validRecoverySettingNumber,
 } from "./chatGPTRecoverySettings";
@@ -76,63 +74,6 @@ describe("custom ChatGPT recovery intervals", () => {
     expect(readChatGPTRecoverySettings()).toMatchObject({ watchdogSeconds: 120, globalSeconds: 43 });
   });
 
-  it("locks manual cooldowns during experiments and restores the saved baseline afterward", () => {
-    updateChatGPTRecoverySettings({ globalSeconds: 47, orangeGlobalSeconds: 91, paused: false });
-    setRecoveryExperimentEnabled(true, 1_000);
-    expect(readChatGPTRecoverySettings().globalSeconds).toBe(30);
-    updateChatGPTRecoverySettings({ globalSeconds: 15 });
-    expect(readChatGPTRecoverySettings().globalSeconds).toBe(30);
-    updateChatGPTRecoverySettings({ paused: true });
-    expect(readChatGPTRecoverySettings().paused).toBe(true);
-    setRecoveryExperimentEnabled(false, 1_100);
-    expect(readChatGPTRecoverySettings()).toMatchObject({ globalSeconds: 47, orangeGlobalSeconds: 91, paused: true });
-  });
-
-  it("experiments with orange recovery schemes without overriding observe-only safety", () => {
-    updateChatGPTRecoverySettings({ orangeStrategy: "reload-stop-continue" });
-    const baseline = { ...readRecoveryExperiment(), enabled: true, armId: "steady-reload-only" };
-    expect(saveRecoveryExperiment(baseline)).toBe(true);
-    expect(readChatGPTRecoverySettings()).toMatchObject({
-      globalSeconds: 30, orangeGlobalSeconds: 90, perSessionSeconds: 180,
-      orangeStrategy: "reload-only",
-    });
-    expect(saveRecoveryExperiment({ ...baseline, armId: "steady-reload-stop" })).toBe(true);
-    expect(readChatGPTRecoverySettings().orangeStrategy).toBe("reload-stop");
-    expect(saveRecoveryExperiment({ ...baseline, enabled: false })).toBe(true);
-    updateChatGPTRecoverySettings({ orangeStrategy: "observe-only" });
-    expect(saveRecoveryExperiment(baseline)).toBe(true);
-    expect(readChatGPTRecoverySettings().orangeStrategy).toBe("observe-only");
-    expect(saveRecoveryExperiment({ ...baseline, enabled: false })).toBe(true);
-    expect(readChatGPTRecoverySettings().orangeStrategy).toBe("observe-only");
-  });
-  it("does not wake recovery listeners for cross-window statistics-only writes", () => {
-    const onChange = vi.fn();
-    const unsubscribe = subscribeChatGPTRecoverySettings(onChange);
-    const initial = readRecoveryExperiment();
-    expect(saveRecoveryExperiment({ ...initial, missingExposureMs: 1000 })).toBe(true);
-    window.dispatchEvent(new dom.window.Event("storage"));
-    expect(onChange).not.toHaveBeenCalled();
-    const enabled = { ...initial, enabled: true, armStartedAt: 10, lastEvaluatedAt: 10 };
-    expect(saveRecoveryExperiment(enabled)).toBe(true);
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(saveRecoveryExperiment({ ...enabled, missingExposureMs: 3000 })).toBe(true);
-    window.dispatchEvent(new dom.window.Event("storage"));
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(saveRecoveryExperiment({ ...enabled, armId: "responsive" })).toBe(true);
-    expect(onChange).toHaveBeenCalledTimes(2);
-    unsubscribe();
-  });
-  it("does not rerender experiment settings for unrelated localStorage changes", () => {
-    const onChange = vi.fn();
-    const unsubscribe = subscribeRecoveryExperiment(onChange);
-    window.dispatchEvent(new dom.window.StorageEvent("storage", { key: "t3code:another-feature" }));
-    expect(onChange).not.toHaveBeenCalled();
-    window.dispatchEvent(new dom.window.StorageEvent("storage", {
-      key: "t3code:chatgpt:recovery-experiment:v1",
-    }));
-    expect(onChange).toHaveBeenCalledTimes(1);
-    unsubscribe();
-  });
   it("returns safe defaults when browser storage itself is denied", () => {
     vi.stubGlobal("window", {
       get localStorage() { throw new Error("SecurityError"); },

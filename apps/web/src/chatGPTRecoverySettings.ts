@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from "react";
-import { currentRecoveryExperimentArm, readRecoveryExperiment } from "./chatGPTRecoveryExperiment";
 import {
   DEFAULT_CHATGPT_ORANGE_RECOVERY_STRATEGY,
   normalizeChatGPTOrangeRecoveryStrategy,
@@ -59,10 +58,8 @@ export function readChatGPTRecoverySettings(): ChatGPTRecoverySettings {
   let raw: string | null;
   try { raw = window.localStorage.getItem(KEY); }
   catch { return STORAGE_DENIED_RECOVERY_SETTINGS; }
-  const experiment = readRecoveryExperiment();
-  const cacheKey = `${raw ?? ""}:${experiment.enabled ? experiment.armId : "manual"}`;
-  if (cacheKey === rawCache) return settingsCache;
-  rawCache = cacheKey;
+  if (raw === rawCache) return settingsCache;
+  rawCache = raw;
   let input: Record<string, unknown> = {};
   try {
     const parsed: unknown = JSON.parse(raw ?? "{}");
@@ -83,34 +80,14 @@ export function readChatGPTRecoverySettings(): ChatGPTRecoverySettings {
   next.paused = typeof input.paused === "boolean" ? input.paused : false;
   next.orangeStrategy = normalizeChatGPTOrangeRecoveryStrategy(input.orangeStrategy);
   next.ordering = input.ordering === "managers-first" ? "managers-first" : "recent-first";
-  // Experiment tuning overlays manual preferences without modifying them.
-  if (experiment.enabled) {
-    const arm = currentRecoveryExperimentArm(experiment);
-    next.globalSeconds = arm.redSeconds;
-    next.orangeGlobalSeconds = arm.orangeSeconds;
-    next.perSessionSeconds = arm.perSessionSeconds;
-    // Preserve explicit observe-only safety preference. The experiment may
-    // choose less aggressive active strategies, but cannot auto-enable orange
-    // mutations when the user has disabled them completely.
-    if (next.orangeStrategy !== "observe-only") next.orangeStrategy = arm.orangeStrategy;
-  }
   settingsCache = next;
   return next;
 }
 
 export function updateChatGPTRecoverySettings(patch: Partial<ChatGPTRecoverySettings>): void {
   if (typeof window === "undefined") return;
-  if (readRecoveryExperiment().enabled && Object.keys(patch).some(key => key !== "paused")) return;
   try {
-    const current = readChatGPTRecoverySettings();
-    // Preserve the original manual baseline while an experiment manages intervals.
-    let baseline = current;
-    if (readRecoveryExperiment().enabled) {
-      try {
-        baseline = { ...DEFAULT_CHATGPT_RECOVERY_SETTINGS,
-          ...JSON.parse(window.localStorage.getItem(KEY) ?? "{}") as Partial<ChatGPTRecoverySettings> };
-      } catch { baseline = DEFAULT_CHATGPT_RECOVERY_SETTINGS; }
-    }
+    const baseline = readChatGPTRecoverySettings();
     window.localStorage.setItem(
       KEY,
       JSON.stringify({ ...baseline, ...Object.fromEntries(
@@ -133,13 +110,9 @@ export function subscribeChatGPTRecoverySettings(onChange: () => void): () => vo
     onChange();
   };
   window.addEventListener(EVENT, notifyOnlyOnChange);
-  window.addEventListener("chatgpt-recovery-experiment-changed", notifyOnlyOnChange);
-  // Other windows emit StorageEvents even for the experiment's 30-second
-  // statistics-only writes. Those must never reset the recovery scheduler.
   window.addEventListener("storage", notifyOnlyOnChange);
   return () => {
     window.removeEventListener(EVENT, notifyOnlyOnChange);
-    window.removeEventListener("chatgpt-recovery-experiment-changed", notifyOnlyOnChange);
     window.removeEventListener("storage", notifyOnlyOnChange);
   };
 }

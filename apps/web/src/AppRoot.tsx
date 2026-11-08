@@ -5,7 +5,6 @@ import { ProviderResetSound } from "./components/ProviderResetSound";
 import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
 import { ChatGPTBrowserPrewarm } from "./components/sidebar/ChatGPTBrowserPrewarm";
 import { ChatGPTSessionRegistryDriver } from "./components/sidebar/ChatGPTSessionRegistryDriver";
-import { ChatGPTRecoveryExperimentObserver } from "./components/sidebar/ChatGPTRecoveryExperimentObserver";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
 
@@ -17,7 +16,6 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
       <ElectronBrowserHost />
       <ChatGPTBrowserPrewarm />
       <ChatGPTSessionRegistryDriver />
-      <ChatGPTRecoveryExperimentObserver />
       <ProviderResetSound />
       <QuitHoldOverlay />
     </AppAtomRegistryProvider>

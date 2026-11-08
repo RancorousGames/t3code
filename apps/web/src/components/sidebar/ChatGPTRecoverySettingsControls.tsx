@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { currentRecoveryExperimentArm, readRecoveryExperiment, recoveryExperimentStatistics, recoveryExperimentSummaryReport, setRecoveryExperimentEnabled, subscribeRecoveryExperiment } from "../../chatGPTRecoveryExperiment";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -184,20 +183,6 @@ export function ChatGPTRecoveryPauseButton() {
 
 export function ChatGPTRecoverySettingsControls() {
   const settings = useChatGPTRecoverySettings();
-  const [experiment, setExperiment] = useState(readRecoveryExperiment);
-  useEffect(() => subscribeRecoveryExperiment(() => setExperiment(readRecoveryExperiment())), []);
-  const stats = recoveryExperimentStatistics(experiment);
-  const [copyStatus, setCopyStatus] = useState("");
-  const copyStats = () => {
-    try {
-      const request = navigator.clipboard?.writeText(recoveryExperimentSummaryReport(experiment));
-      if (!request) { setCopyStatus("Clipboard unavailable"); return; }
-      void request.then(() => setCopyStatus("Copied"))
-        .catch(() => setCopyStatus("Clipboard unavailable"));
-    } catch {
-      setCopyStatus("Clipboard unavailable");
-    }
-  };
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
@@ -210,53 +195,7 @@ export function ChatGPTRecoverySettingsControls() {
         </div>
         <ChatGPTRecoveryPauseButton />
       </div>
-      <div className="rounded-md border p-3 space-y-2" aria-label="Recovery experimentation">
-        <div className="flex items-center justify-between gap-2">
-          <div><div className="text-sm font-medium">Recovery cadence experiment</div>
-            <p className="text-xs text-muted-foreground">Compare retry cadences and gentler orange action sequences using verified recovery outcomes. Manual preferences are preserved; observe-only is never overridden.</p></div>
-          <Button size="sm" variant={experiment.enabled ? "secondary" : "outline"}
-            onClick={() => setRecoveryExperimentEnabled(!experiment.enabled)}>
-            {experiment.enabled ? "Stop experiment" : "Start experiment"}
-          </Button>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button size="xs" variant="outline" onClick={copyStats}>Copy aggregate statistics</Button>
-          {copyStatus && <span role="status" className="text-xs text-muted-foreground">{copyStatus}</span>}
-        </div>
-        <p className="text-xs">Current arm: {currentRecoveryExperimentArm(experiment).id} · round {experiment.round + 1} · {experiment.enabled ? "managing cooldowns" : "inactive"}</p>
-        <p className="text-xs text-muted-foreground">Current policy: red {currentRecoveryExperimentArm(experiment).redSeconds}s, orange {currentRecoveryExperimentArm(experiment).orangeSeconds}s, orange per-session {currentRecoveryExperimentArm(experiment).perSessionSeconds}s; orange scheme {settings.orangeStrategy}. Global pause and observe-only take precedence.</p>
-        <p className="text-xs">Recent trials: {(experiment.switchHistory ?? []).slice(-3).reverse()
-          .map(trial => `${trial.from} → ${trial.to} (${trial.reason}; ${trial.recoveredEpisodes}/${trial.closedEpisodes} observed recoveries)`)
-          .join(" · ") || "No completed trials yet"}</p>
-        <div className="grid gap-1 text-xs text-muted-foreground">
-          {stats.map(item => (
-            <div key={item.arm} className="rounded border border-border/40 px-2 py-1.5">
-              <div className="font-medium">{item.arm}: {item.episodes} verified closed episodes</div>
-              <div>{item.recovered} recovered; {item.recoveredPerHour === null
-                ? "rate pending (requires 5 observed minutes)"
-                : `${item.recoveredPerHour.toFixed(1)} recoveries / observed hour`};
-                {" "}{item.observedRecoveryRate === null ? "insufficient data"
-                  : `${Math.round(item.observedRecoveryRate * 100)}% observed`};
-                {" "}recent median recovered {item.medianMs === null ? "n/a"
-                  : `${Math.round(item.medianMs / 1000)}s`}.
-              </div>
-              <div>Recent red {item.byCategory[0]?.recovered}/{item.byCategory[0]?.attempts};
-                {" "}orange {item.byCategory[1]?.recovered}/{item.byCategory[1]?.attempts}.
-              </div>
-              <div className="mt-0.5">
-                Workload proxy (matched opportunity exposure): {item.buckets.map(group =>
-                  `${group.busyBucket}: ${group.count < 3 ? `${group.count} samples` : `${Math.round(group.recovered / group.count * 100)}% (${group.count})`}`
-                ).join(" · ")}
-              </div>
-              <div>Matched lane/load throughput: {item.laneBuckets.filter(group => group.recoveredPerHour !== null)
-                .map(group => `${group.category} ${group.busyBucket}: ${group.recoveredPerHour!.toFixed(1)}/h`)
-                .join(" · ") || "pending comparable observations"}</div>
-            </div>
-          ))}
-        </div>
-        <p className="text-xs text-muted-foreground">Observed runtime {Math.round(Object.values(experiment.exposureMs ?? {}).reduce((a,b) => a+b, 0) / 60000)} min; no recovery opportunity {Math.round((experiment.noOpportunityMs ?? 0) / 60000)} min; unobserved gaps {Math.round((experiment.missingExposureMs ?? 0) / 60000)} min. Active/unknown and partial episodes are excluded. Recently observed working guests are only a load proxy; missing activity observations remain unknown. Results are observational, not proof of causal improvement.</p>
-      </div>
-      <fieldset disabled={experiment.enabled} className={experiment.enabled ? "opacity-50" : ""}>
+      <div>
       {numericOptions.map(({ key, label, help, values, unit }) => key === "targetCount" ? (
         <SettingSelect key={key} label={label} help={help}
           value={String(settings[key])}
@@ -276,7 +215,7 @@ export function ChatGPTRecoverySettingsControls() {
           Reset defaults
         </Button>
       </div>
-      </fieldset>
+      </div>
       <p className="text-xs text-muted-foreground">
         Red recovery stays on one highest-priority failing session and retries it until healthy,
         without round-robin. Only an explicit manual retry can replace the pinned red target.
