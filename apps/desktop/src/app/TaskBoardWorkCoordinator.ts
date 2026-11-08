@@ -1023,8 +1023,23 @@ export class TaskBoardWorkCoordinator {
         .filter(item => item.state === "queued" && item.readiness && !item.claimed &&
           !item.legacyOpenRig && UUID.test(item.queueRequest))
         .map(item => ({ boardRoot: board.boardRoot, item })) : []);
+      // Spread automatic admissions across boards already represented by live
+      // green workers. Historical Working claims must not bias selection.
+      const workingIds = new Set((await this.caffy.capacity().catch(() => null))?.workingIds ?? []);
+      const boardLoad = new Map<string, number>();
+      for (const board of snapshots) {
+        const load = board.items.filter(item =>
+          (item.state === "working" && !!item.sessionId && workingIds.has(item.sessionId)) ||
+          (item.state === "reserved" && !!item.reservationId &&
+            Date.parse(item.reservationExpiresAt ?? "") > Date.now()) ||
+          (item.state === "starting" && !!item.reservationId &&
+            this.startingSince(board.boardRoot, item) + STARTING_HOLD_MS > Date.now()),
+        ).length;
+        boardLoad.set(rootKey(board.boardRoot), load);
+      }
       queued.sort((a, b) =>
         (a.item.priority === "urgent" ? 0 : 1) - (b.item.priority === "urgent" ? 0 : 1) ||
+        (boardLoad.get(rootKey(a.boardRoot)) ?? 0) - (boardLoad.get(rootKey(b.boardRoot)) ?? 0) ||
         a.item.created.localeCompare(b.item.created) ||
         a.boardRoot.localeCompare(b.boardRoot) || a.item.taskId.localeCompare(b.item.taskId));
       if (!queued.length) {
