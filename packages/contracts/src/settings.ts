@@ -123,6 +123,8 @@ export const DEFAULT_SNOOZE_PRESETS: ReadonlyArray<SnoozePresetSetting> = [
   { kind: "at", day: "today", time: "18:00" },
   { kind: "at", day: "tomorrow", time: "09:00" },
   { kind: "at", day: "monday", time: "09:00" },
+  { kind: "after", minutes: 3 * 24 * 60 },
+  { kind: "after", minutes: 7 * 24 * 60 },
 ];
 
 export const MIN_GLASS_OPACITY = 40;

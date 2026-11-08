@@ -334,6 +334,8 @@ describe("resolveSnoozePresets", () => {
       "In 3 hours 10:01",
       "This evening 18:00",
       "Tomorrow 9:00",
+      "In 3 days Wed 7:01",
+      "In 7 days Sun 7:01",
     ]);
   });
 
