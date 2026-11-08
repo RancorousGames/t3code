@@ -24,7 +24,7 @@ export async function controlSessions(
     if (!actions.has(input.op)) throw new Error("Unknown Caffy operation.");
     const fields = ["action", "op", "sessionId", "conversationId", "mode",
       "durationMinutes", "intervalMinutes", "onceOnly", "startup", "keepAwake",
-      "keepT3Busy", "maxWorking"];
+      "keepT3Busy", "maxWorking", "shutdownWhenIdle", "busyForMinutes"];
     if (Object.keys(input).some(field => !fields.includes(field)))
       throw new Error("Unexpected Caffy fields.");
     if (input.op === "set" && (!input.sessionId || !input.mode))

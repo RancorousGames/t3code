@@ -569,12 +569,14 @@ export function ChatGPTBrowserSidebarEntry({
   const [viewPolicyBusy, setViewPolicyBusy] = useState(false);
   const [workingReporterId] = useState(() => crypto.randomUUID());
   const updateViewCaffyPolicy = async (
-    input: { keepT3Busy?: boolean; shutdownWhenIdle?: boolean },
+    input: { keepT3Busy?: boolean; shutdownWhenIdle?: boolean; busyForMinutes?: number },
   ) => {
     const api = window.desktopBridge?.caffyControl;
     if (!api || viewPolicyBusy) return;
-    if (input.shutdownWhenIdle === true) {
-      const warning = "Force shutdown this PC when all ChatGPT sessions have been idle for at least 30 seconds? All running programs will be closed without saving. The setting automatically switches OFF before shutdown.";
+    if (input.shutdownWhenIdle === true || input.busyForMinutes !== undefined) {
+      const warning = input.busyForMinutes !== undefined
+        ? `Keep T3 assigning work for ${input.busyForMinutes / 60} hour(s), then stop new automatic work and force Windows to shut down once all T3 sessions are idle? Other programs will close without saving.`
+        : "Force shutdown this PC when all ChatGPT sessions have been idle for at least 30 seconds? All running programs will be closed without saving. The setting automatically switches OFF before shutdown.";
       const approved = await (
         readLocalApi()?.dialogs.confirm(warning, { variant: "destructive" }) ??
         Promise.resolve(window.confirm(warning))
@@ -585,7 +587,9 @@ export function ChatGPTBrowserSidebarEntry({
     try {
       await api({ action: "policy", ...input });
       window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
-      setMenuFeedback(input.shutdownWhenIdle === true
+      setMenuFeedback(input.busyForMinutes !== undefined
+        ? `T3 will work for ${input.busyForMinutes / 60}h, then shut down after sessions become idle.`
+        : input.shutdownWhenIdle === true
         ? "Forced PC shutdown armed. It will disarm before initiating shutdown."
         : input.shutdownWhenIdle === false
           ? "Automatic PC shutdown cancelled."
@@ -2015,7 +2019,9 @@ export function ChatGPTBrowserSidebarEntry({
           <BotIcon aria-hidden />
           <span className="flex-1">Keep T3 Busy</span>
           <span className={`ms-auto text-2xs font-semibold ${caffyOverview?.keepT3Busy ? "text-emerald-500" : "text-muted-foreground"}`}>
-            {caffyOverview ? (caffyOverview.keepT3Busy ? "ON" : "OFF") : "—"}
+            {caffyOverview?.busyUntil != null
+              ? `→ ${new Date(caffyOverview.busyUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+              : caffyOverview ? (caffyOverview.keepT3Busy ? "ON" : "OFF") : "—"}
           </span>
         </SidebarMenuButton>
       </SidebarMenuItem>
@@ -2151,6 +2157,20 @@ export function ChatGPTBrowserSidebarEntry({
                   >
                     Turn PC off when idle
                   </MenuCheckboxItem>
+                  <MenuSeparator />
+                  <MenuGroupLabel>Work, then shut down</MenuGroupLabel>
+                  {[1, 2, 4, 6].map(hours => (
+                    <MenuItem key={hours} disabled={!caffyOverview || viewPolicyBusy}
+                      onClick={() => void updateViewCaffyPolicy({ busyForMinutes: hours * 60 })}>
+                      <MenuItemLabel>{hours}h of work → off when idle</MenuItemLabel>
+                    </MenuItem>
+                  ))}
+                  {caffyOverview?.busyUntil != null && (
+                    <MenuItem disabled={viewPolicyBusy} onClick={() => void updateViewCaffyPolicy({ keepT3Busy: false, shutdownWhenIdle: false })}>
+                      <MenuItemLabel>Cancel timed work + shutdown</MenuItemLabel>
+                    </MenuItem>
+                  )}
+                  <MenuSeparator />
                   <MenuCheckboxItem
                     checked={showWorkers}
                     onCheckedChange={(checked) => setShowWorkers(checked)}

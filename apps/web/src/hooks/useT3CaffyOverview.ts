@@ -30,6 +30,7 @@ export interface T3CaffyOverview {
   maxWorking: number;
   keepT3Busy: boolean;
   shutdownWhenIdle: boolean;
+  busyUntil: number | null;
   entries: T3CaffyEntry[];
 }
 
@@ -86,6 +87,7 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
           maxWorking: data.maxWorking,
           keepT3Busy: data.keepT3Busy,
           shutdownWhenIdle: data.shutdownWhenIdle,
+          busyUntil: "busyUntil" in data && typeof data.busyUntil === "number" ? data.busyUntil : null,
           entries,
         };
         setOverview(lastVerifiedOverview);

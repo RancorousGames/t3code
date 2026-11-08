@@ -446,7 +446,7 @@ export const make = Effect.gen(function* () {
               ? caffy.status(action === "status" ? request.sessionId : undefined)
             : action === "policy"
               ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking,
-                  shutdownWhenIdle: request.shutdownWhenIdle })
+                  shutdownWhenIdle: request.shutdownWhenIdle, busyForMinutes: request.busyForMinutes })
             : action === "begin_in"
               ? await caffy.beginAt(request.sessionId ?? "", conversationId ?? "", request.beginAt ?? null)
             : action === "auto_reboot"
@@ -460,7 +460,7 @@ export const make = Effect.gen(function* () {
             : action === "startup"
               ? caffy.startup(request.sessionId ?? "", request.startup === true)
             : caffy.wake(request.sessionId ?? "");
-          if (action === "policy" && request.keepT3Busy === true) launchTaskBoardIfBusy();
+          if (action === "policy" && (request.keepT3Busy === true || request.busyForMinutes !== undefined)) launchTaskBoardIfBusy();
           return { version: 1 as const, requestId: request.requestId, ok: true as const, data };
         } catch (error) {
           return { version: 1 as const, requestId: request.requestId, ok: false as const,

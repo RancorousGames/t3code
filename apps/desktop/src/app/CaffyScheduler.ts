@@ -66,6 +66,7 @@ interface CaffyStore {
   keepT3Busy: boolean;
   maxWorking: number;
   shutdownWhenIdle?: boolean;
+  busyUntil?: number | null;
   agentStops?: AgentStoppedCaffy[];
 }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -87,6 +88,7 @@ export class CaffyScheduler {
   private keepT3Busy = false;
   private maxWorking = 6;
   private shutdownWhenIdle = false;
+  private busyUntil: number | null = null;
   private shutdownIdleSince: number | null = null;
   private shutdownChecking = false;
   private shutdownError: string | null = null;
@@ -152,6 +154,8 @@ export class CaffyScheduler {
         }
         this.keepT3Busy = saved.keepT3Busy === true;
         this.shutdownWhenIdle = saved.shutdownWhenIdle === true;
+        this.busyUntil = saved.busyUntil != null && Number.isSafeInteger(saved.busyUntil) && saved.busyUntil > 0
+          ? saved.busyUntil : null;
         if (Number.isInteger(saved.maxWorking) && saved.maxWorking >= 1 && saved.maxWorking <= 100)
           this.maxWorking = saved.maxWorking;
       }
@@ -202,6 +206,7 @@ export class CaffyScheduler {
         agentStops: [...this.agentStops.values()].slice(-128),
         keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
         shutdownWhenIdle: this.shutdownWhenIdle,
+        busyUntil: this.busyUntil,
       } satisfies CaffyStore), { encoding: "utf8", flush: true });
       NodeFS.renameSync(tmp, this.file);
     } finally {
@@ -242,6 +247,7 @@ export class CaffyScheduler {
   start() {
     if (this.started) return;
     this.started = true;
+    this.expireTimedBusy();
     this.backupConfiguration();
     let changed = false;
     for (const row of this.entries.values()) {
@@ -259,7 +265,7 @@ export class CaffyScheduler {
     }
     if (changed) this.save();
     this.syncPower();
-    this.timer = setInterval(() => { void this.pump(); void this.checkShutdown(); }, CLOCK);
+    this.timer = setInterval(() => { this.expireTimedBusy(); void this.pump(); void this.checkShutdown(); }, CLOCK);
     this.timer.unref?.();
     void this.pump();
   }
@@ -427,6 +433,7 @@ export class CaffyScheduler {
   }
 
   status(sessionId?: string) {
+    this.expireTimedBusy();
     if (sessionId) return this.lookup(sessionId) ?? null;
     return {
       entries: [...this.entries.values()],
@@ -438,6 +445,7 @@ export class CaffyScheduler {
       keepT3Busy: this.keepT3Busy,
       maxWorking: this.maxWorking,
       shutdownWhenIdle: this.shutdownWhenIdle,
+      busyUntil: this.busyUntil,
       shutdownError: this.shutdownError,
     };
   }
@@ -460,16 +468,41 @@ export class CaffyScheduler {
     return { accepted: true };
   }
 
+  private expireTimedBusy(): void {
+    if (this.busyUntil === null || Date.now() < this.busyUntil) return;
+    this.busyUntil = null;
+    this.keepT3Busy = false;
+    this.shutdownIdleSince = null;
+    this.save();
+  }
+
   policy(input: {
     keepT3Busy?: boolean | undefined;
     maxWorking?: number | undefined;
     shutdownWhenIdle?: boolean | undefined;
+    busyForMinutes?: number | undefined;
   }) {
-    if (input.keepT3Busy !== undefined) this.keepT3Busy = input.keepT3Busy;
-    if (input.shutdownWhenIdle !== undefined) {
-      this.shutdownWhenIdle = input.shutdownWhenIdle;
+    if (input.busyForMinutes !== undefined) {
+      if (![60, 120, 240, 360].includes(input.busyForMinutes))
+        throw new Error("busyForMinutes must be 60, 120, 240 or 360.");
+      this.busyUntil = Date.now() + input.busyForMinutes * 60_000;
+      this.keepT3Busy = true;
+      this.shutdownWhenIdle = true;
       this.shutdownIdleSince = null;
       this.shutdownError = null;
+    } else {
+      // A manual switch replaces the combined schedule rather than leaving a hidden shutdown armed.
+      if (this.busyUntil !== null && (input.keepT3Busy !== undefined || input.shutdownWhenIdle !== undefined)) {
+        this.busyUntil = null;
+        this.shutdownWhenIdle = false;
+        this.keepT3Busy = false;
+      }
+      if (input.keepT3Busy !== undefined) this.keepT3Busy = input.keepT3Busy;
+      if (input.shutdownWhenIdle !== undefined) {
+        this.shutdownWhenIdle = input.shutdownWhenIdle;
+        this.shutdownIdleSince = null;
+        this.shutdownError = null;
+      }
     }
     if (input.maxWorking !== undefined) {
       if (!Number.isInteger(input.maxWorking) || input.maxWorking < 1 || input.maxWorking > 100)
@@ -481,7 +514,8 @@ export class CaffyScheduler {
     this.deliveries.resumeAllowed();
     void this.pump();
     return { keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
-      shutdownWhenIdle: this.shutdownWhenIdle, shutdownError: this.shutdownError };
+      shutdownWhenIdle: this.shutdownWhenIdle, busyUntil: this.busyUntil,
+      shutdownError: this.shutdownError };
   }
 
   async set(input: {
@@ -962,6 +996,7 @@ export class CaffyScheduler {
     workingIds: string[]; unknown: number; used: number; available: number;
     admissible: boolean; reason: string | null;
   }> {
+    this.expireTimedBusy();
     const policy = this.keepT3Busy;
     const now = Date.now();
     for (const [reporter, state] of this.workingReports)
@@ -1031,20 +1066,21 @@ export class CaffyScheduler {
    * Error/orange/red sessions are not working. Persist OFF before /s /f /t 0.
    * No fallback to guessed zero when the live header or inventory is missing. */
   private async checkShutdown(): Promise<void> {
-    if (!this.started || !this.shutdownWhenIdle || this.shutdownChecking) return;
+    this.expireTimedBusy();
+    if (!this.started || !this.shutdownWhenIdle || this.busyUntil !== null || this.shutdownChecking) return;
     this.shutdownChecking = true;
     try {
       const snapshot = await this.capacity();
-      if (!this.started || !this.shutdownWhenIdle) return;
+      if (!this.started || !this.shutdownWhenIdle || this.busyUntil !== null) return;
       // A completed queued wake has a two-minute capacity cooldown; it is
       // *not* an active session and must not hold the PC awake indefinitely.
       // Only actual workers, active outbox attempts or pending starts matter.
       const sending = [...this.entries.values()].some(row => {
         if (row.paused || !row.pendingMessageId) return false;
         try {
-          return ["queued", "sending", "uncertain"].includes(
-            this.deliveries.status(row.pendingMessageId).status,
-          );
+          const status = this.deliveries.status(row.pendingMessageId).status;
+          return status === "sending" || status === "uncertain" ||
+            (status === "queued" && (row.mode !== "queued" || this.keepT3Busy));
         } catch { return true; } // UNKNOWN outbox outcome: fail closed.
       });
       if (snapshot.unknown > 0 || snapshot.working > 0 || sending ||
@@ -1193,6 +1229,7 @@ export class CaffyScheduler {
     ticket: string, sessionId?: string, allowWhenBusyDisabled = false,
   ): Promise<boolean> {
     return await this.admissionExclusive(async () => {
+      this.expireTimedBusy();
       if (!this.keepT3Busy && !allowWhenBusyDisabled) return false;
       const alreadyHeld = !!sessionId && (
         this.taskReservations.some(row => row.sessionId === sessionId &&
@@ -1218,7 +1255,7 @@ export class CaffyScheduler {
     return (await this.capacity()).admissible;
   }
 
-  get policyEnabled(): boolean { return this.keepT3Busy; }
+  get policyEnabled(): boolean { this.expireTimedBusy(); return this.keepT3Busy; }
 
   /**
    * TaskBoard yields to waiting queued Caffy recipients, including unloaded
@@ -1226,6 +1263,7 @@ export class CaffyScheduler {
    * Invalid bindings are excluded once their reconciliation error is known.
    */
   get hasPendingQueuedWakes(): boolean {
+    this.expireTimedBusy();
     const now = Date.now();
     return this.keepT3Busy && [...this.entries.values()].some(row =>
       row.mode === "queued" && row.pendingWake && !row.paused &&
@@ -1237,6 +1275,7 @@ export class CaffyScheduler {
   }
 
   private async pump() {
+    this.expireTimedBusy();
     if (!this.started) return;
     if (this.pumping) { this.pumpRequested = true; return; }
     this.pumping = true;

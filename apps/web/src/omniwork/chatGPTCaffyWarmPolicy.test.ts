@@ -11,7 +11,7 @@ const entry = (changes: Partial<T3CaffyEntry> = {}): T3CaffyEntry => ({
   pendingWake: true, ...changes,
 });
 const overview = (monitors: T3CaffyEntry[], keepT3Busy = true): T3CaffyOverview => ({
-  entries: monitors, keepT3Busy, maxWorking: 3, shutdownWhenIdle: false,
+  entries: monitors, keepT3Busy, maxWorking: 3, shutdownWhenIdle: false, busyUntil: null,
 });
 
 describe("Caffy-aware keep-warm / unload protection", () => {

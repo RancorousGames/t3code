@@ -69,9 +69,10 @@ function fixture() {
       ? { conversationGuardValidated: guardedRead, verifiedConversationId: REPLACEMENT }
       : { sessions: roster, total: roster.length },
   })) as ConstructorParameters<typeof CaffyScheduler>[2];
-  const open = () => new CaffyScheduler(directory, deliveries, request, {
-    start: () => 1, stop: () => {},
-  }, () => { throw new Error("Never call OS shutdown in tests."); });
+  const open = (shutdownPC: () => void = () => { throw new Error("Never call OS shutdown in tests."); }) =>
+    new CaffyScheduler(directory, deliveries, request, {
+      start: () => 1, stop: () => {},
+    }, shutdownPC);
   return {
     initial, open,
     setRoster: (rows: typeof roster) => { roster = rows; },
@@ -86,6 +87,65 @@ const monitor = (scheduler: CaffyScheduler) =>
   scheduler.status(SESSION) as CaffyConfig | null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
+  it("persists timed Busy, disarms on manual override, and rejects new work after expiration", async () => {
+    const f = fixture();
+    const first = f.open();
+    try {
+      const timed = first.policy({ busyForMinutes: 120 });
+      expect(timed).toMatchObject({ keepT3Busy: true, shutdownWhenIdle: true });
+      expect(timed.busyUntil).toBeGreaterThan(Date.now() + 119 * 60_000);
+      first.close();
+      const restored = f.open();
+      try {
+        expect(restored.status()).toMatchObject({ busyUntil: timed.busyUntil, keepT3Busy: true });
+        restored.policy({ keepT3Busy: false });
+        expect(restored.status()).toMatchObject({ busyUntil: null, keepT3Busy: false, shutdownWhenIdle: false });
+      } finally { restored.close(); }
+      const path = NodePath.join(f.directory, "caffy-v2.json");
+      const expired = JSON.parse(NodeFS.readFileSync(path, "utf8"));
+      expired.keepT3Busy = true;
+      expired.shutdownWhenIdle = true;
+      expired.busyUntil = Date.now() - 1_000;
+      NodeFS.writeFileSync(path, JSON.stringify(expired));
+      const resumed = f.open();
+      try {
+        expect(resumed.status()).toMatchObject({ busyUntil: null, keepT3Busy: false, shutdownWhenIdle: true });
+        expect(await resumed.acquireAutomaticAdmission("new-job")).toBe(false);
+      } finally { resumed.close(); }
+    } finally { first.close(); f.dispose(); }
+  });
+  it("holds shutdown until the timed window expires and existing work is idle", async () => {
+    const f = fixture();
+    let shutdowns = 0;
+    const c = f.open(() => { shutdowns++; });
+    const internal = c as unknown as {
+      checkShutdown: () => Promise<void>;
+      busyUntil: number | null;
+      shutdownIdleSince: number | null;
+    };
+    try {
+      monitor(c)!.pendingMessageId = null;
+      monitor(c)!.pendingWake = false;
+      c.reportWorkingSnapshot([], "sidebar");
+      c.setTaskReservations([], true);
+      c.policy({ busyForMinutes: 60 });
+      c.start();
+      await internal.checkShutdown();
+      expect(shutdowns).toBe(0);
+      expect(internal.shutdownIdleSince).toBeNull();
+      internal.busyUntil = Date.now() - 1;
+      c.reportWorkingSnapshot([SESSION], "sidebar");
+      await internal.checkShutdown();
+      expect(shutdowns).toBe(0);
+      c.reportWorkingSnapshot([], "sidebar");
+      await internal.checkShutdown();
+      expect(shutdowns).toBe(0);
+      internal.shutdownIdleSince = Date.now() - 31_000;
+      await internal.checkShutdown();
+      expect(shutdowns).toBe(1);
+      expect(c.status()).toMatchObject({ keepT3Busy: false, shutdownWhenIdle: false, busyUntil: null });
+    } finally { c.close(); f.dispose(); }
+  });
   it("reports exactly the green sidebar count while separately guarding a pending start", async () => {
     const f = fixture();
     const c = f.open();

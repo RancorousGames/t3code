@@ -1922,6 +1922,7 @@ export interface DesktopBridge {
     startup?: boolean;
     keepAwake?: boolean;
     keepT3Busy?: boolean;
+    busyForMinutes?: number;
     maxWorking?: number;
     shutdownWhenIdle?: boolean;
     workingSessionIds?: readonly string[];
