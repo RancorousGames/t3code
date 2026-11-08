@@ -147,8 +147,8 @@ function SplitPane({
   const splitMode = splitSessionIds(readSplitLayout(environmentId)).length > 1;
   const available = sessions.some((s) => s.id === node.sessionId);
   return <section className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border ${primary ? "border-primary" : "border-border"}`}
-    onPointerDownCapture={() => { if (!primary) onSelect(node.sessionId); }}>
-    <div className="flex h-8 shrink-0 items-center gap-1 bg-muted/40 px-1 text-xs">
+>
+    <div className="flex h-8 shrink-0 items-center gap-1 bg-muted/40 px-1 text-xs [-webkit-app-region:no-drag]">
       <button type="button" aria-label="Make primary ChatGPT pane"
         className={`rounded px-1 ${primary ? "font-bold text-primary" : "text-muted-foreground"}`}
         onClick={() => onSelect(node.sessionId)}>{primary ? "●" : "○"}</button>
@@ -164,9 +164,13 @@ function SplitPane({
       {splitMode && <button type="button" title="Close split" aria-label="Close pane"
         className="rounded px-1 hover:bg-muted" onClick={() => onClose(node.sessionId)}>×</button>}
     </div>
-    {available ? <ChatGPTBrowserView key={node.sessionId} environmentId={environmentId}
-      sessionId={node.sessionId} primary={primary} splitMode={splitMode} /> :
-      <div className="p-3 text-sm">Session unavailable.</div>}
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" onPointerDownCapture={() => {
+      if (!primary) onSelect(node.sessionId);
+    }}>
+      {available ? <ChatGPTBrowserView key={node.sessionId} environmentId={environmentId}
+        sessionId={node.sessionId} primary={primary} splitMode={splitMode} /> :
+        <div className="p-3 text-sm">Session unavailable.</div>}
+    </div>
   </section>;
 }
 

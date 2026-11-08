@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { randomUUID } from "./lib/utils";
 
 export type SplitNode =
@@ -47,25 +47,49 @@ function write(environmentId: string, node: SplitNode | null) {
 }
 
 export function useSplitLayout(environmentId: string | null | undefined): SplitNode | null {
-  const raw = useSyncExternalStore(
-    (notify) => {
-      const onChange = (event: Event) => {
-        if (event.type === "storage" ||
-          (event as CustomEvent<string>).detail === environmentId) notify();
-      };
-      window.addEventListener(EVENT, onChange);
-      window.addEventListener("storage", onChange);
-      return () => {
-        window.removeEventListener(EVENT, onChange);
-        window.removeEventListener("storage", onChange);
-      };
-    },
-    () => environmentId ? localStorage.getItem(key(environmentId)) : null,
-    () => null,
-  );
-  // Parse after subscription; do not return freshly parsed objects as the external snapshot.
-  if (!raw || !environmentId) return null;
-  return readSplitLayout(environmentId);
+  const [snapshot, setSnapshot] = useState<{
+    environmentId: string | null;
+    raw: string | null;
+    node: SplitNode | null;
+  }>(() => {
+    const raw = typeof window !== "undefined" && environmentId
+      ? localStorage.getItem(key(environmentId)) : null;
+    return {
+      environmentId: environmentId ?? null,
+      raw,
+      node: raw && environmentId ? readSplitLayout(environmentId) : null,
+    };
+  });
+
+  useEffect(() => {
+    const sync = () => {
+      const raw = environmentId ? localStorage.getItem(key(environmentId)) : null;
+      setSnapshot((current) =>
+        current.environmentId === (environmentId ?? null) && current.raw === raw
+          ? current
+          : {
+              environmentId: environmentId ?? null,
+              raw,
+              node: raw && environmentId ? readSplitLayout(environmentId) : null,
+            },
+      );
+    };
+    const onChange = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === environmentId) sync();
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (!environmentId || event.key === null || event.key === key(environmentId)) sync();
+    };
+    window.addEventListener(EVENT, onChange);
+    window.addEventListener("storage", onStorage);
+    sync();
+    return () => {
+      window.removeEventListener(EVENT, onChange);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [environmentId]);
+
+  return snapshot.environmentId === (environmentId ?? null) ? snapshot.node : null;
 }
 
 export function reconcileSplitLayout(
