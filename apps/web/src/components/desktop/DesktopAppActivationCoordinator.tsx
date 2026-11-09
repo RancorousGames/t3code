@@ -32,6 +32,7 @@ import {
   readChatGPTSpawnReceipts,
   startChatGPTSpawnDelivery,
   chatGPTSpawnDeliveryStatus,
+  confirmChatGPTSpawnFromVisibleTurn,
 } from "../../chatGPTSpawnReceipts";
 import {
   chatGPTBrowserLastUrlKey,
@@ -1704,7 +1705,15 @@ export function DesktopAppActivationCoordinator() {
             };
           }
           if (request.action === "read" && data && typeof data === "object" && "session" in data) {
-            const read = data as { session: { id: string } };
+            const read = data as { session: { id: string; observedGuestUrl?: string | null;
+              url?: string | null; messages?: Array<{ role: string; text: string }> } };
+            confirmChatGPTSpawnFromVisibleTurn(
+              environmentId,
+              read.session.id,
+              read.session.observedGuestUrl ?? read.session.url,
+              (read.session.messages ?? []).filter((message) => message.role === "user")
+                .map((message) => message.text),
+            );
             return {
               version: 1,
               requestId: request.requestId,

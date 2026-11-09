@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   readChatGPTSpawnReceipts, recordChatGPTSpawnCreated,
   startChatGPTSpawnDelivery, chatGPTSpawnDeliveryStatus,
+  confirmChatGPTSpawnFromVisibleTurn,
 } from "./chatGPTSpawnReceipts";
 
 describe("durable ChatGPT spawn correlation", () => {
@@ -34,11 +35,29 @@ describe("durable ChatGPT spawn correlation", () => {
     const send = vi.fn(async () => { throw new Error("Renderer disconnected after submit"); });
     await startChatGPTSpawnDelivery(env, "request-lost", "child-lost", send);
     const receipt = readChatGPTSpawnReceipts(env)[0]!;
-    expect(chatGPTSpawnDeliveryStatus(env, receipt)).toEqual({
+    expect(chatGPTSpawnDeliveryStatus(env, receipt)).toMatchObject({
       promptDelivery: "unknown", messageSent: false, sendAttempted: null,
     });
     expect(receipt.initialDelivery?.reason).toContain("Renderer disconnected");
     await startChatGPTSpawnDelivery(env, "request-lost", "child-lost", send);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers an UNKNOWN first send only from the correct guest user turn", async () => {
+    const env = EnvironmentId.make("spawn-visible-recovery");
+    const id = "7e3bedb2-c36a-4f8d-8af7-ef1939bea011";
+    recordChatGPTSpawnCreated(env, "recovered-request", id);
+    const send = vi.fn(async () => ({ delivery: "unknown" as const, sendAttempted: true }));
+    await startChatGPTSpawnDelivery(env, "recovered-request", id, send);
+    const url = "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111";
+    expect(confirmChatGPTSpawnFromVisibleTurn(env, id, url,
+      ['Bootstrap(role="worker", given_id="unrelated")'])).toBe(false);
+    expect(confirmChatGPTSpawnFromVisibleTurn(env, id, "https://chatgpt.com/",
+      [`Bootstrap(role="worker", given_id="${id}")`])).toBe(false);
+    expect(confirmChatGPTSpawnFromVisibleTurn(env, id, url,
+      [`Work on WT-0249\n\nBootstrap(role="worker", given_id="${id}")`])).toBe(true);
+    expect(chatGPTSpawnDeliveryStatus(env, readChatGPTSpawnReceipts(env)[0]!).messageSent).toBe(true);
+    await startChatGPTSpawnDelivery(env, "recovered-request", id, send);
     expect(send).toHaveBeenCalledTimes(1);
   });
 

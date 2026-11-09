@@ -110,6 +110,7 @@ export async function sendInitialChatGPTPrompt(input: {
   let lastError: unknown;
   let rejectedGuest = false;
   let lastSubmitReason: string | null = null;
+  let callbackOutcome: string | null = null;
   let sendAttempted = false;
   const acquireActivity = input.acquireActivity ?? acquireBrowserSurfaceActivity;
   let activeRuntimeId: string | null = null;
@@ -187,6 +188,13 @@ export async function sendInitialChatGPTPrompt(input: {
               }),
             });
             const submit = directSubmitOutcome(callbackResult);
+            callbackOutcome =
+              callbackResult &&
+              typeof callbackResult === "object" &&
+              "callbackOutcome" in callbackResult &&
+              typeof callbackResult.callbackOutcome === "string"
+                ? callbackResult.callbackOutcome
+                : "unreported";
             if (submit === "not_submitted") {
               lastSubmitReason =
                 callbackResult &&
@@ -209,8 +217,15 @@ export async function sendInitialChatGPTPrompt(input: {
               const expected = normalize(${JSON.stringify(prompt)});
               const conversationReady = location.pathname.startsWith('/c/') &&
                 /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(location.pathname.split('/')[2]);
-              return conversationReady && [...document.querySelectorAll('[data-message-author-role="user"]')]
-                .some(el => normalize(el.innerText || el.textContent) === expected);
+              const expectedPrefix = expected.slice(0, 120);
+              const bootstrapId = ${JSON.stringify(input.sessionId)};
+              return conversationReady && [...document.querySelectorAll(
+                '[data-message-author-role="user"],[data-content-search-unit-key$=":user"]'
+              )].some(el => {
+                const observed = normalize(el.innerText || el.textContent);
+                return observed === expected ||
+                  (observed.startsWith(expectedPrefix) && observed.includes(bootstrapId));
+              });
             })()`;
             while (now() < deadline) {
               try {
@@ -226,7 +241,7 @@ export async function sendInitialChatGPTPrompt(input: {
               await pause(150);
             }
             throw new Error(
-              "ChatGPT direct submission was invoked, but its user turn was not confirmed.",
+              `ChatGPT direct callback ${callbackOutcome ?? "unknown"}; no user turn was confirmed before deadline.`,
             );
           }
         } catch (error) {

@@ -62,6 +62,8 @@ describe("fresh ChatGPT session direct-submit delivery", () => {
     expect(submitted[0]).toContain("preserveDraft: true");
     expect(submitted[0]).not.toContain("execCommand");
     expect(submitted[0]).not.toContain("editor.focus");
+    expect(expressions.some((expression) =>
+      expression.includes('[data-content-search-unit-key$=":user"]'))).toBe(true);
   });
 
   it("reboots a registered manual session using its original public ID, not its browser slot ID", async () => {

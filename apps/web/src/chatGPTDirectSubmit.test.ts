@@ -20,7 +20,7 @@ function guest(url: string, draft: string, minified = false) {
   const fiber = {
     memoizedProps: {
       submitDisabled: false,
-      allowBackgroundSubmit: true,
+      allowBackgroundSubmit: minified ? undefined : true,
       onSubmit: minified
         ? function a(message: string) {
             called++;
@@ -72,7 +72,7 @@ describe("ChatGPT React direct submission", () => {
         expectedNewChat: true,
       }),
     );
-    expect(result).toEqual({ submitted: true });
+    expect(result).toEqual({ submitted: true, callbackOutcome: "completed" });
     expect(fake.outcome()).toEqual({
       called: 1,
       text: "First message",

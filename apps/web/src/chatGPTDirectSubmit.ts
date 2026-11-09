@@ -56,7 +56,8 @@ export function chatGPTDirectSubmitExpression(input: {
             Object.prototype.hasOwnProperty.call(props, 'submitDisabled') &&
             Object.prototype.hasOwnProperty.call(props, 'allowBackgroundSubmit') &&
             typeof props.submitDisabled === 'boolean' &&
-            typeof props.allowBackgroundSubmit === 'boolean') {
+            (props.allowBackgroundSubmit === undefined ||
+             typeof props.allowBackgroundSubmit === 'boolean')) {
           callback = candidate;
           break;
         }
@@ -66,8 +67,17 @@ export function chatGPTDirectSubmitExpression(input: {
     if (!callback) return { submitted: false, reason: 'callback_unavailable' };
     if (!validTarget()) return { submitted: false, reason: 'identity_or_expiry' };
     // No DOM mutations. An error after this call begins is an UNKNOWN send.
-    callback(${JSON.stringify(input.text)}, performance.now(), { preserveDraft: true }, true);
-    return { submitted: true };
+    const result = callback(${JSON.stringify(input.text)}, performance.now(), { preserveDraft: true }, true);
+    // Invocation is not proof of a user turn. React can report a rejected
+    // submission even though its callback exists; keep that diagnostic.
+    const outcome = value => ({ submitted: true,
+      callbackOutcome: value === false ? 'rejected' : value === true ? 'accepted' : 'completed' });
+    if (!result || typeof result.then !== 'function') return outcome(result);
+    return Promise.race([
+      Promise.resolve(result).then(outcome),
+      new Promise(resolve => setTimeout(() => resolve({ submitted: true,
+        callbackOutcome: 'pending' }), 1800)),
+    ]);
   })()`;
 }
 

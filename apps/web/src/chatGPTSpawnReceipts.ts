@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
 import { readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
+import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { logChatGPTWorkerStartup } from "./chatGPTWorkerStartupDiagnostics";
 
 const SpawnReceipt = Schema.Struct({
@@ -76,7 +77,10 @@ export function startChatGPTSpawnDelivery(
     if (!current.some((r) => r.requestId === requestId && r.sessionId === sessionId))
       throw new Error("Spawn reservation disappeared; preserve UNKNOWN delivery.");
     const updated = current.map((r) =>
-      r.requestId === requestId && r.sessionId === sessionId ? { ...r, initialDelivery } : r
+      r.requestId === requestId && r.sessionId === sessionId
+        ? { ...r, initialDelivery: r.initialDelivery?.delivery === "user_turn_observed"
+            ? r.initialDelivery : initialDelivery }
+        : r
     );
     setLocalStorageItem(STORAGE_KEY, updated, SpawnReceipts);
     const session = readChatGPTBrowserSessions(environmentId).find((s) => s.id === sessionId);
@@ -104,11 +108,41 @@ export function startChatGPTSpawnDelivery(
   return pending;
 }
 
+/** Resolve an UNKNOWN startup only from an actual user turn in the matching /c/ guest.
+ * This does not invoke or replay any ChatGPT submission. */
+export function confirmChatGPTSpawnFromVisibleTurn(
+  environmentId: EnvironmentId,
+  sessionId: string,
+  observedUrl: string | null | undefined,
+  userTexts: readonly string[],
+): boolean {
+  if (!chatGPTConversationIdFromUrl(observedUrl ?? "")) return false;
+  const current = getLocalStorageItem(STORAGE_KEY, SpawnReceipts) ?? [];
+  const receipt = current.find((r) => r.environmentId === environmentId && r.sessionId === sessionId);
+  if (!receipt) return false;
+  if (receipt.initialDelivery?.delivery === "user_turn_observed") return true;
+  // Every managed new-chat handoff contains its exact unique Bootstrap ID.
+  if (!userTexts.some((text) => text.includes("Bootstrap(role=") &&
+      text.includes(`given_id="${sessionId}"`))) return false;
+  const updated = current.map((r) => r === receipt ? {
+    ...r,
+    initialDelivery: { delivery: "user_turn_observed" as const, sendAttempted: true as const,
+      reason: "Recovered from a verified user turn in the exact ChatGPT conversation." },
+  } : r);
+  setLocalStorageItem(STORAGE_KEY, updated, SpawnReceipts);
+  const session = readChatGPTBrowserSessions(environmentId).find((s) => s.id === sessionId);
+  if (session) logChatGPTWorkerStartup(environmentId, session, "delivery_finished",
+    updated.find((r) => r.sessionId === sessionId) ?? null);
+  return true;
+}
+
 export function chatGPTSpawnDeliveryStatus(environmentId: EnvironmentId, receipt: SpawnReceipt) {
   return {
-    promptDelivery: activeInitialDeliveries.has(deliveryKey(environmentId, receipt.requestId))
-      ? "pending" as const
-      : receipt.initialDelivery?.delivery ?? "unknown" as const,
+    promptDelivery: receipt.initialDelivery?.delivery === "user_turn_observed"
+      ? "user_turn_observed" as const
+      : activeInitialDeliveries.has(deliveryKey(environmentId, receipt.requestId))
+        ? "pending" as const
+        : receipt.initialDelivery?.delivery ?? "unknown" as const,
     messageSent: receipt.initialDelivery?.delivery === "user_turn_observed",
     sendAttempted: receipt.initialDelivery?.sendAttempted ?? null,
     ...(receipt.initialDelivery?.reason ? { reason: receipt.initialDelivery.reason } : {}),
