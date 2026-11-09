@@ -437,6 +437,13 @@ export class TaskBoardWorkCoordinator {
 
   private async starting(item: QueueItem, boardRoot: string, requestId: string) {
     if (!this.running) return;
+    // The live green-session count is the admission limit, including when
+    // resuming a previously reserved task after other workers became active.
+    const capacity = await this.caffy.capacity().catch(() => null);
+    if (!capacity || capacity.unknown !== 0 || capacity.working >= capacity.limit) {
+      this.lastIdleReason = capacity?.reason ?? "Green-session count unavailable; spawn deferred.";
+      return;
+    }
     const result = await cli("node.exe", [
       NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
     ], JSON.stringify({

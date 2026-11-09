@@ -1117,7 +1117,7 @@ export function ChatGPTBrowserSidebarEntry({
       finally { busy = false; }
     };
     void send();
-    const timer = window.setInterval(() => { void send(); }, 8_000);
+    const timer = window.setInterval(() => { void send(); }, 2_000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, [workingIdsKey, workingReporterId, allSessionIdsKey, environmentId, Object.keys(activities).length]);
   // This is the T3 work-admission limit, distinct from the warm-webview ceiling.

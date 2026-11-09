@@ -1000,7 +1000,7 @@ export class CaffyScheduler {
     const policy = this.keepT3Busy;
     const now = Date.now();
     for (const [reporter, state] of this.workingReports)
-      if (now - state.observedAt > 25_000) this.workingReports.delete(reporter);
+      if (now - state.observedAt > 7_000) this.workingReports.delete(reporter);
 
     // Exactly the green rows reported by the ChatGPT list sidebar.
     // Neither TaskBoard ownership, Caffy monitors, startup reservations nor
