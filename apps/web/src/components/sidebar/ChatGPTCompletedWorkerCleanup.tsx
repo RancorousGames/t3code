@@ -15,6 +15,7 @@ import {
   type WorkerCreationEvidence,
 } from "../../chatGPTCompletedWorkerPolicy";
 import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
+import { auditBlankChatGPTWorkers } from "../../chatGPTWorkerStartupDiagnostics";
 import {
   clearSpawnAutoCloseIdleSince,
   readSpawnAutoCloseIdleSince,
@@ -84,6 +85,7 @@ export function ChatGPTCompletedWorkerCleanup({
         readChatGPTSpawnReceipts(environmentId).map((r) => [r.sessionId, r.createdAt]),
       );
       const initial = readChatGPTBrowserSessions(environmentId);
+      auditBlankChatGPTWorkers(environmentId, initial, readChatGPTSpawnReceipts(environmentId), Date.now());
       const creationEvidence = (id: string): WorkerCreationEvidence => {
         const spawnCreatedAt = receiptCreatedAt.get(id);
         const lastWorkingAt = getLocalStorageItem(

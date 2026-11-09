@@ -3,6 +3,8 @@ import type { ChatGPTInitialPromptReceipt } from "./chatGPTBrowserAutomation";
 import * as Schema from "effect/Schema";
 
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
+import { readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
+import { logChatGPTWorkerStartup } from "./chatGPTWorkerStartupDiagnostics";
 
 const SpawnReceipt = Schema.Struct({
   requestId: Schema.String,
@@ -16,7 +18,7 @@ const SpawnReceipt = Schema.Struct({
   })),
 });
 const SpawnReceipts = Schema.Array(SpawnReceipt);
-type SpawnReceipt = typeof SpawnReceipt.Type;
+export type SpawnReceipt = typeof SpawnReceipt.Type;
 const activeInitialDeliveries = new Map<string, Promise<void>>();
 const deliveryKey = (environmentId: string, requestId: string) => `${environmentId}:${requestId}`;
 const STORAGE_KEY = "t3code:chatgpt-browser:spawn-receipts:v1";
@@ -42,6 +44,8 @@ export function recordChatGPTSpawnCreated(
     index >= all.length - 256 || receipt.initialDelivery?.delivery === "unknown",
   );
   setLocalStorageItem(STORAGE_KEY, next, SpawnReceipts);
+  const session = readChatGPTBrowserSessions(environmentId).find((s) => s.id === sessionId);
+  if (session) logChatGPTWorkerStartup(environmentId, session, "created", next.at(-1) ?? null);
 }
 
 /** Persist UNKNOWN before dispatch. Losing the renderer never makes a send replay-safe. */
@@ -64,22 +68,31 @@ export function startChatGPTSpawnDelivery(
     existing.initialDelivery?.delivery === "not_sent" &&
     existing.initialDelivery.sendAttempted === false;
   if (existing.initialDelivery && !safeRetry) return Promise.resolve();
-  const save = (initialDelivery: NonNullable<SpawnReceipt["initialDelivery"]>) => {
+  const save = (
+    initialDelivery: NonNullable<SpawnReceipt["initialDelivery"]>,
+    stage: "delivery_started" | "delivery_finished",
+  ) => {
     const current = getLocalStorageItem(STORAGE_KEY, SpawnReceipts) ?? [];
     if (!current.some((r) => r.requestId === requestId && r.sessionId === sessionId))
       throw new Error("Spawn reservation disappeared; preserve UNKNOWN delivery.");
-    setLocalStorageItem(STORAGE_KEY, current.map((r) =>
+    const updated = current.map((r) =>
       r.requestId === requestId && r.sessionId === sessionId ? { ...r, initialDelivery } : r
-    ), SpawnReceipts);
+    );
+    setLocalStorageItem(STORAGE_KEY, updated, SpawnReceipts);
+    const session = readChatGPTBrowserSessions(environmentId).find((s) => s.id === sessionId);
+    if (session) logChatGPTWorkerStartup(
+      environmentId, session, stage,
+      updated.find((r) => r.requestId === requestId) ?? null,
+    );
   };
-  save({ delivery: "unknown", sendAttempted: null, reason: "Initial delivery has not been confirmed. Do not replay this spawn." });
+  save({ delivery: "unknown", sendAttempted: null, reason: "Initial delivery has not been confirmed. Do not replay this spawn." }, "delivery_started");
   const pending = Promise.resolve().then(send).then(
-    (receipt) => save(receipt),
+    (receipt) => save(receipt, "delivery_finished"),
     (error: unknown) => save({
       delivery: "unknown",
       sendAttempted: null,
       reason: error instanceof Error ? error.message : String(error),
-    }),
+    }, "delivery_finished"),
   ).catch((error: unknown) => {
     // The pre-dispatch UNKNOWN receipt remains the durable truth if saving the
     // outcome fails. Do not turn a persistence failure into another send.
