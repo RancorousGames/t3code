@@ -10,17 +10,19 @@ import {
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import {
   chatGPTGuestKey,
+  chatGPTGuestTouchedAt,
   clearChatGPTGuestUserOpened,
   evictVerifiedIdleChatGPTGuest,
-  useChatGPTGuestHibernation,
 } from "../../browser/chatGPTGuestHibernation";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
 import { nativeChatGPTPageStatus } from "../../browser/nativeChatGPTWarmSession";
 import { getLocalStorageItem } from "../../hooks/useLocalStorage";
+import { activeOmniworkUnloadPolicy } from "../../omniwork/chatGPTUnloadPolicy";
+import { useChatGPTWarmSessions } from "../../omniwork/chatGPTWarmSessionPolicy";
 import { readThreadPreviewState } from "../../previewStateStore";
 import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import { inspectChatGPTPageSnapshot, type ChatGPTPageSnapshot } from "../../chatGPTPageSnapshot";
-import { CHATGPT_ACTIVITY_EXPRESSION, CHATGPT_RECENT_ACTIVITY_MS } from "./chatGPTActivity";
+import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
 import * as Schema from "effect/Schema";
 
 const SAFE_IDLE_EXPRESSION = `(() => {
@@ -47,8 +49,28 @@ export function safeToUnload(
   return true;
 }
 
-/** The maximum is soft: only an older, verified grey/idle page may be evicted.
- * User selection, delivery, errors and unknown state never become an eviction hint. */
+/** Explicit opens expire after the idle window instead of permanently bypassing
+ * the soft cap. Snooze is a deliberate release; "Keep loaded" remains a pin. */
+export function canEvictChatGPTOverflowSession(input: {
+  readonly now: number;
+  readonly lastUsedAt: number;
+  readonly idleMs: number | null;
+  readonly snoozedUntil?: number | undefined;
+  readonly selected: boolean;
+  readonly viewed: boolean;
+  readonly keepLoaded: boolean;
+  readonly caffySoon: boolean;
+  readonly deliveryPending: boolean;
+  readonly sendUncertain: boolean;
+}): boolean {
+  if (input.idleMs === null || input.selected || input.viewed || input.keepLoaded ||
+    input.caffySoon || input.deliveryPending || input.sendUncertain) return false;
+  return (input.snoozedUntil ?? 0) > input.now ||
+    input.lastUsedAt <= input.now - input.idleMs;
+}
+
+/** The maximum is soft: evict only verified idle pages with an empty composer.
+ * User selection, explicit pins, delivery, errors and unknown state stay protected. */
 export function ChatGPTIdleOverflowUnloader({
   environmentId,
   sessions,
@@ -81,8 +103,9 @@ export function ChatGPTIdleOverflowUnloader({
               status: await nativeChatGPTPageStatus(bridge, environmentId, session.id),
             })))
           : [];
-        if (disposed || (native.length > 0 && (!bridge ||
-          nativeStatus.some(({ status }) => status.residency === "unknown")))) return;
+        if (disposed || (native.length > 0 && !bridge)) return;
+        // One unavailable/mismatched probe must not prevent eviction of other
+        // positively identified residents. Unknown pages are never closed.
         const residents = nativeStatus.filter(({ status }) => status.residency === "resident");
         const legacyKeys = new Set(
           Array.from(document.querySelectorAll<HTMLElement>(
@@ -93,24 +116,30 @@ export function ChatGPTIdleOverflowUnloader({
         let overflow = residents.length + legacyKeys.size - maxCount;
         if (overflow <= 0) return;
 
-        const now = Date.now();
+        const idleMs = activeOmniworkUnloadPolicy().idleMs;
         const eligible = (session: BrowserSession) => {
-          const lastWorking = getLocalStorageItem(
-            chatGPTBrowserLastWorkingKey(environmentId, session.id), Schema.Number,
-          ) ?? 0;
           const key = JSON.stringify([
             environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId,
           ]);
-          const userOpened = useChatGPTGuestHibernation.getState().userOpened[key] === true;
-          return session.id !== selectedId && !isChatGPTSessionBeingViewed(environmentId, session.id) &&
-            // Explicitly opened sessions are exempt from the automatic cap until snoozed/unloaded.
-            (!userOpened || (session.snoozedUntil ?? 0) > now) &&
-            !imminentCaffyIds.has(session.id) &&
-            !deliveryRequests[`${environmentId}:${session.id}`] &&
-            !hasUncertainChatGPTSend(environmentId, session.id) &&
-            (session.snoozedUntil ?? 0) <= now &&
-            (lastWorking <= 0 || lastWorking <= now - CHATGPT_RECENT_ACTIVITY_MS) &&
-            (session.lastDirectInteractionAt ?? 0) <= now - 30_000;
+          const lastUsedAt = Math.max(
+            getLocalStorageItem(
+              chatGPTBrowserLastWorkingKey(environmentId, session.id), Schema.Number,
+            ) ?? 0,
+            session.lastDirectInteractionAt ?? 0,
+            chatGPTGuestTouchedAt(key) ?? 0,
+          );
+          return canEvictChatGPTOverflowSession({
+            now: Date.now(),
+            lastUsedAt,
+            idleMs,
+            snoozedUntil: session.snoozedUntil,
+            selected: session.id === selectedId,
+            viewed: isChatGPTSessionBeingViewed(environmentId, session.id),
+            keepLoaded: useChatGPTWarmSessions.getState().keepLoadedIds.has(session.id),
+            caffySoon: imminentCaffyIds.has(session.id),
+            deliveryPending: deliveryRequests[`${environmentId}:${session.id}`] === true,
+            sendUncertain: hasUncertainChatGPTSend(environmentId, session.id),
+          });
         };
         const oldestFirst = [...sessions].filter(eligible).sort((a, b) =>
           (a.lastDirectInteractionAt ?? 0) - (b.lastDirectInteractionAt ?? 0));
