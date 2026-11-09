@@ -2274,7 +2274,8 @@ export const layerWsRpc = (
                   "ReadHistory",
                   "Submit",
                   "IdempotentSubmit",
-                  ...(hasUniqueDesktopCreator(environmentId) ? ["CreateSession"] : []),
+                  // Native thread creation is server-owned, even without a browser desktop.
+                  "CreateSession",
                 ],
                 sourceUpdatesComplete: false,
               });
@@ -2292,6 +2293,23 @@ export const layerWsRpc = (
                     "EnvironmentChanged",
                     "Create receipt belongs to a different environment.",
                   );
+                const seed = [environmentId, input.clientRequestId]
+                  .map((value) => `${value.length}:${value}`).join("");
+                const bytes = yield* crypto.digest("SHA-256", new TextEncoder().encode(seed)).pipe(Effect.orDie);
+                const hash = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+                const nativeOperationId = `provider-v1-native-create:${hash}`;
+                if (input.operationId === nativeOperationId) {
+                  const threadId = ThreadId.make(`provider-native-${hash.slice(0, 32)}`);
+                  const committed = yield* threadManagement.hasReceipt(CommandId.make(nativeOperationId));
+                  if (!committed) return error("NotFound", "Native create receipt not found.");
+                  const now = DateTime.formatIso(yield* DateTime.now);
+                  return reply({
+                    operationId: nativeOperationId, clientRequestId: input.clientRequestId,
+                    state: "Created", session: { provider: "t3", id: `thread:${encodeURIComponent(threadId)}` },
+                    conversationId: null, initialPromptDelivery: "NotSent",
+                    parentConfirmed: false, observedAt: now,
+                  });
+                }
                 const found = getCreateReceipt(
                   environmentId,
                   input.clientRequestId,
@@ -2310,10 +2328,57 @@ export const layerWsRpc = (
               if (Result.isFailure(decoded))
                 return error("InvalidInput", "Invalid create request.");
               const input = decoded.success;
-              if (input.kind !== "t3/chatgpt")
-                return error("Unsupported", "Native T3 MAIN CreateSession is not permitted.");
               if (input.expectedEnvironmentId !== environmentId)
                 return error("EnvironmentChanged", "Create environment does not match.");
+              if (input.kind === "t3/thread") {
+                if (input.initialMessage !== undefined)
+                  return error("InvalidInput", "Create native thread first; submit its first message through the native queue.");
+                if (input.parentSessionId !== undefined)
+                  return error("Unsupported", "Native thread parenting is not supported by this creator.");
+                const seed = [environmentId, input.clientRequestId]
+                  .map((value) => `${value.length}:${value}`).join("");
+                const bytes = yield* crypto.digest("SHA-256", new TextEncoder().encode(seed)).pipe(Effect.orDie);
+                const hash = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+                const commandId = CommandId.make(`provider-v1-native-create:${hash}`);
+                const threadId = ThreadId.make(`provider-native-${hash.slice(0, 32)}`);
+                const observedAt = DateTime.formatIso(yield* DateTime.now);
+                const receipt = (state: "Created" | "NotCreated" | "Unknown", reason?: string) => ({
+                  operationId: commandId, clientRequestId: input.clientRequestId,
+                  state, session: state === "Created"
+                    ? { provider: "t3", id: `thread:${encodeURIComponent(threadId)}` } : null,
+                  conversationId: null, initialPromptDelivery: "NotSent",
+                  parentConfirmed: false, observedAt, ...(reason === undefined ? {} : { reason }),
+                });
+                if (yield* threadManagement.hasReceipt(commandId)) return reply(receipt("Created"));
+                const snapshot = yield* Effect.result(
+                  threadManagement.readShellSnapshot({ location: "active" }).pipe(Effect.flatten),
+                );
+                if (Result.isFailure(snapshot))
+                  return error("Unavailable", "T3 native project catalog could not be read.");
+                const project = input.project?.replace(/\\/g, "/").toLowerCase();
+                const sources = snapshot.success.threads.filter((thread) =>
+                  project === undefined || thread.projectId.toLowerCase() === project ||
+                  thread.worktreePath?.replace(/\\/g, "/").toLowerCase() === project,
+                );
+                // Reuse the selected project model/runtime settings, not a fabricated default.
+                const source = sources.sort((a, b) => DateTime.toEpochMillis(b.updatedAt) -
+                  DateTime.toEpochMillis(a.updatedAt))[0];
+                if (!source) return reply(receipt("NotCreated",
+                  "No matching native project/thread. Open a thread in that project on desktop first."));
+                const dispatched = yield* Effect.result(threadManagement.dispatch({
+                  type: "thread.create", createdBy: "user", creationSource: "web",
+                  commandId, threadId, projectId: source.projectId, title: input.title,
+                  modelSelection: source.modelSelection, runtimeMode: source.runtimeMode,
+                  interactionMode: source.interactionMode, branch: source.branch,
+                  worktreePath: source.worktreePath,
+                }));
+                if (Result.isFailure(dispatched))
+                  return reply(receipt("Unknown",
+                    "Native thread creation outcome is uncertain; reconcile the original request ID."));
+                return reply(receipt("Created"));
+              }
+              if (input.kind !== "t3/chatgpt")
+                return error("Unsupported", "Unknown T3 session kind.");
               if (
                 !hasUniqueDesktopCreator(environmentId) &&
                 !hasBrowserCreateRequest(environmentId, input.clientRequestId)
@@ -2841,7 +2906,7 @@ export const layerWsRpc = (
                 return error("InvalidInput", "Expected a T3 session.");
               const nativeId = rawNativeThreadId(session);
               if (nativeId !== null) {
-                const shell = yield* Effect.result(threadManagement.getThreadShell(nativeId));
+                const shell = yield* Effect.result(threadManagement.getThreadShell(ThreadId.make(nativeId)));
                 return Result.isFailure(shell)
                   ? error("Unavailable", "Native session could not be located.")
                   : reply({ state: "Ready" });
