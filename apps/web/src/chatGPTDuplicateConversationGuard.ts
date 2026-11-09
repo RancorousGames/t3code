@@ -18,15 +18,20 @@ export function findDuplicateChatGPTConversationOwner(
   return findExistingChatGPTConversation(eligible, observedUrl, lastUrl);
 }
 
-/**
- * Legacy refusal text for moves without the verified merge preflight.
- * Unconfirmed sends and managed identities still prohibit retirement.
- */
-export function duplicateMergeHealthRank(status: string): number {
-  if (status === "working") return 4;
-  if (["done_or_idle", "waiting_for_input", "conversation_full", "new"].includes(status)) return 3;
-  if (["hibernated", "unloaded", "hidden", "loading", "pending_or_stalled"].includes(status)) return 2;
-  return 1;
+/** Merge the same conversation into one tab: live work first, then a loaded guest, then health. */
+export function duplicateMergeHealthRank(status: string, loaded: boolean): number {
+  const active = status === "working" ? 100 : 0;
+  const resident = loaded ? 10 : 0;
+  const healthy = [
+    "working",
+    "done_or_idle",
+    "waiting_for_input",
+    "conversation_full",
+    "new",
+  ].includes(status)
+    ? 1
+    : 0;
+  return active + resident + healthy;
 }
 
 export function refuseChatGPTConversationMove(hasUncertainSend: boolean): string {

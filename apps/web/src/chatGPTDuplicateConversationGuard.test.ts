@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   findDuplicateChatGPTConversationOwner,
+  duplicateMergeHealthRank,
   refuseChatGPTConversationMove,
 } from "./chatGPTDuplicateConversationGuard";
 
@@ -60,6 +61,18 @@ describe("T3-0114 duplicate-conversation guard", () => {
         lastUrl,
       ),
     ).toBeUndefined();
+  });
+
+  it("keeps active work before loaded guests, and loaded guests before healthier unloaded tabs", () => {
+    expect(duplicateMergeHealthRank("working", false)).toBeGreaterThan(
+      duplicateMergeHealthRank("done_or_idle", true),
+    );
+    expect(duplicateMergeHealthRank("unavailable", true)).toBeGreaterThan(
+      duplicateMergeHealthRank("done_or_idle", false),
+    );
+    expect(duplicateMergeHealthRank("done_or_idle", true)).toBeGreaterThan(
+      duplicateMergeHealthRank("stuck", true),
+    );
   });
 
   it("refuses destructive transfer when draft safety is unproven or a send is UNKNOWN", () => {
