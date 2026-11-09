@@ -109,6 +109,7 @@ export async function sendInitialChatGPTPrompt(input: {
   const threadRef = chatGPTBrowserThreadRef(input.environmentId, input.sessionId);
   let lastError: unknown;
   let rejectedGuest = false;
+  let lastSubmitReason: string | null = null;
   let sendAttempted = false;
   const acquireActivity = input.acquireActivity ?? acquireBrowserSurfaceActivity;
   let activeRuntimeId: string | null = null;
@@ -178,16 +179,24 @@ export async function sendInitialChatGPTPrompt(input: {
             // A definite no-callback result permits another readiness probe;
             // transport loss or callback exceptions remain UNKNOWN (no retry).
             sendAttempted = true;
-            const submit = directSubmitOutcome(await automation.evaluate(runtimeId, {
+            const callbackResult = await automation.evaluate(runtimeId, {
               expression: chatGPTDirectSubmitExpression({
                 text: prompt,
                 expectedNewChat: true,
                 sendExpiresAt: deadline,
               }),
-            }));
+            });
+            const submit = directSubmitOutcome(callbackResult);
             if (submit === "not_submitted") {
+              lastSubmitReason =
+                callbackResult &&
+                typeof callbackResult === "object" &&
+                "reason" in callbackResult &&
+                typeof callbackResult.reason === "string"
+                  ? callbackResult.reason
+                  : "callback_not_submitted";
               sendAttempted = false;
-              lastError = new Error("ChatGPT direct-submit callback is not available yet.");
+              lastError = new Error(`ChatGPT direct submit not ready (${lastSubmitReason}).`);
               await pause(250);
               continue;
             }
@@ -205,16 +214,20 @@ export async function sendInitialChatGPTPrompt(input: {
             })()`;
             while (now() < deadline) {
               try {
-                if ((await automation.evaluate(runtimeId, {
-                  expression: deliveredExpression,
-                })) === true)
+                if (
+                  (await automation.evaluate(runtimeId, {
+                    expression: deliveredExpression,
+                  })) === true
+                )
                   return { delivery: "user_turn_observed", sendAttempted: true };
               } catch {
                 // ChatGPT may navigate during the first user turn.
               }
               await pause(150);
             }
-            throw new Error("ChatGPT direct submission was invoked, but its user turn was not confirmed.");
+            throw new Error(
+              "ChatGPT direct submission was invoked, but its user turn was not confirmed.",
+            );
           }
         } catch (error) {
           lastError = error;

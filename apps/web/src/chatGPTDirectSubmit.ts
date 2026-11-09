@@ -14,8 +14,13 @@ export function chatGPTDirectSubmitExpression(input: {
   expectedNewChat?: boolean | undefined;
   sendExpiresAt?: number | undefined;
 }): string {
-  if (!input.text.trim() || Boolean(input.expectedConversationId) === Boolean(input.expectedNewChat))
-    throw new Error("Direct submission requires text and exactly one target: conversation or fresh chat.");
+  if (
+    !input.text.trim() ||
+    Boolean(input.expectedConversationId) === Boolean(input.expectedNewChat)
+  )
+    throw new Error(
+      "Direct submission requires text and exactly one target: conversation or fresh chat.",
+    );
 
   return `(() => {
     const expected = ${JSON.stringify(input.expectedConversationId ?? null)};
@@ -50,7 +55,8 @@ export function chatGPTDirectSubmitExpression(input: {
         if (typeof candidate === 'function' &&
             Object.prototype.hasOwnProperty.call(props, 'submitDisabled') &&
             Object.prototype.hasOwnProperty.call(props, 'allowBackgroundSubmit') &&
-            String(candidate).includes('serialization_metadata')) {
+            typeof props.submitDisabled === 'boolean' &&
+            typeof props.allowBackgroundSubmit === 'boolean') {
           callback = candidate;
           break;
         }
