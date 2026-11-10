@@ -47,6 +47,10 @@ import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
 import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
 import { randomUUID } from "../../lib/utils";
 import {
+  preserveSelectedChatGPTSessionPosition,
+  prioritizeChatGPTSessionHighlights,
+} from "../../chatGPTSidebarPriority";
+import {
   formatChatGPTSessionDateTime,
   recordChatGPTSessionActiveAt,
 } from "../../chatGPTSessionTimestamps";
@@ -1263,16 +1267,31 @@ export function ChatGPTBrowserSidebarEntry({
   const activityOrderContext = JSON.stringify([
     environmentId, sortMode, showingHidden, showingSnoozed, hideUnloaded,
     showWorkers, showAIInterfaceSessions, erroredSessionsAtBottom,
-    selectedColors, pendingQuestionIds, freshPinnedIds, sessions.map((session) => session.id),
+    selectedColors, pendingQuestionIds, freshPinnedIds,
+    sessions.map((session) => [session.id, session.borderColor ?? null]),
   ]);
-  const groupedSessions = stabilizeChatGPTActivityOrder(
+  const lastRenderedOrder = useRef<{
+    environmentId: string | null | undefined;
+    groups: typeof rawGroupedSessions;
+  } | null>(null);
+  const stableGroups = stabilizeChatGPTActivityOrder(
     rawGroupedSessions, activityOrderSnapshot, activityOrderContext, sortActivityById,
+  );
+  const priorityGroups = prioritizeChatGPTSessionHighlights(
+    stableGroups, sortActivityById, permanentProjectKeys,
+  );
+  const groupedSessions = preserveSelectedChatGPTSessionPosition(
+    priorityGroups,
+    lastRenderedOrder.current?.environmentId === environmentId
+      ? lastRenderedOrder.current.groups : null,
+    activeSessionId,
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Preserve the last committed visual order across asynchronous status probes.
   useLayoutEffect(() => {
+    lastRenderedOrder.current = { environmentId, groups: groupedSessions };
     const next = snapshotChatGPTActivityOrder(groupedSessions, activityOrderContext, sortActivityById);
     setActivityOrderSnapshot((previous) => sameChatGPTActivityOrder(previous, next) ? previous : next);
-  }, [groupedSessions, activityOrderContext, sortActivityById]);
+  }, [groupedSessions, activityOrderContext, sortActivityById, environmentId]);
   const searchResults = useMemo(
     () =>
       searchChatGPTSessionCatalog({
@@ -2489,10 +2508,9 @@ export function ChatGPTBrowserSidebarEntry({
             if (String(over.id).startsWith("group:status:")) return;
             const dragged = String(active.id),
               target = String(over.id);
-            // Activity mode flattens projects into one status queue. Resolve
-            // drag destinations using actual project assignments, never the
-            // synthetic queue key (which would silently clear a project).
-            const projectGroups = sortMode === "activity" ? recognizedGroups : groupedSessions;
+            // Both sorting modes promote working/highlighted rows into a synthetic
+            // queue. Drag destinations must use actual project assignments.
+            const projectGroups = recognizedGroups;
             const project = target.startsWith("group:")
               ? groupedSessions.find((group) => group.key === target.slice(6))
               : projectGroups.find((group) =>
