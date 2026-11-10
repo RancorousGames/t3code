@@ -1458,8 +1458,8 @@ export function ChatGPTBrowserSidebarEntry({
             onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
             intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null }
         : null;
-    // Use the actual ChatGPT stop control for manual Stop and Caffy's pause.
-    // A failed/ambiguous stop must not arm a deferred wake.
+    // Manual Stop requires the actual ChatGPT control. Deferred Caffy wakes
+    // treat Stop as best-effort so missing controls cannot block scheduling.
     const stopGeneration = async () => {
       const expression = `(() => {
         const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');

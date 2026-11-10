@@ -100,9 +100,9 @@ export function buildChatGPTSessionContextMenu(input: {
   walk(session.id);
   const availableParents = sessions.filter((entry) => !ancestors.has(entry.id));
   return [
+    item("copy:t3-id", "Copy T3 session ID"),
     item("copy", "Copy", {
       children: [
-        item("copy:t3-id", "T3 Session ID"),
         item("copy:conversation-id", "ChatGPT Conversation ID"),
         item("copy:url", "ChatGPT URL", { disabled: input.hasConversationUrl === false }),
         item("copy:title", "Session title"),

@@ -21,7 +21,9 @@ describe("ChatGPT native sidebar menu", () => {
   it("keeps parent actions together and nested, without rename or reload", () => {
     const menu = buildChatGPTSessionContextMenu(state);
     expect(menu.some((item) => /rename|reload/i.test(item.label))).toBe(false);
-    expect(menu.find((item) => item.id === "copy")?.children?.length).toBe(5);
+    expect(menu[0]?.id).toBe("copy:t3-id");
+    expect(menu[0]?.label).toBe("Copy T3 session ID");
+    expect(menu.find((item) => item.id === "copy")?.children?.length).toBe(4);
     expect(menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")?.label)
       .toBe("ChatGPT URL");
     const parent = menu.find((item) => item.id === "parent");

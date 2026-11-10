@@ -44,28 +44,33 @@ describe("Caffy pause and delayed resume", () => {
     expect(events).toEqual(["pause", "stop", "save-and-activate"]);
   });
 
-  it("does not schedule when the stop button could not be activated", async () => {
-    let scheduled = false;
-    await expect(scheduleCaffyBegin(
-      123456, true,
-      async () => { throw new Error("Stop unavailable"); },
-      async () => { scheduled = true; },
-    )).rejects.toThrow("Stop unavailable");
-    expect(scheduled).toBe(false);
-  });
-
-  it("restores the original Caffy monitor when stopping fails", async () => {
+  it("schedules even when the working guest has no active Stop control", async () => {
     const events: string[] = [];
-    await expect(scheduleCaffyBegin(
+    const interrupted = await scheduleCaffyBegin(
       123456, true,
-      async () => { events.push("stop-failed"); throw new Error("Unavailable"); },
+      async () => { events.push("no-stop"); throw new Error("No active Stop generation control was found."); },
       async () => { events.push("schedule"); },
       {
         suspendWake: async () => { events.push("suspend"); },
         resumeWake: async () => { events.push("restore"); },
       },
-    )).rejects.toThrow("Unavailable");
-    expect(events).toEqual(["suspend", "stop-failed", "restore"]);
+    );
+    expect(interrupted).toBe(false);
+    expect(events).toEqual(["suspend", "no-stop", "schedule"]);
+  });
+
+  it("restores the original Caffy monitor if scheduling fails after Stop is unavailable", async () => {
+    const events: string[] = [];
+    await expect(scheduleCaffyBegin(
+      123456, true,
+      async () => { events.push("no-stop"); throw new Error("Unavailable"); },
+      async () => { events.push("schedule-failed"); throw new Error("Persistence failed"); },
+      {
+        suspendWake: async () => { events.push("suspend"); },
+        resumeWake: async () => { events.push("restore"); },
+      },
+    )).rejects.toThrow("Persistence failed");
+    expect(events).toEqual(["suspend", "no-stop", "schedule-failed", "restore"]);
   });
 
   it("schedules idle sessions and clears delays without interrupting", async () => {

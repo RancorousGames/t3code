@@ -1,8 +1,4 @@
-/**
- * Scheduling a working guest is an intentional pause, not just a timer edit.
- * Confirm its genuine Stop generation click BEFORE persisting the Caffy
- * deadline. A failed stop cannot leave a misleading "paused until" schedule.
- */
+/** Schedule the future wake even when a stale working indicator has no Stop control. */
 export async function scheduleCaffyBegin(
   beginAt: number | null,
   working: boolean,
@@ -22,22 +18,27 @@ export async function scheduleCaffyBegin(
   }
   let suspended = false;
   let saved = false;
+  let stopped = false;
   if (options?.suspendWake) {
     await options.suspendWake();
     suspended = true;
   }
   try {
-    await stopGeneration();
-    // Saving a future deadline also unpauses the monitor durably in the
-    // desktop scheduler. No second IPC (which may fail) is needed here.
+    try {
+      await stopGeneration();
+      stopped = true;
+    } catch {
+      // Stop is best-effort; a stale working state or unloaded guest must not block scheduling.
+    }
+    // Saving the future deadline also unpauses the monitor durably.
     await saveSchedule(beginAt);
     saved = true;
   } catch (error) {
-    // If stop/scheduling failed, restore the original monitor state.
+    // A failed schedule must restore the original monitor state.
     // Once the future schedule is saved, NEVER issue an early wake.
     if (suspended && !saved && options?.resumeWake)
       await options.resumeWake().catch(() => {});
     throw error;
   }
-  return true;
+  return stopped;
 }
