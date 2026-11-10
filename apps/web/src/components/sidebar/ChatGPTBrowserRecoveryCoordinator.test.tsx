@@ -205,7 +205,8 @@ describe("serialized ChatGPT browser recovery", () => {
   it("reacts to a health transition without waiting for the watchdog", async () => {
     let activity = "idle";
     mocks.result.mockImplementation(async (id: string) => ({
-      activity, url: `https://chatgpt.com/c/${id}`,
+      activity,
+      url: `https://chatgpt.com/c/${id}`,
     }));
     await mount(["comit"]);
     await act(async () => {
@@ -214,9 +215,11 @@ describe("serialized ChatGPT browser recovery", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
     activity = "invalid: Could not load this ChatGPT conversation";
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed", {
-        detail: { environmentId: "local", sessionId: "comit" },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(500);
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
@@ -225,7 +228,8 @@ describe("serialized ChatGPT browser recovery", () => {
   it("discovers a silent failure on the fallback watchdog without polling every 20 seconds", async () => {
     let activity = "idle";
     mocks.result.mockImplementation(async (id: string) => ({
-      activity, url: `https://chatgpt.com/c/${id}`,
+      activity,
+      url: `https://chatgpt.com/c/${id}`,
     }));
     await mount(["comit"]);
     await act(async () => {
@@ -335,7 +339,9 @@ describe("serialized ChatGPT browser recovery", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(65_000);
     });
-    expect(mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit").length).toBeGreaterThan(1);
+    expect(
+      mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit").length,
+    ).toBeGreaterThan(1);
     expect(mocks.refresh).not.toHaveBeenCalledWith("runtime:other");
   });
 
@@ -639,11 +645,18 @@ describe("serialized ChatGPT browser recovery", () => {
     },
   );
 
-  it("cancels an interrupted recovery when the connection heals, requiring a fresh grace period", async () => {
+  it("cancels an interrupted recovery only when an assistant response actually advances", async () => {
     let activity = "interrupted";
     mocks.result.mockImplementation(async (id: string) => ({
       activity,
       url: `https://chatgpt.com/c/${id}`,
+      ...(activity === "working"
+        ? {
+            lastRole: "assistant",
+            assistantHasContent: true,
+            lastText: "genuinely new reply",
+          }
+        : {}),
     }));
     await mount(["comit"]);
     await act(async () => {
@@ -651,19 +664,61 @@ describe("serialized ChatGPT browser recovery", () => {
     });
     activity = "working";
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
-        { detail: { environmentId: "local", sessionId: "comit" } }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(10_000);
     });
     activity = "interrupted";
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
-        { detail: { environmentId: "local", sessionId: "comit" } }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(570_000);
+    });
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+  });
+
+  it("preserves the ten-minute grace through superficial green without an assistant reply", async () => {
+    let activity = "interrupted";
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity,
+      url: `https://chatgpt.com/c/${id}`,
+    }));
+    await mount(["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(480_000);
+    });
+    activity = "working"; // Stop reappears, but the assistant has not said anything.
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(
+      JSON.parse(localStorage.getItem("t3code:chatgpt-browser:bounded-recovery:local")!).orange
+        .comit.firstSeenAt,
+    ).toBe(new Date("2026-10-13T18:00:00Z").valueOf());
+    activity = "interrupted";
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(65_000);
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
   });
@@ -713,7 +768,9 @@ describe("serialized ChatGPT browser recovery", () => {
     // Once the formerly unresolved bridge has settled, its red session is
     // eligible again on the global cadence, without a separate 120 s delay.
     expect(mocks.refresh).not.toHaveBeenCalledWith("runtime:other");
-    expect(mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit").length).toBeGreaterThan(1);
+    expect(
+      mocks.refresh.mock.calls.filter(([id]) => id === "runtime:comit").length,
+    ).toBeGreaterThan(1);
   });
 });
 
@@ -867,8 +924,11 @@ describe("persistent orange recovery safety", () => {
     expect(mocks.refresh.mock.calls.length).toBeGreaterThan(3);
     activity = "idle";
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
-        { detail: { environmentId: "local", sessionId: "comit" } }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(31_000);
     });
     expect(
@@ -1171,15 +1231,21 @@ describe("red error panel without an editor", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
     activity = "idle";
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
-        { detail: { environmentId: "local", sessionId: "comit" } }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(100_000);
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
     activity = "invalid: the ChatGPT composer is unavailable";
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("t3:chatgpt-recovery-state-changed",
-        { detail: { environmentId: "local", sessionId: "comit" } }));
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
       await vi.advanceTimersByTimeAsync(40_000);
     });
     expect(mocks.refresh).not.toHaveBeenCalled();

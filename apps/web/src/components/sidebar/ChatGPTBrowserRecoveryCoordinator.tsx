@@ -23,6 +23,10 @@ import {
 } from "../../chatGPTBrowserSessions";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { chatGPTDirectSubmitExpression } from "../../chatGPTDirectSubmit";
+import {
+  chatGPTAssistantSignature as assistantSignature,
+  chatGPTAssistantAdvanced as assistantResponseAdvanced,
+} from "../../chatGPTRecoveryProgress";
 import { recordChatGPTRecoveryEvent } from "../../chatGPTRecoveryDiagnostics";
 import { recordChatGPTRecoveryAttemptLog } from "../../chatGPTRecoveryAttemptLog";
 import {
@@ -211,18 +215,14 @@ function recoveryMetric(
     }
     if (problem === "healthy") {
       // Require actual resumed generation or positively advanced assistant content.
-      const advanced =
-        snapshot.activity === "working" ||
-        (snapshot.lastRole === "assistant" &&
-          snapshot.assistantHasContent === true &&
-          binding?.assistantAtStart !== null &&
-          binding?.assistantAtStart !== undefined &&
-          assistantSignature(snapshot) !== binding.assistantAtStart);
+      // A Stop button without any new assistant text is not progress: ChatGPT
+      // can alternate between "working" and "interrupted" for hours on a
+      // permanently stalled turn.
+      const advanced = assistantResponseAdvanced(snapshot, binding?.assistantAtStart);
       if (
         metric?.outcome === "active" &&
         sameConversation &&
         (sameTurn || continued) &&
-        positivelyResumed(snapshot) &&
         advanced &&
         !snapshot.permanentReason
       ) {
@@ -317,23 +317,9 @@ export function nextRedRetryDelay(_sessionId: string, _attempts: number): number
   // retains its separate per-session cooldown and guarded recovery sequence.
   return readChatGPTRecoverySettings().globalSeconds * 1_000;
 }
-function assistantSignature(snapshot: RecoverySnapshot): number {
-  let hash = 2166136261;
-  for (const char of snapshot.lastRole === "assistant" ? (snapshot.lastText ?? "") : "")
-    hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-  return hash >>> 0;
-}
 function sameEpisode(snapshot: RecoverySnapshot, episode: OrangeEpisode): boolean {
   return (
     snapshot.lastUserTurnKey === episode.userTurnKey && snapshot.lastUserTurn === episode.userTurn
-  );
-}
-function positivelyResumed(snapshot: RecoverySnapshot): boolean {
-  return (
-    snapshot.activity === "working" ||
-    (snapshot.activity === "idle" &&
-      snapshot.lastRole === "assistant" &&
-      snapshot.assistantHasContent === true)
   );
 }
 function safeIdleForContinue(snapshot: RecoverySnapshot, episode: OrangeEpisode): boolean {
@@ -730,7 +716,9 @@ export function ChatGPTBrowserRecoveryCoordinator({
         const wakeupSet = new Set(currentWakeupIds());
         // Native pages do not have legacy paint surfaces. Never spend scarce
         // webview wake slots on entries handled by the native coordinator.
-        const toWake = candidates.filter((id) => wakeupSet.has(id) && !isPersistentChatGPTSessionOptedIn(id));
+        const toWake = candidates.filter(
+          (id) => wakeupSet.has(id) && !isPersistentChatGPTSessionOptedIn(id),
+        );
         const wakeNow = new Set<string>();
         for (let n = 0; n < Math.min(BACKGROUND_PROBES_PER_SCAN, toWake.length); n++) {
           wakeNow.add(toWake[(wakeupCursor + n) % toWake.length]!);
@@ -1111,6 +1099,10 @@ export function ChatGPTBrowserRecoveryCoordinator({
               continue;
             }
             recoveryMetric(envId, persistent, sessionId, conversationId, snapshot, problem);
+            const binding = persistent.metrics[sessionId];
+            const assistantAdvanced =
+              binding?.conversationId === conversationId &&
+              assistantResponseAdvanced(snapshot, binding.assistantAtStart);
             if (problem === "healthy") {
               if (red) {
                 recordChatGPTRecoveryEvent(envId, sessionId, "healthy", "red-load-failure-cleared");
@@ -1118,14 +1110,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 saveBoundedState(envId, persistent);
                 noteRecoveryVerified(envId, sessionId);
               }
-              if (
-                episode?.stage === "stop_issued" &&
-                (snapshot.activity === "working" ||
-                  (snapshot.activity === "idle" &&
-                    snapshot.assistantHasContent === true &&
-                    episode.assistantSignature !== undefined &&
-                    assistantSignature(snapshot) !== episode.assistantSignature))
-              ) {
+              if (episode?.stage === "stop_issued" && assistantAdvanced) {
                 // A reply visibly resumed/advanced after STOP; cancel Continue.
                 persistent.orange[sessionId] = {
                   ...episode,
@@ -1255,12 +1240,13 @@ export function ChatGPTBrowserRecoveryCoordinator({
               }
               if (episode) {
                 if (episode.stage === "grace") {
-                  // An idle composer with an empty assistant is NOT proof of a
-                  // reply, but the orange banner disappeared: its grace interval
-                  // is no longer sustained. Start fresh if it reappears.
-                  delete persistent.orange[sessionId];
+                  // A missing orange banner or visible Stop button is NOT
+                  // recovery until the assistant actually advances. Keep the
+                  // original grace clock through working/interrupted flicker.
+                  if (assistantAdvanced) delete persistent.orange[sessionId];
                 } else if (episode.stage === "continue_issued") {
                   if (
+                    assistantAdvanced &&
                     snapshot.lastUserTurnKey !== episode.userTurnKey &&
                     snapshot.lastUserTurnKey != null &&
                     snapshot.lastUserIsRecoveryContinue === true
@@ -1272,7 +1258,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                       stageAt: Date.now(),
                     };
                 } else if (episode.stage === "reloaded" || episode.stage === "stop_issued") {
-                  if (positivelyResumed(snapshot) && episode.stage === "reloaded")
+                  if (assistantAdvanced && episode.stage === "reloaded")
                     persistent.orange[sessionId] = {
                       ...episode,
                       stage: "recovered",
@@ -1295,7 +1281,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 }
                 saveBoundedState(envId, persistent);
               }
-              if (!episode || episode.stage === "recovered" || episode.stage === "grace")
+              if (!episode || episode.stage === "recovered" || assistantAdvanced)
                 noteRecoveryVerified(envId, sessionId);
               phase(sessionId, null);
               continue;
@@ -1568,7 +1554,11 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 second.snapshot.permanentReason ||
                 (second.snapshot.stopVisible === true && problem === "load-failure")
               ) {
-                if (second?.problem === "healthy" && positivelyResumed(second.snapshot)) {
+                if (
+                  second?.problem === "healthy" &&
+                  binding?.conversationId === conversationId &&
+                  assistantResponseAdvanced(second.snapshot, binding.assistantAtStart)
+                ) {
                   recoveryMetric(
                     envId,
                     persistent,
@@ -1749,8 +1739,10 @@ export function ChatGPTBrowserRecoveryCoordinator({
         ...[...missingComposerFirstSeen.values()].map(
           (entry) => entry.at + settings.missingComposerSeconds * 1_000,
         ),
-        ...Object.values(persistent.orange).flatMap((entry) => {
-          if (entry.stage === "grace")
+        ...Object.entries(persistent.orange).flatMap(([id, entry]) => {
+          // Keep orphaned-turn age across superficial green periods, but do not
+          // wake the scanner every 5s while that guest is visibly healthy.
+          if (entry.stage === "grace" && currentInterruptedIds().includes(id))
             return [entry.firstSeenAt + settings.orangeGraceMinutes * 60_000];
           if (entry.stage === "reloaded") return [entry.stageAt + 10_000];
           if (entry.stage === "stop_issued") return [entry.stageAt + 5_000];

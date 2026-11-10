@@ -7,6 +7,7 @@ import { chatGPTBrowserLastUrlKey, readChatGPTBrowserSessions } from "../../chat
 import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { chatGPTDirectSubmitExpression } from "../../chatGPTDirectSubmit";
+import { chatGPTAssistantSignature } from "../../chatGPTRecoveryProgress";
 import {
   hasChatGPTLoadFailure,
   cooldownElapsed,
@@ -49,6 +50,9 @@ interface NativeState {
   lastUserTurnKey: string | null;
   lastUserTurn: number | null;
   lastUserIsRecoveryContinue: boolean;
+  lastRole: "user" | "assistant" | null;
+  assistantHasContent: boolean;
+  assistantSignature: number;
   draftEmpty: boolean | null;
   stopVisible: boolean;
 }
@@ -64,7 +68,10 @@ const PROBE = `(() => ({
     const draft = editor instanceof HTMLTextAreaElement ? editor.value : editor instanceof HTMLElement ? (editor.innerText || editor.textContent || "") : null;
     const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
     return {lastUserTurnKey:page.lastUserTurnKey,lastUserTurn:page.lastUserTurn,
-      lastUserIsRecoveryContinue:page.lastUserIsRecoveryContinue,draftEmpty:draft === null ? null : !draft.trim(),
+      lastUserIsRecoveryContinue:page.lastUserIsRecoveryContinue,
+      lastRole:page.lastRole,assistantHasContent:page.assistantHasContent,
+      assistantSignature:(${chatGPTAssistantSignature.toString()})(page),
+      draftEmpty:draft === null ? null : !draft.trim(),
       stopVisible:!!stop && stop.getClientRects().length > 0 && !stop.hasAttribute("disabled")};
   })(),
 }))()`;
@@ -87,7 +94,13 @@ function nativeRedReloadGuardExpression(expectedUrl: string): string {
   })()`;
 }
 
-type NativeOrangeStage = "stop-pending" | "stop" | "type-pending" | "typed" | "send-pending" | "sent";
+type NativeOrangeStage =
+  | "stop-pending"
+  | "stop"
+  | "type-pending"
+  | "typed"
+  | "send-pending"
+  | "sent";
 interface NativeOrangeEpisode {
   conversationId: string;
   turnKey: string;
@@ -97,42 +110,125 @@ interface NativeOrangeEpisode {
 const orangeKey = (env: string, id: string) => `t3code:chatgpt-native-orange-action:${env}:${id}`;
 function nativeOrangeEpisode(env: string, id: string): NativeOrangeEpisode | null {
   try {
-    const value = JSON.parse(localStorage.getItem(orangeKey(env, id)) ?? "null") as NativeOrangeEpisode | null;
-    return value && typeof value.conversationId === "string" && typeof value.turnKey === "string" &&
-      Number.isSafeInteger(value.turn) && ["stop-pending", "stop", "type-pending", "typed", "send-pending", "sent"].includes(value.stage) ? value : null;
-  } catch { return null; }
+    const value = JSON.parse(
+      localStorage.getItem(orangeKey(env, id)) ?? "null",
+    ) as NativeOrangeEpisode | null;
+    return value &&
+      typeof value.conversationId === "string" &&
+      typeof value.turnKey === "string" &&
+      Number.isSafeInteger(value.turn) &&
+      ["stop-pending", "stop", "type-pending", "typed", "send-pending", "sent"].includes(
+        value.stage,
+      )
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
 }
 function saveNativeOrangeEpisode(env: string, id: string, episode: NativeOrangeEpisode): boolean {
-  try { localStorage.setItem(orangeKey(env, id), JSON.stringify(episode)); return true; }
-  catch { return false; }
+  try {
+    localStorage.setItem(orangeKey(env, id), JSON.stringify(episode));
+    return true;
+  } catch {
+    return false;
+  }
 }
 /** Preserve observed orange failure age through a T3 restart. The queue itself
  * intentionally resets per launch, but a verified unchanged conversation
  * should not wait another full grace period after each reboot. */
 const failureAgeKey = (env: string, id: string) =>
   `t3code:chatgpt-native-failure-age:v1:${env}:${id}`;
-function durableFailureAge(env: string, id: string, conversationId: string,
-  failure: string, firstSeenAt: number): number {
-  const key = failureAgeKey(env, id);
-  let since = firstSeenAt;
+interface NativeFailureAge {
+  conversationId: string;
+  failure: string;
+  firstSeenAt: number;
+  turnKey: string | null;
+  turn: number | null;
+  assistantAtStart: number;
+}
+const failureGroup = (failure: string) =>
+  failure === "interrupted" || failure === "delivery-timeout" ? "orange" : failure;
+function readNativeFailureAge(env: string, id: string): NativeFailureAge | null {
   try {
-    const old = JSON.parse(localStorage.getItem(key) ?? "null") as {
-      conversationId?: string; failure?: string; firstSeenAt?: number;
-    } | null;
-    if (old?.conversationId === conversationId && old.failure === failure &&
-        typeof old.firstSeenAt === "number" && old.firstSeenAt > 0 &&
-        old.firstSeenAt <= firstSeenAt) since = old.firstSeenAt;
-    localStorage.setItem(key, JSON.stringify({ conversationId, failure, firstSeenAt: since }));
-  } catch { /* Without storage, use this scan's verified first observation. */ }
+    const value = JSON.parse(
+      localStorage.getItem(failureAgeKey(env, id)) ?? "null",
+    ) as Partial<NativeFailureAge> | null;
+    return value &&
+      typeof value.conversationId === "string" &&
+      typeof value.failure === "string" &&
+      Number.isFinite(value.firstSeenAt) &&
+      typeof value.assistantAtStart === "number" &&
+      (value.turnKey === null || typeof value.turnKey === "string") &&
+      (value.turn === null || Number.isSafeInteger(value.turn))
+      ? (value as NativeFailureAge)
+      : null;
+  } catch {
+    return null;
+  }
+}
+function nativeReplyAdvanced(state: NativeState, initial: NativeFailureAge | null): boolean {
+  return (
+    !!initial &&
+    state.lastRole === "assistant" &&
+    state.assistantHasContent &&
+    state.assistantSignature !== initial.assistantAtStart
+  );
+}
+function durableFailureAge(
+  env: string,
+  id: string,
+  conversationId: string,
+  failure: string,
+  firstSeenAt: number,
+  state: NativeState,
+): number {
+  const group = failureGroup(failure);
+  const old = readNativeFailureAge(env, id);
+  const sameTurn =
+    old?.conversationId === conversationId &&
+    old.failure === group &&
+    old.turnKey === state.lastUserTurnKey &&
+    old.turn === state.lastUserTurn;
+  const since =
+    sameTurn && old.firstSeenAt > 0 && old.firstSeenAt <= firstSeenAt
+      ? old.firstSeenAt
+      : firstSeenAt;
+  try {
+    localStorage.setItem(
+      failureAgeKey(env, id),
+      JSON.stringify({
+        conversationId,
+        failure: group,
+        firstSeenAt: since,
+        turnKey: state.lastUserTurnKey,
+        turn: state.lastUserTurn,
+        assistantAtStart: sameTurn
+          ? old!.assistantAtStart
+          : state.lastRole === "assistant" && state.assistantHasContent
+            ? state.assistantSignature
+            : 0,
+      } satisfies NativeFailureAge),
+    );
+  } catch {
+    /* Without storage, use this scan's verified first observation. */
+  }
   return since;
 }
 function clearDurableFailureAge(env: string, id: string): void {
-  try { localStorage.removeItem(failureAgeKey(env, id)); }
-  catch { /* best effort */ }
+  try {
+    localStorage.removeItem(failureAgeKey(env, id));
+  } catch {
+    /* best effort */
+  }
 }
 /** Recovery checks URL, last human turn, and generation atomically with the
  * direct callback. No synthetic typing or Send click is performed. */
-function nativeOrangeExpression(url: string, episode: NativeOrangeEpisode, action: "stop" | "send"): string {
+function nativeOrangeExpression(
+  url: string,
+  episode: NativeOrangeEpisode,
+  action: "stop" | "send",
+): string {
   const submit = chatGPTDirectSubmitExpression({
     text: "Continue.",
     expectedConversationId: episode.conversationId,
@@ -180,12 +276,13 @@ function nativeMissingComposerReloadExpression(url: string): string {
   })()`;
 }
 const healthy = (state: NativeState) => state.activity === "working" || state.activity === "idle";
-const reason = (state: NativeState): "load-failure" | "interrupted" | "delivery-timeout" | "missing-composer" | null => {
+const reason = (
+  state: NativeState,
+): "load-failure" | "interrupted" | "delivery-timeout" | "missing-composer" | null => {
   if (state.explicitLoadFailure || state.loadError) return "load-failure";
   if (state.activity === "interrupted" || state.activity === "delivery-timeout")
     return state.activity;
-  if (state.activity === "invalid: the ChatGPT composer is unavailable")
-    return "missing-composer";
+  if (state.activity === "invalid: the ChatGPT composer is unavailable") return "missing-composer";
   return null;
 };
 
@@ -194,7 +291,13 @@ async function observeNative(
   environmentId: EnvironmentId,
   sessionId: string,
 ): Promise<NativeState | null> {
-  const identity = { environmentId, sessionId, profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(environmentId).find((entry) => entry.id === sessionId)) };
+  const identity = {
+    environmentId,
+    sessionId,
+    profileId: chatGPTSessionProfileId(
+      readChatGPTBrowserSessions(environmentId).find((entry) => entry.id === sessionId),
+    ),
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -214,8 +317,14 @@ async function observeNative(
             loading: false,
             loadError: host.loadError,
             explicitLoadFailure: false,
-            lastUserTurnKey: null, lastUserTurn: null, lastUserIsRecoveryContinue: false,
-            draftEmpty: null, stopVisible: false,
+            lastUserTurnKey: null,
+            lastUserTurn: null,
+            lastUserIsRecoveryContinue: false,
+            lastRole: null,
+            assistantHasContent: false,
+            assistantSignature: 0,
+            draftEmpty: null,
+            stopVisible: false,
           };
         if (host.loading)
           return {
@@ -224,8 +333,14 @@ async function observeNative(
             loading: true,
             loadError: null,
             explicitLoadFailure: false,
-            lastUserTurnKey: null, lastUserTurn: null, lastUserIsRecoveryContinue: false,
-            draftEmpty: null, stopVisible: false,
+            lastUserTurnKey: null,
+            lastUserTurn: null,
+            lastUserIsRecoveryContinue: false,
+            lastRole: null,
+            assistantHasContent: false,
+            assistantSignature: 0,
+            draftEmpty: null,
+            stopVisible: false,
           };
         const reply = (await bridge({ operation: "evaluate", identity, expression: PROBE })) as {
           result?: Partial<NativeState> | string;
@@ -241,6 +356,15 @@ async function observeNative(
           lastUserTurnKey: reply.result.lastUserTurnKey ?? null,
           lastUserTurn: reply.result.lastUserTurn ?? null,
           lastUserIsRecoveryContinue: reply.result.lastUserIsRecoveryContinue === true,
+          lastRole:
+            reply.result.lastRole === "user" || reply.result.lastRole === "assistant"
+              ? reply.result.lastRole
+              : null,
+          assistantHasContent: reply.result.assistantHasContent === true,
+          assistantSignature:
+            typeof reply.result.assistantSignature === "number"
+              ? reply.result.assistantSignature
+              : 0,
           draftEmpty: reply.result.draftEmpty ?? null,
           stopVisible: reply.result.stopVisible === true,
         };
@@ -302,9 +426,13 @@ export function ChatGPTNativeRecoveryCoordinator({
       const now = Date.now();
       if (previous?.code === code && now - previous.at < 60_000) return;
       lastDecision.set(id, { code, at: now });
-      logChatGPTRecoveryTimeline(env, "native", "deferred", `${code}: ${detail}`, { sessionId: id });
+      logChatGPTRecoveryTimeline(env, "native", "deferred", `${code}: ${detail}`, {
+        sessionId: id,
+      });
       recordChatGPTRecoveryAttemptLog(env, {
-        at: now, kind: "deferred", sessionId: id,
+        at: now,
+        kind: "deferred",
+        sessionId: id,
         attemptNumber: readRecoveryQueue(env).failures[id]?.attempts ?? 0,
         detail: `${code}: ${detail}`,
       });
@@ -360,7 +488,11 @@ export function ChatGPTNativeRecoveryCoordinator({
           if (hasUncertainChatGPTSend(env, id)) {
             suspendedIds.add(id);
             reconcileRecoveryQueue(env, context());
-            decision(id, "uncertain-send", "Recovery deferred to avoid duplicating an unconfirmed message.");
+            decision(
+              id,
+              "uncertain-send",
+              "Recovery deferred to avoid duplicating an unconfirmed message.",
+            );
             continue;
           }
           if (isChatGPTRecoveryMutationPending(env, id)) {
@@ -373,47 +505,89 @@ export function ChatGPTNativeRecoveryCoordinator({
           if (!first) {
             suspendedIds.add(id);
             reconcileRecoveryQueue(env, context());
-            if (currentInputs().redIds.includes(id) || currentInputs().interruptedIds.includes(id) || pending.failures[id])
-              decision(id, "guest-unavailable", "No inspectable native guest. Waiting for normal capped warm loading, not creating an extra page.");
+            if (
+              currentInputs().redIds.includes(id) ||
+              currentInputs().interruptedIds.includes(id) ||
+              pending.failures[id]
+            )
+              decision(
+                id,
+                "guest-unavailable",
+                "No inspectable native guest. Waiting for normal capped warm loading, not creating an extra page.",
+              );
             continue;
           }
           if (first.loading) {
             suspendedIds.add(id);
             reconcileRecoveryQueue(env, context());
-            if (currentInputs().redIds.includes(id) || currentInputs().interruptedIds.includes(id) || pending.failures[id])
-              decision(id, "guest-loading", "Chromium navigation in progress; retry after it settles.");
+            if (
+              currentInputs().redIds.includes(id) ||
+              currentInputs().interruptedIds.includes(id) ||
+              pending.failures[id]
+            )
+              decision(
+                id,
+                "guest-loading",
+                "Chromium navigation in progress; retry after it settles.",
+              );
             continue;
           }
           suspendedIds.delete(id);
           lastObservedAt = Date.now();
           const existingEpisode = nativeOrangeEpisode(env, id);
-          if (existingEpisode && chatGPTConversationIdFromUrl(first.url) === existingEpisode.conversationId) {
-            const sameTurn = first.lastUserTurnKey === existingEpisode.turnKey &&
+          if (
+            existingEpisode &&
+            chatGPTConversationIdFromUrl(first.url) === existingEpisode.conversationId
+          ) {
+            const sameTurn =
+              first.lastUserTurnKey === existingEpisode.turnKey &&
               first.lastUserTurn === existingEpisode.turn;
-            if (sameTurn && ["stop-pending", "type-pending", "send-pending"].includes(existingEpisode.stage)) {
+            if (
+              sameTurn &&
+              ["stop-pending", "type-pending", "send-pending"].includes(existingEpisode.stage)
+            ) {
               // A guest mutation with an unknown outcome must never be replayed.
-              if (existingEpisode.stage === "send-pending" && first.activity === "working")
+              if (
+                existingEpisode.stage === "send-pending" &&
+                nativeReplyAdvanced(first, readNativeFailureAge(env, id))
+              )
                 noteRecoveryVerified(env, id);
               continue;
             }
-            if (sameTurn && (existingEpisode.stage === "stop" || existingEpisode.stage === "typed") &&
-                (first.activity === "idle" || first.activity === "working")) {
+            if (
+              sameTurn &&
+              (existingEpisode.stage === "stop" || existingEpisode.stage === "typed") &&
+              (first.activity === "idle" || first.activity === "working")
+            ) {
               if (first.activity === "working") {
-                // A genuinely resumed answer needs no synthetic Continue.
-                noteRecoveryVerified(env, id);
+                // The Stop control alone is not evidence of new assistant work.
+                if (nativeReplyAdvanced(first, readNativeFailureAge(env, id)))
+                  noteRecoveryVerified(env, id);
                 continue;
               }
               if (readChatGPTRecoverySettings().paused || hasUncertainChatGPTSend(env, id))
                 continue;
               const next = "send";
-              if (!allowsChatGPTOrangeRecoveryAction(
-                readChatGPTRecoverySettings().orangeStrategy, "continue")) {
-                decision(id, "continue-disabled", "Orange recovery settings prohibit sending Continue.");
+              if (
+                !allowsChatGPTOrangeRecoveryAction(
+                  readChatGPTRecoverySettings().orangeStrategy,
+                  "continue",
+                )
+              ) {
+                decision(
+                  id,
+                  "continue-disabled",
+                  "Orange recovery settings prohibit sending Continue.",
+                );
                 continue;
               }
               const lease = tryAcquireChatGPTRecoveryMutation(env, id, "automatic", "continue");
               if (!lease) {
-                decision(id, "continue-lock", "Another guest mutation is active; follow-up deferred.");
+                decision(
+                  id,
+                  "continue-lock",
+                  "Another guest mutation is active; follow-up deferred.",
+                );
                 continue;
               }
               try {
@@ -422,57 +596,122 @@ export function ChatGPTNativeRecoveryCoordinator({
                 const updated = { ...existingEpisode, stage: "send-pending" as const };
                 if (!saveNativeOrangeEpisode(env, id, updated)) continue;
                 recordChatGPTRecoveryAttemptLog(env, {
-                  at: Date.now(), kind: "attempt", sessionId: id,
+                  at: Date.now(),
+                  kind: "attempt",
+                  sessionId: id,
                   attemptNumber: readRecoveryQueue(env).failures[id]?.attempts ?? 0,
                   detail: "native orange Continue direct submission",
                 });
-                logChatGPTRecoveryTimeline(env, "native", "attempt", `Guarded orange ${next} on exact stalled user turn.`, { sessionId: id });
-                const identity = { environmentId: env, sessionId: id,
-                  profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find(s => s.id === id)) };
-                const response = await bridge({
-                  operation: "evaluate", identity,
+                logChatGPTRecoveryTimeline(
+                  env,
+                  "native",
+                  "attempt",
+                  `Guarded orange ${next} on exact stalled user turn.`,
+                  { sessionId: id },
+                );
+                const identity = {
+                  environmentId: env,
+                  sessionId: id,
+                  profileId: chatGPTSessionProfileId(
+                    readChatGPTBrowserSessions(env).find((s) => s.id === id),
+                  ),
+                };
+                const response = (await bridge({
+                  operation: "evaluate",
+                  identity,
                   expression: nativeOrangeExpression(first.url, existingEpisode, next),
-                }) as { result?: string };
+                })) as { result?: string };
                 if (response.result === "continue-submitted")
                   saveNativeOrangeEpisode(env, id, { ...updated, stage: "sent" });
-                recordChatGPTRecoveryEvent(env, id, "native-orange-action",
-                  `${next}:${response.result ?? "unconfirmed"}`);
-                logChatGPTRecoveryTimeline(env, "native", "outcome",
-                  `Native orange ${next}: ${response.result ?? "unconfirmed"}.`, { sessionId: id });
+                recordChatGPTRecoveryEvent(
+                  env,
+                  id,
+                  "native-orange-action",
+                  `${next}:${response.result ?? "unconfirmed"}`,
+                );
+                logChatGPTRecoveryTimeline(
+                  env,
+                  "native",
+                  "outcome",
+                  `Native orange ${next}: ${response.result ?? "unconfirmed"}.`,
+                  { sessionId: id },
+                );
               } catch (error) {
-                recordChatGPTRecoveryEvent(env, id, "native-orange-action",
-                  `${next}:bridge-unconfirmed`);
-                decision(id, "continue-unconfirmed", `Native orange ${next} outcome unknown; action not duplicated.`);
+                recordChatGPTRecoveryEvent(
+                  env,
+                  id,
+                  "native-orange-action",
+                  `${next}:bridge-unconfirmed`,
+                );
+                decision(
+                  id,
+                  "continue-unconfirmed",
+                  `Native orange ${next} outcome unknown; action not duplicated.`,
+                );
                 console.warn("[T3 native recovery] Orange follow-up outcome unknown:", error);
-              } finally { lease.release(); }
+              } finally {
+                lease.release();
+              }
               continue;
             }
             if (sameTurn && existingEpisode.stage !== "sent") continue;
             if (sameTurn && existingEpisode.stage === "sent") {
-              // An idle page alone is not proof that the synthetic send landed.
-              if (first.activity === "working") noteRecoveryVerified(env, id);
+              // A stale Stop button must not count as resumed work.
+              if (nativeReplyAdvanced(first, readNativeFailureAge(env, id)))
+                noteRecoveryVerified(env, id);
               continue;
             }
-            if (["sent", "send-pending"].includes(existingEpisode.stage) && first.lastUserIsRecoveryContinue) {
-              // The new user turn is positive evidence the single Continue was delivered.
-              noteRecoveryVerified(env, id);
+            if (
+              ["sent", "send-pending"].includes(existingEpisode.stage) &&
+              first.lastUserIsRecoveryContinue
+            ) {
+              // A new Continue user turn confirms delivery, not an assistant reply.
+              if (nativeReplyAdvanced(first, readNativeFailureAge(env, id)))
+                noteRecoveryVerified(env, id);
               continue;
             }
             // Only a distinct, positively identified human turn can rearm.
             if (!first.lastUserTurnKey || first.lastUserIsRecoveryContinue) continue;
-            try { localStorage.removeItem(orangeKey(env, id)); } catch { /* best effort */ }
+            try {
+              localStorage.removeItem(orangeKey(env, id));
+            } catch {
+              /* best effort */
+            }
           }
           if (healthy(first)) {
+            const prior = readNativeFailureAge(env, id);
+            // The banner often disappears while the same user turn remains
+            // unanswered and a stale Stop button reports "working". Do not
+            // restart its ten-minute grace until an assistant really advances.
+            if (
+              prior?.failure === "orange" &&
+              prior.conversationId === chatGPTConversationIdFromUrl(first.url) &&
+              prior.turnKey !== null &&
+              prior.turnKey === first.lastUserTurnKey &&
+              prior.turn === first.lastUserTurn &&
+              !nativeReplyAdvanced(first, prior)
+            )
+              continue;
             clearDurableFailureAge(env, id);
             const wasQueued = !!readRecoveryQueue(env).failures[id];
             noteRecoveryVerified(env, id);
-            if (wasQueued) logChatGPTRecoveryTimeline(env, "native", "health",
-              `Verified healthy DOM (${first.activity}); no mutation necessary.`, { sessionId: id });
+            if (wasQueued)
+              logChatGPTRecoveryTimeline(
+                env,
+                "native",
+                "health",
+                `Verified healthy DOM (${first.activity}); no mutation necessary.`,
+                { sessionId: id },
+              );
             continue;
           }
           const failure = reason(first);
           if (!failure) {
-            decision(id, "unclassified", `Guest reports ${first.activity}; no positively verified recoverable error.`);
+            decision(
+              id,
+              "unclassified",
+              `Guest reports ${first.activity}; no positively verified recoverable error.`,
+            );
             continue;
           }
           const savedUrl = (() => {
@@ -499,22 +738,44 @@ export function ChatGPTNativeRecoveryCoordinator({
             // Report the error even if navigation never reached the expected route.
             // Never attempt automatic recovery without a matching binding.
             noteRecoveryFailure(env, id, failure, ctx);
-            decision(id, "identity-unverified", "Guest conversation does not match saved/registered binding; mutation prohibited.");
+            decision(
+              id,
+              "identity-unverified",
+              "Guest conversation does not match saved/registered binding; mutation prohibited.",
+            );
             continue;
           }
           noteRecoveryFailure(env, id, failure, ctx);
           const queue = reconcileRecoveryQueue(env, ctx);
           const entry = queue.failures[id];
           if (!entry || !queue.targets.includes(id)) {
-            decision(id, "queue-wait", "Verified failure is waiting for its turn among ranked recovery targets.");
+            decision(
+              id,
+              "queue-wait",
+              "Verified failure is waiting for its turn among ranked recovery targets.",
+            );
             continue;
           }
           const settings = readChatGPTRecoverySettings();
-          const firstSeenAt = durableFailureAge(env, id, expectedConversation, failure, entry.firstSeenAt);
-          if (failure === "missing-composer" &&
-              (first.draftEmpty === false || first.stopVisible ||
-                Date.now() - firstSeenAt < settings.missingComposerSeconds * 1_000)) {
-            decision(id, "composer-grace", "Composer absent; waiting for sustained failure and guarding drafts/generation.");
+          const firstSeenAt = durableFailureAge(
+            env,
+            id,
+            expectedConversation,
+            failure,
+            entry.firstSeenAt,
+            first,
+          );
+          if (
+            failure === "missing-composer" &&
+            (first.draftEmpty === false ||
+              first.stopVisible ||
+              Date.now() - firstSeenAt < settings.missingComposerSeconds * 1_000)
+          ) {
+            decision(
+              id,
+              "composer-grace",
+              "Composer absent; waiting for sustained failure and guarding drafts/generation.",
+            );
             continue;
           }
           const now = Date.now();
@@ -538,20 +799,28 @@ export function ChatGPTNativeRecoveryCoordinator({
               // A visible, independently rechecked delivery-timeout notice
               // is terminal enough to try recovery after one minute; ordinary
               // transient interruption retains user-configured grace.
-              until: entry.red ? 0 : firstSeenAt +
-                (failure === "delivery-timeout"
-                  ? Math.min(settings.orangeGraceMinutes, 1)
-                  : settings.orangeGraceMinutes) * 60_000,
+              until: entry.red
+                ? 0
+                : firstSeenAt +
+                  (failure === "delivery-timeout"
+                    ? Math.min(settings.orangeGraceMinutes, 1)
+                    : settings.orangeGraceMinutes) *
+                    60_000,
             },
             {
               code: "session-cooldown",
-              until: entry.red || !((history.bySession[id] ?? 0) > 0) ? 0 :
-                history.bySession[id]! + settings.perSessionSeconds * 1_000,
+              until:
+                entry.red || !((history.bySession[id] ?? 0) > 0)
+                  ? 0
+                  : history.bySession[id]! + settings.perSessionSeconds * 1_000,
             },
           ].find((block) => block.until > now);
           if (gate) {
-            decision(id, gate.code,
-              `No action yet. Next eligible after ${new Date(gate.until).toISOString()} (attempts: ${entry.attempts}; last outcome: ${entry.lastOutcome}).`);
+            decision(
+              id,
+              gate.code,
+              `No action yet. Next eligible after ${new Date(gate.until).toISOString()} (attempts: ${entry.attempts}; last outcome: ${entry.lastOutcome}).`,
+            );
             continue;
           }
 
@@ -560,21 +829,37 @@ export function ChatGPTNativeRecoveryCoordinator({
           const second = await observeNative(bridge, env, id);
           if (!second || second.loading || second.url !== first.url || reason(second) !== failure) {
             if (second && healthy(second)) noteRecoveryVerified(env, id);
-            decision(id, "verification-changed", "Independent second inspection did not confirm the same recoverable failure.");
+            decision(
+              id,
+              "verification-changed",
+              "Independent second inspection did not confirm the same recoverable failure.",
+            );
             continue;
           }
-          const specialStop = failure !== "load-failure" && failure !== "missing-composer" &&
-            second.stopVisible && second.draftEmpty === true &&
-            !!second.lastUserTurnKey && second.lastUserTurn !== null &&
+          const specialStop =
+            failure !== "load-failure" &&
+            failure !== "missing-composer" &&
+            second.stopVisible &&
+            second.draftEmpty === true &&
+            !!second.lastUserTurnKey &&
+            second.lastUserTurn !== null &&
             !second.lastUserIsRecoveryContinue &&
             allowsChatGPTOrangeRecoveryAction(settings.orangeStrategy, "stop") &&
             allowsChatGPTOrangeRecoveryAction(settings.orangeStrategy, "continue");
           // An interrupted page retaining Stop cannot pass the safe reload
           // guard. Use the exact-turn Stop/Continue sequence instead.
           const lease = tryAcquireChatGPTRecoveryMutation(
-            env, id, "automatic", specialStop ? "stop" : "reload");
+            env,
+            id,
+            "automatic",
+            specialStop ? "stop" : "reload",
+          );
           if (!lease) {
-            decision(id, "mutation-lock", "Recovery lease already held; retry when it is released.");
+            decision(
+              id,
+              "mutation-lock",
+              "Recovery lease already held; retry when it is released.",
+            );
             continue;
           }
           let pendingAction: Promise<unknown> | null = null;
@@ -603,48 +888,74 @@ export function ChatGPTNativeRecoveryCoordinator({
             recordChatGPTRecoveryEvent(env, id, "native-recovery-attempt", failure);
             if (specialStop) {
               const episode: NativeOrangeEpisode = {
-                conversationId: expectedConversation, turnKey: second.lastUserTurnKey!,
-                turn: second.lastUserTurn!, stage: "stop-pending",
+                conversationId: expectedConversation,
+                turnKey: second.lastUserTurnKey!,
+                turn: second.lastUserTurn!,
+                stage: "stop-pending",
               };
               if (!saveNativeOrangeEpisode(env, id, episode)) {
                 finishRecoveryAttempt(env, id, "Cannot persist at-most-once Stop marker");
                 continue;
               }
-              const identity = { environmentId: env, sessionId: id,
-                profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find(s => s.id === id)) };
+              const identity = {
+                environmentId: env,
+                sessionId: id,
+                profileId: chatGPTSessionProfileId(
+                  readChatGPTBrowserSessions(env).find((s) => s.id === id),
+                ),
+              };
               pendingAction = bridge({
-                operation: "evaluate", identity,
+                operation: "evaluate",
+                identity,
                 expression: nativeOrangeExpression(second.url, episode, "stop"),
               });
             } else if (failure === "missing-composer") {
-              const identity = { environmentId: env, sessionId: id,
-                profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find(s => s.id === id)) };
+              const identity = {
+                environmentId: env,
+                sessionId: id,
+                profileId: chatGPTSessionProfileId(
+                  readChatGPTBrowserSessions(env).find((s) => s.id === id),
+                ),
+              };
               pendingAction = bridge({
-                operation: "evaluate", identity,
+                operation: "evaluate",
+                identity,
                 expression: nativeMissingComposerReloadExpression(second.url),
               });
             } else if (failure === "load-failure") {
-              const identity = { environmentId: env, sessionId: id, profileId: chatGPTSessionProfileId(readChatGPTBrowserSessions(env).find((entry) => entry.id === id)) };
+              const identity = {
+                environmentId: env,
+                sessionId: id,
+                profileId: chatGPTSessionProfileId(
+                  readChatGPTBrowserSessions(env).find((entry) => entry.id === id),
+                ),
+              };
               // Red recovery must actually reload the Chromium page, not
               // depend on ChatGPT's Retry/Try again button text. A main-frame
               // network error cannot execute guest JS; two matching host
               // snapshots are the prerequisite in that case.
               pendingAction = (async () => {
-                const origin = second.explicitLoadFailure ? "provider-error-panel" : "main-frame-network-error";
+                const origin = second.explicitLoadFailure
+                  ? "provider-error-panel"
+                  : "main-frame-network-error";
                 if (second.explicitLoadFailure) {
-                  const checked = await bridge({
+                  const checked = (await bridge({
                     operation: "evaluate",
                     identity,
                     expression: nativeRedReloadGuardExpression(second.url),
-                  }) as { result?: string; url?: string };
+                  })) as { result?: string; url?: string };
                   if (typeof checked.url === "string" && checked.url !== second.url)
                     return { result: "red-guard-route-changed" };
                   if (checked.result !== "reload-safe")
                     return { result: `red-guard-${checked.result ?? "unconfirmed"}` };
                 }
-                logChatGPTRecoveryTimeline(env, "native", "retry",
+                logChatGPTRecoveryTimeline(
+                  env,
+                  "native",
+                  "retry",
                   `Red native Chromium reload requested (${origin}); verified conversation binding and unchanged failure.`,
-                  { sessionId: id, attempt });
+                  { sessionId: id, attempt },
+                );
                 // The host returns after invoking webContents.reload(), not
                 // after the new page is healthy. Only a later probe proves that.
                 await bridge({ operation: "reload", identity });
@@ -678,36 +989,58 @@ export function ChatGPTNativeRecoveryCoordinator({
             ]);
             if (deadline) clearTimeout(deadline);
             if (settled.timedOut) {
-              decision(id, "action-unconfirmed", failure === "load-failure"
-                ? "Red native Chromium reload not acknowledged within 8 seconds; awaiting original host operation."
-                : "Native operation timed out; never blindly duplicate an unknown action.");
+              decision(
+                id,
+                "action-unconfirmed",
+                failure === "load-failure"
+                  ? "Red native Chromium reload not acknowledged within 8 seconds; awaiting original host operation."
+                  : "Native operation timed out; never blindly duplicate an unknown action.",
+              );
               yielded = true;
               lease.yieldToSession(id);
-              finishRecoveryAttempt(env, id, failure === "load-failure"
-                ? "Red native Chromium reload request pending; host acknowledgement unknown"
-                : "Native action still pending; outcome unknown");
+              finishRecoveryAttempt(
+                env,
+                id,
+                failure === "load-failure"
+                  ? "Red native Chromium reload request pending; host acknowledgement unknown"
+                  : "Native action still pending; outcome unknown",
+              );
             } else if ("error" in settled) {
-              const why = String(settled.error instanceof Error ? settled.error.message : settled.error)
-                .split("\n")[0]?.slice(0, 165) ?? "unknown error";
+              const why =
+                String(settled.error instanceof Error ? settled.error.message : settled.error)
+                  .split("\n")[0]
+                  ?.slice(0, 165) ?? "unknown error";
               decision(id, "action-rejected", `Native recovery rejected: ${why}`);
-              finishRecoveryAttempt(env, id, failure === "load-failure"
-                ? `Red native Chromium reload request rejected (${why}); no verified recovery`
-                : `Native action rejected (${why}); no verified recovery`);
+              finishRecoveryAttempt(
+                env,
+                id,
+                failure === "load-failure"
+                  ? `Red native Chromium reload request rejected (${why}); no verified recovery`
+                  : `Native action rejected (${why}); no verified recovery`,
+              );
             } else {
               const result = settled.value as { result?: string; origin?: string } | null;
-              if (specialStop && result?.result === "stop-clicked" &&
-                  second.lastUserTurnKey && second.lastUserTurn !== null)
+              if (
+                specialStop &&
+                result?.result === "stop-clicked" &&
+                second.lastUserTurnKey &&
+                second.lastUserTurn !== null
+              )
                 saveNativeOrangeEpisode(env, id, {
-                  conversationId: expectedConversation, turnKey: second.lastUserTurnKey,
-                  turn: second.lastUserTurn, stage: "stop",
+                  conversationId: expectedConversation,
+                  turnKey: second.lastUserTurnKey,
+                  turn: second.lastUserTurn,
+                  stage: "stop",
                 });
-              const confirmed =
-                specialStop ? result?.result === "stop-clicked"
-                : failure === "missing-composer" ? result?.result === "reload-issued"
-                : failure === "load-failure" ? result?.result === "red-native-reload-issued"
-                  : !!result &&
-                    typeof result === "object" &&
-                    ("nativeReloadIssued" in result || "requestedNavigation" in result);
+              const confirmed = specialStop
+                ? result?.result === "stop-clicked"
+                : failure === "missing-composer"
+                  ? result?.result === "reload-issued"
+                  : failure === "load-failure"
+                    ? result?.result === "red-native-reload-issued"
+                    : !!result &&
+                      typeof result === "object" &&
+                      ("nativeReloadIssued" in result || "requestedNavigation" in result);
               finishRecoveryAttempt(
                 env,
                 id,
