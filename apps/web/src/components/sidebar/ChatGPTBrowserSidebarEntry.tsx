@@ -667,7 +667,7 @@ export function ChatGPTBrowserSidebarEntry({
       ? getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String) ??
         session?.archive?.conversationUrl ?? null
       : null;
-    const conversationId = chatGPTConversationIdFromUrl(url);
+    const conversationId = chatGPTConversationIdFromUrl(url) ?? session?.bootstrapIdentity?.conversationId;
     await control({
       action: "set", sessionId, mode,
       ...(conversationId ? { conversationId } : {}),
@@ -1646,11 +1646,14 @@ export function ChatGPTBrowserSidebarEntry({
         } else if (action.startsWith("caffy:begin:")) {
           const preset = action.slice("caffy:begin:".length);
           const beginAt = resolveCaffyBeginAt(preset);
+          const conversationId = chatGPTConversationIdFromUrl(savedUrl) ?? session.bootstrapIdentity?.conversationId;
           const wasWorking = await scheduleCaffyBegin(
             beginAt,
             activities[sessionId]?.age === "working",
             stopGeneration,
-            (at) => control({ action: "begin_in", sessionId, beginAt: at }),
+            (at) => control({ action: "begin_in", sessionId, beginAt: at,
+              ...(conversationId ? { conversationId } : {}),
+            }),
             activeCaffy ? {
               // Prevent the Stop-induced idle event from immediately waking
               // a live idle/queued monitor before we save the future deadline.
