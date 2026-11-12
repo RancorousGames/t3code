@@ -1050,7 +1050,7 @@ export class TaskBoardWorkCoordinator {
         if (this.caffy.hasPendingQueuedWakes) return;
         // The TaskBoard and Caffy queues share one atomic admission gate.
         const requestId = NodeCrypto.randomUUID();
-        if (!(await this.caffy.acquireAutomaticAdmission(requestId))) return;
+        if (!(await this.caffy.acquireAutomaticAdmission(requestId, undefined, false, `task:${next.item.taskId}`))) return;
         try {
           await this.taskCommand(next.boardRoot, [
             "task", "queue", "reserve", next.item.taskId,
@@ -1113,7 +1113,7 @@ export class TaskBoardWorkCoordinator {
           return;
         }
         const requestId = NodeCrypto.randomUUID();
-        if (!(await this.caffy.acquireAutomaticAdmission(requestId))) {
+        if (!(await this.caffy.acquireAutomaticAdmission(requestId, undefined, false, `task:${candidate.item.taskId}`))) {
           const capacity = await this.caffy.capacity().catch(() => null);
           this.lastIdleReason = this.caffy.hasPriorityCapacityMessage()
             ? "A user Queue on capacity message takes priority over TaskBoard."

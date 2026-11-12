@@ -1492,7 +1492,7 @@ export class CaffyScheduler {
       this.automaticAdmissionJournal.record({
         ticket, ...(target ? { target } : {}), alreadyHeld,
         decision: reason ? "deferred" : "admitted",
-        reason: reason ?? "Capacity available",
+        reason: reason ?? (alreadyHeld ? "Existing pending slot" : "Capacity available"),
         capacity: available,
       });
       if (reason) return false;
