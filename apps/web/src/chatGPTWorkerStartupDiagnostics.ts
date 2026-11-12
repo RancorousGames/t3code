@@ -10,7 +10,7 @@ export const CHATGPT_WORKER_STARTUP_LOG_KEY = "t3code:chatgpt-worker-startup-log
 const STARTUP_TIMEOUT_MS = 10 * 60_000;
 const MAX_EVENTS = 2048;
 
-type Stage = "created" | "delivery_started" | "delivery_finished" | "blank_worker" | "missing_bootstrap";
+type Stage = "created" | "delivery_started" | "delivery_finished" | "blank_worker" | "missing_bootstrap" | "registered";
 
 type StartupEvent = {
   at: string;
@@ -34,7 +34,7 @@ function persist(event: StartupEvent): void {
     const parsed: unknown = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return;
     if (
-      (event.stage === "blank_worker" || event.stage === "missing_bootstrap") &&
+      (event.stage === "blank_worker" || event.stage === "missing_bootstrap" || event.stage === "registered") &&
       parsed.some((old) =>
         old && typeof old === "object" &&
         (old as StartupEvent).sessionId === event.sessionId &&
@@ -99,9 +99,12 @@ export function auditBlankChatGPTWorkers(
   for (const session of sessions) {
     if (session.binding?.role !== "worker" || !session.spawnRequestId || session.hidden) continue;
     const receipt = bySession.get(session.id) ?? null;
+    if (session.bootstrapIdentity?.state === "registered") {
+      logChatGPTWorkerStartup(environmentId, session, "registered", receipt);
+      continue;
+    }
     const createdAt = session.createdAt ?? receipt?.createdAt;
     if (!createdAt || now - createdAt < STARTUP_TIMEOUT_MS || createdAt > now) continue;
-    if (session.bootstrapIdentity?.state === "registered") continue;
     let conversationId: string | null = null;
     try {
       conversationId = chatGPTConversationIdFromUrl(getLocalStorageItem(
