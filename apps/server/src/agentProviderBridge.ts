@@ -1,4 +1,9 @@
-import type { AgentProviderV1Session } from "@t3tools/contracts";
+import type { AgentProviderV1Capability, AgentProviderV1Session } from "@t3tools/contracts";
+
+/** Browser catalogs may claim only capabilities implemented by the desktop bridge. */
+export function permittedDesktopBrowserCapability(capability: AgentProviderV1Capability): boolean {
+  return capability === "ReadHistory" || capability === "Submit" || capability === "RemoteControl";
+}
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 

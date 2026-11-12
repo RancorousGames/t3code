@@ -5,8 +5,20 @@ import {
   dispatchBrowserWork,
   finishDesktopWork,
   publishDesktopCatalog,
+  permittedDesktopBrowserCapability,
   takeDesktopWork,
 } from "./agentProviderBridge.ts";
+
+describe("authenticated desktop catalog capability guard", () => {
+  it("accepts the browser publisher's RemoteControl claim without permitting native powers", () => {
+    expect(["ReadHistory", "Submit", "RemoteControl"].every((capability) =>
+      permittedDesktopBrowserCapability(capability as Parameters<typeof permittedDesktopBrowserCapability>[0]),
+    )).toBe(true);
+    expect(permittedDesktopBrowserCapability("CreateSession")).toBe(false);
+    expect(permittedDesktopBrowserCapability("Desktop.NativeInput")).toBe(false);
+    expect(permittedDesktopBrowserCapability("NativeQueue")).toBe(false);
+  });
+});
 
 describe("explicit phone browser load", () => {
   it("wakes the exact unloaded session without requiring ReadHistory or submitting text", async () => {

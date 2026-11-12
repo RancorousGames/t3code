@@ -19,6 +19,7 @@ import * as Context from "effect/Context";
 import {
   agentProviderEpoch,
   publishDesktopCatalog,
+  permittedDesktopBrowserCapability,
   readDesktopCatalog,
   disconnectDesktopCatalog,
   dispatchBrowserWork,
@@ -2436,8 +2437,14 @@ export const layerWsRpc = (
                     session.ref.id.startsWith("thread:") ||
                     session.source.rawThreadId !== undefined ||
                     session.ref.provider !== "t3" ||
+                    // RemoteControl is a valid browser-session capability in the
+                    // shared AgentProviderV1 contract. The desktop publishes it
+                    // for every ChatGPT session; rejecting it silently discards
+                    // the entire catalog and makes sessions.create report
+                    // "No unique active desktop ChatGPT creator" even while
+                    // the desktop is connected.
                     session.capabilities.some(
-                      (capability) => capability !== "ReadHistory" && capability !== "Submit",
+                      (capability) => !permittedDesktopBrowserCapability(capability),
                     ) ||
                     session.deliveryModes.some(
                       (mode) => mode !== "WhenIdle" && mode !== "WaitForSlot" && mode !== "Steer",
