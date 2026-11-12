@@ -13,6 +13,9 @@ export interface T3CaffyEntry {
   intervalMinutes: number;
   beginAt?: number | null;
   autoRebootMinutes?: number | null;
+  autoRebootEveryRuns?: number | null;
+  repeatPrompt?: string | null;
+  createdAt: number;
   rebootOperationId?: string | null;
   nextDueAt?: number | null;
   pendingWake?: boolean;
@@ -95,7 +98,7 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
             ? data.scheduledSpawns.filter((job): job is ScheduledChatGPTJob =>
               !!job && typeof job === "object" &&
               typeof job.id === "string" && typeof job.title === "string" &&
-              typeof job.beginAt === "number" &&
+              (job.beginAt === null || (typeof job.beginAt === "number" && Number.isSafeInteger(job.beginAt))) &&
               ["scheduled", "dispatching", "created", "uncertain"].includes(job.status))
             : [],
         };

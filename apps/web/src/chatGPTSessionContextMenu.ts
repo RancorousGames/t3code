@@ -65,29 +65,10 @@ export function buildChatGPTSessionContextMenu(input: {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
   const activeCaffy = input.caffy;
-  const durationMinutes = activeCaffy?.expiresAt !== null && activeCaffy?.expiresAt !== undefined
-    ? Math.round((activeCaffy.expiresAt - (activeCaffy.beginAt ?? activeCaffy.createdAt)) / 60_000) : null;
-  const wakeMode = activeCaffy?.mode === "idle" ? "Idle" :
-    activeCaffy?.mode === "periodic" ? "Periodic" :
-    activeCaffy?.mode === "queued" ? "Queued idle" :
+  const wakeMode = activeCaffy?.mode === "idle" || activeCaffy?.mode === "queued" ? "Auto-continue" :
+    activeCaffy?.mode === "periodic" ? "Periodic auto-continue" :
     activeCaffy?.mode === "startup" ? "Startup only" : null;
-  const caffyDurations = (mode: "idle" | "periodic", prefix: string, intervalMinutes = 20) => {
-    const current = activeCaffy?.mode === mode &&
-      (mode === "idle" || activeCaffy.intervalMinutes === intervalMinutes);
-    return [
-      ...CAFFY_DURATION_HOURS.map((hours) => item(`${prefix}:${hours}`, `${hours}h`, {
-        checked: current && !activeCaffy?.onceOnly && durationMinutes === hours * 60,
-      })),
-      item(`${prefix}:infinite`, "Infinite", {
-        checked: current && !activeCaffy?.onceOnly && durationMinutes === null,
-      }),
-      item(`${prefix}:custom`, "Custom…"),
-      item(`${prefix}:once`, "Once only", {
-        separatorBefore: true,
-        checked: current && activeCaffy?.onceOnly,
-      }),
-    ];
-  };
+
   const snoozed = (session.snoozedUntil ?? 0) > now;
   const ancestors = new Set([session.id]);
   const walk = (id: string) => {
@@ -170,69 +151,16 @@ export function buildChatGPTSessionContextMenu(input: {
             ],
           }),
         ]),
+    item("schedule:prompt", "Schedule prompt…", { separatorBefore: true }),
     item("caffy", wakeMode
       ? `Caffy · ${wakeMode}${activeCaffy?.beginAt && activeCaffy.beginAt > now ? " (scheduled)" : ""}${activeCaffy?.paused ? " (paused)" : ""}`
       : "Caffy", {
       children: [
-        item("caffy:idle", "Wake on Idle", {
-          checked: activeCaffy?.mode === "idle",
-          children: caffyDurations("idle", "caffy:idle"),
+        item("caffy:auto", "Auto-continue…", {
+          checked: activeCaffy?.mode === "queued" || activeCaffy?.mode === "periodic",
         }),
-        item("caffy:queued", "Wake on Idle (Queued) · Infinite", {
-          checked: activeCaffy?.mode === "queued",
-        }),
-        item("caffy:periodic", "Periodic Wake", {
-          checked: activeCaffy?.mode === "periodic",
-          children: [
-            ...CAFFY_INTERVAL_MINUTES.map((minutes) => item(
-              `caffy:periodic:${minutes}`, `Every ${minutes}m`, {
-                checked: activeCaffy?.mode === "periodic" && activeCaffy.intervalMinutes === minutes,
-                children: caffyDurations("periodic", `caffy:periodic:${minutes}`, minutes),
-              },
-            )),
-            item("caffy:periodic:custom", "Custom interval…", {
-              separatorBefore: true,
-              checked: activeCaffy?.mode === "periodic" &&
-                !CAFFY_INTERVAL_MINUTES.some((minutes) => minutes === activeCaffy.intervalMinutes),
-            }),
-          ],
-        }),
-        item("caffy:begin", activeCaffy?.beginAt && activeCaffy.beginAt > now
-          ? `Resume scheduled · ${new Date(activeCaffy.beginAt).toLocaleString()}`
-          : working ? "Pause work and resume in" : "Begin working in", {
-          separatorBefore: true,
-          children: [
-            item("caffy:begin:30", working ? "Resume in 30 minutes" : "30 minutes"),
-            item("caffy:begin:60", working ? "Resume in 1 hour" : "1 hour"),
-            item("caffy:begin:120", working ? "Resume in 2 hours" : "2 hours"),
-            item("caffy:begin:240", working ? "Resume in 4 hours" : "4 hours"),
-            item("caffy:begin:custom", "Choose time and prompt…"),
-            item("caffy:begin:tomorrow-morning", "Tomorrow at 09:00", { separatorBefore: true }),
-            item("caffy:begin:tomorrow-afternoon", "Tomorrow at 13:00"),
-            item("caffy:begin:tomorrow-evening", "Tomorrow at 18:00"),
-            item("caffy:begin:clear", "Cancel delayed start", {
-              separatorBefore: true, disabled: !activeCaffy?.beginAt,
-            }),
-          ],
-        }),
-        item("caffy:auto-reboot", activeCaffy?.autoRebootMinutes
-          ? `Auto-reboot · Every ${activeCaffy.autoRebootMinutes}m` : "Auto-reboot", {
-          disabled: !activeCaffy || activeCaffy.onceOnly || !["idle", "queued"].includes(activeCaffy.mode),
-          children: [
-            item("caffy:auto-reboot:30", "Every 30 minutes", {
-              checked: activeCaffy?.autoRebootMinutes === 30,
-            }),
-            item("caffy:auto-reboot:60", "Every 1 hour", {
-              checked: activeCaffy?.autoRebootMinutes === 60,
-            }),
-            item("caffy:auto-reboot:120", "Every 2 hours", {
-              checked: activeCaffy?.autoRebootMinutes === 120,
-            }),
-            item("caffy:auto-reboot:off", "Off", {
-              separatorBefore: true, checked: !activeCaffy?.autoRebootMinutes,
-            }),
-          ],
-        }),
+
+
         item("caffy:pause", activeCaffy?.paused ? "Resume Caffy" : "Pause Caffy", { disabled: !activeCaffy, separatorBefore: true }),
         item("caffy:startup", "Resume on Startup", {
           checked: input.caffy?.startup ?? false,

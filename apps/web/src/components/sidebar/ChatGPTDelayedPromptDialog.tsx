@@ -6,7 +6,8 @@ import { Input } from "../ui/input";
 
 export type DelayedPromptTarget =
   | { kind: "existing"; sessionId: string; sessionTitle: string; beginAt: number }
-  | { kind: "new" };
+  | { kind: "new" }
+  | { kind: "scheduled"; job: ScheduledChatGPTJob; prompt: string };
 
 export interface ScheduledChatGPTJob {
   id: string;
@@ -31,19 +32,22 @@ export function ChatGPTDelayedPromptDialog({
   submit: (input: { title: string; prompt: string; beginAt: number | null; onIdle: boolean }) => Promise<void>;
   cancelJob: (id: string) => Promise<void>;
 }) {
-  const [title, setTitle] = useState("");
-  const [onIdle, setOnIdle] = useState(false);
-  const [prompt, setPrompt] = useState("");
+  const [onIdle, setOnIdle] = useState(
+    target.kind === "scheduled" ? target.job.onIdle === true : true,
+  );
+  const [prompt, setPrompt] = useState(target.kind === "scheduled" ? target.prompt : "");
   const [when, setWhen] = useState(() => dateTimeLocal(new Date(
-    target.kind === "existing" ? target.beginAt : Date.now() + 60 * 60_000,
+    target.kind === "existing" ? target.beginAt :
+      target.kind === "scheduled" ? target.job.beginAt ?? Date.now() + 60 * 60_000 :
+      Date.now() + 60 * 60_000,
   )));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timestamp = new Date(when).getTime();
   const validTime = Number.isSafeInteger(timestamp) &&
-    timestamp > Date.now() && timestamp <= Date.now() + maxDelayMs;
-  const valid = (onIdle || validTime) && prompt.trim().length > 0 && prompt.length <= 29_800 &&
-    (target.kind === "existing" || (title.trim().length > 0 && title.length <= 120));
+    ((timestamp > Date.now() && timestamp <= Date.now() + maxDelayMs) ||
+      (target.kind === "scheduled" && timestamp === target.job.beginAt));
+  const valid = (onIdle || validTime) && prompt.trim().length > 0 && prompt.length <= 29_800;
 
   const setPreset = (minutes: number) => {
     setWhen(dateTimeLocal(new Date(Date.now() + minutes * 60_000)));
@@ -55,7 +59,8 @@ export function ChatGPTDelayedPromptDialog({
     setBusy(true);
     setError(null);
     try {
-      await submit({ title: title.trim(), prompt: prompt.trim(), beginAt: onIdle ? null : timestamp, onIdle });
+      const title = prompt.trim().split(/\r?\n/, 1)[0]!.replace(/\s+/g, " ").slice(0, 120);
+      await submit({ title, prompt: prompt.trim(), beginAt: onIdle ? null : timestamp, onIdle });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -72,28 +77,23 @@ export function ChatGPTDelayedPromptDialog({
               {target.kind === "new" ? <PlusIcon className="size-5" /> : <AlarmClockIcon className="size-5" />}
             </div>
             <div className="min-w-0">
-              <DialogTitle>{target.kind === "new" ? "Schedule a new ChatGPT task" : "Begin working later"}</DialogTitle>
+              <DialogTitle>{target.kind === "scheduled" ? "Edit scheduled ChatGPT session" : target.kind === "new" ? "Schedule a new ChatGPT task" : "Schedule prompt"}</DialogTitle>
               <p className="mt-1 truncate text-xs text-muted-foreground">
                 {target.kind === "new"
-                  ? "A new session will be created when the deadline arrives."
-                  : `Send a custom prompt to ${target.sessionTitle} at the selected time.`}
+                  ? "Create a new session when capacity is available, or at a chosen time."
+                  : target.kind === "scheduled"
+                    ? "No ChatGPT session exists yet. Edit or cancel this pending start."
+                    : `Send a prompt to ${target.sessionTitle} when capacity is available, or at a chosen time.`}
               </p>
             </div>
           </div>
         </DialogHeader>
         <form onSubmit={(event) => void onSubmit(event)}>
           <div className="space-y-5 px-6 pb-5">
-            {target.kind === "new" && (
-              <label className="block space-y-1.5 text-sm font-medium">
-                Session title
-                <Input autoFocus placeholder="What will this session work on?" maxLength={120}
-                  value={title} onChange={(event) => setTitle(event.target.value)} required />
-              </label>
-            )}
             <label className="block space-y-1.5 text-sm font-medium">
               Prompt to send
               <textarea
-                autoFocus={target.kind === "existing"}
+                autoFocus
                 aria-label="Prompt to send when scheduled"
                 placeholder="Describe exactly what ChatGPT should do when the time comes…"
                 rows={7} maxLength={29_800} required
@@ -111,9 +111,6 @@ export function ChatGPTDelayedPromptDialog({
                 <Button type="button" variant={onIdle ? "default" : "outline"} size="sm"
                   onClick={() => setOnIdle(true)} aria-pressed={onIdle}>Begin on idle</Button>
               </div>
-              {onIdle ? <p className="rounded-lg border border-primary/20 bg-primary/5 p-2.5 text-xs leading-relaxed text-muted-foreground">
-                Wait for a free Keep T3 Busy slot, then send this prompt. Scheduled tasks take priority over new TaskBoard work. Keep T3 Busy must be enabled.
-              </p> : null}
               {!onIdle && <>
               <div className="flex items-center gap-2 text-sm font-semibold">
                 <CalendarClockIcon className="size-4 text-primary" /> When to begin
@@ -172,9 +169,22 @@ export function ChatGPTDelayedPromptDialog({
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={busy} onClick={close}>Cancel</Button>
+            {target.kind === "scheduled" && (
+              <Button type="button" variant="outline" disabled={busy}
+                className="text-destructive hover:text-destructive"
+                onClick={() => {
+                  setBusy(true);
+                  setError(null);
+                  void cancelJob(target.job.id).then(close).catch((cause: unknown) =>
+                    setError(cause instanceof Error ? cause.message : String(cause)),
+                  ).finally(() => setBusy(false));
+                }}>Cancel scheduled session</Button>
+            )}
+            <Button type="button" variant="outline" disabled={busy} onClick={close}>
+              {target.kind === "scheduled" ? "Close" : "Cancel"}
+            </Button>
             <Button type="submit" disabled={!valid || busy}>
-              {busy ? "Saving…" : target.kind === "new" ? "Schedule new session" : "Schedule prompt"}
+              {busy ? "Saving…" : target.kind === "scheduled" ? "Save changes" : target.kind === "new" ? "Schedule new session" : "Schedule prompt"}
             </Button>
           </DialogFooter>
         </form>

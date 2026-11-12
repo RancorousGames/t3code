@@ -32,34 +32,25 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu.find((item) => item.id === "stop")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "task:open")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "reboot")).toBeDefined();
-    expect(menu.find((item) => item.id === "caffy")?.children?.length).toBeGreaterThan(4);
+    expect(menu.find((item) => item.id === "schedule:prompt")).toBeDefined();
+    expect(menu.findIndex((item) => item.id === "schedule:prompt")).toBeLessThan(
+      menu.findIndex((item) => item.id === "caffy"),
+    );
+    expect(menu.find((item) => item.id === "caffy")?.children?.map((item) => item.id))
+      .toEqual(["caffy:auto", "caffy:pause", "caffy:startup", "caffy:stop"]);
   });
   it("disables URL copy when the conversation URL is unavailable", () => {
     const menu = buildChatGPTSessionContextMenu({ ...state, hasConversationUrl: false });
     expect(menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")?.disabled)
       .toBe(true);
   });
-  it("offers idle duration presets and nested periodic intervals including custom", () => {
+  it("unifies capacity and periodic auto-continue behind one configuration dialog", () => {
     const menu = buildChatGPTSessionContextMenu({ ...state, caffy: {
       mode: "periodic", startup: false, onceOnly: false, paused: false,
-      createdAt: 1000, expiresAt: 1000 + 3 * 60 * 60_000, intervalMinutes: 10,
+      createdAt: 1000, expiresAt: 1000 + 3 * 60 * 60_000, intervalMinutes: 1440,
     } });
-    const caffy = menu.find((item) => item.id === "caffy");
-    const idle = caffy?.children?.find((item) => item.id === "caffy:idle");
-    expect(idle?.children?.map((item) => item.label)).toEqual([
-      "1h", "2h", "4h", "8h", "Infinite", "Custom…", "Once only",
-    ]);
-    const periodic = caffy?.children?.find((item) => item.id === "caffy:periodic");
-    expect(periodic?.children?.map((item) => item.label)).toEqual([
-      "Every 5m", "Every 10m", "Every 20m", "Every 30m", "Every 60m", "Custom interval…",
-    ]);
-    const every10 = periodic?.children?.find((item) => item.id === "caffy:periodic:10");
-    expect(every10?.checked).toBe(true);
-    expect(every10?.children?.map((item) => item.id)).toEqual([
-      "caffy:periodic:10:1", "caffy:periodic:10:2", "caffy:periodic:10:4",
-      "caffy:periodic:10:8", "caffy:periodic:10:infinite",
-      "caffy:periodic:10:custom", "caffy:periodic:10:once",
-    ]);
+    expect(menu.find((item) => item.id === "caffy")?.label).toContain("Periodic auto-continue");
+    expect(menu.find((item) => item.id === "caffy")?.children?.[0]?.id).toBe("caffy:auto");
   });
   it("respects the authoritative manager role and snooze state", () => {
     const menu = buildChatGPTSessionContextMenu({
@@ -84,20 +75,11 @@ describe("ChatGPT native sidebar menu", () => {
   });
 });
 
-it("labels a working Caffy session as a pause and a deferred session as scheduled resume", () => {
+it("offers the same scheduling and auto-continue controls regardless of working state", () => {
   const active = buildChatGPTSessionContextMenu({ ...state, working: true });
-  const pause = active.find(item => item.id === "caffy")?.children
-    ?.find(item => item.id === "caffy:begin");
-  expect(pause?.label).toBe("Pause work and resume in");
-  expect(pause?.children?.find(item => item.id === "caffy:begin:60")?.label)
-    .toBe("Resume in 1 hour");
-
-  const scheduled = buildChatGPTSessionContextMenu({
-    ...state, working: false, caffy: {
-      mode: "idle", startup: false, onceOnly: false, paused: false,
-      createdAt: 1000, expiresAt: null, intervalMinutes: 20, beginAt: 3601000,
-    },
-  });
-  expect(scheduled.find(item => item.id === "caffy")?.children
-    ?.find(item => item.id === "caffy:begin")?.label).toContain("Resume scheduled");
+  const idle = buildChatGPTSessionContextMenu({ ...state, working: false });
+  expect(active.find(item => item.id === "stop")?.disabled).toBe(false);
+  expect(idle.find(item => item.id === "stop")?.disabled).toBe(true);
+  expect(active.find(item => item.id === "caffy")?.children?.map(item => item.id))
+    .toEqual(idle.find(item => item.id === "caffy")?.children?.map(item => item.id));
 });

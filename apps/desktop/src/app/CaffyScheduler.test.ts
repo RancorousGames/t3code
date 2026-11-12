@@ -87,6 +87,75 @@ const monitor = (scheduler: CaffyScheduler) =>
   scheduler.status(SESSION) as CaffyConfig | null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
+  it("lists pending sessions without exposing prompts, and edits or cancels the same durable job", () => {
+    const f = fixture();
+    const c = f.open();
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    try {
+      c.scheduleSpawn({ id: jobId, title: "Status report", prompt: "Report today's status",
+        beginAt: null, onIdle: true });
+      const overview = c.status() as { scheduledSpawns: Array<Record<string, unknown>> };
+      expect(overview.scheduledSpawns[0]).toMatchObject({
+        id: jobId, title: "Status report", beginAt: null, onIdle: true, status: "scheduled",
+      });
+      expect(overview.scheduledSpawns[0]).not.toHaveProperty("prompt");
+      expect(c.readScheduledSpawn(jobId).prompt).toBe("Report today's status");
+
+      const start = Date.now() + 60 * 60_000;
+      c.updateScheduledSpawn({ id: jobId, title: "Weekly report",
+        prompt: "Report on the last 7 days", beginAt: start, onIdle: false });
+      expect(c.readScheduledSpawn(jobId)).toMatchObject({
+        id: jobId, title: "Weekly report", prompt: "Report on the last 7 days",
+        beginAt: start, onIdle: false,
+      });
+      c.close();
+      const restored = f.open();
+      try {
+        expect(restored.readScheduledSpawn(jobId).prompt).toBe("Report on the last 7 days");
+        expect(restored.cancelScheduledSpawn(jobId)).toMatchObject({ cancelled: true, id: jobId });
+        expect(() => restored.readScheduledSpawn(jobId)).toThrow("not found");
+      } finally { restored.close(); }
+    } finally { c.close(); f.dispose(); }
+  });
+  it("counts only verified completed runs and retains a single periodic wake through restart", () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.mode = "periodic";
+      row.intervalMinutes = 10080;
+      row.beginAt = null;
+      row.nextDueAt = Date.now() + 10080 * 60_000;
+      row.pendingWake = true;
+      row.pendingMessageId = null;
+      row.lastWakeAt = Date.now() - 5_000;
+      row.repeatPrompt = "Generate the weekly project report.";
+      row.autoRebootEveryRuns = 3;
+      c.reportWorkingSnapshot([], "sidebar");
+      c.setTaskReservations([], true);
+      expect(c.hasPendingQueuedWakes).toBe(true);
+
+      const completed = {
+        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
+        bindingRevision: null, sequence: 2, eventId: `${SESSION}:${ORIGINAL}:2`,
+        observedAt: Date.now(), turnCount: 3, kind: "completed" as const,
+      };
+      c.onIdle(completed);
+      c.onIdle(completed);
+      expect(row.wakesSinceReboot).toBe(1);
+      expect(row.pendingWake).toBe(true);
+      c.close();
+
+      const restored = f.open();
+      try {
+        expect(monitor(restored)).toMatchObject({
+          mode: "periodic", intervalMinutes: 10080, pendingWake: true,
+          repeatPrompt: "Generate the weekly project report.",
+          autoRebootEveryRuns: 3, wakesSinceReboot: 1,
+        });
+      } finally { restored.close(); }
+    } finally { c.close(); f.dispose(); }
+  });
   it("persists timed Busy, disarms on manual override, and rejects new work after expiration", async () => {
     const f = fixture();
     const first = f.open();

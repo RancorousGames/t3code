@@ -174,7 +174,9 @@ import { isAIInterfaceSession } from "../../chatGPTAIInterfaceSessions";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import { useT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "../../hooks/useT3CaffyOverview";
 import { CaffyCoffeePotIcon } from "./CaffyCoffeePotIcon";
-import { ChatGPTDelayedPromptDialog, type DelayedPromptTarget } from "./ChatGPTDelayedPromptDialog";
+import { ChatGPTDelayedPromptDialog, type DelayedPromptTarget, type ScheduledChatGPTJob } from "./ChatGPTDelayedPromptDialog";
+import { ChatGPTAutoContinueDialog, type AutoContinueConfig, type AutoContinueRequest } from "./ChatGPTAutoContinueDialog";
+import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
 import {
   updateChatGPTRecoverySettings,
   useChatGPTRecoverySettings,
@@ -669,17 +671,23 @@ export function ChatGPTBrowserSidebarEntry({
   const [menuFeedback, setMenuFeedback] = useState<string | null>(null);
   const [menuDialog, setMenuDialog] = useState<ChatGPTSessionMenuDialogState | null>(null);
   const [delayedPromptTarget, setDelayedPromptTarget] = useState<DelayedPromptTarget | null>(null);
+  const [autoContinueTarget, setAutoContinueTarget] = useState<{
+    sessionId: string; config: AutoContinueConfig | null;
+  } | null>(null);
   const [keepAwakeFeedback, setKeepAwakeFeedback] = useState<string | null>(null);
   const scheduleDelayedPrompt = async (input: { title: string; prompt: string; beginAt: number | null; onIdle: boolean }) => {
     if (!environmentId || !delayedPromptTarget) return;
     const control = window.desktopBridge?.caffyControl;
     if (!control) throw new Error("T3 desktop scheduler is unavailable.");
-    if (delayedPromptTarget.kind === "new") {
+    if (delayedPromptTarget.kind === "new" || delayedPromptTarget.kind === "scheduled") {
+      const editing = delayedPromptTarget.kind === "scheduled";
       await control({
-        action: "schedule_spawn", jobId: randomUUID(),
+        action: editing ? "edit_spawn" : "schedule_spawn",
+        jobId: editing ? delayedPromptTarget.job.id : randomUUID(),
         title: input.title, prompt: input.prompt, beginAt: input.beginAt, onIdle: input.onIdle,
       });
-      setKeepAwakeFeedback(input.onIdle ? "New ChatGPT task queued ahead of TaskBoard work." :
+      setKeepAwakeFeedback(editing ? "Scheduled ChatGPT session updated." :
+        input.onIdle ? "New ChatGPT task queued ahead of TaskBoard work." :
         `New ChatGPT session scheduled for ${new Date(input.beginAt!).toLocaleString()}.`);
     } else {
       const sessionId = delayedPromptTarget.sessionId;
@@ -723,6 +731,27 @@ export function ChatGPTBrowserSidebarEntry({
     window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
     setDelayedPromptTarget(null);
   };
+  const openScheduledSpawn = async (job: ScheduledChatGPTJob) => {
+    const control = window.desktopBridge?.caffyControl;
+    if (!control) { setMenuFeedback("T3 desktop scheduler is unavailable."); return; }
+    try {
+      const detail = await control({ action: "read_spawn", jobId: job.id });
+      if (!detail || typeof detail !== "object" ||
+          !("id" in detail) || detail.id !== job.id ||
+          !("status" in detail) || detail.status !== "scheduled" ||
+          !("prompt" in detail) || typeof detail.prompt !== "string" ||
+          !("title" in detail) || typeof detail.title !== "string" ||
+          !("beginAt" in detail) || !(detail.beginAt === null || typeof detail.beginAt === "number"))
+        throw new Error("Scheduled session is no longer editable.");
+      setDelayedPromptTarget({ kind: "scheduled",
+        job: { ...job, title: detail.title, beginAt: detail.beginAt,
+          onIdle: "onIdle" in detail && detail.onIdle === true, status: "scheduled" },
+        prompt: detail.prompt });
+    } catch (error) {
+      setMenuFeedback(`Cannot edit scheduled session: ${error instanceof Error ? error.message : String(error)}`);
+      window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+    }
+  };
   const editOmniworkBinding = (sessionId: string) => {
     const session = sessions.find((item) => item.id === sessionId);
     if (!session) return;
@@ -743,6 +772,7 @@ export function ChatGPTBrowserSidebarEntry({
   const configureCaffy = async (
     sessionId: string, mode: "idle" | "periodic" | "queued",
     durationMinutes?: number, onceOnly = false, intervalMinutes = 20,
+    options?: Pick<AutoContinueRequest, "repeatPrompt" | "autoRebootMinutes" | "autoRebootEveryRuns" | "beginAt">,
   ) => {
     const control = window.desktopBridge?.caffyControl;
     if (!control) throw new Error("T3 Caffy v2 is not available in this desktop build.");
@@ -756,10 +786,14 @@ export function ChatGPTBrowserSidebarEntry({
       action: "set", sessionId, mode,
       ...(conversationId ? { conversationId } : {}),
       ...(durationMinutes !== undefined ? { durationMinutes } : {}),
-      intervalMinutes, startup: false, onceOnly, keepAwake: true,
+      intervalMinutes, startup: false, onceOnly, keepAwake: mode !== "periodic",
+      ...(options?.repeatPrompt !== undefined ? { repeatPrompt: options.repeatPrompt } : {}),
+      ...(options?.autoRebootMinutes !== undefined ? { rebootMinutes: options.autoRebootMinutes } : {}),
+      ...(options?.autoRebootEveryRuns !== undefined ? { rebootEveryRuns: options.autoRebootEveryRuns } : {}),
+      ...(options?.beginAt !== undefined ? { beginAt: options.beginAt } : {}),
     });
     setKeepAwakeFeedback(
-      `Caffy scheduled: ${mode === "queued" ? "Queued idle" : mode === "periodic" ? `Every ${intervalMinutes} minutes` : "Idle"} · ${onceOnly ? "once" : durationMinutes === undefined ? "infinite" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
+      `Auto-continue: ${mode === "queued" ? "when a Keep T3 Busy slot is available" : mode === "periodic" ? `every ${intervalMinutes} minutes` : "when capacity is available"} · ${onceOnly ? "once" : durationMinutes === undefined ? "until stopped" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
     );
     window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
   };
@@ -1516,7 +1550,44 @@ export function ChatGPTBrowserSidebarEntry({
       getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String) ??
       session.archive?.conversationUrl ??
       "";
-    const age = activities[sessionId]?.age;
+    // Do not build Caffy controls from a potentially 30-second-old sidebar poll.
+    // A missing or unresponsive guest is unknown, never assumed idle or working.
+    let liveActivity: "working" | "idle" | "unknown" = "unknown";
+    try {
+      const readLive = async (): Promise<unknown> => {
+        if (isPersistentChatGPTSessionOptedIn(sessionId)) {
+          const observed = await inspectPersistentChatGPTPage<string>(
+            environmentId, sessionId, CHATGPT_ACTIVITY_EXPRESSION,
+          );
+          window.dispatchEvent(new CustomEvent("t3:chromium-sidebar-probe", {
+            detail: { environmentId, sessionId },
+          }));
+          return observed;
+        }
+        const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
+        const preview = readThreadPreviewState(thread);
+        const tabId = preview.activeTabId;
+        const runtimeTabId = tabId && preview.serverEpoch
+          ? previewRuntimeTabId(thread, preview.serverEpoch, tabId) : null;
+        const guest = runtimeTabId && !isChatGPTGuestHibernated(runtimeTabId)
+          ? Array.from(document.querySelectorAll<HTMLElementTagNameMap["webview"]>(
+              "webview, [data-t3-chromium-guest='true']",
+            )).find((element) => element.dataset.previewTab === runtimeTabId)
+          : null;
+        const observed = guest ? await guest.executeJavaScript(CHATGPT_ACTIVITY_EXPRESSION) : null;
+        if (runtimeTabId) window.dispatchEvent(new CustomEvent("t3:chatgpt-page-push", {
+          detail: { runtimeTabId },
+        }));
+        return observed;
+      };
+      const observed = await Promise.race([
+        readLive(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
+      ]);
+      if (observed === "working" || observed === "idle") liveActivity = observed;
+    } catch { /* Unverified browser state must never choose a destructive menu action. */ }
+    const age = liveActivity === "working" ? "working" :
+      liveActivity === "idle" ? "inactive" : "unknown";
     const registryContext = {
       model: deriveChatGPTSession(
         {
@@ -1540,7 +1611,8 @@ export function ChatGPTBrowserSidebarEntry({
       ["idle", "periodic", "queued", "startup"].includes(String(caffyState.mode))
         ? caffyState as { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
             onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
-            intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null }
+            intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null;
+             autoRebootEveryRuns?: number | null; repeatPrompt?: string | null }
         : null;
     // Manual Stop requires the actual ChatGPT control. Deferred Caffy wakes
     // treat Stop as best-effort so missing controls cannot block scheduling.
@@ -1555,7 +1627,7 @@ export function ChatGPTBrowserSidebarEntry({
           projects,
           snoozePresets: presets,
           now: Date.now(),
-          working: activities[sessionId]?.age === "working",
+          working: liveActivity === "working",
           hasTask: !!session.binding?.taskRef,
           hasConversationUrl: !!savedUrl,
           caffy: activeCaffy,
@@ -1696,10 +1768,15 @@ export function ChatGPTBrowserSidebarEntry({
             else setSessionSnooze([sessionId], Date.parse(preset.snoozedUntil));
           }
         }
+      } else if (action === "schedule:prompt") {
+        setDelayedPromptTarget({ kind: "existing", sessionId, sessionTitle: session.title,
+          beginAt: Date.now() + 60 * 60_000 });
       } else if (action.startsWith("caffy:")) {
         const control = window.desktopBridge?.caffyControl;
         if (!control) throw new Error("T3 Caffy v2 is unavailable; rebuild and restart T3.");
-        if (action === "caffy:stop") {
+        if (action === "caffy:auto") {
+          setAutoContinueTarget({ sessionId, config: activeCaffy });
+        } else if (action === "caffy:stop") {
           await control({ action: "stop", sessionId, stopInitiator: "user" });
           setKeepAwakeFeedback("Caffy stopped for this session.");
         } else if (action === "caffy:queued") {
@@ -2478,6 +2555,31 @@ export function ChatGPTBrowserSidebarEntry({
           </SidebarMenuButton>
         </SidebarMenuItem>
       ) : null}
+      {!sectionCollapsed && !showingHidden && !showingSnoozed &&
+        (caffyOverview?.scheduledSpawns ?? [])
+          .filter((job) => job.status !== "created" &&
+            (!isSearching || job.title.toLowerCase().includes(searchQuery.trim().toLowerCase())))
+          .map((job) => (
+            <SidebarMenuItem key={`pending-chatgpt:${job.id}`}>
+              <SidebarMenuButton
+                size="sm"
+                disabled={job.status !== "scheduled"}
+                aria-label={`Scheduled ChatGPT session: ${job.title}. ${job.status === "scheduled" ? "Edit or cancel" : job.status}.`}
+                title={job.status !== "scheduled" ? `Session creation ${job.status}. ${job.error ?? "Cannot edit after creation starts."}` :
+                  `Pending ChatGPT session — click to edit or cancel. ${job.onIdle ? "Waiting for Keep T3 Busy capacity." : job.beginAt === null ? "" : `Starts ${new Date(job.beginAt).toLocaleString()}.`}`}
+                onClick={() => void openScheduledSpawn(job)}
+              >
+                <CalendarClockIcon aria-hidden className="shrink-0 text-amber-400" />
+                <span className="min-w-0 flex-1 truncate text-amber-300/90">{job.title}</span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {job.status === "scheduled"
+                    ? job.onIdle ? "Queued" : job.beginAt === null ? "Pending" :
+                      new Date(job.beginAt).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})
+                    : job.status === "dispatching" ? "Starting" : "Review"}
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
       {menuFeedback && (
         <SidebarMenuItem>
           <p role="status" className="px-2 py-1 text-xs text-muted-foreground">
@@ -2817,8 +2919,8 @@ export function ChatGPTBrowserSidebarEntry({
                                 ? `Caffy stopped by agent at ${new Date(caffyAgentStop.stoppedAt).toLocaleString()} — no further wakes scheduled`
                                 : null;
                               const caffyLabel = caffyMonitor
-                                ? `Caffy: ${caffyMonitor.mode === "queued" ? "Queued wake on idle" :
-                                    caffyMonitor.mode === "idle" ? "Wake on idle" :
+                                ? `Caffy: ${caffyMonitor.mode === "queued" ? "Auto-continue on free slot" :
+                                    caffyMonitor.mode === "idle" ? "Auto-continue on free slot" :
                                     caffyMonitor.mode === "periodic" ? `Periodic every ${caffyMonitor.intervalMinutes} min` :
                                     "Wake on startup"}${caffyMonitor.onceOnly ? " (once)" : ""}${
                                     caffyMonitor.mode === "queued" && !caffyOverview?.keepT3Busy
@@ -3261,9 +3363,22 @@ export function ChatGPTBrowserSidebarEntry({
           )}
         </DndContext>
       )}
+      {autoContinueTarget && (
+        <ChatGPTAutoContinueDialog
+          key={autoContinueTarget.sessionId}
+          existing={autoContinueTarget.config}
+          close={() => setAutoContinueTarget(null)}
+          submit={async (input) => {
+            await configureCaffy(autoContinueTarget.sessionId, input.mode,
+              input.durationMinutes, false, input.intervalMinutes, input);
+            setAutoContinueTarget(null);
+          }}
+        />
+      )}
       {delayedPromptTarget && (
         <ChatGPTDelayedPromptDialog
-          key={delayedPromptTarget.kind === "existing" ? `${delayedPromptTarget.sessionId}:${delayedPromptTarget.beginAt}` : "new"}
+          key={delayedPromptTarget.kind === "existing" ? `${delayedPromptTarget.sessionId}:${delayedPromptTarget.beginAt}` :
+            delayedPromptTarget.kind === "scheduled" ? `scheduled:${delayedPromptTarget.job.id}` : "new"}
           target={delayedPromptTarget}
           jobs={(caffyOverview?.scheduledSpawns ?? []).filter(job => job.status !== "created").slice(-20)}
           close={() => setDelayedPromptTarget(null)}
