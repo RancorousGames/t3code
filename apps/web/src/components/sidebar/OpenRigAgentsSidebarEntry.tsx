@@ -32,7 +32,7 @@ export function OpenRigAgentsSidebarEntry() {
   const [snapshotAt, setSnapshotAt] = useState<string | null>(null);
   const [connection, setConnection] = useState<"checking" | "online" | "offline">("checking");
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // The last snapshot of the selected seat, kept if it leaves the agent list.
   const [selectedAgent, setSelectedAgent] = useState<DesktopOpenRigAgent | null>(null);
