@@ -203,6 +203,7 @@ const OrchestratorMcpRunningTaskNext = Schema.Literal(ORCHESTRATOR_MCP_RUNNING_T
 
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   taskId: NodeId,
+  chatgptSessionId: Schema.optional(Schema.String),
   /** Null for a task that runs in a linked environment; see `remoteChild`. */
   childThreadId: Schema.NullOr(ThreadId),
   /** The linked environment and thread a remote task runs as. */
@@ -588,7 +589,7 @@ export type OrchestratorMcpModelOption = typeof OrchestratorMcpModelOption.Type;
 
 export const OrchestratorMcpProviderCapability = Schema.Struct({
   providerInstanceId: ProviderInstanceId,
-  driverKind: ProviderDriverKind,
+  driverKind: Schema.Union([ProviderDriverKind, Schema.Literal("chatgpt")]),
   displayName: Schema.NullOr(Schema.String),
   models: Schema.Array(
     Schema.Struct({

@@ -88,6 +88,7 @@ import { recordChatGPTSessionRefreshedAt } from "./chatGPTSessionTimestamps";
 import { tryAcquireChatGPTRecoveryMutation } from "./chatGPTRecoveryMutationGate";
 import { aggregateChatGPTRecoveryMetrics } from "./chatGPTRecoveryMetrics";
 import { validChatGPTCompletion } from "./chatGPTSessionCompletion";
+import { stopDelegatedChatGPTGeneration } from "./chatgpt-delegation/stop";
 import { deriveChatGPTSession, matchesChatGPTSessionWhich } from "./chatGPTSessionModel";
 import { assertArchivableSession, descendantSessions } from "./chatGPTSessionArchivePolicy";
 
@@ -100,6 +101,7 @@ export type ChatGPTSessionAction =
   | "experimental_evaluate"
   | "send"
   | "reconcile_send"
+  | "stop"
   | "reload"
   | "complete"
   | "archive"
@@ -834,7 +836,7 @@ export async function runChatGPTSessionControl(input: {
   const from = input.from ?? "end";
   if (
     input.expectedConversationId !== undefined &&
-    !["read", "send", "reconcile_send", "experimental_evaluate"].includes(action)
+    !["read", "send", "reconcile_send", "experimental_evaluate", "stop"].includes(action)
   ) {
     throw new Error("expectedConversationId is supported only for read, send and reconcile_send.");
   }
@@ -881,6 +883,20 @@ export async function runChatGPTSessionControl(input: {
     throw new Error(
       "Unknown T3 session ID. T3 links Bootstrap IDs using the exact guest's tool result or assistant [T3_ID:uuid] confirmation; until registration use the sidebar's Copy T3 session ID.",
     );
+  if (action === "stop") {
+    const guest = guestFor(environmentId, entry.id);
+    if (!guest.runtimeId || !input.expectedConversationId)
+      throw new Error("An exact mounted ChatGPT conversation is required for Stop.");
+    return {
+      sessionId: entry.id,
+      ...(await stopDelegatedChatGPTGeneration(
+        environmentId,
+        entry.id,
+        guest.runtimeId,
+        input.expectedConversationId,
+      )),
+    };
+  }
   if (action === "experimental_evaluate") {
     // Explicit developer experiment, never a send or queue fallback. Reject
     // unmounted/hibernated/hidden guests rather than waking a different page.

@@ -6,6 +6,8 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
+import * as ChatGPTDelegation from "./chatgpt-delegation/ChatGPTDelegation.ts";
+import * as ChatGPTDelegationDesktop from "./chatgpt-delegation/DesktopTransport.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
@@ -806,6 +808,9 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   // Follows delegated tasks running in linked environments, including after a restart.
   Layer.effectDiscard(
+    ChatGPTDelegation.ChatGPTDelegation.pipe(Effect.flatMap((bridge) => bridge.start())),
+  ),
+  Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
 ).pipe(
@@ -813,6 +818,7 @@ const layerMakeRoutes = Layer.mergeAll(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
   // delegate_task to a linked environment, from /mcp and the follower above.
+  Layer.provide(ChatGPTDelegation.layer.pipe(Layer.provide(ChatGPTDelegationDesktop.layer))),
   Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.
   Layer.provide(PeerLinkRequests.layer),

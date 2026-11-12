@@ -122,6 +122,7 @@ import { isLiveCallerShell, threadNotFound } from "./threadAccess.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
+import * as ChatGPTDelegation from "../chatgpt-delegation/ChatGPTDelegation.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -1018,6 +1019,7 @@ const make = Effect.gen(function* () {
   const gitDriver = yield* GitVcsDriver.GitVcsDriver;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const remoteDelegation = yield* RemoteDelegation.RemoteDelegation;
+  const chatgpt = yield* Effect.serviceOption(ChatGPTDelegation.ChatGPTDelegation);
 
   const requireProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(
@@ -2287,7 +2289,7 @@ const make = Effect.gen(function* () {
       );
       const inherited = parent?.thread.modelSelection;
       const searchTerms = input.search?.toLowerCase().split(/\s+/).filter(Boolean) ?? [];
-      return {
+      const result: OrchestratorMcpCapabilitiesResult = {
         parentThreadId: parent?.thread.id ?? null,
         inheritedProviderInstanceId: inherited?.instanceId ?? null,
         inheritedModel: inherited?.model ?? null,
@@ -2351,6 +2353,9 @@ const make = Effect.gen(function* () {
           maxBatchThreads: 20,
         },
       };
+      return Option.isSome(chatgpt)
+        ? { ...result, providers: [...result.providers, yield* chatgpt.value.capability] }
+        : result;
     }),
     delegateTask: Effect.fn("OrchestratorMcpService.delegateTask")(function* (callerScope, input) {
       const environmentId =
@@ -2378,6 +2383,9 @@ const make = Effect.gen(function* () {
           "invalid_request",
           "A local task runs in this thread's project. Omit target.projectId, or pass target.environmentId to run it in that environment's project.",
         );
+      }
+      if (input.target?.providerInstanceId === "chatgpt" && Option.isSome(chatgpt)) {
+        return yield* chatgpt.value.delegate(scope, input);
       }
       const parentRun = parent.runs
         .filter(ThreadManagementService.isActiveRun)
@@ -2553,10 +2561,14 @@ const make = Effect.gen(function* () {
     }),
     taskStatus: Effect.fn("OrchestratorMcpService.taskStatus")(function* (callerScope, taskId) {
       const scope = yield* requireThreadScope(callerScope, "task_status");
+      if (ChatGPTDelegation.isChatGPTTask(taskId) && Option.isSome(chatgpt))
+        return yield* chatgpt.value.read(scope, taskId);
       return yield* readTask(scope, taskId, false, true);
     }),
     cancelTask: Effect.fn("OrchestratorMcpService.cancelTask")(function* (callerScope, input) {
       const scope = yield* requireThreadScope(callerScope, "task_cancel");
+      if (ChatGPTDelegation.isChatGPTTask(input.taskId) && Option.isSome(chatgpt))
+        return yield* chatgpt.value.cancel(scope, input.taskId);
       const current = yield* readTask(scope, input.taskId);
       const childThreadId = current.childThreadId;
       if (childThreadId === null) {

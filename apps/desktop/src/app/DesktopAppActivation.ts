@@ -398,8 +398,11 @@ export const make = Effect.gen(function* () {
         try {
           // Bootstrap can rename a browser UUID to a public T3_ID between
           // context-menu registration and the agent calling caffy.stop().
-          if (action === "list" || (request.sessionId && !caffy.status(request.sessionId)))
+          // `list` is polled every 10s by the UI, so it uses the 30s-throttled
+          // reconcile; only an unresolved sessionId forces a fresh one.
+          if (request.sessionId && !caffy.status(request.sessionId))
             await caffy.reconcileIdentityAliases(true);
+          else if (action === "list") await caffy.reconcileIdentityAliases();
           let conversationId = request.conversationId;
           if (action === "begin_in" && !conversationId && request.sessionId) {
             const prior = caffy.status(request.sessionId);

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { isChatGPTSessionBeingViewed } from "../../browser/chatGPTViewingProtection";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { readChatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
@@ -86,6 +86,11 @@ export function ChatGPTIdleOverflowUnloader({
   deliveryRequests: Readonly<Record<string, boolean>>;
   imminentCaffyIds: ReadonlySet<string>;
 }) {
+  // Inputs change identity often (the Caffy poll alone produces a new
+  // imminentCaffyIds Set every 10s). Read them through a ref so the timers
+  // below are not torn down and restarted before they ever fire.
+  const latest = useRef({ sessions, selectedId, maxCount, deliveryRequests, imminentCaffyIds });
+  latest.current = { sessions, selectedId, maxCount, deliveryRequests, imminentCaffyIds };
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- synchronizes native/legacy guest capacity with actual Chromium residency.
   useEffect(() => {
     let disposed = false;
@@ -93,6 +98,7 @@ export function ChatGPTIdleOverflowUnloader({
     const run = async () => {
       if (checking || disposed) return;
       checking = true;
+      const { sessions, maxCount } = latest.current;
       try {
         const bridge = window.desktopBridge?.stableChatGPTViewRequest;
         const native = sessions.filter((session) =>
@@ -117,7 +123,9 @@ export function ChatGPTIdleOverflowUnloader({
         if (overflow <= 0) return;
 
         const idleMs = activeOmniworkUnloadPolicy().idleMs;
+        // Reads the latest props, so re-checks after an await see current selection.
         const eligible = (session: BrowserSession) => {
+          const { selectedId, deliveryRequests, imminentCaffyIds } = latest.current;
           const key = JSON.stringify([
             environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId,
           ]);
@@ -208,6 +216,6 @@ export function ChatGPTIdleOverflowUnloader({
       clearTimeout(initial);
       clearInterval(timer);
     };
-  }, [environmentId, sessions, selectedId, maxCount, deliveryRequests, imminentCaffyIds]);
+  }, [environmentId]);
   return null;
 }

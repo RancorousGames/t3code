@@ -186,6 +186,7 @@ export const DesktopAppActivationRequest = Schema.Union([
       "cancel_delivery",
       "idle_status",
       "idle_wait",
+      "stop",
       "reload",
       "complete",
       "archive",
