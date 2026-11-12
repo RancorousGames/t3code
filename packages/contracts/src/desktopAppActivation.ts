@@ -68,7 +68,7 @@ export const DesktopAppActivationRequest = Schema.Union([
   Schema.Struct({
     ...DesktopAppActivationBase,
     type: Schema.Literal("caffy"),
-    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "working_snapshot", "retire", "begin_in", "auto_reboot", "schedule_spawn", "cancel_spawn", "cancel_begin"]),
+    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "throughput", "working_snapshot", "retire", "begin_in", "auto_reboot", "schedule_spawn", "cancel_spawn", "cancel_begin"]),
     sessionId: Schema.optional(Schema.String),
     conversationId: Schema.optional(ChatGPTConversationId),
     mode: Schema.optional(Schema.Literals(["idle", "periodic", "queued", "startup"])),

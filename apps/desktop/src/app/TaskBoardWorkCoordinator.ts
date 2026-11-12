@@ -121,6 +121,8 @@ export class TaskBoardWorkCoordinator {
   private busy = false;
   private lastError: string | null = null;
   private lastObservedAt: string | null = null;
+  private lastCompletionScanAt = 0;
+  private readonly completionMtimes = new Map<string, number>();
   private snapshots: QueueSnapshot[] = [];
   private lastPromptRecoveryAt = 0;
   private readonly promptRecoveryAttempts = new Map<string, number>();
@@ -257,12 +259,46 @@ export class TaskBoardWorkCoordinator {
         if (!keys.has(key)) this.definiteFailures.delete(key);
       }
       this.syncReservations(true);
+      this.scanCompletions(snapshots);
       return snapshots;
     } catch (error) {
       // Never admit another T3 automatic worker from a partial/unknown TaskBoard
       // inventory. Preserve the last known reservations but fail closed.
       this.syncReservations(false);
       throw error;
+    }
+  }
+
+  /** Queue completion is not the same as Done: verify the actual task frontmatter. */
+  private scanCompletions(snapshots: QueueSnapshot[]) {
+    const now = Date.now();
+    if (now - this.lastCompletionScanAt < 60_000) return;
+    this.lastCompletionScanAt = now;
+    for (const board of snapshots) {
+      for (const item of board.items) {
+        if (item.state !== "completed" || !item.sessionId || item.legacyOpenRig) continue;
+        const name = item.taskId + ".md";
+        const active = NodePath.join(board.boardRoot, "Active", name);
+        const archived = NodePath.join(board.boardRoot, "Archive", name);
+        const file = NodeFS.existsSync(active) ? active : archived;
+        try {
+          const stat = NodeFS.statSync(file);
+          if (stat.mtimeMs < now - 8 * 24 * 3_600_000 ||
+              this.completionMtimes.get(file) === stat.mtimeMs) continue;
+          const body = NodeFS.readFileSync(file, "utf8").split("\n---", 2)[0] ?? "";
+          this.completionMtimes.set(file, stat.mtimeMs);
+          const field = (name: string) => new RegExp(`^\\s*${name}:\\s*(.*?)\\s*$`, "m").exec(body)?.[1];
+          if (field("column") !== "done" || field("execution_mode") !== "queue" ||
+              field("queue_session_id") !== item.sessionId ||
+              field("queue_request") !== item.queueRequest) continue;
+          const stamp = field("completed_at");
+          const at = Date.parse(stamp ?? "");
+          if (Number.isFinite(at)) {
+            this.caffy.throughput.recordCompletion(
+              `${rootKey(board.boardRoot)}:${item.taskId}:${stamp}`, at);
+          }
+        } catch { /* Cloud-synced task can move mid-scan; retry the next sweep. */ }
+      }
     }
   }
 
@@ -452,7 +488,7 @@ export class TaskBoardWorkCoordinator {
       intent: "implement", kind: "chatgpt", background: true,
       requireQueue: true, queueRequest: item.queueRequest, reservationId: requestId,
       home: this.home,
-    }), 115_000) as { status?: string; sessionId?: string; message?: string; definitelyNotCreated?: boolean }
+    }), 115_000) as { status?: string; sessionId?: string; message?: string; definitelyNotCreated?: boolean; created?: boolean }
 
     if (result.definitelyNotCreated === true) {
       await this.taskCommand(boardRoot, [
@@ -470,6 +506,8 @@ export class TaskBoardWorkCoordinator {
       return;
     }
     if (["created", "opened", "prompt_unknown"].includes(result.status ?? "")) {
+      if (result.created === true && result.sessionId && UUID.test(result.sessionId))
+        this.caffy.throughput.recordSession(`task:${rootKey(boardRoot)}:${item.taskId}:${requestId}`);
       this.lastAdmissionAt = Date.now();
       this.lastIdleReason = null;
       this.definiteFailures.delete(this.retryKey(boardRoot, item));

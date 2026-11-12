@@ -1912,7 +1912,7 @@ export interface DesktopBridge {
   readChatGPTDeliveryDiagnostics?: () => Promise<DesktopChatGPTDeliveryDiagnostics>;
   /** Durable T3-owned Caffy API; no OpenRig dependency. */
   caffyControl?: (input: {
-    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "working_snapshot" | "retire" | "begin_in" | "auto_reboot" | "schedule_spawn" | "cancel_spawn" | "cancel_begin";
+    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "throughput" | "working_snapshot" | "retire" | "begin_in" | "auto_reboot" | "schedule_spawn" | "cancel_spawn" | "cancel_begin";
     sessionId?: string;
     conversationId?: string;
     mode?: "idle" | "periodic" | "queued" | "startup";

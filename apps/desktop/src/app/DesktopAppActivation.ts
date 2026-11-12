@@ -430,6 +430,8 @@ export const make = Effect.gen(function* () {
             ? await caffy.capacity()
             : action === "tasks"
               ? taskBoardCoordinator.status()
+            : action === "throughput"
+              ? caffy.throughputStatus()
             : action === "set"
             ? await caffy.set({
                 sessionId: request.sessionId ?? "",

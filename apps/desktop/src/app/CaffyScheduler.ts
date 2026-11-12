@@ -10,6 +10,7 @@ import type {
 } from "@t3tools/contracts";
 import type { ChatGPTDeliveryQueue, DeliveryRecord } from "./ChatGPTDeliveryQueue.ts";
 import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
+import { AutoworkThroughput } from "./AutoworkThroughput.ts";
 
 type Mode = "idle" | "periodic" | "queued" | "startup";
 type Trigger = "idle" | "periodic" | "queued" | "startup" | "manual";
@@ -102,6 +103,7 @@ const valid = (row: CaffyConfig): boolean =>
 /** One persistent policy and one pending message per session, regardless of wake source. */
 export class CaffyScheduler {
   private readonly file: string;
+  readonly throughput: AutoworkThroughput;
   private readonly entries = new Map<string, CaffyConfig>();
   private readonly scheduledSpawns = new Map<string, ScheduledChatGPTSpawn>();
   private readonly agentStops = new Map<string, AgentStoppedCaffy>();
@@ -192,6 +194,8 @@ export class CaffyScheduler {
           this.maxWorking = saved.maxWorking;
       }
     } catch { /* Corrupt/missing local state is not evidence for a wake. */ }
+    this.throughput = new AutoworkThroughput(stateDir,
+      this.keepT3Busy && (this.busyUntil === null || this.busyUntil > Date.now()));
     this.deliveries.subscribeTransitions(record => this.onDelivery(record));
     this.deliveries.setDispatchPermission(record => {
       const row = this.lookup(record.sessionId);
@@ -298,12 +302,13 @@ export class CaffyScheduler {
     }
     if (changed) this.save();
     this.syncPower();
-    this.timer = setInterval(() => { this.expireTimedBusy(); void this.pump(); void this.checkShutdown(); }, CLOCK);
+    this.timer = setInterval(() => { this.expireTimedBusy(); this.throughput.heartbeat(); void this.pump(); void this.checkShutdown(); }, CLOCK);
     this.timer.unref?.();
     void this.pump();
   }
 
   close() {
+    this.throughput.setEnabled(false);
     this.started = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
@@ -504,6 +509,7 @@ export class CaffyScheduler {
 
   private expireTimedBusy(): void {
     if (this.busyUntil === null || Date.now() < this.busyUntil) return;
+    this.throughput.setEnabled(false, this.busyUntil);
     this.busyUntil = null;
     this.keepT3Busy = false;
     this.shutdownIdleSince = null;
@@ -543,6 +549,7 @@ export class CaffyScheduler {
         throw new Error("maxWorking must be 1..100.");
       this.maxWorking = input.maxWorking;
     }
+    this.throughput.setEnabled(this.keepT3Busy);
     this.save();
     this.backupConfiguration();
     this.deliveries.resumeAllowed();
@@ -774,6 +781,7 @@ export class CaffyScheduler {
             typeof reply.data.sessionId === "string") {
           job.status = "created";
           job.sessionId = reply.data.sessionId;
+          if (job.onIdle === true) this.throughput.recordSession(`scheduled:${job.id}`);
           job.holdUntil = Date.now() + 180_000;
           delete job.error;
         } else {
@@ -1412,6 +1420,7 @@ export class CaffyScheduler {
   }
 
   get policyEnabled(): boolean { this.expireTimedBusy(); return this.keepT3Busy; }
+  throughputStatus() { this.expireTimedBusy(); return this.throughput.snapshot(); }
 
   /**
    * TaskBoard yields to waiting queued Caffy recipients, including unloaded

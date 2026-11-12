@@ -75,6 +75,151 @@ const ACTIVE_COLOR = "#84cc16";
 const PLOT = { left: 18, right: 274, top: 6, bottom: 48 };
 const HOUR_MS = 60 * 60_000;
 
+interface AutoworkBucket {
+  at: number;
+  activeMs: number;
+  completed: number;
+  sessions: number;
+}
+interface AutoworkHistory {
+  trackingSince: number | null;
+  busyNow: boolean;
+  available: boolean;
+  day: AutoworkBucket[];
+  week: AutoworkBucket[];
+}
+const DONE_COLOR = "#84cc16";
+const START_COLOR = "#4da3ff";
+
+function isAutoworkHistory(value: unknown): value is AutoworkHistory {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Partial<AutoworkHistory>;
+  const validBuckets = (data: unknown, count: number) =>
+    Array.isArray(data) && data.length === count && data.every(item =>
+      item && Number.isFinite(item.at) && Number.isFinite(item.activeMs) &&
+      Number.isInteger(item.completed) && Number.isInteger(item.sessions));
+  return (row.trackingSince === null || Number.isFinite(row.trackingSince)) &&
+    typeof row.busyNow === "boolean" && typeof row.available === "boolean" &&
+    validBuckets(row.day, 24) && validBuckets(row.week, 168);
+}
+
+function useAutoworkHistory() {
+  const [history, setHistory] = useState<AutoworkHistory | null>(null);
+  useEffect(() => {
+    if (!isElectron || !window.desktopBridge?.caffyControl) return;
+    let mounted = true;
+    let fetching = false;
+    const refresh = async () => {
+      if (fetching || document.visibilityState === "hidden") return;
+      fetching = true;
+      try {
+        const value: unknown = await window.desktopBridge?.caffyControl?.({ action: "throughput" });
+        if (mounted && isAutoworkHistory(value)) setHistory(value);
+      } catch { /* Keep the last known chart through transient bridge outages. */ }
+      finally { fetching = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+  return history;
+}
+
+function AutoworkHourlyChart({ label, buckets }: {
+  label: string;
+  buckets: readonly AutoworkBucket[];
+}) {
+  const left = 9, right = 272, top = 8, bottom = 63;
+  const width = (right - left) / buckets.length;
+  const maxCount = Math.max(1, ...buckets.flatMap(row => [row.completed, row.sessions]));
+  const scale = (count: number) => (bottom - top) * count / maxCount;
+  const activeHours = buckets.reduce((total, row) => total + row.activeMs, 0) / HOUR_MS;
+  const done = buckets.reduce((total, row) => total + row.completed, 0);
+  const started = buckets.reduce((total, row) => total + row.sessions, 0);
+  const ticks = buckets.length === 24
+    ? [[0, "-24h"], [12, "-12h"], [24, "now"]] as const
+    : [[0, "-7d"], [84, "-3.5d"], [168, "now"]] as const;
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between px-1">
+        <span className="text-xs font-semibold">{label}</span>
+        <span className="text-2xs tabular-nums text-muted-foreground">
+          {done} done · {started} starts
+        </span>
+      </div>
+      <div className="mb-1 flex justify-between px-1 text-2xs tabular-nums text-muted-foreground">
+        <span>{activeHours.toFixed(1)}h busy · {activeHours > 0 ? (done / activeHours).toFixed(2) : "—"} done/active h</span>
+        <span className="flex gap-2">
+          <span style={{ color: DONE_COLOR }}>done</span>
+          <span style={{ color: START_COLOR }}>starts</span>
+        </span>
+      </div>
+      <svg viewBox="0 0 280 78" className="h-[78px] w-full rounded-md border border-border/70 bg-background/80"
+        role="img"
+        aria-label={`${label} auto-work throughput: ${done} TaskBoard tasks moved to Done, ${started} automatically started sessions, across ${activeHours.toFixed(1)} observed hours with Keep T3 Busy enabled. Each bar is one hour; gray bands indicate enabled time.`}>
+        <line x1={left} x2={right} y1={bottom} y2={bottom} stroke="var(--muted-foreground)" opacity="0.6" />
+        <line x1={left} x2={right} y1={top} y2={top} stroke="var(--border)" />
+        <text x={right} y={top + 7} fontSize="8" textAnchor="end" fill="var(--muted-foreground)">{maxCount}/h</text>
+        {buckets.map((row, index) => {
+          const x = left + index * width;
+          const barWidth = Math.max(0.45, width * 0.32);
+          const doneHeight = scale(row.completed);
+          const startedHeight = scale(row.sessions);
+          return (
+            <g key={row.at}>
+              {row.activeMs > 0 ? (
+                <rect x={x} y={top} width={width} height={bottom - top}
+                  fill="var(--muted-foreground)" opacity={0.04 + 0.11 * Math.min(1, row.activeMs / HOUR_MS)} />
+              ) : null}
+              {row.completed > 0 ? (
+                <rect x={x + width * 0.15} y={bottom - doneHeight} width={barWidth} height={doneHeight}
+                  fill={DONE_COLOR} />
+              ) : null}
+              {row.sessions > 0 ? (
+                <rect x={x + width * 0.53} y={bottom - startedHeight} width={barWidth} height={startedHeight}
+                  fill={START_COLOR} />
+              ) : null}
+            </g>
+          );
+        })}
+        {ticks.map(([index, tick]) => (
+          <text key={tick} x={left + index * width} y="74" fontSize="8"
+            textAnchor={index === 0 ? "start" : index === buckets.length ? "end" : "middle"}
+            fill="var(--muted-foreground)">{tick}</text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function AutoworkThroughputCharts({ history }: { history: AutoworkHistory }) {
+  if (!history.available) return (
+    <div className="px-1 text-xs text-destructive">Autowork history file needs repair; existing data was preserved.</div>
+  );
+  return (
+    <div className="space-y-2 border-t border-border/60 pt-2">
+      <div className="flex items-center justify-between px-1">
+        <span className="text-xs font-semibold">Keep T3 Busy throughput</span>
+        <span className="text-2xs text-muted-foreground">{history.busyNow ? "tracking" : "paused"}</span>
+      </div>
+      <AutoworkHourlyChart label="Past 24 hours" buckets={history.day} />
+      <AutoworkHourlyChart label="Past week" buckets={history.week} />
+      <div className="px-1 text-2xs text-muted-foreground">
+        {history.trackingSince === null
+          ? "Tracking starts when Keep T3 Busy is enabled."
+          : `Counted during observed busy time since ${new Date(history.trackingSince).toLocaleString()}.`}
+        {" "}Gray hours = enabled; blank hours = off or unobserved.
+      </div>
+    </div>
+  );
+}
+
+
 /** Step chart of sampled working ChatGPT sessions; unobserved spans are hatched, never filled in. */
 function ChatGPTActiveSessions({
   samples,
@@ -315,6 +460,7 @@ export function QuotaPacingWidget({
   );
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const activeSamples = useChatGPTActiveHistory(primaryEnvironmentId, isElectron);
+  const autoworkHistory = useAutoworkHistory();
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -470,7 +616,7 @@ export function QuotaPacingWidget({
           <span aria-hidden>{open ? "−" : "+"}</span>
         </button>
         {open ? (
-          <div className="space-y-2 px-2 pb-2">
+          <div className="max-h-[82vh] space-y-2 overflow-y-auto px-2 pb-2">
             <div className="flex items-center justify-between px-1 text-2xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <RotateCcwIcon className="size-3" />
@@ -633,6 +779,7 @@ export function QuotaPacingWidget({
                 </svg>
               </div>
             ))}
+            {autoworkHistory ? <AutoworkThroughputCharts history={autoworkHistory} /> : null}
             {isElectron && primaryEnvironmentId ? (
               <ChatGPTActiveSessions samples={activeSamples} now={now} />
             ) : null}
