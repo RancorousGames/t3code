@@ -37,6 +37,10 @@ export interface CaffyConfig {
   lastError: string | null;
   /** Absolute future start, persisted through full desktop restarts. */
   beginAt?: number | null;
+  /** Optional one-time instruction for the next delayed wake. */
+  delayedPrompt?: string | null;
+  /** Pinned with pendingMessageId so crash recovery cannot change a queued send. */
+  pendingMessageBody?: string | null;
   /** Only idle and queued modes support automated context reboot. */
   autoRebootMinutes?: number | null;
   /** An admitted queued monitor retains one automatic slot until stopped. */
@@ -59,9 +63,24 @@ interface LocalCapacityClaim {
   state: "waiting" | "admitted" | "submitted" | "uncertain";
   createdAt: number; submittedAt: number | null;
 }
+interface ScheduledChatGPTSpawn {
+  id: string;
+  title: string;
+  prompt: string;
+  beginAt: number | null;
+  /** Wait for Keep T3 Busy to have a free agent slot, ahead of TaskBoard. */
+  onIdle?: boolean;
+  project?: string;
+  status: "scheduled" | "dispatching" | "created" | "uncertain";
+  /** Short reservation while the newly spawned session mounts and starts. */
+  holdUntil?: number;
+  sessionId?: string;
+  error?: string;
+}
 interface CaffyStore {
   version: 2;
   entries: CaffyConfig[];
+  scheduledSpawns?: ScheduledChatGPTSpawn[];
   capacityClaims?: LocalCapacityClaim[];
   keepT3Busy: boolean;
   maxWorking: number;
@@ -84,6 +103,7 @@ const valid = (row: CaffyConfig): boolean =>
 export class CaffyScheduler {
   private readonly file: string;
   private readonly entries = new Map<string, CaffyConfig>();
+  private readonly scheduledSpawns = new Map<string, ScheduledChatGPTSpawn>();
   private readonly agentStops = new Map<string, AgentStoppedCaffy>();
   private keepT3Busy = false;
   private maxWorking = 6;
@@ -140,6 +160,18 @@ export class CaffyScheduler {
       const saved = JSON.parse(NodeFS.readFileSync(this.file, "utf8")) as CaffyStore;
       if (saved.version === 2 && Array.isArray(saved.entries)) {
         for (const row of saved.entries) if (valid(row)) this.entries.set(row.sessionId, row);
+        for (const job of saved.scheduledSpawns ?? []) {
+          if (!job || !UUID.test(job.id) ||
+              !(job.onIdle === true ? job.beginAt === null : Number.isSafeInteger(job.beginAt)) ||
+              typeof job.title !== "string" || typeof job.prompt !== "string" ||
+              !["scheduled", "dispatching", "created", "uncertain"].includes(job.status)) continue;
+          // Dispatch may have reached the renderer before T3 shut down.
+          if (job.status === "dispatching") {
+            job.status = "uncertain";
+            job.error = "T3 restarted during creation. Inspect this request before retrying.";
+          }
+          this.scheduledSpawns.set(job.id, job);
+        }
         for (const claim of saved.capacityClaims ?? []) {
           if (claim && UUID.test(claim.messageId) && UUID.test(claim.sessionId) &&
               (claim.conversationId === null || UUID.test(claim.conversationId)) &&
@@ -202,6 +234,7 @@ export class CaffyScheduler {
     try {
       NodeFS.writeFileSync(tmp, JSON.stringify({
         version: 2, entries: [...this.entries.values()],
+        scheduledSpawns: [...this.scheduledSpawns.values()],
         capacityClaims: [...this.capacityClaims.values()],
         agentStops: [...this.agentStops.values()].slice(-128),
         keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
@@ -437,6 +470,7 @@ export class CaffyScheduler {
     if (sessionId) return this.lookup(sessionId) ?? null;
     return {
       entries: [...this.entries.values()],
+      scheduledSpawns: [...this.scheduledSpawns.values()].map(({ prompt: _prompt, ...job }) => job),
       agentStops: [...this.agentStops.values()],
       capacityClaims: [...this.capacityClaims.values()].map(row => ({
         messageId: row.messageId, state: row.state,
@@ -523,6 +557,7 @@ export class CaffyScheduler {
     durationMinutes?: number | undefined; onceOnly?: boolean | undefined; startup?: boolean | undefined;
     intervalMinutes?: number | undefined; keepAwake?: boolean | undefined;
     beginAt?: number | null | undefined;
+    delayedPrompt?: string | null | undefined;
   }) {
     if (!UUID.test(input.sessionId) || !UUID.test(input.conversationId))
       throw new Error("Exact sessionId and conversationId UUIDs required.");
@@ -569,6 +604,8 @@ export class CaffyScheduler {
           id === input.sessionId || id === canonicalId || id === identity?.id))
         this.agentStops.delete(key);
     }
+    if (input.delayedPrompt && prior?.pendingMessageId)
+      throw new Error("Existing Caffy delivery is pending; inspect or cancel it before scheduling a new prompt.");
     if (prior?.pendingMessageId &&
         (prior.conversationId !== input.conversationId || prior.sessionId !== canonicalId))
       throw new Error("Existing wake delivery needs reconciliation before changing its recipient identity.");
@@ -580,8 +617,10 @@ export class CaffyScheduler {
       prior.keepAwake === (input.keepAwake ?? true) &&
       prior.intervalMinutes === intervalMinutes;
     if (same) {
-      if (input.beginAt !== undefined && input.beginAt !== prior.beginAt) {
-        prior.beginAt = input.beginAt;
+      if ((input.beginAt !== undefined && input.beginAt !== prior.beginAt) ||
+          (input.delayedPrompt !== undefined && input.delayedPrompt !== prior.delayedPrompt)) {
+        if (input.beginAt !== undefined) prior.beginAt = input.beginAt;
+        prior.delayedPrompt = input.delayedPrompt ?? null;
         prior.pendingWake = true;
         prior.pendingReason = "manual";
         this.save();
@@ -606,12 +645,16 @@ export class CaffyScheduler {
       expiresAt: input.durationMinutes === undefined ? null :
         Math.max(now, input.beginAt ?? prior?.beginAt ?? now) + input.durationMinutes * 60_000,
       nextDueAt: input.mode === "periodic" ? now + intervalMinutes * 60_000 : null,
-      pendingWake: prior?.conversationId === input.conversationId ? prior.pendingWake : input.mode === "idle" || input.mode === "queued",
-      pendingReason: prior?.conversationId === input.conversationId ? prior.pendingReason : input.mode === "idle" || input.mode === "queued" ? "manual" : null,
+      pendingWake: input.delayedPrompt && input.mode === "queued" ? true :
+        prior?.conversationId === input.conversationId ? prior.pendingWake : input.mode === "idle" || input.mode === "queued",
+      pendingReason: input.delayedPrompt && input.mode === "queued" ? "manual" :
+        prior?.conversationId === input.conversationId ? prior.pendingReason : input.mode === "idle" || input.mode === "queued" ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
       lastIdleSequence: Math.max(prior?.lastIdleSequence ?? 0, identity?.idleSequence ?? 0),
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
       beginAt: input.beginAt !== undefined ? input.beginAt : prior?.beginAt ?? null,
+      delayedPrompt: input.delayedPrompt !== undefined ? input.delayedPrompt : prior?.delayedPrompt ?? null,
+      pendingMessageBody: prior?.pendingMessageBody ?? null,
       autoRebootMinutes: ["idle", "queued"].includes(input.mode) ? prior?.autoRebootMinutes ?? null : null,
       capacityHeld: input.mode === "queued" ? (prior?.capacityHeld ?? false) : false,
       lastActivatedAt: prior?.lastActivatedAt ?? null,
@@ -671,7 +714,110 @@ export class CaffyScheduler {
     return { stopped };
   }
 
-  async beginAt(sessionId: string, conversationId: string, at: number | null) {
+  scheduleSpawn(input: { id: string; title: string; prompt: string; beginAt: number | null; onIdle?: boolean; project?: string }) {
+    if (!UUID.test(input.id)) throw new Error("Scheduled job requires a stable UUID.");
+    if (!input.title.trim() || input.title.length > 120 ||
+        !input.prompt.trim() || input.prompt.length > 29_800)
+      throw new Error("Provide a title and a prompt (maximum 29800 characters).");
+    if (input.onIdle === true ? input.beginAt !== null :
+        input.beginAt === null || !Number.isSafeInteger(input.beginAt) ||
+        input.beginAt <= Date.now() || input.beginAt > Date.now() + 90 * 24 * 60 * 60_000)
+      throw new Error("Choose either Begin on idle or a future time within 90 days.");
+    const existing = this.scheduledSpawns.get(input.id);
+    if (existing) {
+      if (existing.title !== input.title || existing.prompt !== input.prompt ||
+          existing.beginAt !== input.beginAt ||
+          (existing.onIdle === true) !== (input.onIdle === true) ||
+          existing.project !== input.project)
+        throw new Error("Scheduled job ID belongs to a different request.");
+      return { id: existing.id, status: existing.status, beginAt: existing.beginAt };
+    }
+    this.scheduledSpawns.set(input.id, { ...input, status: "scheduled" });
+    this.save();
+    void this.pump();
+    return { id: input.id, status: "scheduled", beginAt: input.beginAt };
+  }
+
+  cancelScheduledSpawn(id: string) {
+    const job = this.scheduledSpawns.get(id);
+    if (!job) throw new Error("Scheduled job not found.");
+    if (job.status !== "scheduled")
+      throw new Error("Creation may already have started. Inspect its receipt before changing it.");
+    this.scheduledSpawns.delete(id);
+    this.save();
+    return { cancelled: true, id };
+  }
+
+  private async dispatchScheduledSpawn(now: number) {
+    const job = [...this.scheduledSpawns.values()]
+      .filter(item => item.status === "scheduled" &&
+        (item.onIdle === true ? this.keepT3Busy : item.beginAt !== null && item.beginAt <= now))
+      .sort((a, b) => (a.beginAt ?? 0) - (b.beginAt ?? 0))[0];
+    if (!job) return;
+    const ticket = `scheduled-spawn:${job.id}`;
+    if (!(await this.acquireAutomaticAdmission(ticket, undefined, job.onIdle !== true))) return;
+    try {
+      if (this.scheduledSpawns.get(job.id) !== job || job.status !== "scheduled") return;
+      // Persist the one-way transition before requesting creation. After a crash
+      // the same prompt must never be spawned again without receipt inspection.
+      job.status = "dispatching";
+      this.save();
+      try {
+        const reply = await this.request({
+          version: 1, requestId: job.id, type: "chatgpt.spawn",
+          title: job.title, prompt: job.prompt,
+          ...(job.project ? { project: job.project } : {}),
+          role: "personal",
+        });
+        if (reply.ok && "data" in reply && reply.data &&
+            typeof reply.data === "object" && "sessionId" in reply.data &&
+            typeof reply.data.sessionId === "string") {
+          job.status = "created";
+          job.sessionId = reply.data.sessionId;
+          job.holdUntil = Date.now() + 180_000;
+          delete job.error;
+        } else {
+          job.status = "uncertain";
+          job.error = reply.ok ? "Spawn receipt did not confirm a session ID." :
+            reply.message;
+        }
+      } catch (error) {
+        job.status = "uncertain";
+        job.error = String(error);
+      }
+      this.save();
+    } finally {
+      this.releaseAutomaticAdmission(ticket);
+    }
+  }
+
+  cancelDelayedPrompt(sessionId: string) {
+    const row = this.lookup(sessionId);
+    if (!row) return { cleared: true };
+    if (row.pendingMessageId) {
+      const messageId = row.pendingMessageId;
+      const delivery = this.deliveries.status(messageId);
+      if (delivery.status !== "queued")
+        throw new Error("Prompt may already have been sent; inspect delivery before cancelling.");
+      row.pendingMessageId = null;
+      row.pendingMessageBody = null;
+      this.deliveries.cancel(messageId);
+    }
+    if (row.onceOnly && (row.mode === "queued" || row.mode === "idle")) {
+      return { cleared: true, stopped: this.stop(sessionId, "user").stopped };
+    }
+    row.delayedPrompt = null;
+    row.pendingMessageBody = null;
+    row.beginAt = null;
+    row.pendingWake = false;
+    row.pendingReason = null;
+    this.save();
+    return { cleared: true };
+  }
+
+  async beginAt(sessionId: string, conversationId: string, at: number | null, prompt?: string) {
+    if (prompt !== undefined && (!prompt.trim() || prompt.length > 29_800))
+      throw new Error("Delayed prompt must contain 1..29800 characters.");
     if (at !== null && (!Number.isSafeInteger(at) || at <= Date.now() ||
         at > Date.now() + 90 * 24 * 60 * 60_000))
       throw new Error("Begin working must be within the next 90 days.");
@@ -679,7 +825,7 @@ export class CaffyScheduler {
     if (!row) {
       if (at === null) return { cleared: true };
       row = await this.set({ sessionId, conversationId, mode: "idle",
-        onceOnly: true, keepAwake: false, beginAt: at });
+        onceOnly: true, keepAwake: false, beginAt: at, delayedPrompt: prompt ?? null });
       return row;
     }
     if (row.conversationId !== conversationId)
@@ -698,6 +844,7 @@ export class CaffyScheduler {
         throw new Error("Cannot delay a wake that has already been attempted.");
       const messageId = row.pendingMessageId;
       row.pendingMessageId = null;
+      row.pendingMessageBody = null;
       this.deliveries.cancel(messageId);
     }
     if (row.expiresAt !== null) {
@@ -706,6 +853,7 @@ export class CaffyScheduler {
       row.expiresAt = (at ?? Date.now()) + duration;
     }
     row.beginAt = at;
+    row.delayedPrompt = at === null ? null : prompt ?? null;
     row.pendingWake = true;
     row.pendingReason = "manual";
     if (at !== null) {
@@ -899,6 +1047,8 @@ export class CaffyScheduler {
     if (!row || row.pendingMessageId !== record.messageId) return;
     if (record.status === "delivered") {
       row.pendingMessageId = null;
+      row.pendingMessageBody = null;
+      row.delayedPrompt = null;
       row.lastWakeAt = Date.now();
       row.lastActivatedAt ??= row.lastWakeAt;
       row.lastError = null;
@@ -1034,6 +1184,10 @@ export class CaffyScheduler {
     }
     for (const claim of this.capacityClaims.values()) {
       if (claim.state !== "waiting") pendingIds.add(claim.sessionId);
+    }
+    for (const job of this.scheduledSpawns.values()) {
+      if (job.status === "created" && job.sessionId && (job.holdUntil ?? 0) > now)
+        pendingIds.add(job.sessionId);
     }
     for (const row of this.taskReservations) {
       if (row.holdUntil === undefined || row.holdUntil <= now) continue;
@@ -1237,6 +1391,8 @@ export class CaffyScheduler {
         [...this.entries.values()].some(row => row.sessionId === sessionId &&
           row.pendingMessageId !== null));
       if (!alreadyHeld && this.hasPriorityCapacityMessage()) return false;
+      if (!alreadyHeld && this.hasPendingQueuedWakes &&
+          !ticket.startsWith("wake:") && !ticket.startsWith("scheduled-spawn:")) return false;
       const available = await this.capacity().catch(() => null);
       if (!available || available.unknown !== 0) return false;
       const admissionUsed = available.used + available.reserved;
@@ -1265,13 +1421,18 @@ export class CaffyScheduler {
   get hasPendingQueuedWakes(): boolean {
     this.expireTimedBusy();
     const now = Date.now();
-    return this.keepT3Busy && [...this.entries.values()].some(row =>
-      row.mode === "queued" && row.pendingWake && !row.paused &&
-      !row.pendingMessageId && row.lastError === null &&
-      // A queued wake intentionally delayed by the user does not reserve
-      // priority/capacity until its activation deadline.
-      (row.beginAt == null || row.beginAt <= now) &&
-      (row.expiresAt === null || row.expiresAt > now));
+    return this.keepT3Busy && (
+      [...this.scheduledSpawns.values()].some(job => job.status === "scheduled" &&
+        (job.onIdle === true || (job.beginAt !== null && job.beginAt <= now))) ||
+      [...this.entries.values()].some(row =>
+        row.mode === "queued" && row.pendingWake && !row.paused &&
+        !row.pendingMessageId && row.lastError === null &&
+        // A queued wake intentionally delayed by the user does not reserve
+        // priority/capacity until its activation deadline.
+        (row.beginAt == null || row.beginAt <= now) &&
+        (row.expiresAt === null || row.expiresAt > now)) ||
+      [...this.entries.values()].some(row => row.delayedPrompt && row.pendingWake &&
+        !row.paused && (row.beginAt === null || row.beginAt === undefined || row.beginAt <= now)));
   }
 
   private async pump() {
@@ -1282,6 +1443,7 @@ export class CaffyScheduler {
     try {
       await this.reconcileIdentityAliases().catch(() => {});
       const now = Date.now();
+      await this.dispatchScheduledSpawn(now);
       const rows = [...this.entries.values()].sort((a,b) =>
         Number(b.mode === "queued" && b.pendingWake && !b.paused) -
         Number(a.mode === "queued" && a.pendingWake && !a.paused));
@@ -1323,7 +1485,8 @@ export class CaffyScheduler {
             try {
               this.deliveries.enqueue({
                 messageId: row.pendingMessageId, sessionId: row.sessionId,
-                conversationId: row.conversationId, body: WAKE_TEXT,
+                conversationId: row.conversationId, body: row.pendingMessageBody ?? WAKE_TEXT,
+                caffyWake: true,
               });
             } catch (error) { row.lastError = String(error); this.save(); }
           }
@@ -1382,6 +1545,8 @@ export class CaffyScheduler {
         // result is reconciled by this ID rather than generating another wake.
         const messageId = NodeCrypto.randomUUID();
         row.pendingMessageId = messageId;
+        row.pendingMessageBody = row.delayedPrompt ?? WAKE_TEXT;
+        row.delayedPrompt = null;
         row.pendingWake = false;
         row.pendingReason = null;
         if (row.mode === "queued") row.capacityHeld = true;
@@ -1389,7 +1554,8 @@ export class CaffyScheduler {
         try {
           this.deliveries.enqueue({
             messageId, sessionId: row.sessionId,
-            conversationId: row.conversationId, body: WAKE_TEXT,
+            conversationId: row.conversationId, body: row.pendingMessageBody ?? WAKE_TEXT,
+            caffyWake: true,
           });
         } catch (error) {
           // Keep the ID pinned; the journal might already contain it.

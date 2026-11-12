@@ -22,7 +22,7 @@ export const setReady = DesktopIpc.makeIpcMethod({
 export const caffyControl = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.DESKTOP_CAFFY_CONTROL_CHANNEL,
   payload: Schema.Struct({
-    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "working_snapshot", "retire", "begin_in", "auto_reboot"]),
+    action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "working_snapshot", "retire", "begin_in", "auto_reboot", "schedule_spawn", "cancel_spawn", "cancel_begin"]),
     sessionId: Schema.optional(Schema.String),
     conversationId: Schema.optional(Schema.String),
     mode: Schema.optional(Schema.Literals(["idle", "periodic", "queued", "startup"])),
@@ -40,6 +40,11 @@ export const caffyControl = DesktopIpc.makeIpcMethod({
     lifecycleReason: Schema.optional(Schema.Literals(["closed", "hidden", "snoozed", "missing"])),
     stopInitiator: Schema.optional(Schema.Literal("user")),
     beginAt: Schema.optional(Schema.NullOr(Schema.Number)),
+    jobId: Schema.optional(Schema.String),
+    onIdle: Schema.optional(Schema.Boolean),
+    title: Schema.optional(Schema.String),
+    prompt: Schema.optional(Schema.String),
+    project: Schema.optional(Schema.String),
     rebootMinutes: Schema.optional(Schema.NullOr(Schema.Number)),
   }),
   result: Schema.Unknown,

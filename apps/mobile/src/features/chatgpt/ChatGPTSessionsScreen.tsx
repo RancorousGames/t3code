@@ -20,6 +20,7 @@ import {
   readChatGPTRegistryReceipt,
 } from "../../state/chatGPTRegistry";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { ChatGPTSchedulePanel, type MobileChatGPTSchedule, type MobileChatGPTScheduledJob, type MobileChatGPTScheduledEntry } from "./ChatGPTSchedulePanel";
 
 function elapsed(at: number | null, now: number): string {
   if (!at || !Number.isFinite(at)) return "never";
@@ -89,6 +90,9 @@ export function ChatGPTSessionsScreen() {
   const [data, setData] = useState<RegistryRead | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [scheduleFor, setScheduleFor] = useState<string | null | undefined>(undefined);
+  const [scheduledJobs, setScheduledJobs] = useState<MobileChatGPTScheduledJob[]>([]);
+  const [scheduledEntries, setScheduledEntries] = useState<MobileChatGPTScheduledEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -136,6 +140,9 @@ export function ChatGPTSessionsScreen() {
     setData(null);
     setSelectedSessionId(null);
     setDraft("");
+    setScheduleFor(undefined);
+    setScheduledJobs([]);
+    setScheduledEntries([]);
     void refresh();
   }, [environmentId, refresh]);
 
@@ -188,26 +195,26 @@ export function ChatGPTSessionsScreen() {
     } finally { setBusy(false); }
   };
 
-  const operate = async (row: ChatGPTRegistrySession, actionId: string, args: Record<string, unknown>) => {
-    if (!row.publicSessionId) {
+  const operate = async (row: ChatGPTRegistrySession | null, actionId: string, args: Record<string, unknown>): Promise<boolean> => {
+    if (row && !row.publicSessionId) {
       setFeedback("This session is not registered. Wait for its first assistant [T3_ID] marker.");
-      return;
+      return false;
     }
     if (!environmentId || !online || busy || !canOperate) {
       setFeedback("Desktop offline or no permission; no action queued.");
-      return;
+      return false;
     }
     const requestId = uuidv4();
     setBusy(true);
     try {
       const response = await act({
         environmentId,
-        input: { requestId, environmentId, sessionId: row.publicSessionId, actionId, args },
+        input: { requestId, environmentId, sessionId: row?.publicSessionId ?? "scheduled-chatgpt", actionId, args },
       });
       if (response._tag !== "Success" || !response.value.ok) {
         setFeedback(response._tag === "Success" ? response.value.reason ?? "Desktop action refused."
           : "Unable to confirm the request. Do not resend without checking.");
-        return;
+        return false;
       }
       setFeedback("Sent to desktop; awaiting the receipt. Will not resend.");
       for (let attempt = 0; attempt < 8; attempt++) {
@@ -215,13 +222,45 @@ export function ChatGPTSessionsScreen() {
         const next = await receipt({ environmentId, input: { requestId } });
         if (next._tag !== "Success" || !next.value?.resolvedAt) continue;
         const result = next.value.result;
-        setFeedback(result?.ok === true
+        const succeeded = result?.ok === true;
+        setFeedback(succeeded
           ? `Desktop: ${String(result.status ?? "action completed")}`
           : `Desktop: ${String(result?.reason ?? result?.status ?? "not completed")}`);
-        return;
+        if (actionId === "schedule_list" && succeeded && Array.isArray(result?.jobs)) {
+          setScheduledJobs(result.jobs.filter((job): job is MobileChatGPTScheduledJob =>
+            !!job && typeof job === "object" &&
+            typeof job.id === "string" && typeof job.title === "string" &&
+            (job.beginAt === null || typeof job.beginAt === "number") &&
+            typeof job.status === "string"));
+        }
+        if (actionId === "schedule_list" && succeeded && Array.isArray(result?.entries)) {
+          setScheduledEntries(result.entries.filter((entry): entry is MobileChatGPTScheduledEntry =>
+            !!entry && typeof entry === "object" &&
+            typeof entry.sessionId === "string" &&
+            (entry.beginAt === null || typeof entry.beginAt === "number") &&
+            typeof entry.mode === "string"));
+        }
+        return succeeded;
       }
       setFeedback("Desktop result not confirmed. The command was NOT sent again.");
+      return false;
     } finally { setBusy(false); }
+  };
+  const schedule = async (input: MobileChatGPTSchedule): Promise<boolean> => {
+    const row = scheduleFor ? rows.find(item => item.sessionId === scheduleFor) ?? null : null;
+    if (scheduleFor && (!row || !conversationId(row))) {
+      setFeedback("The selected conversation is unregistered; schedule rejected.");
+      return false;
+    }
+    return operate(row, row ? "schedule_existing" : "schedule_new", {
+      ...(row ? { expectedConversationId: conversationId(row) } : { title: input.title }),
+      prompt: input.prompt, onIdle: input.onIdle, beginAt: input.beginAt,
+    });
+  };
+  const showScheduler = (id: string | null) => {
+    setScheduleFor(id);
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
+    void operate(null, "schedule_list", {});
   };
 
   return (
@@ -233,7 +272,34 @@ export function ChatGPTSessionsScreen() {
           paddingBottom: Math.max(insets.bottom, 24) + 90, gap: 12 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
       >
-        <Text className="text-xl font-semibold text-foreground">ChatGPT sessions</Text>
+        <View className="flex-row items-center justify-between">
+          <Text className="text-xl font-semibold text-foreground">ChatGPT sessions</Text>
+          <NativeButton label="Schedule new +" disabled={!online || busy || !canOperate}
+            onPress={() => showScheduler(null)} />
+        </View>
+        {scheduleFor !== undefined ? (
+          <ChatGPTSchedulePanel
+            key={scheduleFor ?? "new"}
+            targetTitle={scheduleFor === null ? null : String(rows.find(row => row.sessionId === scheduleFor)?.record.title ?? scheduleFor)}
+            onCreate={schedule}
+            onClose={() => setScheduleFor(undefined)}
+            busy={busy}
+            scheduledJobs={scheduledJobs}
+            scheduledEntries={scheduledEntries.filter(entry =>
+              scheduleFor === null || entry.sessionId === scheduleFor)}
+            onCancelExisting={async (id) => {
+              const row = rows.find(item => item.sessionId === id);
+              if (!row) { setFeedback("Scheduled session is not in this environment."); return; }
+              const ok = await operate(row, "schedule_cancel_existing", {});
+              if (ok) setScheduledEntries(current => current.filter(entry => entry.sessionId !== id));
+            }}
+            onCancelJob={async (id) => {
+              const ok = await operate(null, "schedule_cancel", { jobId: id });
+              if (ok) setScheduledJobs(current => current.filter(job => job.id !== id));
+            }}
+            onRefreshJobs={async () => { await operate(null, "schedule_list", {}); }}
+          />
+        ) : null}
         <Text className="text-xs text-foreground-muted">
           {online ? "Desktop connected" : "Desktop offline"} · Last contact {elapsed(data?.driver.lastSeenAt ?? null, now)}
           {!online ? " · Last-known sessions only; live actions unavailable." : ""}
@@ -302,6 +368,8 @@ export function ChatGPTSessionsScreen() {
                 disabled={busy || !online || !canOperate || !draft.trim() || !conversationId(selected) || !selected.publicSessionId}
                 onPress={() => void operate(selected, selected.snapshot?.lastAssistantEndsWithQuestion ? "answer" : "send", { message: draft.trim(),
                   expectedConversationId: conversationId(selected) })} />
+              <NativeButton label="Schedule" disabled={!online || busy || !canOperate || !selected.publicSessionId || !conversationId(selected)}
+                onPress={() => showScheduler(selected.sessionId)} />
               <NativeButton label="Retry" disabled={!online || busy || !canOperate || !selected.publicSessionId}
                 onPress={() => void operate(selected, "retry_recovery", {})} />
               <NativeButton label="Reload" disabled={!online || busy || !canOperate || !selected.publicSessionId}

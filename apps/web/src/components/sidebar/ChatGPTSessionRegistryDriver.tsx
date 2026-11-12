@@ -125,9 +125,102 @@ export async function executeRegistryDriverAction(
     completion: { declaredAt: string; observedTurns: number; observedUrl: string | null },
   ) => void,
 ): Promise<Record<string, unknown>> {
+  const scheduler = window.desktopBridge?.caffyControl;
+  if (["schedule_new", "schedule_list", "schedule_cancel"].includes(action.actionId)) {
+    if (action.sessionId !== "scheduled-chatgpt")
+      return { ok: false, reason: "Invalid scheduler target." };
+    if (!scheduler) return { ok: false, reason: "Desktop scheduler unavailable." };
+    try {
+      if (action.actionId === "schedule_list") {
+        const result = await scheduler({ action: "list" });
+        const data = result && typeof result === "object" ? result as {
+          scheduledSpawns?: readonly Record<string, unknown>[];
+          entries?: readonly Record<string, unknown>[];
+          keepT3Busy?: boolean;
+        } : {};
+        return { ok: true, status: "schedules_listed",
+          jobs: (data.scheduledSpawns ?? []).slice(-30),
+          entries: (data.entries ?? []).filter(entry =>
+            (typeof entry.beginAt === "number" && entry.beginAt > Date.now()) ||
+            (typeof entry.delayedPrompt === "string" && !!entry.delayedPrompt) ||
+            (typeof entry.pendingMessageBody === "string" && !!entry.pendingMessageBody &&
+              !entry.pendingMessageBody.startsWith("Continue working on your current assignment.")))
+            .map(entry => ({
+              sessionId: entry.sessionId, beginAt: entry.beginAt,
+              mode: entry.mode, onceOnly: entry.onceOnly, pendingWake: entry.pendingWake,
+              onIdle: entry.mode === "queued" && entry.beginAt == null,
+            })),
+          keepT3Busy: data.keepT3Busy ?? false,
+        };
+      }
+      if (action.actionId === "schedule_cancel") {
+        const jobId = action.args.jobId;
+        if (typeof jobId !== "string" || !/^[0-9a-f-]{36}$/i.test(jobId))
+          return { ok: false, reason: "A scheduled job UUID is required." };
+        await scheduler({ action: "cancel_spawn", jobId });
+        return { ok: true, status: "schedule_cancelled" };
+      }
+      const title = action.args.title;
+      const prompt = action.args.prompt;
+      const onIdle = action.args.onIdle === true;
+      const beginAt = action.args.beginAt;
+      if (typeof title !== "string" || title.trim().length < 1 || title.length > 120 ||
+          typeof prompt !== "string" || !prompt.trim() || prompt.length > 8_000 ||
+          (onIdle ? beginAt !== null : !Number.isSafeInteger(beginAt) ||
+            (beginAt as number) <= Date.now() ||
+            (beginAt as number) > Date.now() + 90 * 24 * 60 * 60_000))
+        return { ok: false, reason: "Provide a title, prompt and valid schedule." };
+      await scheduler({
+        action: "schedule_spawn", jobId: action.requestId,
+        title: title.trim(), prompt, onIdle, beginAt: onIdle ? null : beginAt as number,
+      });
+      return { ok: true, status: "scheduled", jobId: action.requestId };
+    } catch (error) {
+      return { ok: false, reason: errorText(error) };
+    }
+  }
+
   const sessions = readChatGPTBrowserSessions(environmentId);
   const target = sessions.find((entry) => entry.id === action.sessionId);
   if (!target) return { ok: false, reason: "ChatGPT session no longer exists on desktop." };
+  if (action.actionId === "schedule_cancel_existing") {
+    if (!scheduler) return { ok: false, reason: "Desktop scheduler unavailable." };
+    try {
+      await scheduler({ action: "cancel_begin", sessionId: target.id });
+      return { ok: true, status: "schedule_cancelled" };
+    } catch (error) {
+      return { ok: false, reason: errorText(error) };
+    }
+  }
+  if (action.actionId === "schedule_existing") {
+    if (!scheduler) return { ok: false, reason: "Desktop scheduler unavailable." };
+    const prompt = action.args.prompt;
+    const onIdle = action.args.onIdle === true;
+    const beginAt = action.args.beginAt;
+    const expectedConversationId = action.args.expectedConversationId;
+    if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 8_000 ||
+        typeof expectedConversationId !== "string" ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(expectedConversationId) ||
+        (onIdle ? beginAt !== null : !Number.isSafeInteger(beginAt) ||
+          (beginAt as number) <= Date.now() ||
+          (beginAt as number) > Date.now() + 90 * 24 * 60 * 60_000))
+      return { ok: false, reason: "Provide a prompt, exact conversation ID and valid schedule." };
+    const registered = target.bootstrapIdentity?.state === "registered"
+      ? target.bootstrapIdentity.conversationId : null;
+    if (registered !== expectedConversationId)
+      return { ok: false, reason: "Conversation changed or is unregistered; no prompt scheduled." };
+    try {
+      await scheduler(onIdle
+        ? { action: "set", sessionId: target.id, conversationId: expectedConversationId,
+            mode: "queued", onceOnly: true, startup: false, keepAwake: false,
+            prompt, beginAt: null }
+        : { action: "begin_in", sessionId: target.id, conversationId: expectedConversationId,
+            beginAt: beginAt as number, prompt });
+      return { ok: true, status: onIdle ? "queued_for_capacity" : "scheduled" };
+    } catch (error) {
+      return { ok: false, reason: errorText(error) };
+    }
+  }
 
   if (action.actionId === "snooze" || action.actionId === "unsnooze") {
     const hours = action.args.hours;

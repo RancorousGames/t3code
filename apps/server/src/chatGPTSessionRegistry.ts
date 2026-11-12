@@ -20,7 +20,7 @@ const DRIVER_LEASE_MS = 15_000;
 const MAX_SNAPSHOT_TEXT = 2_000;
 const MAX_RECORD_BYTES = 48_000;
 const MAX_ACTION_BYTES = 16_000;
-const DRIVER_ACTIONS = new Set(["read", "send", "when_idle", "answer", "reload", "retry_recovery", "complete", "snooze", "unsnooze"]);
+const DRIVER_ACTIONS = new Set(["read", "send", "when_idle", "answer", "reload", "retry_recovery", "complete", "snooze", "unsnooze", "schedule_existing", "schedule_new", "schedule_list", "schedule_cancel", "schedule_cancel_existing"]);
 
 export class ChatGPTDriverUnavailable extends Data.TaggedError("ChatGPTDriverUnavailable")<{
   readonly message: string;
@@ -484,7 +484,11 @@ const make = Effect.gen(function* () {
         if (row && row.closedAt !== null) return yield* Effect.fail(new ChatGPTDriverUnavailable("ChatGPT session is closed; no action queued."));
         // An unknown public T3 ID is a durable reservation, not a send attempt.
         // It cannot be taken until a verified Bootstrap identity arrives in sync.
-        if (!row && !["send", "when_idle"].includes(request.actionId)) return yield* Effect.fail(new ChatGPTDriverUnavailable("ChatGPT session is unknown; no action queued."));
+        const globalScheduleAction = ["schedule_new", "schedule_list", "schedule_cancel"].includes(request.actionId);
+        if (globalScheduleAction && request.sessionId !== "scheduled-chatgpt")
+          return yield* Effect.fail(new ChatGPTDriverUnavailable("Scheduled task action requires the scheduler target."));
+        if (!globalScheduleAction && !row && !["send", "when_idle"].includes(request.actionId))
+          return yield* Effect.fail(new ChatGPTDriverUnavailable("ChatGPT session is unknown; no action queued."));
         const now = yield* Clock.currentTimeMillis;
         yield* sql`
           INSERT INTO chatgpt_registry_actions
@@ -502,10 +506,11 @@ const make = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const rows = yield* sql<ActionRow>`
           SELECT a.* FROM chatgpt_registry_actions a
-          INNER JOIN chatgpt_session_registry s
+          LEFT JOIN chatgpt_session_registry s
             ON s.environment_id = a.environment_id AND s.session_id = a.session_id
           WHERE a.environment_id = ${environmentId} AND a.driver_id = ${driverId}
-            AND a.dispatched_at IS NULL AND a.resolved_at IS NULL AND s.closed_at IS NULL
+            AND a.dispatched_at IS NULL AND a.resolved_at IS NULL
+            AND (a.session_id = 'scheduled-chatgpt' OR (s.session_id IS NOT NULL AND s.closed_at IS NULL))
           ORDER BY requested_at, request_id LIMIT ${Math.min(50, Math.max(1, limit))}
         `;
         for (const row of rows) {

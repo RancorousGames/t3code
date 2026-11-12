@@ -18,6 +18,8 @@ export interface DeliveryRecord {
   sessionId: string;
   conversationId: string;
   body: string;
+  /** Trusted main-process Caffy wake, independent of user-written body text. */
+  caffyWake?: boolean;
   status: DeliveryState;
   attempts: number;
   /** Number of duplicate-risk submissions, persisted across desktop restarts. */
@@ -50,9 +52,11 @@ const isWakeBody = (body: string) =>
   /^\[WAKE [1-9]\d*\] - To stop wakes, call keep_awake\.complete\([a-f0-9]{12}\)\. Total time elapsed: (?:\d+h)?\d+m$/.test(
     body,
   );
-const isCaffyWakeBody = (body: string) => body.startsWith("Continue working on your current assignment. If everything is genuinely finished, stop Caffy");
+const isCaffyWakeBody = (body: string) => body === "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
+const isCaffyRecord = (record: DeliveryRecord) => record.caffyWake === true || isCaffyWakeBody(record.body);
+const isCustomCaffyRecord = (record: DeliveryRecord) => record.caffyWake === true && !isCaffyWakeBody(record.body);
 const deliveryText = (record: DeliveryRecord) =>
-  isWakeBody(record.body) ? record.body : `${MARKER(record.messageId)}\n${record.body}`;
+  isWakeBody(record.body) || (isCaffyRecord(record) && !isCustomCaffyRecord(record)) ? record.body : `${MARKER(record.messageId)}\n${record.body}`;
 // Existing marked messages use bounded retry; wake messages remain reconciliation-only.
 const DUPLICATE_RETRY_DELAYS_MS = [5 * 60_000, 15 * 60_000];
 const LONG_RETRY_MS = 15 * 60_000;
@@ -267,7 +271,7 @@ export class ChatGPTDeliveryQueue {
     if (this.timer) clearTimeout(this.timer);
   }
 
-  enqueue(input: { messageId: string; sessionId: string; conversationId: string; body: string }) {
+  enqueue(input: { messageId: string; sessionId: string; conversationId: string; body: string; caffyWake?: boolean }) {
     if (
       !isUuid(input.messageId) ||
       !isUuid(input.conversationId) ||
@@ -283,7 +287,8 @@ export class ChatGPTDeliveryQueue {
       if (
         existing.sessionId !== input.sessionId ||
         existing.conversationId !== input.conversationId ||
-        existing.body !== input.body
+        existing.body !== input.body ||
+        (existing.caffyWake === true) !== (input.caffyWake === true)
       )
         throw new Error("Message ID already belongs to a different payload or recipient.");
       return this.publicRecord(existing);
@@ -455,7 +460,7 @@ export class ChatGPTDeliveryQueue {
       if (messageId && row.messageId !== messageId) continue;
       if (!ids.has(row.sessionId) ||
           (conversationId && row.conversationId !== conversationId) ||
-          (caffyOnly && !isCaffyWakeBody(row.body)) ||
+          (caffyOnly && !isCaffyRecord(row)) ||
           row.status === "delivered" || row.status === "cancelled") continue;
       const possiblySent = row.attempts > 0 ||
         row.status === "sending" || row.status === "uncertain";
@@ -515,7 +520,7 @@ export class ChatGPTDeliveryQueue {
       sessionId: record.sessionId,
       expectedConversationId: record.conversationId,
       ...(previous ? { previousDeliveredMessage: deliveryText(previous) } : {}),
-      message: isWakeBody(record.body) || isCaffyWakeBody(record.body)
+      message: isWakeBody(record.body) || (isCaffyRecord(record) && !isCustomCaffyRecord(record))
         ? record.body
         : `${MARKER(record.messageId)}\n${retry ? "[Potential duplicate: acknowledgement was lost. If you already handled this message ID, do not repeat its actions.]\n" : ""}${record.body}`,
       ...(retry ? { allowPossibleDuplicate: true } : {}),
@@ -680,7 +685,7 @@ export class ChatGPTDeliveryQueue {
         return;
       }
       record.uncertainSince ??= record.lastSubmissionAt ?? record.createdAt;
-      if (isWakeBody(record.body) || isCaffyWakeBody(record.body)) {
+      if (isWakeBody(record.body) || isCaffyRecord(record)) {
         // The wake uses composer-free direct submission. Unknown means reconcile,
         // never submit another wake without proof the first was not sent.
         this.update(record, "uncertain", detail);
@@ -708,7 +713,7 @@ export class ChatGPTDeliveryQueue {
       );
     } finally {
       if (record.attempts >= MAX_DELIVERY_ATTEMPTS &&
-          record.status !== "delivered" && record.status !== "cancelled" &&
+          !["delivered", "cancelled"].includes(record.status) &&
           !record.awaitingGuest) {
         this.update(record, "needs_attention",
           `Delivery stopped after ${record.attempts} attempts; retained for debugging.`);

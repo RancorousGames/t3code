@@ -2516,18 +2516,21 @@ export const layerWsRpc = (
                 "verification", "worker", "binding_clear", "binding_update", "project", "parent",
                 "highlight", "rename", "caffy_set", "caffy_stop", "caffy_pause",
                 "caffy_resume", "caffy_startup", "caffy_begin", "caffy_reboot",
-                "caffy_wake",
+                "caffy_wake", "caffy_schedule_spawn", "caffy_cancel_spawn", "caffy_cancel_begin",
               ]);
+              const optionsValid = p.options === undefined ||
+                (!!p.options && typeof p.options === "object" && !Array.isArray(p.options) &&
+                  Object.entries(p.options).length <= 16 &&
+                  Object.entries(p.options).every(([key, value]) => {
+                    const stringLimit = key === "prompt" &&
+                      ["caffy_begin", "caffy_set", "caffy_schedule_spawn"].includes(command ?? "")
+                        ? 8_000 : 500;
+                    return key.length <= 40 && (value === null || typeof value === "boolean" ||
+                      (typeof value === "number" && Number.isSafeInteger(value)) ||
+                      (typeof value === "string" && value.length <= stringLimit));
+                  }));
               if (p.session?.provider !== "t3" || !id || id.startsWith("thread:") ||
-                  !command || !allowed.has(command) ||
-                  (p.options !== undefined && (!p.options || typeof p.options !== "object" ||
-                    Array.isArray(p.options) ||
-                    Object.entries(p.options).length > 16 ||
-                    Object.entries(p.options).some(([key, value]) =>
-                      key.length > 40 ||
-                      (value !== null && typeof value !== "boolean" &&
-                        !(typeof value === "number" && Number.isSafeInteger(value)) &&
-                        !(typeof value === "string" && value.length <= 500))))))
+                  !command || !allowed.has(command) || !optionsValid)
                 return error("InvalidInput", "Invalid T3 browser control request.");
               const result = yield* Effect.promise(() => dispatchBrowserWork(
                 environmentId, id, null, "control", undefined,

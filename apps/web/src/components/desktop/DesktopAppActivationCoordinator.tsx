@@ -2263,6 +2263,11 @@ export function DesktopAppActivationCoordinator() {
                     entry.archive?.conversationUrl ?? null;
                   const caffyState = caffy
                     ? await caffy({ action: "status", sessionId: id }).catch(() => null) : null;
+                  const caffyOverview = caffy
+                    ? await caffy({ action: "list" }).catch(() => null) : null;
+                  const scheduledSpawns = caffyOverview && typeof caffyOverview === "object" &&
+                    "scheduledSpawns" in caffyOverview && Array.isArray(caffyOverview.scheduledSpawns)
+                    ? caffyOverview.scheduledSpawns : [];
                   return { ok: true as const, data: {
                     id: publicChatGPTSessionId(entry),
                     browserId: id, title: entry.title,
@@ -2274,6 +2279,7 @@ export function DesktopAppActivationCoordinator() {
                     borderColor: entry.borderColor ?? null,
                     keepLoaded: useChatGPTWarmSessions.getState().keepLoadedIds.has(id),
                     caffy: caffyState,
+                    scheduledSpawns,
                     otherSessions: sessions.filter((s) => s.id !== id).map((s) => ({
                       id: publicChatGPTSessionId(s), title: s.title,
                     })),
@@ -2443,10 +2449,39 @@ export function DesktopAppActivationCoordinator() {
                     const enabled = bool("value");
                     if (enabled === null) throw new Error("Startup setting required.");
                     await caffy({ action: "startup", sessionId: id, startup: enabled });
+                  } else if (command === "caffy_schedule_spawn") {
+                    const jobId = str("jobId");
+                    const title = str("title")?.trim();
+                    const prompt = str("prompt")?.trim();
+                    const onIdle = bool("onIdle") === true;
+                    const beginAt = number("beginAt");
+                    if (!jobId || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(jobId) ||
+                        !title || title.length > 120 || !prompt || prompt.length > 8_000 ||
+                        (onIdle ? beginAt !== null : !Number.isSafeInteger(beginAt) ||
+                          beginAt! <= Date.now() || beginAt! > Date.now() + 90 * 86_400_000))
+                      throw new Error("Provide a stable job UUID, task title, prompt, and valid deadline or Begin on idle.");
+                    await caffy({ action: "schedule_spawn", jobId, title, prompt,
+                      onIdle, beginAt: onIdle ? null : beginAt });
+                  } else if (command === "caffy_cancel_spawn") {
+                    const jobId = str("jobId");
+                    if (!jobId || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(jobId))
+                      throw new Error("Valid scheduled job UUID required.");
+                    await caffy({ action: "cancel_spawn", jobId });
+                  } else if (command === "caffy_cancel_begin") {
+                    await caffy({ action: "cancel_begin", sessionId: id });
                   } else if (command === "caffy_begin") {
                     const beginAt = number("beginAt");
-                    if (beginAt !== null && (beginAt < Date.now() || beginAt > Date.now() + 7 * 86_400_000))
-                      throw new Error("Begin time must be within 7 days.");
+                    const prompt = str("prompt")?.trim();
+                    const onIdle = bool("onIdle") === true;
+                    if (prompt && prompt.length > 8_000)
+                      throw new Error("Scheduled prompt must not exceed 8000 characters.");
+                    if (onIdle) {
+                      if (!prompt) throw new Error("Begin on idle requires a prompt.");
+                      await caffy({ action: "set", sessionId: id, mode: "queued", onceOnly: true,
+                        startup: false, keepAwake: false, beginAt: null, prompt });
+                    } else {
+                    if (beginAt !== null && (beginAt <= Date.now() || beginAt > Date.now() + 90 * 86_400_000))
+                      throw new Error("Begin time must be within 90 days.");
                     // Match T3's "Pause work and resume in" semantics:
                     // suppress the Caffy idle wake before stopping a live reply.
                     const working = beginAt !== null &&
@@ -2461,10 +2496,12 @@ export function DesktopAppActivationCoordinator() {
                       await caffy({ action: "pause", sessionId: id });
                     try {
                       if (working) await stopPhoneGeneration();
-                      await caffy({ action: "begin_in", sessionId: id, beginAt });
+                      await caffy({ action: "begin_in", sessionId: id, beginAt,
+                        ...(prompt ? { prompt } : {}) });
                     } finally {
                       if (shouldSuspend)
                         await caffy({ action: "resume", sessionId: id });
+                    }
                     }
                   } else if (command === "caffy_reboot") {
                     const minutes = number("value");

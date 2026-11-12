@@ -1912,7 +1912,7 @@ export interface DesktopBridge {
   readChatGPTDeliveryDiagnostics?: () => Promise<DesktopChatGPTDeliveryDiagnostics>;
   /** Durable T3-owned Caffy API; no OpenRig dependency. */
   caffyControl?: (input: {
-    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "working_snapshot" | "retire" | "begin_in" | "auto_reboot";
+    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "working_snapshot" | "retire" | "begin_in" | "auto_reboot" | "schedule_spawn" | "cancel_spawn" | "cancel_begin";
     sessionId?: string;
     conversationId?: string;
     mode?: "idle" | "periodic" | "queued" | "startup";
@@ -1930,6 +1930,11 @@ export interface DesktopBridge {
     lifecycleReason?: "closed" | "hidden" | "snoozed" | "missing";
     stopInitiator?: "user";
     beginAt?: number | null;
+    jobId?: string;
+    onIdle?: boolean;
+    title?: string;
+    prompt?: string;
+    project?: string;
     rebootMinutes?: number | null;
   }) => Promise<unknown>;
   /** Read-only OpenRig Caffy managed idle subscriptions (not T3 queued messages). */

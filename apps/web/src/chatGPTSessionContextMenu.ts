@@ -206,6 +206,7 @@ export function buildChatGPTSessionContextMenu(input: {
             item("caffy:begin:60", working ? "Resume in 1 hour" : "1 hour"),
             item("caffy:begin:120", working ? "Resume in 2 hours" : "2 hours"),
             item("caffy:begin:240", working ? "Resume in 4 hours" : "4 hours"),
+            item("caffy:begin:custom", "Choose time and prompt…"),
             item("caffy:begin:tomorrow-morning", "Tomorrow at 09:00", { separatorBefore: true }),
             item("caffy:begin:tomorrow-afternoon", "Tomorrow at 13:00"),
             item("caffy:begin:tomorrow-evening", "Tomorrow at 18:00"),

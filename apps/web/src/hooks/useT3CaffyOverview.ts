@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ScheduledChatGPTJob } from "../components/sidebar/ChatGPTDelayedPromptDialog";
 
 /** Read-only T3-owned scheduling state, never the obsolete OpenRig Caffy registry. */
 export interface T3CaffyEntry {
@@ -32,6 +33,7 @@ export interface T3CaffyOverview {
   shutdownWhenIdle: boolean;
   busyUntil: number | null;
   entries: T3CaffyEntry[];
+  scheduledSpawns: ScheduledChatGPTJob[];
 }
 
 export const T3_CAFFY_UPDATED_EVENT = "t3:caffy-updated";
@@ -89,6 +91,13 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
           shutdownWhenIdle: data.shutdownWhenIdle,
           busyUntil: "busyUntil" in data && typeof data.busyUntil === "number" ? data.busyUntil : null,
           entries,
+          scheduledSpawns: "scheduledSpawns" in data && Array.isArray(data.scheduledSpawns)
+            ? data.scheduledSpawns.filter((job): job is ScheduledChatGPTJob =>
+              !!job && typeof job === "object" &&
+              typeof job.id === "string" && typeof job.title === "string" &&
+              typeof job.beginAt === "number" &&
+              ["scheduled", "dispatching", "created", "uncertain"].includes(job.status))
+            : [],
         };
         setOverview(lastVerifiedOverview);
       } catch {
