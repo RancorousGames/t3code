@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { WebContentsView, type BrowserWindow, type Rectangle } from "electron";
 import { MENU_ACTION_CHANNEL, STABLE_CHATGPT_VIEW_STATE_CHANNEL } from "../ipc/channels.ts";
+import { RENAME_CHATGPT_SESSION_MENU_ACTION } from "../window/ChatGPTCloseShortcut.ts";
 import { installChatGPTInstantRetry } from "./ChatGPTInstantRetry.ts";
 import {
   dispatchChatGPTGuestKeyToOwner,
@@ -173,7 +174,10 @@ export function createStableChatGPTViewRegistry(owner: BrowserWindow) {
       );
       if (nativeAction) {
         event.preventDefault();
-        if (!input.isAutoRepeat) owner.webContents.send(MENU_ACTION_CHANNEL, nativeAction);
+        if (!input.isAutoRepeat) {
+          if (nativeAction === RENAME_CHATGPT_SESSION_MENU_ACTION) owner.webContents.focus();
+          owner.webContents.send(MENU_ACTION_CHANNEL, nativeAction);
+        }
         return;
       }
       const key = input.key.toLowerCase();

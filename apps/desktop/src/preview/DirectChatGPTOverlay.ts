@@ -136,8 +136,10 @@ function handleHostEvent(event: PersistentChatGPTHostEvent): void {
     return;
   }
   // These two open T3 inputs, which need keyboard focus back from the page.
-  if (action === FIND_CHATGPT_MENU_ACTION || action === RENAME_CHATGPT_SESSION_MENU_ACTION)
+  if (action === FIND_CHATGPT_MENU_ACTION || action === RENAME_CHATGPT_SESSION_MENU_ACTION) {
     owner.focus();
+    owner.webContents.focus();
+  }
   if (!event.input.isAutoRepeat) owner.webContents.send(MENU_ACTION_CHANNEL, action);
 }
 onPersistentChatGPTHostEvent(handleHostEvent);

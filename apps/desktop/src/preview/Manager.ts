@@ -65,7 +65,9 @@ import {
   activeChatGPTBrowserSessionId,
   CLOSE_CHATGPT_SESSION_MENU_ACTION,
   isChatGPTCloseShortcut,
+  isChatGPTRenameShortcut,
   isChatGPTSessionPreviewTab,
+  RENAME_CHATGPT_SESSION_MENU_ACTION,
 } from "../window/ChatGPTCloseShortcut.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
@@ -1591,6 +1593,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         event.preventDefault();
         if (!input.isAutoRepeat) {
           main?.webContents.send(MENU_ACTION_CHANNEL, CLOSE_CHATGPT_SESSION_MENU_ACTION);
+        }
+        return;
+      }
+      if (selectedChatGPTGuest && isChatGPTRenameShortcut(input)) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) {
+          main?.webContents.focus();
+          main?.webContents.send(MENU_ACTION_CHANNEL, RENAME_CHATGPT_SESSION_MENU_ACTION);
         }
         return;
       }
