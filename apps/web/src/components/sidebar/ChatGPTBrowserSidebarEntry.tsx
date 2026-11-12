@@ -791,7 +791,7 @@ export function ChatGPTBrowserSidebarEntry({
       action: "set", sessionId, mode,
       ...(conversationId ? { conversationId } : {}),
       ...(durationMinutes !== undefined ? { durationMinutes } : {}),
-      intervalMinutes, startup: false, onceOnly, keepAwake: mode !== "periodic",
+      intervalMinutes, startup: false, onceOnly, keepAwake: mode !== "periodic" && !onceOnly,
       ...(options?.repeatPrompt !== undefined ? { repeatPrompt: options.repeatPrompt } : {}),
       ...(options?.autoRebootMinutes !== undefined ? { rebootMinutes: options.autoRebootMinutes } : {}),
       ...(options?.autoRebootEveryRuns !== undefined ? { rebootEveryRuns: options.autoRebootEveryRuns } : {}),
@@ -1778,6 +1778,20 @@ export function ChatGPTBrowserSidebarEntry({
             else setSessionSnooze([sessionId], Date.parse(preset.snoozedUntil));
             if (activeSessionId === sessionId) void navigateAfterSessionRemoved([sessionId]);
           }
+        }
+      } else if (action === "schedule:resume") {
+        if (activeCaffy) {
+          const alreadyScheduled = activeCaffy.mode === "queued" && activeCaffy.onceOnly &&
+            !activeCaffy.paused && !activeCaffy.beginAt &&
+            !activeCaffy.repeatPrompt && !activeCaffy.delayedPrompt;
+          if (!alreadyScheduled) throw new Error("Caffy already has a schedule. Stop it first or edit Auto-continue.");
+          setKeepAwakeFeedback("Resume is already scheduled for the next free Keep T3 Busy slot.");
+        } else {
+          // No dialog: exactly one default continuation; never interrupt a working session.
+          await configureCaffy(sessionId, "queued", undefined, true, 20, {
+            repeatPrompt: "", autoRebootMinutes: null, autoRebootEveryRuns: null,
+          });
+          setKeepAwakeFeedback("Resume scheduled once, when the session is idle and Keep T3 Busy has capacity.");
         }
       } else if (action === "schedule:prompt") {
         setDelayedPromptTarget({ kind: "existing", sessionId, sessionTitle: session.title,

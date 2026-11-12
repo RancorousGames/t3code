@@ -60,11 +60,17 @@ export function buildChatGPTSessionContextMenu(input: {
   hasConversationUrl?: boolean;
   caffy?: { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
     onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
-    intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null } | null;
+    intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null;
+    delayedPrompt?: string | null; repeatPrompt?: string | null } | null;
 }): MenuItem[] {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
   const activeCaffy = input.caffy;
+  // One-click resume owns a one-shot Caffy monitor. Do not silently replace
+  // another ongoing, periodic, or custom-prompt schedule.
+  const quickResumeScheduled = Boolean(activeCaffy &&
+    activeCaffy.mode === "queued" && activeCaffy.onceOnly && !activeCaffy.paused &&
+    !activeCaffy.beginAt && !activeCaffy.repeatPrompt && !activeCaffy.delayedPrompt);
   const wakeMode = activeCaffy?.mode === "idle" || activeCaffy?.mode === "queued" ? "Auto-continue" :
     activeCaffy?.mode === "periodic" ? "Periodic auto-continue" :
     activeCaffy?.mode === "startup" ? "Startup only" : null;
@@ -151,7 +157,12 @@ export function buildChatGPTSessionContextMenu(input: {
             ],
           }),
         ]),
-    item("schedule:prompt", "Schedule prompt…", { separatorBefore: true }),
+    item("schedule:resume", "Schedule resume", {
+      separatorBefore: true,
+      checked: quickResumeScheduled,
+      disabled: Boolean(activeCaffy && !quickResumeScheduled),
+    }),
+    item("schedule:prompt", "Schedule prompt…"),
     item("caffy", wakeMode
       ? `Caffy · ${wakeMode}${activeCaffy?.beginAt && activeCaffy.beginAt > now ? " (scheduled)" : ""}${activeCaffy?.paused ? " (paused)" : ""}`
       : "Caffy", {
@@ -162,7 +173,7 @@ export function buildChatGPTSessionContextMenu(input: {
 
 
         item("caffy:pause", activeCaffy?.paused ? "Resume Caffy" : "Pause Caffy", { disabled: !activeCaffy, separatorBefore: true }),
-        item("caffy:startup", "Resume on Startup", {
+        item("caffy:startup", "Resume when T3 starts", {
           checked: input.caffy?.startup ?? false,
           separatorBefore: true,
         }),

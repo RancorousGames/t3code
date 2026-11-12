@@ -32,6 +32,12 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu.find((item) => item.id === "stop")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "task:open")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "reboot")).toBeDefined();
+    expect(menu.find((item) => item.id === "schedule:resume")).toMatchObject({
+      label: "Schedule resume", disabled: false, checked: false,
+    });
+    expect(menu.findIndex((item) => item.id === "schedule:resume")).toBe(
+      menu.findIndex((item) => item.id === "schedule:prompt") - 1,
+    );
     expect(menu.find((item) => item.id === "schedule:prompt")).toBeDefined();
     expect(menu.findIndex((item) => item.id === "schedule:prompt")).toBeLessThan(
       menu.findIndex((item) => item.id === "caffy"),
@@ -51,6 +57,17 @@ describe("ChatGPT native sidebar menu", () => {
     } });
     expect(menu.find((item) => item.id === "caffy")?.label).toContain("Periodic auto-continue");
     expect(menu.find((item) => item.id === "caffy")?.children?.[0]?.id).toBe("caffy:auto");
+    expect(menu.find((item) => item.id === "schedule:resume")?.disabled).toBe(true);
+  });
+  it("marks a one-shot default resume as already scheduled without replacing another policy", () => {
+    const menu = buildChatGPTSessionContextMenu({ ...state, caffy: {
+      mode: "queued", startup: false, onceOnly: true, paused: false,
+      createdAt: 1000, expiresAt: null, intervalMinutes: 20,
+      repeatPrompt: null, delayedPrompt: null,
+    } });
+    expect(menu.find(item => item.id === "schedule:resume")).toMatchObject({
+      checked: true, disabled: false,
+    });
   });
   it("respects the authoritative manager role and snooze state", () => {
     const menu = buildChatGPTSessionContextMenu({
