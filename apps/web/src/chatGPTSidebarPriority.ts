@@ -1,9 +1,34 @@
+import type { BrowserSession } from "./chatGPTBrowserSessions";
 import type {
   ChatGPTSessionSortActivity,
   ChatGPTSidebarGroup,
   ChatGPTSidebarSession,
 } from "./chatGPTSessionGrouping";
 import { chatGPTSessionHighlightAccentClass } from "./components/sidebar/chatGPTSidebarVisuals";
+
+/** Restore the last selection when it survives; otherwise use actual activity history, not row order. */
+export function selectChatGPTSidebarReplacement(
+  sessions: readonly BrowserSession[],
+  excludedIds: ReadonlySet<string>,
+  previousId: string | null | undefined,
+  activity: Readonly<Record<string, ChatGPTSessionSortActivity>>,
+  now: number,
+): string | null {
+  const eligible = sessions.filter(
+    (session) =>
+      !excludedIds.has(session.id) &&
+      !session.hidden &&
+      !session.verificationPending &&
+      (session.snoozedUntil ?? 0) <= now,
+  );
+  if (previousId && eligible.some((session) => session.id === previousId)) return previousId;
+  return eligible.toSorted((left, right) =>
+    (activity[right.id]?.lastActivityAt ?? activity[right.id]?.lastWorkingAt ?? 0) -
+      (activity[left.id]?.lastActivityAt ?? activity[left.id]?.lastWorkingAt ?? 0) ||
+    (right.createdAt ?? 0) - (left.createdAt ?? 0) ||
+    left.id.localeCompare(right.id),
+  )[0]?.id ?? null;
+}
 
 /** Explicit highlights outrank all non-working statuses and project buckets. */
 export function prioritizeChatGPTSessionHighlights(

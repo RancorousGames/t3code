@@ -50,6 +50,7 @@ import { randomUUID } from "../../lib/utils";
 import {
   preserveSelectedChatGPTSessionPosition,
   prioritizeChatGPTSessionHighlights,
+  selectChatGPTSidebarReplacement,
 } from "../../chatGPTSidebarPriority";
 import {
   formatChatGPTSessionDateTime,
@@ -587,10 +588,14 @@ export function ChatGPTBrowserSidebarEntry({
     [allPermanentProjects],
   );
   const previousSelected = useRef(activeSessionId);
+  const selectionBeforeCurrent = useRef<string | null>(null);
   const sidebarMountedAt = useRef(Date.now());
   useEffect(() => {
     const before = previousSelected.current;
-    if (before && before !== activeSessionId) markDirectInteraction(before);
+    if (before && before !== activeSessionId) {
+      markDirectInteraction(before);
+      selectionBeforeCurrent.current = before;
+    }
     previousSelected.current = activeSessionId;
   }, [activeSessionId, markDirectInteraction]);
   const [showSnoozed, setShowSnoozed] = useState(false);
@@ -843,7 +848,9 @@ export function ChatGPTBrowserSidebarEntry({
       0,
   );
   const singleClickResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const firstSessionClick = useRef<{ id: string; wasWorking: boolean; at: number } | null>(null);
+  const firstSessionClick = useRef<{
+    id: string; wasWorking: boolean; previousId: string | null; at: number;
+  } | null>(null);
   const [questionRevision, setQuestionRevision] = useState(0);
   useEffect(() => {
     const changed = (event: Event) => {
@@ -1143,6 +1150,12 @@ export function ChatGPTBrowserSidebarEntry({
       ? navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: nextId } })
       : navigate({ to: "/" });
   };
+  const navigateAfterSessionRemoved = (
+    excludedIds: readonly string[],
+    previousId: string | null = selectionBeforeCurrent.current,
+  ) => navigateAfterSidebarMutation(selectChatGPTSidebarReplacement(
+    sidebarVisibleSessions, new Set(excludedIds), previousId, sortActivityById, Date.now(),
+  ));
   const isAutomaticallySelected = (id: string) =>
     automaticSelectionTarget.current === id ||
     sessions.some(
@@ -1467,8 +1480,7 @@ export function ChatGPTBrowserSidebarEntry({
       removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId));
       removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, sessionId));
       if (activeSessionId === sessionId) {
-        const next = visibleSessions.find((session) => session.id !== sessionId);
-        await navigateAfterSidebarMutation(next?.id ?? null);
+        await navigateAfterSessionRemoved([sessionId]);
       }
     } finally {
       closingRef.current = null;
@@ -1529,8 +1541,7 @@ export function ChatGPTBrowserSidebarEntry({
     preserveSidebarScroll();
     setSessionHidden(sessionId, true);
     if (activeSessionId !== sessionId) return;
-    const next = visibleSessions.find((session) => session.id !== sessionId);
-    await navigateAfterSidebarMutation(next?.id ?? null);
+    await navigateAfterSessionRemoved([sessionId]);
   };
 
   // Both ChatGPT sidebar rows and native T3 thread rows use the same OS menu.
@@ -1749,8 +1760,7 @@ export function ChatGPTBrowserSidebarEntry({
         preserveSidebarScroll();
         setSessionVerification(sessionId, !session.verificationPending);
         if (!session.verificationPending && activeSessionId === sessionId) {
-          const next = visibleSessions.find((entry) => entry.id !== sessionId && !isSnoozed(entry));
-          void navigateAfterSidebarMutation(next?.id ?? null);
+          void navigateAfterSessionRemoved([sessionId]);
         }
       } else if (action.startsWith("snooze:")) {
         if (action === "snooze:clear") {
@@ -1766,6 +1776,7 @@ export function ChatGPTBrowserSidebarEntry({
             const step = ["hour", "three-hours", "evening", "tomorrow"].indexOf("id" in preset && typeof preset.id === "string" ? preset.id : "");
             if (step >= 0) quickSnoozeSession(sessionId, Date.parse(preset.snoozedUntil), step);
             else setSessionSnooze([sessionId], Date.parse(preset.snoozedUntil));
+            if (activeSessionId === sessionId) void navigateAfterSessionRemoved([sessionId]);
           }
         }
       } else if (action === "schedule:prompt") {
@@ -1887,13 +1898,7 @@ export function ChatGPTBrowserSidebarEntry({
               throw new Error("Cannot unload native session without an empty-composer backup.");
           }
           if (activeSessionId === sessionId) {
-            const next = sessions.find((entry) => entry.id !== sessionId && !entry.hidden);
-            if (next)
-              await navigate({
-                to: "/browser/$browserSessionId",
-                params: { browserSessionId: next.id },
-              });
-            else await navigate({ to: "/" });
+            await navigateAfterSessionRemoved([sessionId]);
           }
           if (state === "resident") await bridge({ operation: "close", identity });
           hibernateChatGPTGuest(sessionId, true);
@@ -1921,13 +1926,7 @@ export function ChatGPTBrowserSidebarEntry({
             throw new Error("Could not confirm an empty composer and save the draft state.");
         }
         if (activeSessionId === sessionId) {
-          const next = sessions.find((entry) => entry.id !== sessionId && !entry.hidden);
-          if (next)
-            await navigate({
-              to: "/browser/$browserSessionId",
-              params: { browserSessionId: next.id },
-            });
-          else await navigate({ to: "/" });
+          await navigateAfterSessionRemoved([sessionId]);
         }
         hibernateChatGPTGuest(runtimeId, true);
       }
@@ -1986,6 +1985,8 @@ export function ChatGPTBrowserSidebarEntry({
           if (preset) {
             preserveSidebarScroll();
             setSessionSnooze(ids, Date.parse(preset.snoozedUntil));
+            if (activeSessionId && ids.includes(activeSessionId))
+              void navigateAfterSessionRemoved(ids);
           }
         }
       }
@@ -3114,11 +3115,13 @@ export function ChatGPTBrowserSidebarEntry({
                                                 activeSessionId === session.id ? "page" : undefined
                                               }
                                               onClick={(event) => {
+                                                if (event.detail > 1) return;
                                                 if (event.detail === 1) {
                                                   firstSessionClick.current = {
                                                     id: session.id,
                                                     wasWorking:
                                                       activities[session.id]?.age === "working",
+                                                    previousId: activeSessionId ?? null,
                                                     at: Date.now(),
                                                   };
                                                 }
@@ -3187,6 +3190,11 @@ export function ChatGPTBrowserSidebarEntry({
                                                   activities[session.id]?.age === "working",
                                                 );
                                                 if (action === "ignore") return;
+                                                const previousId = first?.id === session.id
+                                                  ? first.previousId === session.id
+                                                    ? selectionBeforeCurrent.current
+                                                    : first.previousId
+                                                  : selectionBeforeCurrent.current;
                                                 if (action === "hide-working") {
                                                   preserveSidebarScroll();
                                                   event.currentTarget.blur();
@@ -3194,13 +3202,7 @@ export function ChatGPTBrowserSidebarEntry({
                                                     (previous) =>
                                                       new Set([...previous, session.id]),
                                                   );
-                                                  const next = sidebarVisibleSessions.find(
-                                                    (entry) =>
-                                                      entry.id !== session.id && !isSnoozed(entry),
-                                                  );
-                                                  void navigateAfterSidebarMutation(
-                                                    next?.id ?? null,
-                                                  );
+                                                  void navigateAfterSessionRemoved([session.id], previousId);
                                                   return;
                                                 }
                                                 // Three consecutive double-click snoozes: 24h, 72h, 7d.
@@ -3214,13 +3216,7 @@ export function ChatGPTBrowserSidebarEntry({
                                                 preserveSidebarScroll();
                                                 event.currentTarget.blur();
                                                 quickSnoozeSession(session.id, until, nextStep);
-                                                const next = visibleSessions.find(
-                                                  (entry) =>
-                                                    entry.id !== session.id && !isSnoozed(entry),
-                                                );
-                                                void navigateAfterSidebarMutation(
-                                                  next?.id ?? null,
-                                                );
+                                                void navigateAfterSessionRemoved([session.id], previousId);
                                               }}
                                             >
                                               {isChildSession && (

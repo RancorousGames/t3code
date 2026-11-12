@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   preserveSelectedChatGPTSessionPosition,
   prioritizeChatGPTSessionHighlights,
+  selectChatGPTSidebarReplacement,
 } from "./chatGPTSidebarPriority";
 import type { ChatGPTSidebarGroup, ChatGPTSessionSortActivity } from "./chatGPTSessionGrouping";
 
@@ -102,5 +103,43 @@ describe("T3 sidebar selection and highlight priority", () => {
       "recent",
       "old",
     ]);
+  });
+});
+
+describe("ChatGPT sidebar replacement selection", () => {
+  const sessions = [
+    { id: "old", title: "Old", createdAt: 10 },
+    { id: "removed", title: "Removed", createdAt: 50 },
+    { id: "recent", title: "Recent", createdAt: 40 },
+    { id: "hidden", title: "Hidden", hidden: true },
+    { id: "snoozed", title: "Snoozed", snoozedUntil: 200 },
+    { id: "review", title: "Review", verificationPending: true },
+  ];
+  const activity: Record<string, ChatGPTSessionSortActivity> = {
+    old: { age: "inactive", lastWorkingAt: 5, lastActivityAt: 20 },
+    removed: { age: "inactive", lastWorkingAt: 200, lastActivityAt: 200 },
+    recent: { age: "inactive", lastWorkingAt: 70, lastActivityAt: 80 },
+    hidden: { age: "working", lastWorkingAt: 190, lastActivityAt: 190 },
+    snoozed: { age: "inactive", lastWorkingAt: 180, lastActivityAt: 180 },
+    review: { age: "inactive", lastWorkingAt: 170, lastActivityAt: 170 },
+  };
+
+  it("restores the prior selection even when another session was active more recently", () => {
+    expect(selectChatGPTSidebarReplacement(sessions, new Set(["removed"]), "old", activity, 100))
+      .toBe("old");
+  });
+
+  it("falls back to the most recently active eligible session, not the next sidebar row", () => {
+    expect(selectChatGPTSidebarReplacement(sessions, new Set(["removed"]), "hidden", activity, 100))
+      .toBe("recent");
+    expect(selectChatGPTSidebarReplacement(sessions, new Set(["removed", "recent"]), null, activity, 100))
+      .toBe("old");
+  });
+
+  it("uses creation order when there is no activity, or returns null when none remain", () => {
+    expect(selectChatGPTSidebarReplacement(sessions.slice(0, 3), new Set(["removed"]), null, {}, 100))
+      .toBe("recent");
+    expect(selectChatGPTSidebarReplacement(sessions, new Set(sessions.map((session) => session.id)), null, activity, 100))
+      .toBeNull();
   });
 });
