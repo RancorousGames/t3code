@@ -1,8 +1,18 @@
 import { DEFAULT_SERVER_SETTINGS, type ModelSelection } from "@t3tools/contracts";
 import { isReasoningControl } from "@t3tools/client-runtime/model-traits";
+import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { readChatGPTProviderActivity } from "../chatGPTProviderActivity";
+import {
+  chatGPTBrowserLastUrlKey, chatGPTBrowserLastWorkingKey, chatGPTBrowserThreadRef,
+  readChatGPTBrowserSessions,
+} from "../chatGPTBrowserSessions";
+import { closePreviewSession } from "./preview/closePreviewSession";
+import { previewEnvironment } from "../state/preview";
+import { readThreadPreviewState } from "../previewStateStore";
+import { useAtomCommand } from "../state/use-atom-command";
 import { useNavigate } from "@tanstack/react-router";
 import { FilePlus2Icon } from "lucide-react";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
@@ -14,7 +24,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { executeProviderBrowserCreate } from "../agentProviderBrowserCreate";
 import { useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
 import { useEnvironmentProviders, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useServerConfigs, waitForThreadShell } from "../state/entities";
+import { readThreadShell, useProjects, useServerConfigs, waitForThreadShell } from "../state/entities";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { threadEnvironment } from "../state/threads";
 import { useScratchProject } from "../hooks/useScratchProject";
@@ -26,10 +36,14 @@ import {
   buildPrepfileHandoffInstruction,
   buildPrepfileInstruction,
   prepfileOutputPath,
+  readPrepfileGeneratorCleanupJobs,
+  setPrepfileGeneratorCleanupJobs,
+  updatePrepfileGeneratorCleanupJob,
   readPrepfileHandoffs,
   setPrepfileHandoffs,
   updatePrepfileHandoff,
   type PendingPrepfileHandoff,
+  type PrepfileGeneratorCleanupJob,
   type PrepfileDepth,
 } from "../prepfileFlow";
 import { ProviderModelPicker } from "./chat/ProviderModelPicker";
@@ -61,7 +75,7 @@ export function NewPrepfileAction() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const shortcutLabel = shortcutLabelForCommand(keybindings, "prepfile.new");
   const environmentId = usePrimaryEnvironmentId();
-  const { createSession } = useChatGPTBrowserSessions(environmentId);
+  const { createSession, removeSession } = useChatGPTBrowserSessions(environmentId);
   const projects = useProjects();
   const configs = useServerConfigs();
   const providerMap = useEnvironmentProviders();
@@ -187,6 +201,8 @@ export function NewPrepfileAction() {
 
   const createThread = useOrchestrationCommand(threadEnvironment.create, { reportFailure: false });
   const startTurn = useOrchestrationCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const deleteGeneratorThread = useOrchestrationCommand(threadEnvironment.delete, { reportFailure: false });
+  const closeGeneratorPreview = useAtomCommand(previewEnvironment.close, { reportFailure: false });
 
   async function startNative(input: {
     environmentId: NonNullable<typeof environmentId>;
@@ -258,6 +274,43 @@ export function NewPrepfileAction() {
     }
   });
 
+  const disposeGenerator = useEffectEvent(async (job: PrepfileGeneratorCleanupJob) => {
+    // The output is already durable; close only the session identifier captured
+    // at creation. Never match titles, projects, or recently visited sessions.
+    if (job.generator === "native") {
+      const threadRef = scopeThreadRef(job.environmentId, job.sessionId as ReturnType<typeof newThreadId>);
+      const shell = readThreadShell(threadRef);
+      if (shell) {
+        const result = await deleteGeneratorThread({
+          environmentId: job.environmentId,
+          input: { threadId: threadRef.threadId },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      }
+      if (window.location.pathname.endsWith(`/${job.sessionId}`)) void navigate({ to: "/" });
+    } else {
+      const exists = readChatGPTBrowserSessions(job.environmentId)
+        .some((session) => session.id === job.sessionId);
+      if (exists) {
+        const ref = chatGPTBrowserThreadRef(job.environmentId, job.sessionId);
+        for (const snapshot of Object.values(readThreadPreviewState(ref).sessions)) {
+          const result = await closePreviewSession({
+            closePreview: closeGeneratorPreview,
+            snapshot,
+            tabId: snapshot.tabId,
+            threadRef: ref,
+          });
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        }
+        removeSession(job.sessionId, "completed-worker");
+        localStorage.removeItem(chatGPTBrowserLastUrlKey(job.environmentId, job.sessionId));
+        localStorage.removeItem(chatGPTBrowserLastWorkingKey(job.environmentId, job.sessionId));
+      }
+      if (window.location.pathname.endsWith(`/${job.sessionId}`)) void navigate({ to: "/" });
+    }
+    updatePrepfileGeneratorCleanupJob(job.id, () => null);
+  });
+
   useEffect(() => {
     const checkFile = window.desktopBridge?.readPrepfileStatus;
     if (!environmentId || !checkFile) return;
@@ -289,6 +342,43 @@ export function NewPrepfileAction() {
           updatePrepfileHandoff(job.id, (entry) => ({ ...entry, state: "dispatching", targetThreadId }));
           refreshPending((value) => value + 1);
           await dispatchHandoff({ ...job, state: "dispatching", targetThreadId });
+        }
+        // Also clean up generators when automatic implementation handoff is off.
+        // Avoid deleting an agent while its final writing/response turn is active.
+        for (const job of readPrepfileGeneratorCleanupJobs()) {
+          if (cancelled || job.environmentId !== environmentId || job.state !== "waiting") continue;
+          const file = await checkFile(job.outputPath);
+          const now = Date.now();
+          if (!file.exists || file.size < 64 || now - file.modifiedAtMs < 5_000) {
+            observedFiles.current.delete(`cleanup:${job.id}`);
+            continue;
+          }
+          const fingerprint = `${file.size}:${file.modifiedAtMs}`;
+          if (observedFiles.current.get(`cleanup:${job.id}`) !== fingerprint) {
+            observedFiles.current.set(`cleanup:${job.id}`, fingerprint);
+            continue;
+          }
+          if (job.generator === "native") {
+            const shell = readThreadShell(scopeThreadRef(job.environmentId, job.sessionId as ReturnType<typeof newThreadId>));
+            if (shell && (shell.latestRun?.status !== "completed" || threadRuntimeIsActive(shell.runtime))) continue;
+          } else {
+            const activity = readChatGPTProviderActivity(job.environmentId, job.sessionId);
+            if (activity === "working" || activity === "interrupted" || activity === "delivery-timeout") continue;
+            // An unloaded guest may not report idle; the stable output remains the
+            // authoritative signal after a short grace period.
+            if (activity === "unknown" && now - file.modifiedAtMs < 20_000) continue;
+          }
+          if (cancelled) return;
+          updatePrepfileGeneratorCleanupJob(job.id, (entry) => ({ ...entry, state: "disposing" }));
+          try {
+            await disposeGenerator({ ...job, state: "disposing" });
+          } catch (cause) {
+            // Do not replay an uncertain delete or close: this ID stays reserved.
+            toastManager.add({
+              type: "error", title: "Prepfile completed; session cleanup needs review",
+              description: failedMessage(cause),
+            });
+          }
         }
       } catch (cause) {
         toastManager.add({ type: "error", title: "Prepfile monitoring failed", description: failedMessage(cause) });
@@ -385,11 +475,27 @@ export function NewPrepfileAction() {
             description: "Inspect the new ChatGPT session; the prompt will not be submitted twice.",
           });
         }
+        setPrepfileGeneratorCleanupJobs([
+          ...readPrepfileGeneratorCleanupJobs(),
+          {
+            id, environmentId: captured.environmentId, outputPath,
+            createdAt: Date.now(), generator: "chatgpt",
+            sessionId: outcome.data.sessionId, state: "waiting",
+          },
+        ]);
       } else if (targetProject && captured.generatorSelection) {
-        await startNative({
+        const threadId = await startNative({
           environmentId: captured.environmentId, projectId: targetProject.id,
           title: "Prepare context file", prompt, modelSelection: captured.generatorSelection,
         });
+        setPrepfileGeneratorCleanupJobs([
+          ...readPrepfileGeneratorCleanupJobs(),
+          {
+            id, environmentId: captured.environmentId, outputPath,
+            createdAt: Date.now(), generator: "native",
+            sessionId: threadId, state: "waiting",
+          },
+        ]);
       }
       toastManager.add({
         type: "success",

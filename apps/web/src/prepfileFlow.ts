@@ -14,6 +14,52 @@ export interface PendingPrepfileHandoff {
   readonly targetThreadId?: ThreadId;
 }
 
+export interface PrepfileGeneratorCleanupJob {
+  readonly id: string;
+  readonly environmentId: EnvironmentId;
+  readonly outputPath: string;
+  readonly createdAt: number;
+  readonly generator: "chatgpt" | "native";
+  readonly sessionId: string;
+  readonly state: "waiting" | "disposing";
+}
+
+const CLEANUP_STORAGE_KEY = "t3code:prepfile-generators:v1";
+
+export function readPrepfileGeneratorCleanupJobs(): PrepfileGeneratorCleanupJob[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(CLEANUP_STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((job): job is PrepfileGeneratorCleanupJob =>
+      typeof job === "object" && job !== null &&
+      typeof job.id === "string" &&
+      typeof job.environmentId === "string" &&
+      typeof job.outputPath === "string" &&
+      typeof job.createdAt === "number" &&
+      (job.generator === "chatgpt" || job.generator === "native") &&
+      typeof job.sessionId === "string" &&
+      (job.state === "waiting" || job.state === "disposing")
+    ).slice(-30);
+  } catch {
+    return [];
+  }
+}
+
+export function setPrepfileGeneratorCleanupJobs(jobs: readonly PrepfileGeneratorCleanupJob[]): void {
+  localStorage.setItem(CLEANUP_STORAGE_KEY, JSON.stringify(jobs.slice(-30)));
+}
+
+export function updatePrepfileGeneratorCleanupJob(
+  id: string,
+  update: (job: PrepfileGeneratorCleanupJob) => PrepfileGeneratorCleanupJob | null,
+): void {
+  setPrepfileGeneratorCleanupJobs(readPrepfileGeneratorCleanupJobs().flatMap((job) => {
+    if (job.id !== id) return [job];
+    const next = update(job);
+    return next ? [next] : [];
+  }));
+}
+
 const STORAGE_KEY = "t3code:prepfile-handoffs:v1";
 const SKILL_PATH = "C:\\Users\\crovea\\.agents\\skills\\extra-skill-finder\\on-request\\prepfile\\SKILL.md";
 
