@@ -231,12 +231,14 @@ export class CaffyScheduler {
     this.deliveries.setDispatchPermission(record => {
       const row = this.lookup(record.sessionId);
       if (!row || row.pendingMessageId !== record.messageId) return true;
-      return !row.paused && (row.mode === "startup" || row.runWithoutBusy || this.keepT3Busy);
+      // Keep T3 Busy controls only TaskBoard autofill. User-created Caffy
+      // schedules remain eligible even when TaskBoard autofill is off.
+      return !row.paused;
     });
     this.deliveries.setDispatchAdmission(async record => {
       const row = this.lookup(record.sessionId);
       if (!row || row.pendingMessageId !== record.messageId) return true;
-      if (row.paused || (row.mode !== "startup" && !row.runWithoutBusy && !this.keepT3Busy)) return false;
+      if (row.paused) return false;
       const snapshot = await this.capacity().catch(() => null);
       // An already admitted wake may finish its exact pending send, but a
       // preexisting oversubscription must not authorize additional Caffy
@@ -301,7 +303,6 @@ export class CaffyScheduler {
 
   private syncPower() {
     const active = [...this.entries.values()].some(row => !row.paused && row.keepAwake &&
-      (row.mode !== "queued" || this.keepT3Busy) &&
       (row.expiresAt === null || row.expiresAt > Date.now()));
     if (active && this.blockerId === null) {
       try { this.blockerId = this.power.start(); } catch { /* never prevent scheduler progress */ }
@@ -778,7 +779,7 @@ export class CaffyScheduler {
     if (input.onIdle === true ? input.beginAt !== null :
         input.beginAt === null || !Number.isSafeInteger(input.beginAt) ||
         input.beginAt <= Date.now() || input.beginAt > Date.now() + 90 * 24 * 60 * 60_000)
-      throw new Error("Choose either Begin on idle or a future time within 90 days.");
+      throw new Error("Choose either the next available agent slot or a future time within 90 days.");
     const existing = this.scheduledSpawns.get(input.id);
     if (existing) {
       if (existing.title !== input.title || existing.prompt !== input.prompt ||
@@ -814,7 +815,7 @@ export class CaffyScheduler {
         input.beginAt === null || !Number.isSafeInteger(input.beginAt) ||
         (input.beginAt <= now && input.beginAt !== job.beginAt) ||
         input.beginAt > now + 90 * 24 * 60 * 60_000)
-      throw new Error("Choose a future start within 90 days, or Begin on idle.");
+      throw new Error("Choose a future start within 90 days, or the next available agent slot.");
     this.scheduledSpawns.set(job.id, {
       ...job, title: input.title.trim(), prompt: input.prompt.trim(),
       beginAt: input.beginAt, onIdle: input.onIdle === true,
@@ -837,11 +838,11 @@ export class CaffyScheduler {
   private async dispatchScheduledSpawn(now: number) {
     const job = [...this.scheduledSpawns.values()]
       .filter(item => item.status === "scheduled" &&
-        (item.onIdle === true ? this.keepT3Busy : item.beginAt !== null && item.beginAt <= now))
+        (item.onIdle === true || (item.beginAt !== null && item.beginAt <= now)))
       .sort((a, b) => (a.beginAt ?? 0) - (b.beginAt ?? 0))[0];
     if (!job) return;
     const ticket = `scheduled-spawn:${job.id}`;
-    if (!(await this.acquireAutomaticAdmission(ticket, undefined, job.onIdle !== true))) return;
+    if (!(await this.acquireAutomaticAdmission(ticket, undefined, true))) return;
     try {
       if (this.scheduledSpawns.get(job.id) !== job || job.status !== "scheduled") return;
       // Persist the one-way transition before requesting creation. After a crash
@@ -1333,8 +1334,7 @@ export class CaffyScheduler {
         if (row.paused || !row.pendingMessageId) return false;
         try {
           const status = this.deliveries.status(row.pendingMessageId).status;
-          return status === "sending" || status === "uncertain" ||
-            (status === "queued" && (row.mode !== "queued" || this.keepT3Busy));
+          return status === "sending" || status === "uncertain" || status === "queued";
         } catch { return true; } // UNKNOWN outbox outcome: fail closed.
       });
       if (snapshot.unknown > 0 || snapshot.working > 0 || sending ||
@@ -1529,7 +1529,7 @@ export class CaffyScheduler {
   get hasPendingQueuedWakes(): boolean {
     this.expireTimedBusy();
     const now = Date.now();
-    return this.keepT3Busy && (
+    return (
       [...this.scheduledSpawns.values()].some(job => job.status === "scheduled" &&
         (job.onIdle === true || (job.beginAt !== null && job.beginAt <= now))) ||
       [...this.entries.values()].some(row =>
@@ -1606,7 +1606,7 @@ export class CaffyScheduler {
         }
         const wakeTicket = `wake:${row.sessionId}:${row.conversationId}`;
         if (!(await this.acquireAutomaticAdmission(
-          wakeTicket, row.sessionId, row.runWithoutBusy === true,
+          wakeTicket, row.sessionId, true,
         ))) continue;
         try {
         // A cold or errored session cannot pass a live guarded read until
@@ -1614,8 +1614,7 @@ export class CaffyScheduler {
         // the *existing* T3 delivery queue will mount/recover it. The guarded
         // send still refuses a working composer, draft or wrong conversation.
         const bound = await this.registered(row.sessionId, row.conversationId).catch(() => null);
-        if (this.entries.get(row.sessionId) !== row || row.paused ||
-            (!this.keepT3Busy && !row.runWithoutBusy)) continue;
+        if (this.entries.get(row.sessionId) !== row || row.paused) continue;
         if (!bound) {
           // Reconciliation already identified this as the same live session
           // with a new conversation. Preserve the more actionable diagnostic,

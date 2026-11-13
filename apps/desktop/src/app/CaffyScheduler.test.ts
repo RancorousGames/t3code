@@ -61,13 +61,15 @@ function fixture() {
       return 1;
     },
   } as unknown as ConstructorParameters<typeof CaffyScheduler>[1];
-  const request = (async (input: { requestId: string; action: string }) => ({
+  const request = (async (input: { requestId: string; type?: string; action?: string }) => ({
     version: 1,
     requestId: input.requestId,
     ok: true,
-    data: input.action === "read"
-      ? { conversationGuardValidated: guardedRead, verifiedConversationId: REPLACEMENT }
-      : { sessions: roster, total: roster.length },
+    data: input.type === "chatgpt.spawn"
+      ? { sessionId: REPLACEMENT }
+      : input.action === "read"
+        ? { conversationGuardValidated: guardedRead, verifiedConversationId: REPLACEMENT }
+        : { sessions: roster, total: roster.length },
   })) as ConstructorParameters<typeof CaffyScheduler>[2];
   const open = (shutdownPC: () => void = () => { throw new Error("Never call OS shutdown in tests."); }) =>
     new CaffyScheduler(directory, deliveries, request, {
@@ -87,6 +89,42 @@ const monitor = (scheduler: CaffyScheduler) =>
   scheduler.status(SESSION) as CaffyConfig | null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
+  it("runs user-scheduled work at free capacity with TaskBoard autofill off", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      monitor(c)!.pendingMessageId = null;
+      monitor(c)!.pendingWake = false;
+      c.reportWorkingSnapshot([], "sidebar");
+      c.setTaskReservations([], true);
+      c.policy({ keepT3Busy: false, maxWorking: 2 });
+      expect(c.policyEnabled).toBe(false);
+      // This switch still blocks TaskBoard-initiated work.
+      expect(await c.acquireAutomaticAdmission("taskboard:next")).toBe(false);
+      // One-shot and periodic session wakes use the same capacity threshold.
+      expect(await c.acquireAutomaticAdmission("wake:queued", SESSION, true)).toBe(true);
+      c.releaseAutomaticAdmission("wake:queued");
+    } finally { c.close(); f.dispose(); }
+
+    const g = fixture();
+    const scheduler = g.open();
+    try {
+      monitor(scheduler)!.pendingMessageId = null;
+      monitor(scheduler)!.pendingWake = false;
+      scheduler.reportWorkingSnapshot([], "sidebar");
+      scheduler.setTaskReservations([], true);
+      scheduler.policy({ keepT3Busy: false, maxWorking: 2 });
+      const jobId = "55555555-5555-4555-8555-555555555555";
+      scheduler.scheduleSpawn({ id: jobId, title: "Daily report",
+        prompt: "Produce today’s status report", beginAt: null, onIdle: true });
+      await (scheduler as unknown as {dispatchScheduledSpawn(now: number): Promise<void>})
+        .dispatchScheduledSpawn(Date.now());
+      expect(scheduler.status()).toMatchObject({
+        keepT3Busy: false,
+        scheduledSpawns: [{id: jobId, status: "created", sessionId: REPLACEMENT}],
+      });
+    } finally { scheduler.close(); g.dispose(); }
+  });
   it("rejects live legacy ownership but ignores stale terminal OmniHub monitors", () => {
     const old = { state: "active", target: { sessionId: SESSION, expectedConversationId: ORIGINAL } };
     expect(legacyMonitorOwnsConversation(old, SESSION, ORIGINAL)).toBe(true);

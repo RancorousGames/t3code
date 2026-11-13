@@ -193,7 +193,7 @@ export function ChatGPTAutoContinueDialog({
                 value={frequency}
                 onChange={(event) => setFrequency(event.target.value as typeof frequency)}
               >
-                <option value="slot">Whenever a Keep T3 Busy slot is available</option>
+                <option value="slot">Whenever an agent slot is available</option>
                 <option value="periodic">At a recurring interval</option>
               </select>
             </label>

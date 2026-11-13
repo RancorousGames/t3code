@@ -109,7 +109,7 @@ export function ChatGPTDelayedPromptDialog({
                 <Button type="button" variant={!onIdle ? "default" : "outline"} size="sm"
                   onClick={() => setOnIdle(false)} aria-pressed={!onIdle}>At a time</Button>
                 <Button type="button" variant={onIdle ? "default" : "outline"} size="sm"
-                  onClick={() => setOnIdle(true)} aria-pressed={onIdle}>Begin on idle</Button>
+                  onClick={() => setOnIdle(true)} aria-pressed={onIdle}>When capacity is available</Button>
               </div>
               {!onIdle && <>
               <div className="flex items-center gap-2 text-sm font-semibold">
@@ -145,7 +145,7 @@ export function ChatGPTDelayedPromptDialog({
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">{job.title}</p>
                         <p className="text-xs text-muted-foreground">
-                          {job.onIdle ? "Begin on idle" : job.beginAt === null ? "Unscheduled" : new Date(job.beginAt).toLocaleString()} · {job.status}
+                          {job.onIdle ? "When capacity is available" : job.beginAt === null ? "Unscheduled" : new Date(job.beginAt).toLocaleString()} · {job.status}
                         </p>
                         {job.error && <p className="text-xs text-destructive">{job.error}</p>}
                       </div>

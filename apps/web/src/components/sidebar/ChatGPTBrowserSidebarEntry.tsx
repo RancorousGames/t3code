@@ -713,7 +713,7 @@ export function ChatGPTBrowserSidebarEntry({
           prompt: input.prompt,
           onceOnly: true, keepAwake: false, startup: false,
         });
-        setKeepAwakeFeedback("Prompt queued for the next available Keep T3 Busy slot, ahead of TaskBoard.");
+        setKeepAwakeFeedback("Prompt queued for the next available agent slot, ahead of TaskBoard work.");
       } else {
       const wasWorking = await scheduleCaffyBegin(
         input.beginAt,
@@ -800,7 +800,7 @@ export function ChatGPTBrowserSidebarEntry({
       ...(options?.beginAt !== undefined ? { beginAt: options.beginAt } : {}),
     });
     setKeepAwakeFeedback(
-      `Auto-continue: ${mode === "queued" ? "when a Keep T3 Busy slot is available" : mode === "periodic" ? `every ${intervalMinutes} minutes` : "when capacity is available"} · ${onceOnly ? "once" : durationMinutes === undefined ? "until stopped" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
+      `Auto-continue: ${mode === "queued" ? "when an agent slot is available" : mode === "periodic" ? `every ${intervalMinutes} minutes` : "when capacity is available"} · ${onceOnly ? "once" : durationMinutes === undefined ? "until stopped" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
     );
     window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
   };
@@ -1808,7 +1808,7 @@ export function ChatGPTBrowserSidebarEntry({
             !activeCaffy.paused && !activeCaffy.beginAt &&
             !activeCaffy.repeatPrompt && !activeCaffy.delayedPrompt;
           if (!alreadyScheduled) throw new Error("Caffy already has a schedule. Stop it first or edit Auto-continue.");
-          setKeepAwakeFeedback("Resume is already scheduled for the next free Keep T3 Busy slot.");
+          setKeepAwakeFeedback("Resume is already scheduled for the next free agent slot.");
         } else {
           // No dialog: exactly one default continuation; never interrupt a working session.
           await configureCaffy(sessionId, "queued", undefined, true, 20, {
@@ -2237,7 +2237,7 @@ export function ChatGPTBrowserSidebarEntry({
           role="switch"
           aria-checked={caffyOverview?.keepT3Busy ?? false}
           aria-label={`Keep T3 Busy: ${caffyOverview ? (caffyOverview.keepT3Busy ? "on" : "off") : "unavailable"}`}
-          title="Allow automatic TaskBoard jobs and queued Caffy wakes within the working capacity."
+          title="Auto-fill free working slots from TaskBoard. Scheduled prompts, resumes and Caffy runs are independent of this switch."
           disabled={!caffyOverview || viewPolicyBusy}
           onClick={() => void updateViewCaffyPolicy({ keepT3Busy: !caffyOverview!.keepT3Busy })}
         >
@@ -2612,7 +2612,7 @@ export function ChatGPTBrowserSidebarEntry({
                 disabled={job.status !== "scheduled"}
                 aria-label={`Scheduled ChatGPT session: ${job.title}. ${job.status === "scheduled" ? "Edit or cancel" : job.status}.`}
                 title={job.status !== "scheduled" ? `Session creation ${job.status}. ${job.error ?? "Cannot edit after creation starts."}` :
-                  `Pending ChatGPT session — click to edit or cancel. ${job.onIdle ? "Waiting for Keep T3 Busy capacity." : job.beginAt === null ? "" : `Starts ${new Date(job.beginAt).toLocaleString()}.`}`}
+                  `Pending ChatGPT session — click to edit or cancel. ${job.onIdle ? "Waiting for an agent slot." : job.beginAt === null ? "" : `Starts ${new Date(job.beginAt).toLocaleString()}.`}`}
                 onClick={() => void openScheduledSpawn(job)}
               >
                 <CalendarClockIcon aria-hidden className="shrink-0 text-amber-400" />
@@ -2968,10 +2968,7 @@ export function ChatGPTBrowserSidebarEntry({
                                 ? `Caffy: ${caffyMonitor.mode === "queued" ? "Auto-continue on free slot" :
                                     caffyMonitor.mode === "idle" ? "Auto-continue on free slot" :
                                     caffyMonitor.mode === "periodic" ? `Periodic every ${caffyMonitor.intervalMinutes} min` :
-                                    "Wake on startup"}${caffyMonitor.onceOnly ? " (once)" : ""}${
-                                    caffyMonitor.mode === "queued" && !caffyOverview?.keepT3Busy
-                                      ? " — waiting for Keep T3 Busy"
-                                      : ""}${caffyMonitor.beginAt && caffyMonitor.beginAt > clockNow
+                                    "Wake on startup"}${caffyMonitor.onceOnly ? " (once)" : ""}${caffyMonitor.beginAt && caffyMonitor.beginAt > clockNow
                                         ? ` — starts ${new Date(caffyMonitor.beginAt).toLocaleString()}` : ""}${
                                           caffyMonitor.autoRebootMinutes
                                             ? ` — auto-reboot every ${caffyMonitor.autoRebootMinutes}m when idle`
@@ -3318,10 +3315,7 @@ export function ChatGPTBrowserSidebarEntry({
                                               {caffyLabel && (
                                                 <CaffyCoffeePotIcon
                                                   aria-label={caffyLabel}
-                                                  className={`size-3.5 shrink-0 ${caffyMonitor?.mode === "queued" &&
-                                                    !caffyOverview?.keepT3Busy
-                                                      ? "text-sky-400/50"
-                                                      : "text-sky-400"}`}
+                                                  className="size-3.5 shrink-0 text-sky-400"
                                                 >
                                                   <title>{caffyLabel}</title>
                                                 </CaffyCoffeePotIcon>
