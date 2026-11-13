@@ -16,6 +16,7 @@ import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
+import { NewPrepfileAction } from "../NewPrepfileAction";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -79,6 +80,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
             <div className="hidden items-center md:flex">
               <HistoryNavigationButton direction="back" onBackdrop={backdropVariant !== null} />
               <HistoryNavigationButton direction="forward" onBackdrop={backdropVariant !== null} />
+              <NewPrepfileAction />
             </div>
           ) : null}
         </div>

@@ -1984,6 +1984,12 @@ export interface DesktopBridge {
     action: "later" | "clear";
     until?: string;
   }) => Promise<{ applied: true }>;
+  /** Inspect a single prepfile in the bounded local agent scratch tree. */
+  readPrepfileStatus?: (path: string) => Promise<{
+    exists: boolean;
+    size: number;
+    modifiedAtMs: number;
+  }>;
   /** Registered TaskBoard project identities and their task-ID prefixes. */
   readTaskBoardProjects?: () => Promise<readonly {
     key: string;
