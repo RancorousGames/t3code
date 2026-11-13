@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 import {
   CommandId,
   type GitManagerServiceError,
@@ -14,6 +16,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Hex from "effect/Encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -230,12 +233,34 @@ const make = Effect.gen(function* () {
     }
   });
 
-  // Scratch inside a checkout would inherit its git status and checkpoints; require a data dir outside work trees.
+  // Development servers can store data inside Git; keep No project threads in a separate scratch area.
+  const agentScratchBase = path.resolve("E:/_AgentScratch/Unassigned");
+  const useAgentScratch =
+    process.platform === "win32" && (yield* fileSystem.exists(agentScratchBase));
+  const scratchParent = useAgentScratch ? agentScratchBase : homedir();
+  const externalScratchRoot = crypto
+    .digest("SHA-256", new TextEncoder().encode(path.resolve(config.baseDir)))
+    .pipe(
+      Effect.map((hash) =>
+        path.resolve(
+          scratchParent,
+          useAgentScratch ? "T3Code-NoProject" : ".t3code-scratch",
+          Hex.encode(hash).slice(0, 16),
+        ),
+      ),
+    );
   const [probe, invalidate] = yield* Effect.cachedInvalidateWithTTL(
     gitWorkflow.isRepository(config.baseDir).pipe(
       Effect.catchIf(isGitMissing, () => Effect.succeed(false)),
-      Effect.map((isRepository) =>
-        isRepository ? Option.none<string>() : Option.some(path.resolve(config.baseDir, "scratch")),
+      Effect.flatMap((isRepository) =>
+        isRepository
+          ? gitWorkflow.isRepository(scratchParent).pipe(
+              Effect.catchIf(isGitMissing, () => Effect.succeed(false)),
+              Effect.flatMap((homeIsRepository) =>
+                homeIsRepository ? Effect.succeedNone : externalScratchRoot.pipe(Effect.asSome),
+              ),
+            )
+          : Effect.succeedSome(path.resolve(config.baseDir, "scratch")),
       ),
       Effect.catchCause((cause) =>
         Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(Option.none<string>()),
