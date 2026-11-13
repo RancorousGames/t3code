@@ -63,8 +63,6 @@ export function buildPrepfileHandoffInstruction(job: PendingPrepfileHandoff): st
     "Implement the original request using this freshly generated, disposable PREPFILE context:",
     job.outputPath,
     "",
-    "Read the actual UTF-8 prepfile before acting. The cheaper preparation agent has already gathered task requirements, documents and relevant code excerpts. Treat these collected excerpts as your initial source context: do NOT repeat broad codebase searches, reread source files, recompute hashes or check version control merely to rediscover or verify what is already here. Read additional source only when the implementation needs information that is missing from the prepfile, or when making edits. Follow project instructions, implement the request end-to-end, verify as appropriate, and delete this temporary prepfile when the task is done. Do not generate another prepfile.",
-    "",
     "ORIGINAL REQUEST:",
     job.request,
   ].join("\n");
