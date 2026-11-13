@@ -61,6 +61,7 @@ import {
   ChevronRightIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
+  FilePlus2Icon,
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
@@ -249,6 +250,7 @@ import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { dispatchMenuAction } from "../shortcuts/dispatcher";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
 import { Button } from "./ui/button";
@@ -1283,6 +1285,21 @@ function OpenCommandPaletteDialog(props: {
         to: "/browser/$browserSessionId",
         params: { browserSessionId: createChatGPTSession(undefined, { explicitlyUserCreated: true }) },
       }),
+    });
+  }
+
+  if (window.desktopBridge && primaryEnvironmentId) {
+    actionItems.push({
+      kind: "action",
+      value: "action:new-prepfile",
+      searchTerms: ["new", "prepfile", "prepare", "context", "cheap agent"],
+      title: "New prepfile",
+      icon: <FilePlus2Icon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "prepfile.new",
+      run: async () => {
+        // The palette closes before opening a separate prepfile dialog.
+        window.setTimeout(() => dispatchMenuAction("prepfile.new"), 0);
+      },
     });
   }
 
@@ -2590,7 +2607,8 @@ function OpenCommandPaletteDialog(props: {
       (command === "chat.new" ||
         command === "chat.newLocal" ||
         command === "chat.newWithoutProject" ||
-        command === "chatgpt.newSession");
+        command === "chatgpt.newSession" ||
+        command === "prepfile.new");
     const matchingItem =
       isJump || isNewThread
         ? displayedGroups

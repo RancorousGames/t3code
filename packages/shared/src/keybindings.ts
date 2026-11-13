@@ -202,6 +202,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+n", command: "chat.newLocal", when: "!terminalFocus" },
   { key: "mod+alt+n", command: "chat.newWithoutProject", when: "!terminalFocus" },
   { key: "ctrl+shift+t", command: "chatgpt.newSession", when: "isDesktop && !terminalFocus" },
+  { key: "ctrl+alt+p", command: "prepfile.new", when: "isDesktop && !terminalFocus" },
   { key: "ctrl+alt+g", command: "chatgpt.openDashboard", when: "isDesktop && !terminalFocus" },
   { key: "ctrl+alt+r", command: "chatgpt.reloadSession", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },
   { key: "ctrl+alt+s", command: "chatgpt.snoozeSession", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },

@@ -1,8 +1,13 @@
 import { DEFAULT_SERVER_SETTINGS, type ModelSelection } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useNavigate } from "@tanstack/react-router";
 import { FilePlus2Icon } from "lucide-react";
+import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { shortcutLabelForCommand } from "../keybindings";
+import { registerCommands, registerMenuAction } from "../shortcuts/dispatcher";
+import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { executeProviderBrowserCreate } from "../agentProviderBrowserCreate";
@@ -27,6 +32,7 @@ import {
   type PrepfileDepth,
 } from "../prepfileFlow";
 import { ProviderModelPicker } from "./chat/ProviderModelPicker";
+import { SidebarHeaderIconButton } from "./sidebar/SidebarThreadHeader";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "./ui/dialog";
@@ -34,7 +40,6 @@ import { Label } from "./ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 type Generator = "chatgpt" | "luna" | "haiku";
 // Preparation is intentionally limited to low-cost models. The full native
@@ -52,6 +57,8 @@ const failedMessage = (cause: unknown) =>
 
 export function NewPrepfileAction() {
   const navigate = useNavigate();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const shortcutLabel = shortcutLabelForCommand(keybindings, "prepfile.new");
   const environmentId = usePrimaryEnvironmentId();
   const { createSession } = useChatGPTBrowserSessions(environmentId);
   const projects = useProjects();
@@ -72,6 +79,39 @@ export function NewPrepfileAction() {
   const submitting = useRef(false);
   const observedFiles = useRef(new Map<string, string>());
   const handoffRunning = useRef(false);
+  const openDialog = useEffectEvent(() => {
+    setError(null);
+    setOpen(true);
+  });
+
+  // The header button, configurable keybinding, and command palette share one dialog.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the desktop prepfile shortcut while mounted
+  useEffect(() => {
+    const unregisterKeydown = registerCommands(
+      {
+        "prepfile.new": (event) => {
+          if (
+            event.repeat ||
+            event.isComposing ||
+            isCommandPaletteOpen() ||
+            (event.target instanceof Element && event.target.closest("[data-keybinding-capture]"))
+          ) return false;
+          event.preventDefault();
+          event.stopPropagation();
+          openDialog();
+          return true;
+        },
+      },
+      { capture: true, keybindings: () => keybindings },
+    );
+    const unregisterMenuAction = registerMenuAction("prepfile.new", () => {
+      if (!isCommandPaletteOpen()) openDialog();
+    });
+    return () => {
+      unregisterKeydown();
+      unregisterMenuAction();
+    };
+  }, [keybindings]);
 
   const environmentProjects = projects.filter((project) =>
     project.environmentId === environmentId && project.archivedAt == null && !project.isScratch
@@ -332,22 +372,13 @@ export function NewPrepfileAction() {
   const pending = open ? readPrepfileHandoffs().filter((job) => job.environmentId === environmentId) : [];
   return (
     <>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              className="[-webkit-app-region:no-drag]"
-              aria-label="New prepfile"
-              onClick={() => { setError(null); setOpen(true); }}
-            />
-          }
-        >
-          <FilePlus2Icon className="size-4" />
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">New prepfile</TooltipPopup>
-      </Tooltip>
+      <SidebarHeaderIconButton
+        label="New prepfile"
+        tooltip={shortcutLabel ? `New prepfile (${shortcutLabel})` : "New prepfile"}
+        onClick={() => openDialog()}
+      >
+        <FilePlus2Icon />
+      </SidebarHeaderIconButton>
       <Dialog open={open} onOpenChange={(value) => { if (!busy) setOpen(value); }}>
         <DialogPopup className="sm:max-w-xl">
           <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>

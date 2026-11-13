@@ -83,6 +83,7 @@ import {
 import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import { OpenRigAgentsSidebarEntry } from "./sidebar/OpenRigAgentsSidebarEntry";
 import { ChatGPTRegistryRemoteSidebarEntry } from "./sidebar/ChatGPTRegistryRemoteSidebarEntry";
+import { NewPrepfileAction } from "./NewPrepfileAction";
 import { OpenRigOperatorInbox } from "./sidebar/OpenRigOperatorInbox";
 
 import {
@@ -3188,6 +3189,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               newThreadDisabled={projects.length === 0}
               newThreadShortcutLabel={newThreadShortcutLabel}
               chatGPTSessionAction={isElectron ? <ChatGPTBrowserNewSessionAction /> : undefined}
+              prepfileAction={isElectron ? <NewPrepfileAction /> : undefined}
               newThreadInProjectShortcutLabel={newThreadInProjectShortcutLabel}
               showNewThreadInProjectHint={
                 !boringSidebarEnabled &&

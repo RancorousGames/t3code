@@ -383,6 +383,7 @@ export function commandLabel(command: KeybindingCommand): string {
   if (usagePeriod) return `Usage: Period: ${usagePeriod.label}`;
   if (command === "view.reopenClosed") return "Reopen Closed Tab";
   if (command === "chatgpt.newSession") return "ChatGPT: New Session";
+  if (command === "prepfile.new") return "Prepfile: New Preparation";
   if (command === "chatgpt.openDashboard") return "ChatGPT: Open Sessions Dashboard";
   if (command === "chatgpt.reloadSession") return "ChatGPT: Reload Current Session";
   if (command === "chatgpt.snoozeSession") return "ChatGPT: Snooze Current Session (1 Hour)";
