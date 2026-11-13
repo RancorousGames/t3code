@@ -216,6 +216,20 @@ const definitelyNotSubmitted = (reason: string) =>
     reason,
   );
 
+/** A visible user turn is a delivery receipt even if ChatGPT never produces a reply. */
+function observedQueuedUserTurn(
+  item: SessionQueuedMessage,
+  observed: { conversationId: string | null; messages: readonly { role: string; text: string }[] },
+): boolean {
+  if (!item.conversationId || item.conversationId !== observed.conversationId) return false;
+  const expected = `[T3-MSG:${item.id}] ${item.text}`.replace(/\s+/gu, " ").trim();
+  return observed.messages?.some((message) => {
+    if (message.role !== "user") return false;
+    const text = message.text.replace(/\s+/gu, " ").trim();
+    return text === expected || (text.length >= 256 && expected.startsWith(text.slice(0, 256)));
+  }) ?? false;
+}
+
 export async function deliverNextChatGPTSessionMessage(
   environmentId: EnvironmentId,
   sessionId: string,
@@ -224,21 +238,27 @@ export async function deliverNextChatGPTSessionMessage(
   const key = keyFor(environmentId, sessionId);
   if (processing.has(key)) return;
   let queue = readQueue(key);
-  // A prior in-flight send may have lost its JavaScript promise on page reload.
-  // Treat it as UNKNOWN; a fresh renderer must never issue a second click.
-  if (
-    queue.some(
-      (row) =>
-        row.state === "sending" || row.state === "unknown" || row.state === "needs_attention",
-    )
-  )
-    return;
-  const next = queue.find((row) => row.state === "queued");
+  // Reconcile first: a lost browser acknowledgement or stalled assistant must
+  // not leave an already-observed user turn looking queued (or send it twice).
+  const next = queue.find((row) => row.state !== "delivered");
   if (!next) return;
   const session = sessions.find((row) => row.id === sessionId);
   if (!session || session.hidden) return;
   processing.add(key);
   try {
+    const acknowledgeObserved = (observed: Awaited<ReturnType<typeof inspectBrowserSession>>) => {
+      if (!observedQueuedUserTurn(next, observed)) return false;
+      writeQueue(key, readQueue(key).map((row) =>
+        row.id === next.id ? { ...row, state: "delivered" as const, updatedAt: Date.now(), detail: undefined } : row,
+      ));
+      return true;
+    };
+    // UNKNOWN is read-only. A lost acknowledgement may already have sent the
+    // message; only an exact observed user turn can retire it.
+    if (next.state !== "queued") {
+      acknowledgeObserved(await inspectBrowserSession(environmentId, session, "end", 12, true, 512));
+      return;
+    }
     // Admit capacity BEFORE inspecting/loading the ChatGPT guest. Otherwise
     // a new or suspended session could never become idle enough to qualify.
     if (next.condition === "wait_for_slot") {
@@ -263,10 +283,13 @@ export async function deliverNextChatGPTSessionMessage(
         }));
       }
     }
+    // A pending/stalled assistant may still follow a positively submitted
+    // user turn. Check before the idle gate, even with an UNKNOWN send fence.
+    const observed = await inspectBrowserSession(environmentId, session, "end", 12, true, 512);
+    if (acknowledgeObserved(observed)) return;
     // An existing interrupted/UNKNOWN injection owns this guest. Preserve FIFO
     // without generating another send until that delivery is reconciled.
     if (hasUncertainChatGPTSend(environmentId, sessionId)) return;
-    const observed = await inspectBrowserSession(environmentId, session, "end", 1);
     const idle =
       observed.activity === "idle" &&
       ["new", "done_or_idle", "waiting_for_input"].includes(observed.status);
@@ -493,13 +516,16 @@ export function useChatGPTSessionQueueDriver(
   const queue = useChatGPTSessionQueue(environmentId, sessionId);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
-  const pending = queue.some(
-    (row) =>
-      row.state === "queued" ||
+  const pendingSignature = queue
+    .filter((row) =>
+      row.state === "queued" || row.state === "sending" || row.state === "unknown" ||
+      row.state === "needs_attention" ||
       (row.condition === "wait_for_slot" && row.state === "delivered" && !row.capacityReleasedAt),
-  );
+    )
+    .map((row) => `${row.id}:${row.state}:${row.capacitySubmittedAt ?? ""}`)
+    .join("|");
   useEffect(() => {
-    if (!pending) return;
+    if (!pendingSignature) return;
     const drain = () =>
       void deliverNextChatGPTSessionMessage(environmentId, sessionId, sessionsRef.current);
     // A queued message gets an immediate chance on mount or registration. If
@@ -548,5 +574,5 @@ export function useChatGPTSessionQueueDriver(
       if (admissionRetry !== null) window.clearInterval(admissionRetry);
       window.removeEventListener("t3:chatgpt-recovery-state-changed", onRecovery);
     };
-  }, [environmentId, sessionId, pending, sessionsRef]);
+  }, [environmentId, sessionId, pendingSignature]);
 }

@@ -89,6 +89,40 @@ describe("ChatGPT Session Queue", () => {
     expect(pending()[0]?.state).toBe("needs_attention");
   });
 
+  it("reconciles a delivered user turn when ChatGPT leaves only an empty assistant placeholder", async () => {
+    const conversationId = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const id = queueChatGPTSessionMessage(environmentId, sessionId, "Clean up the dialog", conversationId);
+    inspect.mockResolvedValue({
+      activity: "idle", status: "pending_or_stalled", conversationId,
+      messages: [
+        { role: "user", text: `[T3-MSG:${id}]\nClean up the dialog` },
+        { role: "assistant", text: "" },
+      ],
+    });
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    expect(send).not.toHaveBeenCalled();
+    expect(pending()[0]?.state).toBe("delivered");
+  });
+
+  it("recovers a lost send acknowledgement only from the exact original conversation", async () => {
+    const conversationId = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const id = queueChatGPTSessionMessage(environmentId, sessionId, "Original request", conversationId);
+    localStorage.setItem(key, JSON.stringify(pending().map((row) => ({ ...row, state: "unknown" }))));
+    inspect.mockResolvedValueOnce({
+      activity: "idle", status: "done_or_idle",
+      conversationId: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
+      messages: [{ role: "user", text: `[T3-MSG:${id}]\nOriginal request` }],
+    }).mockResolvedValueOnce({
+      activity: "idle", status: "pending_or_stalled", conversationId,
+      messages: [{ role: "user", text: `[T3-MSG:${id}]\nOriginal request` }],
+    });
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    expect(pending()[0]?.state).toBe("unknown");
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    expect(pending()[0]?.state).toBe("delivered");
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("never resubmits an unconfirmed send without explicit reconciliation", async () => {
     queueChatGPTSessionMessage(environmentId, sessionId, "Important", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa");
     inspect.mockResolvedValue({ activity: "idle", status: "done_or_idle", conversationId: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa" });
