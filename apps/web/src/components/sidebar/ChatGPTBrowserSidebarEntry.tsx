@@ -418,6 +418,49 @@ function ChatGPTSnapshotHover({
   );
 }
 
+function BusyCapacitySlider({
+  value, configuredValue, disabled, onCommit,
+}: {
+  value: number;
+  configuredValue: number | null;
+  disabled: boolean;
+  onCommit: (capacity: number) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const lastCommitted = useRef<number | null>(null);
+  const commit = () => {
+    if (disabled || draft === value || lastCommitted.current === draft) return;
+    lastCommitted.current = draft;
+    onCommit(draft);
+  };
+  return (
+    <>
+      <input
+        id="t3-busy-capacity"
+        type="range"
+        min={0}
+        max={5}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        className="h-4 w-20 shrink-0 cursor-pointer accent-emerald-500 disabled:cursor-not-allowed disabled:opacity-50 group-data-[collapsible=icon]:hidden"
+        aria-label="Automatic TaskBoard work capacity"
+        aria-valuetext={draft === 0 ? "Off" : `${draft} working sessions`}
+        title="0 = no TaskBoard auto-fill; 1–5 = maximum working sessions. Scheduled work continues independently."
+        onChange={(event) => setDraft(Number(event.currentTarget.value))}
+        onPointerUp={commit}
+        onKeyUp={(event) => {
+          if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) commit();
+        }}
+        onBlur={commit}
+      />
+      <output htmlFor="t3-busy-capacity" className={`w-4 shrink-0 text-right text-2xs font-semibold tabular-nums group-data-[collapsible=icon]:hidden ${draft > 0 ? "text-emerald-500" : "text-muted-foreground"}`}>
+        {configuredValue === null ? "—" : draft === value && configuredValue > 5 ? "5+" : draft}
+      </output>
+    </>
+  );
+}
+
 export function ChatGPTBrowserSidebarEntry({
   showCreateAction = true,
 }: {
@@ -624,7 +667,7 @@ export function ChatGPTBrowserSidebarEntry({
   const [viewPolicyBusy, setViewPolicyBusy] = useState(false);
   const [workingReporterId] = useState(() => crypto.randomUUID());
   const updateViewCaffyPolicy = async (
-    input: { keepT3Busy?: boolean; shutdownWhenIdle?: boolean; busyForMinutes?: number },
+    input: { keepT3Busy?: boolean; maxWorking?: number; shutdownWhenIdle?: boolean; busyForMinutes?: number },
   ) => {
     const api = window.desktopBridge?.caffyControl;
     if (!api || viewPolicyBusy) return;
@@ -648,7 +691,9 @@ export function ChatGPTBrowserSidebarEntry({
         ? "Forced PC shutdown armed. It will disarm before initiating shutdown."
         : input.shutdownWhenIdle === false
           ? "Automatic PC shutdown cancelled."
-          : input.keepT3Busy ? "Keep T3 Busy enabled." : "Keep T3 Busy disabled.");
+          : input.keepT3Busy === false ? "Keep T3 Busy disabled." : input.maxWorking !== undefined
+            ? `Automatic work capacity set to ${input.maxWorking} sessions.`
+            : "Keep T3 Busy enabled.");
     } catch (error) {
       setMenuFeedback(`Caffy policy failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -2233,22 +2278,21 @@ export function ChatGPTBrowserSidebarEntry({
         )}
       </SidebarMenuItem>
       <SidebarMenuItem>
-        <SidebarMenuButton
-          role="switch"
-          aria-checked={caffyOverview?.keepT3Busy ?? false}
-          aria-label={`Keep T3 Busy: ${caffyOverview ? (caffyOverview.keepT3Busy ? "on" : "off") : "unavailable"}`}
-          title="Auto-fill free working slots from TaskBoard. Scheduled prompts, resumes and Caffy runs are independent of this switch."
-          disabled={!caffyOverview || viewPolicyBusy}
-          onClick={() => void updateViewCaffyPolicy({ keepT3Busy: !caffyOverview!.keepT3Busy })}
-        >
-          <BotIcon aria-hidden />
-          <span className="flex-1">Keep T3 Busy</span>
-          <span className={`ms-auto text-2xs font-semibold ${caffyOverview?.keepT3Busy ? "text-emerald-500" : "text-muted-foreground"}`}>
-            {caffyOverview?.busyUntil != null
-              ? `→ ${new Date(caffyOverview.busyUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-              : caffyOverview ? (caffyOverview.keepT3Busy ? "ON" : "OFF") : "—"}
-          </span>
-        </SidebarMenuButton>
+        <div className="flex h-8 w-full items-center gap-2 rounded-[var(--control-radius)] px-[var(--sidebar-row-content-inset)] text-sm font-medium text-sidebar-muted-foreground/80 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+          <BotIcon className="size-4 shrink-0 text-[var(--sidebar-icon-color)]" aria-hidden />
+          <label className="min-w-0 flex-1 truncate group-data-[collapsible=icon]:hidden" htmlFor="t3-busy-capacity">
+            Keep T3 Busy
+          </label>
+          <BusyCapacitySlider
+            key={`${caffyOverview?.keepT3Busy}-${caffyOverview?.maxWorking}`}
+            value={caffyOverview?.keepT3Busy ? Math.min(caffyOverview.maxWorking, 5) : 0}
+            configuredValue={caffyOverview ? (caffyOverview.keepT3Busy ? caffyOverview.maxWorking : 0) : null}
+            disabled={!caffyOverview || viewPolicyBusy}
+            onCommit={(capacity) => void updateViewCaffyPolicy(capacity === 0
+              ? { keepT3Busy: false }
+              : caffyOverview?.keepT3Busy ? { maxWorking: capacity } : { keepT3Busy: true, maxWorking: capacity })}
+          />
+        </div>
       </SidebarMenuItem>
       <SidebarMenuItem>
         {showingHidden || showingSnoozed ? (
