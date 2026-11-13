@@ -31,14 +31,14 @@ async function recentInGuest(window: BrowserWindow): Promise<HistoryHit[]> {
   for (let attempt = 0; attempt < 24; attempt++) {
     await delay(250);
     const observation = await window.webContents.executeJavaScript(`(() => {
-      const sidebar = document.querySelector("aside");
-      if (!sidebar || !/Recents|Chats/i.test(sidebar.textContent || ""))
-        return { ready: false, links: [] };
-      return {
-        ready: true,
-        links: [...sidebar.querySelectorAll('a[href*="/c/"]')].slice(0, 40)
-          .map((link) => ({ url: link.href, title: (link.textContent || "").trim().slice(0, 200) })),
-      };
+      // ChatGPT has used aside, nav and unwrapped sidebar layouts.
+      // Every link is separately verified against an assistant Bootstrap marker.
+      const links = [...document.querySelectorAll('a[href*="/c/"]')].slice(0, 60)
+        .map((link) => ({ url: link.href, title: (link.textContent || "").trim().slice(0, 200) }));
+      const ready = links.length > 0 ||
+        (document.readyState === "complete" &&
+          Boolean(document.querySelector('aside, nav, [data-testid*="sidebar"]')));
+      return { ready, links };
     })()`, false) as { ready: boolean; links: { url: string; title: string }[] };
     if (!observation.ready) continue;
     const valid = new Map<string, HistoryHit>();
@@ -67,18 +67,23 @@ async function searchInGuest(window: BrowserWindow, query: string): Promise<Hist
   // search modal must not toggle closed when the button is clicked again.
   await window.loadURL("https://chatgpt.com/");
   if (window.isDestroyed()) throw new Error("ChatGPT search guest closed.");
-  const activation = await window.webContents.executeJavaScript(`(() => {
-    const search = document.querySelector('[data-testid="search-button"]') ||
-      document.querySelector('a[href="/search"]') ||
-      [...document.querySelectorAll('button')].find((el) =>
-        /^(search|search chats|search conversations)$/i.test(
-          (el.getAttribute('aria-label') || el.textContent || '').trim(),
-        ));
-    if (!search) return false;
-    search.click();
-    return true;
-  })()`, false) as boolean;
-  if (!activation) throw new Error("ChatGPT history search UI unavailable.");
+  let activation = false;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    activation = await window.webContents.executeJavaScript(`(() => {
+      const search = document.querySelector('[data-testid="search-button"]') ||
+        document.querySelector('a[href="/search"]') ||
+        [...document.querySelectorAll('button')].find((el) =>
+          /^(search|search chats|search conversations)$/i.test(
+            (el.getAttribute('aria-label') || el.textContent || '').trim(),
+          ));
+      if (!search) return false;
+      search.click();
+      return true;
+    })()`, false) as boolean;
+    if (activation) break;
+    await delay(200);
+  }
+  if (!activation) throw new Error("ChatGPT history search button unavailable in this profile.");
   let inputReady = false;
   for (let attempt = 0; attempt < 20; attempt++) {
     inputReady = await window.webContents.executeJavaScript(`(() => Boolean(
@@ -149,8 +154,14 @@ async function verifyBootstrapHit(window: BrowserWindow, hit: HistoryHit, marker
     const replies = document.querySelectorAll(
       '[data-message-author-role="assistant"],[data-content-search-unit-key$=":assistant"],[data-markdown-text-style="assistant-message"]'
     );
-    return [...replies].some((node) =>
-      node.textContent?.toLowerCase().includes(marker.toLowerCase()));
+    return [...replies].some((node) => {
+      if (node.closest('[data-message-author-role="user"],[data-content-search-unit-key$=":user"],[data-testid*="tool"]'))
+        return false;
+      const copy = node.cloneNode(true);
+      copy.querySelectorAll('pre,code,blockquote,[hidden],[aria-hidden="true"],[data-testid*="tool"],button')
+        .forEach((child) => child.remove());
+      return copy.textContent?.toLowerCase().includes(marker.toLowerCase());
+    });
   })()`.replace("MARKER_REPLACE", markerId);
   for (let attempt = 0; attempt < 24; attempt++) {
     await delay(250);
@@ -167,15 +178,32 @@ async function discoverBootstrapInGuest(
     const hit = { conversationId: id, url: conversationUrl, title: "Imported ChatGPT conversation" };
     return await verifyBootstrapHit(window, hit, markerId) ? [hit] : [];
   }
-  let candidates: HistoryHit[] = [];
-  try { candidates = await searchInGuest(window, markerId); }
-  catch { /* Search UI may not index new conversations yet; inspect recent links. */ }
-  if (!candidates.length) candidates = await recentInGuest(window);
-  for (const hit of candidates.slice(0, 12)) {
-    try {
-      if (await verifyBootstrapHit(window, hit, markerId)) return [hit];
-    } catch { /* One inaccessible chat must not import the wrong conversation. */ }
+  // New phone chats tend to sync into Recents before full-text search indexes
+  // their assistant replies. Search remains the fallback for older conversations.
+  const errors: string[] = [];
+  let inspected = 0;
+  for (const [source, find] of [
+    ["recent", () => recentInGuest(window)],
+    ["search", () => searchInGuest(window, markerId)],
+  ] as const) {
+    let candidates: HistoryHit[];
+    try { candidates = await find(); }
+    catch (cause) {
+      errors.push(`${source}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      continue;
+    }
+    for (const hit of candidates.slice(0, 12)) {
+      inspected++;
+      try {
+        if (await verifyBootstrapHit(window, hit, markerId)) return [hit];
+      } catch (cause) {
+        errors.push(`${source} /c/${hit.conversationId}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    }
   }
+  if (errors.length) throw new Error(
+    `No verified Bootstrap marker in ${inspected} candidates (${errors.slice(0, 3).join("; ")}).`,
+  );
   return [];
 }
 

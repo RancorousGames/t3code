@@ -3,6 +3,7 @@ import {
   enqueueExternalBootstrapRequest,
   isExactExternalChatGPTUrl,
   readExternalBootstrapRequests,
+  retryExternalBootstrapRequest,
 } from "./chatGPTExternalBootstrapDiscovery";
 
 const ID = "12345678-abcd-4abc-8abc-123456789abc";
@@ -36,6 +37,21 @@ describe("external ChatGPT registration queue", () => {
     enqueueExternalBootstrapRequest("env", ID, "Another title", FIRST);
     expect(readExternalBootstrapRequests("env")).toEqual(upgraded);
     expect(() => enqueueExternalBootstrapRequest("env", ID, undefined, SECOND)).toThrow(/different pending conversation/);
+  });
+
+  it("stops after bounded retries and retains the diagnostic without attaching anything", () => {
+    enqueueExternalBootstrapRequest("env", ID, "Phone chat");
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      const result = retryExternalBootstrapRequest("env", ID, "marker absent");
+      expect(result).toMatchObject({
+        id: ID, attempts: attempt, failed: attempt === 8, lastError: "marker absent",
+      });
+    }
+    const [failed] = readExternalBootstrapRequests("env");
+    expect(failed?.conversationUrl).toBeUndefined();
+    enqueueExternalBootstrapRequest("env", ID, "Retry");
+    expect(readExternalBootstrapRequests("env")[0]).toMatchObject({ id: ID, attempts: 0 });
+    expect(readExternalBootstrapRequests("env")[0]?.failed).toBeUndefined();
   });
 
   it("rejects lookalike hosts, malformed URLs and invalid IDs", () => {

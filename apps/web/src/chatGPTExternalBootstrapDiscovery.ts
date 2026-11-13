@@ -67,11 +67,14 @@ export function resolveExternalBootstrapRequest(environmentId: string, id: strin
 
 export function retryExternalBootstrapRequest(
   environmentId: string, id: string, reason: string,
-): void {
+): ExternalBootstrapRequest | undefined {
+  let updated: ExternalBootstrapRequest | undefined;
   write(environmentId, readExternalBootstrapRequests(environmentId).map((entry) => {
     if (entry.id !== id) return entry;
     const attempts = entry.attempts + 1;
-    return { ...entry, attempts, failed: attempts >= 8,
-      lastError: reason.slice(0, 200), nextAttemptAt: Date.now() + 20_000 };
+    updated = { ...entry, attempts, failed: attempts >= 8,
+      lastError: reason.slice(0, 400), nextAttemptAt: Date.now() + 20_000 };
+    return updated;
   }));
+  return updated;
 }

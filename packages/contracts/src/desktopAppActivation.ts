@@ -177,6 +177,7 @@ export const DesktopAppActivationRequest = Schema.Union([
       "experimental_evaluate",
       "bootstrap_title",
       "bootstrap_discover",
+      "bootstrap_status",
       "ask_user",
       "request_attention",
       "attention_status",

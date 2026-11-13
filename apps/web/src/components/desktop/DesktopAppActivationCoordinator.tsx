@@ -82,6 +82,7 @@ import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedSt
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { AgentAttentionToast, requestAgentAttention, readAgentAttention } from "./AgentAttentionToast";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { chatGPTCloseStatus } from "../../chatGPTCloseStatus";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import {
@@ -198,6 +199,7 @@ export function DesktopAppActivationCoordinator() {
       const search = window.desktopBridge?.searchChatGPTHistory;
       if (!search) throw new Error("Native ChatGPT history search is unavailable.");
       const matches: Array<{ url: string; conversationId: string; profileId: string }> = [];
+      const profileErrors: string[] = [];
       for (const profileId of [PRIMARY_CHATGPT_PROFILE_ID, SECONDARY_CHATGPT_PROFILE_ID]) {
         try {
           const hits = await search({ environmentId, profileId, query: pending.id,
@@ -206,13 +208,15 @@ export function DesktopAppActivationCoordinator() {
             if (chatGPTConversationIdFromUrl(hit.url) === hit.conversationId)
               matches.push({ ...hit, profileId });
           }
-        } catch {
-          // A signed-out profile or busy search must not prevent trying the other account.
+        } catch (cause) {
+          // The other account may still contain the chat. Retain each failure
+          // so a missing marker is distinguishable from a broken search UI.
+          profileErrors.push(`${profileId}: ${cause instanceof Error ? cause.message : String(cause)}`);
         }
       }
       if (matches.length !== 1) throw new Error(
         matches.length ? "Bootstrap ID matched multiple ChatGPT accounts." :
-          "The exact Bootstrap marker was not found in ChatGPT history.",
+          `No verified Bootstrap marker on either profile${profileErrors.length ? ` (${profileErrors.join("; ")})` : " (not yet in recent/history)" }.`,
       );
       const hit = matches[0]!;
       const latest = readChatGPTBrowserSessions(environmentId);
@@ -247,8 +251,16 @@ export function DesktopAppActivationCoordinator() {
       resolveExternalBootstrapRequest(environmentId, pending.id);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      retryExternalBootstrapRequest(environmentId, pending.id, message);
-      console.warn("[ChatGPT external Bootstrap] Discovery pending:", pending.id, message);
+      const updated = retryExternalBootstrapRequest(environmentId, pending.id, message);
+      console.warn("[ChatGPT external Bootstrap] Discovery:", pending.id,
+        updated?.failed ? "failed" : "retrying", message);
+      if (updated?.failed) {
+        toastManager.add(stackedThreadToast({
+          type: "error",
+          title: "Could not import phone ChatGPT chat",
+          description: `Bootstrap ${pending.id.slice(0, 8)}: ${updated.lastError}. No chat was attached. Check bootstrap_status for details.`,
+        }));
+      }
     } finally {
       externalBootstrapBusyRef.current = false;
     }
@@ -921,6 +933,25 @@ export function DesktopAppActivationCoordinator() {
               requestId: request.requestId,
               ok: true,
               data: { action: "focus", sessionId: target.id, acknowledged: true },
+            };
+          }
+          if (request.action === "bootstrap_status") {
+            const id = request.sessionId?.toLowerCase();
+            if (!id) throw new Error("Bootstrap status requires a session UUID.");
+            const owner = sessionSnapshot.find((session) =>
+              session.id.toLowerCase() === id ||
+              session.bootstrapIdentity?.publicId?.toLowerCase() === id);
+            const pending = readExternalBootstrapRequests(environmentId).find((entry) => entry.id === id);
+            return {
+              version: 1, requestId: request.requestId, ok: true,
+              data: {
+                action: "bootstrap_status", sessionId: id,
+                status: owner ? "attached" : pending?.failed ? "failed" : pending ? "pending" : "not_found",
+                ...(owner ? { conversationId: owner.bootstrapIdentity?.conversationId ?? null,
+                  registered: owner.bootstrapIdentity?.state === "registered" } : {}),
+                ...(pending ? { attempts: pending.attempts, nextAttemptAt: pending.nextAttemptAt,
+                  lastError: pending.lastError ?? null, conversationUrl: pending.conversationUrl ?? null } : {}),
+              },
             };
           }
           if (request.action === "bootstrap_discover") {
@@ -2678,6 +2709,7 @@ export function DesktopAppActivationCoordinator() {
           request.action === "close_status" ||
           request.action === "bootstrap_title" ||
           request.action === "bootstrap_discover" ||
+          request.action === "bootstrap_status" ||
           request.action === "ask_user" ||
           request.action === "request_attention" ||
           request.action === "attention_status")

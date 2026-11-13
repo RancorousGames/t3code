@@ -70,6 +70,7 @@ export async function controlSessions(
     "experimental_evaluate",
     "bootstrap_title",
     "bootstrap_discover",
+    "bootstrap_status",
     "ask_user",
     "request_attention",
     "attention_status",
@@ -126,6 +127,9 @@ export async function controlSessions(
       input.proposedTitle.length < 3 || input.proposedTitle.length > 80 ||
       /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle)))
     throw new Error("bootstrap_title requires a UUID sessionId and safe 3-80 character proposedTitle.");
+  if (input.action === "bootstrap_status" &&
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? ""))
+    throw new Error("bootstrap_status requires an exact session UUID.");
   if (input.action === "bootstrap_discover" &&
     (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
       (input.proposedTitle !== undefined &&
