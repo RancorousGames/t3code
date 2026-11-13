@@ -518,8 +518,8 @@ export function NewPrepfileAction() {
         <FilePlus2Icon />
       </SidebarHeaderIconButton>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogPopup className="sm:max-w-xl">
-          <form onSubmit={(event) => { event.preventDefault(); submit(); }}
+        <DialogPopup className="w-[min(720px,calc(100vw-2rem))] max-w-[720px] max-h-[calc(100dvh-2rem)] overflow-hidden">
+          <form className="flex min-h-0 w-full flex-1 flex-col" onSubmit={(event) => { event.preventDefault(); submit(); }}
             onPasteCapture={(event) => {
               const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
               if (!files.length) return;
@@ -527,23 +527,25 @@ export function NewPrepfileAction() {
               setAttachedImages((previous) => [...previous, ...files].slice(0, 8));
             }}
           >
-            <DialogHeader>
+            <DialogHeader className="shrink-0 border-b border-border/60 pb-4 pt-5">
               <DialogTitle>New prepfile</DialogTitle>
             </DialogHeader>
-            <DialogPanel>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <DialogPanel className="space-y-4 !px-6 !pt-5 !pb-5">
               <div className="flex flex-col gap-4">
-                <Label className="flex flex-col gap-1.5">
-                  Details for prepfile
+                <div className="min-w-0 flex flex-col gap-2">
+                  <Label htmlFor="prepfile-task-request">Task / request</Label>
                   <Textarea
+                    id="prepfile-task-request"
                     value={request}
                     required
                     placeholder="Describe the task, paste an issue, or specify what context to collect…"
                     onChange={(event) => setRequest(event.target.value)}
-                    className="min-h-32"
+                    className="min-h-28 w-full resize-y"
                   />
-                  <label className="inline-flex w-fit cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                    Attach images (or Ctrl+V)
-                    <input type="file" accept="image/*" multiple className="max-w-32 text-xs"
+                  <label htmlFor="prepfile-image-input" className="inline-flex h-8 w-fit cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-xs text-muted-foreground hover:border-foreground/40 hover:text-foreground">
+                    Attach images / paste screenshots
+                    <input id="prepfile-image-input" type="file" accept="image/*" multiple className="sr-only"
                       onChange={(event) => {
                         setAttachedImages((previous) => [...previous, ...(event.target.files ?? [])].slice(0, 8));
                         event.target.value = "";
@@ -555,16 +557,16 @@ export function NewPrepfileAction() {
                       <Button type="button" size="xs" variant="ghost" onClick={() => setAttachedImages((previous) => previous.filter((_, i) => i !== index))}>Remove</Button>
                     </div>
                   ))}
-                </Label>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <Label className="flex flex-col gap-1.5">
-                    Step 1 · Preparation model (cheap)
+                </div>
+                <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="min-w-0 flex flex-col gap-1.5">
+                    <Label htmlFor="prepfile-generator">Preparation agent</Label>
                     <Select
                       value={generator}
                       items={{ chatgpt: "ChatGPT session", luna: "Luna (native)", haiku: "Haiku (native)" }}
                       onValueChange={(value) => { if (value) setGenerator(value as Generator); }}
                     >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="prepfile-generator" className="w-full min-w-0"><SelectValue /></SelectTrigger>
                       <SelectPopup>
                         <SelectItem value="chatgpt">ChatGPT session</SelectItem>
                         {GENERATORS.map((item) => (
@@ -574,24 +576,25 @@ export function NewPrepfileAction() {
                         ))}
                       </SelectPopup>
                     </Select>
-                  </Label>
-                  <Label className="flex flex-col gap-1.5">
-                    Context depth
+                  </div>
+                  <div className="min-w-0 flex flex-col gap-1.5">
+                    <Label htmlFor="prepfile-depth">Research depth</Label>
                     <Select value={depth} items={{ light: "Light", medium: "Medium", heavy: "Heavy" }}
                       onValueChange={(value) => { if (value) setDepth(value as PrepfileDepth); }}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="prepfile-depth" className="w-full min-w-0"><SelectValue /></SelectTrigger>
                       <SelectPopup>
                         <SelectItem value="light">Light</SelectItem>
                         <SelectItem value="medium">Medium (default)</SelectItem>
                         <SelectItem value="heavy">Heavy</SelectItem>
                       </SelectPopup>
                     </Select>
-                  </Label>
+                  </div>
                 </div>
-                <Label className="flex flex-col gap-1.5">
-                  Project / workspace
+                <div className="min-w-0 flex flex-col gap-1.5">
+                  <Label htmlFor="prepfile-project">Project / workspace</Label>
                   <select
-                    className="h-9 rounded-lg border border-input bg-background px-3 text-sm"
+                    id="prepfile-project"
+                    className="h-9 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm"
                     value={projectChoice}
                     onChange={(event) => setProjectChoice(event.target.value)}
                   >
@@ -600,24 +603,38 @@ export function NewPrepfileAction() {
                       <option key={item.id} value={item.id}>{item.title}</option>
                     ))}
                   </select>
-                </Label>
-                <label className="flex cursor-pointer items-center gap-2 text-sm">
-                  <Checkbox checked={autoHandoff} onCheckedChange={(value) => setAutoHandoff(value === true)} />
-                  Start an implementation agent automatically
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-sm">
-                  <Checkbox checked={createTaskboardTask} onCheckedChange={(value) => {
-                    const enabled = value === true;
-                    setCreateTaskboardTask(enabled);
-                    localStorage.setItem("t3code:prepfile-create-taskboard:v1", String(enabled));
-                  }} />
-                  Prepfile writer creates a TaskBoard task
-                </label>
+                </div>
+                <div className="space-y-3 border-t border-border/60 pt-4">
+                  <div className="flex items-center gap-3">
+                    <Checkbox id="prepfile-auto-handoff" checked={autoHandoff}
+                      onCheckedChange={(value) => setAutoHandoff(value === true)} />
+                    <Label htmlFor="prepfile-auto-handoff" className="cursor-pointer font-normal">
+                      Start implementation automatically
+                    </Label>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Checkbox id="prepfile-create-task" checked={createTaskboardTask} onCheckedChange={(value) => {
+                      const enabled = value === true;
+                      setCreateTaskboardTask(enabled);
+                      localStorage.setItem("t3code:prepfile-create-taskboard:v1", String(enabled));
+                    }} />
+                    <Label htmlFor="prepfile-create-task" className="cursor-pointer font-normal">
+                      Create TaskBoard task
+                    </Label>
+                  </div>
+                </div>
                 {autoHandoff && (
-                  <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
-                    <Label>Step 2 · Implementation model (full native T3 picker)</Label>
+                  <div className="min-w-0 space-y-3 border-t border-border/60 pt-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold">Implementation</h3>
+                      <span className="text-xs text-muted-foreground">New T3 thread</span>
+                    </div>
+                    <div className="grid min-w-0 grid-cols-1 items-start gap-3 sm:grid-cols-2">
+                      <div className="min-w-0 space-y-1.5">
+                        <span className="block text-sm font-medium">Model</span>
                     {effectiveHandoff && environmentId ? (
                       <ProviderModelPicker
+                        triggerClassName="!max-w-none w-full"
                         environmentId={environmentId}
                         activeInstanceId={effectiveHandoff.instanceId}
                         model={effectiveHandoff.model}
@@ -631,23 +648,23 @@ export function NewPrepfileAction() {
                       <p className="text-sm text-muted-foreground">No available native T3 model for this project.</p>
                     )}
                     {effectiveHandoff && (
-                      <p className="text-xs text-muted-foreground">
-                        Selected: {selectedModel?.name ?? effectiveHandoff.model} ({selectedEntry?.displayName ?? effectiveHandoff.instanceId})
+                      <p className="truncate text-xs text-muted-foreground" title={selectedEntry?.displayName}>
+                        {selectedModel?.name ?? effectiveHandoff.model}
                       </p>
                     )}
-                    <Label className="flex flex-col gap-1">
-                      Implementation effort
-                      <select className="h-9 rounded-lg border border-input bg-background px-3 text-sm"
+                      </div>
+                      <div className="min-w-0 space-y-1.5">
+                      <Label htmlFor="prepfile-implementation-effort">Effort</Label>
+                      <select id="prepfile-implementation-effort"
+                        className="h-9 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm"
                         value={effectiveEffort ?? ""} disabled={!effortLevels.length}
                         onChange={(event) => setEffortChoice(event.target.value)}>
                         {effortLevels.length
                           ? effortLevels.map((level) => <option key={level.id} value={level.id}>{level.label}</option>)
-                          : <option value="">Not available for this model</option>}
+                          : <option value="">Unavailable</option>}
                       </select>
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      When preparation finishes, T3 creates a new implementation thread with this model. No second thread is created if delivery is uncertain.
-                    </p>
+                      </div>
+                    </div>
                   </div>
                 )}
                 {autoHandoff && pending.length > 0 && (
@@ -675,11 +692,12 @@ export function NewPrepfileAction() {
                 )}
                 {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
               </div>
-            </DialogPanel>
-            <DialogFooter>
+              </DialogPanel>
+            </div>
+            <DialogFooter className="shrink-0">
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={!request.trim() || !environmentId || (autoHandoff && !effectiveHandoff?.model)}>
-                Start
+                Start preparation
               </Button>
             </DialogFooter>
           </form>
