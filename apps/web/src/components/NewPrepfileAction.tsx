@@ -36,13 +36,16 @@ import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
-type Generator = "chatgpt" | "gpt6" | "luna" | "opus55" | "haiku";
-const GENERATORS: ReadonlyArray<{ id: Generator; label: string; match: RegExp }> = [
-  { id: "gpt6", label: "GPT-6 (native)", match: /(?:gpt[- ]?6)(?!\d)/i },
+type Generator = "chatgpt" | "luna" | "haiku";
+// Preparation is intentionally limited to low-cost models. The full native
+// model picker below belongs to the separate implementation agent.
+const GENERATORS: ReadonlyArray<{ id: Exclude<Generator, "chatgpt">; label: string; match: RegExp }> = [
   { id: "luna", label: "Luna (native)", match: /\bluna\b/i },
-  { id: "opus55", label: "Opus 5.5 (native)", match: /opus[- ]?5[.\-]?5/i },
   { id: "haiku", label: "Haiku (native)", match: /\bhaiku\b/i },
 ];
+const isExpensiveImplementationModel = (name: string) =>
+  /\b(?:opus|sonnet|gpt[- ]?6|o3|o4|pro)\b/i.test(name) &&
+  !/\b(?:haiku|luna|mini|nano|flash|lite)\b/i.test(name);
 
 const failedMessage = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
@@ -61,7 +64,7 @@ export function NewPrepfileAction() {
   const [depth, setDepth] = useState<PrepfileDepth>("medium");
   const [generator, setGenerator] = useState<Generator>("chatgpt");
   const [projectChoice, setProjectChoice] = useState("");
-  const [autoHandoff, setAutoHandoff] = useState(false);
+  const [autoHandoff, setAutoHandoff] = useState(true);
   const [handoffSelection, setHandoffSelection] = useState<ModelSelection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +103,9 @@ export function NewPrepfileAction() {
     const available = availableModels.find((item) => match.test(item.model) || match.test(item.label));
     return available ? { instanceId: available.entry.instanceId, model: available.model } : null;
   };
+  const preferredImplementationModel = availableModels.find((item) =>
+    isExpensiveImplementationModel(item.model) || isExpensiveImplementationModel(item.label)
+  );
   const defaultModel = instanceEntries.find(isProviderInstancePickerReady);
   const effectiveHandoff = handoffSelection &&
     instanceEntries.some((item) =>
@@ -107,13 +113,15 @@ export function NewPrepfileAction() {
       item.models.some((model) => model.slug === handoffSelection.model)
     )
       ? handoffSelection
-      : defaultModel
-        ? {
-            instanceId: defaultModel.instanceId,
-            model: defaultModel.models.find((item) => item.isDefault)?.slug ??
-              defaultModel.models[0]?.slug ?? "",
-          }
-        : null;
+      : preferredImplementationModel
+        ? { instanceId: preferredImplementationModel.entry.instanceId, model: preferredImplementationModel.model }
+        : defaultModel
+          ? {
+              instanceId: defaultModel.instanceId,
+              model: defaultModel.models.find((item) => item.isDefault)?.slug ??
+                defaultModel.models[0]?.slug ?? "",
+            }
+          : null;
   const modelOptions = getCustomModelOptionsByInstance(
     settings, providers, effectiveHandoff?.instanceId, effectiveHandoff?.model,
   );
@@ -346,7 +354,7 @@ export function NewPrepfileAction() {
             <DialogHeader>
               <DialogTitle>New prepfile</DialogTitle>
               <DialogDescription>
-                Run the installed prepfile skill, optionally handing its completed context to a new implementation thread.
+                A cheap preparation agent collects source context; a separate implementation agent can use it without repeating discovery.
               </DialogDescription>
             </DialogHeader>
             <DialogPanel>
@@ -364,10 +372,10 @@ export function NewPrepfileAction() {
                 </Label>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Label className="flex flex-col gap-1.5">
-                    Prepfile generator
+                    Step 1 · Preparation model (cheap)
                     <Select
                       value={generator}
-                      items={{ chatgpt: "ChatGPT session", gpt6: "GPT-6 (native)", luna: "Luna (native)", opus55: "Opus 5.5 (native)", haiku: "Haiku (native)" }}
+                      items={{ chatgpt: "ChatGPT session", luna: "Luna (native)", haiku: "Haiku (native)" }}
                       onValueChange={(value) => { if (value) setGenerator(value as Generator); }}
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>
@@ -410,11 +418,11 @@ export function NewPrepfileAction() {
                 </Label>
                 <label className="flex cursor-pointer items-center gap-2 text-sm">
                   <Checkbox checked={autoHandoff} onCheckedChange={(value) => setAutoHandoff(value === true)} />
-                  Automatically hand over the finished prepfile
+                  Start an implementation agent automatically
                 </label>
                 {autoHandoff && (
                   <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
-                    <Label>Implementation model (same picker as native T3 threads)</Label>
+                    <Label>Step 2 · Implementation model (full native T3 picker)</Label>
                     {effectiveHandoff && environmentId ? (
                       <ProviderModelPicker
                         environmentId={environmentId}
@@ -431,11 +439,11 @@ export function NewPrepfileAction() {
                       <p className="text-sm text-muted-foreground">No available native T3 model for this project.</p>
                     )}
                     <p className="text-xs text-muted-foreground">
-                      T3 watches the exact generated file, then creates one new implementation thread. An uncertain send is never automatically repeated.
+                      When preparation finishes, T3 creates a new implementation thread with this model. No second thread is created if delivery is uncertain.
                     </p>
                   </div>
                 )}
-                {pending.length > 0 && (
+                {autoHandoff && pending.length > 0 && (
                   <div className="rounded-lg border border-border p-2 text-xs">
                     <p className="mb-2 font-medium">Pending handoffs</p>
                     {pending.map((job) => (

@@ -39,7 +39,7 @@ export function buildPrepfileInstruction(input: {
     `Depth: ${input.depth}. Save the ONLY final prepfile as UTF-8 Markdown at this exact absolute path:`,
     input.outputPath,
     "",
-    "Create directories as needed. Build the file in a temporary .tmp file alongside the requested path, and atomically rename it to the exact .md path ONLY AFTER the prepfile is completely written and validated. The final .md path is the completion signal for automatic handoff. Include the verbatim user request at the top, then context, source pointers, verification notes, and the skill's deletion instruction. Do NOT implement the requested work or make any project changes.",
+    "Create the destination folder and use the prepfile skill's bundled build_context.py writer with --output set to the exact path above. Do not save a different filename: T3 monitors this path and triggers handoff only when it is stable. Verify the completed output according to the skill. Preserve the verbatim user request at the top, with source-labelled excerpts and the skill's deletion instruction. Do NOT implement the requested work or modify project files.",
     input.hasAutomaticHandoff
       ? "The T3 app will detect this exact file and create the selected implementation thread automatically; do NOT hand over or start implementation yourself."
       : "Do not hand over or start implementation. Return the absolute file path when complete.",
@@ -54,7 +54,7 @@ export function buildPrepfileHandoffInstruction(job: PendingPrepfileHandoff): st
     "Implement the original request using this freshly generated, disposable PREPFILE context:",
     job.outputPath,
     "",
-    "Read the actual UTF-8 file before acting. It is reference context, not a substitute for reading current source or following project instructions. Do not generate another prepfile. Work on the request end-to-end, verify as appropriate, and remove this temporary prepfile after use (not before you have extracted what you need).",
+    "Read the actual UTF-8 prepfile before acting. The cheaper preparation agent has already gathered task requirements, documents and relevant code excerpts. Treat these collected excerpts as your initial source context: do NOT repeat broad codebase searches, reread source files, recompute hashes or check version control merely to rediscover or verify what is already here. Read additional source only when the implementation needs information that is missing from the prepfile, or when making edits. Follow project instructions, implement the request end-to-end, verify as appropriate, and delete this temporary prepfile when the task is done. Do not generate another prepfile.",
     "",
     "ORIGINAL REQUEST:",
     job.request,
