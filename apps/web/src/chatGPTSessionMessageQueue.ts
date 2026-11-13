@@ -533,8 +533,12 @@ export function useChatGPTSessionQueueDriver(
     // Another worker can free a slot without emitting a local idle event.
     // Also retry release using the already verified idle receipt when the T3
     // registry was temporarily unavailable. Do not send a second user turn.
-    const admissionRetry = queue.some(row => row.condition === "wait_for_slot" &&
-      (row.state === "queued" || (row.state === "delivered" && !row.capacityReleasedAt)))
+    const admissionRetry = queue.some(row =>
+      // The unload→mount transition is not guaranteed to emit a new idle
+      // event. Retry only while a real message is queued, never globally.
+      (row.state === "queued" && row.condition !== "wait_for_slot") ||
+      (row.condition === "wait_for_slot" &&
+        (row.state === "queued" || (row.state === "delivered" && !row.capacityReleasedAt))))
       ? window.setInterval(() => {
           drain();
           releaseDeliveredCapacity(environmentId, sessionId);

@@ -96,15 +96,19 @@ function ChatGPTBackgroundQueueOwner({
 }) {
   const queue = useChatGPTSessionQueue(environmentId, sessionId);
   useChatGPTSessionQueueDriver(environmentId, sessionId, sessions);
-  const admitted = queue.some(
+  const needsDeliveryMount = queue.some(
     (row) =>
-      row.condition === "wait_for_slot" &&
-      !!row.capacityAdmittedAt &&
-      !row.capacityReleasedAt &&
-      ["queued", "sending", "delivered"].includes(row.state),
+      // An explicitly queued when_idle wake also needs a guest to observe
+      // idleness. Without a mount, a fully unloaded recipient never emits the
+      // idle/recovery event that the FIFO dispatcher is waiting for.
+      (row.state === "queued" && row.condition !== "wait_for_slot") ||
+      (row.condition === "wait_for_slot" &&
+        !!row.capacityAdmittedAt &&
+        !row.capacityReleasedAt &&
+        ["queued", "sending", "delivered"].includes(row.state)),
   );
   useEffect(() => {
-    if (!admitted) return;
+    if (!needsDeliveryMount) return;
     // Reuse the one targeted delivery mount owner. This avoids two independent
     // preview runtimes opening the same guest when the sidebar is also visible.
     requestChatGPTDeliveryMount(environmentId, sessionId);
@@ -133,7 +137,7 @@ function ChatGPTBackgroundQueueOwner({
       }
     }
     return () => releaseChatGPTDeliveryMount(environmentId, sessionId);
-  }, [admitted, environmentId, sessionId]);
+  }, [needsDeliveryMount, environmentId, sessionId]);
   return null;
 }
 

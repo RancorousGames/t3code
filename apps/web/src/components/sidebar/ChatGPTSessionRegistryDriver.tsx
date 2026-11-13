@@ -505,6 +505,7 @@ export function ChatGPTSessionRegistryDriver() {
     let registered = false;
     let migrating = true;
     let running = false;
+    let actionRunning = false;
     let next: ReturnType<typeof setTimeout> | undefined;
     let lastHashes = new Map<string, string>();
     const reportedRemovals = new Set<string>();
@@ -530,6 +531,41 @@ export function ChatGPTSessionRegistryDriver() {
         });
     }, 10_000);
 
+    // Never let a large/failed registry snapshot or migration block external
+    // when_idle wakes. Heartbeat already runs independently; action dispatch
+    // must do the same. The server only hands out actions for registered rows,
+    // and this worker retains the usual single-consumer FIFO semantics.
+    const drainActions = async () => {
+      if (disposed || !registered || actionRunning) return;
+      actionRunning = true;
+      try {
+        const pending = await take({
+          environmentId: targetEnvironment,
+          input: { environmentId: targetEnvironment, driverId },
+        });
+        if (disposed || pending._tag !== "Success" || !pending.value.ok) return;
+        for (const action of pending.value.actions) {
+          if (disposed) return;
+          const result = await executeRegistryDriverAction(
+            targetEnvironment,
+            action,
+            setSessionSnooze,
+            setSessionCompletion,
+          );
+          if (disposed) return;
+          await finish({
+            environmentId: targetEnvironment,
+            input: { requestId: action.requestId, driverId, result },
+          });
+        }
+      } catch (error) {
+        console.warn("[ChatGPT registry] Action drain failed", error);
+      } finally {
+        actionRunning = false;
+      }
+    };
+    const actionTimer = setInterval(() => void drainActions(), 5_000);
+
     const tick = async () => {
       if (disposed || running) return;
       running = true;
@@ -542,6 +578,7 @@ export function ChatGPTSessionRegistryDriver() {
           if (disposed || response._tag !== "Success" || !response.value.ok) return;
           registered = true;
           migrating = true;
+          void drainActions();
         } else {
           const response = await heartbeat({
             environmentId: targetEnvironment,
@@ -689,27 +726,8 @@ export function ChatGPTSessionRegistryDriver() {
           for (const receipt of toClose)
             reportedRemovals.add(`${receipt.sessionId}:${receipt.removedAt}`);
         }
-        // Registry synchronization must not wait behind a guest that is slow
-        // to reload, reconcile, or respond to a queued send.
-        const pending = await take({
-          environmentId: targetEnvironment,
-          input: { environmentId: targetEnvironment, driverId },
-        });
-        if (disposed || pending._tag !== "Success" || !pending.value.ok) return;
-        for (const action of pending.value.actions) {
-          if (disposed) return;
-          const result = await executeRegistryDriverAction(
-            targetEnvironment,
-            action,
-            setSessionSnooze,
-            setSessionCompletion,
-          );
-          if (disposed) return;
-          await finish({
-            environmentId: targetEnvironment,
-            input: { requestId: action.requestId, driverId, result },
-          });
-        }
+        // Action draining has its own interval: neither this migration nor a
+        // slow registry read can hold external notifications hostage.
       } catch {
         // Loss of connection never authorizes resubmission of a taken action.
         registered = false;
@@ -722,6 +740,7 @@ export function ChatGPTSessionRegistryDriver() {
     return () => {
       disposed = true;
       clearInterval(keepLeaseAlive);
+      clearInterval(actionTimer);
       if (next) clearTimeout(next);
       if (registered)
         void disconnect({
