@@ -5,7 +5,8 @@ import * as NodePath from "node:path";
 import * as NodeCP from "node:child_process";
 import type { CaffyScheduler } from "./CaffyScheduler.ts";
 
-interface Project { id: string; name: string; path: string; dispatchEnabled: boolean }
+type ProjectPriority = "high" | "normal" | "low";
+interface Project { id: string; name: string; path: string; dispatchEnabled: boolean; priority?: ProjectPriority }
 interface Catalog { schema: 1; projects: Project[]; hiddenPaths?: string[] }
 type QueueState = "queued" | "reserved" | "starting" | "working" | "completed";
 interface QueueItem {
@@ -26,7 +27,7 @@ interface QueueItem {
   legacyOpenRig: boolean;
   error?: string | null;
 }
-interface QueueSnapshot { boardRoot: string; items: QueueItem[]; dispatchEnabled: boolean }
+interface QueueSnapshot { boardRoot: string; items: QueueItem[]; dispatchEnabled: boolean; projectPriority: ProjectPriority }
 interface RetiredGuestReceipt {
   boardRoot: string; taskId: string; queueRequest: string;
   requestId: string; sessionId: string;
@@ -219,7 +220,8 @@ export class TaskBoardWorkCoordinator {
       seen.add(key);
       // Hidden projects still contribute live reservation capacity and Starting
       // reconciliation; only new selections are suppressed while hidden.
-      projects.push({ ...project, dispatchEnabled: !hidden.has(key) });
+      projects.push({ ...project, priority: project.priority === "high" || project.priority === "low"
+        ? project.priority : "normal", dispatchEnabled: !hidden.has(key) });
     }
     return projects;
   }
@@ -237,7 +239,8 @@ export class TaskBoardWorkCoordinator {
             !Array.isArray(output.items)) {
           throw new Error(`TaskBoard ${project.name} returned an invalid dispatch queue snapshot.`);
         }
-        snapshots.push({ boardRoot: project.path, items: output.items, dispatchEnabled: project.dispatchEnabled });
+        snapshots.push({ boardRoot: project.path, items: output.items,
+          projectPriority: project.priority ?? "normal", dispatchEnabled: project.dispatchEnabled });
         this.lastObservedAt = output.observedAt ?? new Date().toISOString();
       }
       this.snapshots = snapshots;
@@ -1067,7 +1070,7 @@ export class TaskBoardWorkCoordinator {
       const queued = snapshots.flatMap(board => board.dispatchEnabled ? board.items
         .filter(item => item.state === "queued" && item.readiness && !item.claimed &&
           !item.legacyOpenRig && UUID.test(item.queueRequest))
-        .map(item => ({ boardRoot: board.boardRoot, item })) : []);
+        .map(item => ({ boardRoot: board.boardRoot, projectPriority: board.projectPriority, item })) : []);
       // Spread automatic admissions across boards already represented by live
       // green workers. Historical Working claims must not bias selection.
       const workingIds = new Set((await this.caffy.capacity().catch(() => null))?.workingIds ?? []);
@@ -1082,9 +1085,13 @@ export class TaskBoardWorkCoordinator {
         ).length;
         boardLoad.set(rootKey(board.boardRoot), load);
       }
+      const priorityRank = (priority: ProjectPriority) => priority === "high" ? 0 : priority === "low" ? 2 : 1;
       queued.sort((a, b) =>
-        (a.item.priority === "urgent" ? 0 : 1) - (b.item.priority === "urgent" ? 0 : 1) ||
+        // Choose an unrepresented board before another concurrent worker from
+        // a busy board; within the same load, prefer higher-priority projects.
         (boardLoad.get(rootKey(a.boardRoot)) ?? 0) - (boardLoad.get(rootKey(b.boardRoot)) ?? 0) ||
+        priorityRank(a.projectPriority) - priorityRank(b.projectPriority) ||
+        (a.item.priority === "urgent" ? 0 : 1) - (b.item.priority === "urgent" ? 0 : 1) ||
         a.item.created.localeCompare(b.item.created) ||
         a.boardRoot.localeCompare(b.boardRoot) || a.item.taskId.localeCompare(b.item.taskId));
       if (!queued.length) {
