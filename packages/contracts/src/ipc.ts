@@ -1985,6 +1985,7 @@ export interface DesktopBridge {
     until?: string;
   }) => Promise<{ applied: true }>;
   /** Inspect a single prepfile in the bounded local agent scratch tree. */
+  savePrepfileImage?: (input: { mime: string; dataUrl: string }) => Promise<string>;
   readPrepfileStatus?: (path: string) => Promise<{
     exists: boolean;
     size: number;

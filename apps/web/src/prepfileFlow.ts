@@ -31,6 +31,8 @@ export function buildPrepfileInstruction(input: {
   outputPath: string;
   depth: PrepfileDepth;
   hasAutomaticHandoff: boolean;
+  createTaskboardTask?: boolean;
+  imagePaths?: readonly string[];
 }): string {
   return [
     "Use the PREPFILE skill to prepare research/context for the exact request below. Read and follow the full skill file at:",
@@ -43,6 +45,13 @@ export function buildPrepfileInstruction(input: {
     input.hasAutomaticHandoff
       ? "The T3 app will detect this exact file and create the selected implementation thread automatically; do NOT hand over or start implementation yourself."
       : "Do not hand over or start implementation. Return the absolute file path when complete.",
+    "",
+    ...(input.createTaskboardTask
+      ? ["", "TASKBOARD: After gathering context, create ONE TaskBoard task for this request if none exists already. Search the appropriate board and avoid duplicates. Include the generated prepfile path in task AI Notes. Do not implement it. If the correct board cannot be identified, ask for it rather than inventing a location."]
+      : ["", "Do not create a TaskBoard task."]),
+    ...(input.imagePaths?.length
+      ? ["", "ATTACHED IMAGES (absolute local paths; inspect all and reference their contents in your prepfile):", ...input.imagePaths]
+      : []),
     "",
     "VERBATIM REQUEST:",
     input.request,

@@ -75,6 +75,7 @@ import { readChatGPTBootstrapTitleIpc } from "./methods/chatGPTBootstrapTitle.ts
 import { readTaskBoardWorkerClaimsIpc } from "./methods/taskBoardWorkerClaims.ts";
 import { readTaskBoardProjectsIpc } from "./methods/taskBoardProjectCatalog.ts";
 import { readPrepfileStatusIpc } from "./methods/prepfileStatus.ts";
+import { savePrepfileImageIpc } from "./methods/prepfileImage.ts";
 import {
   openTaskBoardLiveSessionIpc,
   controlTaskBoardLiveSessionIpc,
@@ -143,6 +144,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(readTaskBoardWorkerClaimsIpc);
   yield* ipc.handle(readTaskBoardProjectsIpc);
   yield* ipc.handle(readPrepfileStatusIpc);
+  yield* ipc.handle(savePrepfileImageIpc);
   yield* ipc.handle(openTaskBoardLiveSessionIpc);
   yield* ipc.handle(openTaskBoardLinkIpc);
   yield* ipc.handle(openFirefoxLinkIpc);

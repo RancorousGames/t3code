@@ -56,6 +56,7 @@ export const PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL = "desktop:private-chatgpt-d
 export const TASKBOARD_WORKER_CLAIMS_CHANNEL = "desktop:taskboard-worker-claims";
 export const TASKBOARD_PROJECTS_CHANNEL = "desktop:taskboard-projects";
 export const PREPFILE_STATUS_CHANNEL = "desktop:prepfile-status";
+export const PREPFILE_IMAGE_CHANNEL = "desktop:prepfile-image";
 export const TASKBOARD_LIVE_SESSION_OPEN_CHANNEL = "desktop:taskboard-live-session-open";
 export const TASKBOARD_LIVE_SESSION_CONTROL_CHANNEL = "desktop:taskboard-live-session-control";
 export const TASKBOARD_HUMAN_INBOX_CHANNEL = "desktop:taskboard-human-inbox";

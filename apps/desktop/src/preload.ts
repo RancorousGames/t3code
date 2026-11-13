@@ -169,6 +169,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   readTaskBoardWorkerClaims: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_WORKER_CLAIMS_CHANNEL),
   readTaskBoardProjects: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_PROJECTS_CHANNEL),
   readPrepfileStatus: (path) => ipcRenderer.invoke(IpcChannels.PREPFILE_STATUS_CHANNEL, { path }),
+  savePrepfileImage: (input) => ipcRenderer.invoke(IpcChannels.PREPFILE_IMAGE_CHANNEL, input),
   openTaskBoardLiveSession: (input) =>
     ipcRenderer.invoke(IpcChannels.TASKBOARD_LIVE_SESSION_OPEN_CHANNEL, input),
   controlTaskBoardLiveSession: (input) =>

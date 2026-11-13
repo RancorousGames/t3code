@@ -1,4 +1,5 @@
 import { DEFAULT_SERVER_SETTINGS, type ModelSelection } from "@t3tools/contracts";
+import { isReasoningControl } from "@t3tools/client-runtime/model-traits";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -16,7 +17,7 @@ import { useEnvironmentProviders, usePrimaryEnvironmentId } from "../state/envir
 import { useProjects, useServerConfigs, waitForThreadShell } from "../state/entities";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { threadEnvironment } from "../state/threads";
-import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useScratchProject } from "../hooks/useScratchProject";
 import { useClientSettings, mergeEnvironmentSettings } from "../hooks/useSettings";
 import { newMessageId, newThreadId, randomUUID } from "../lib/utils";
 import { getCustomModelOptionsByInstance } from "../modelSelection";
@@ -35,7 +36,7 @@ import { ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { SidebarHeaderIconButton } from "./sidebar/SidebarThreadHeader";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
-import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "./ui/dialog";
+import { Dialog, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "./ui/dialog";
 import { Label } from "./ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
@@ -65,15 +66,19 @@ export function NewPrepfileAction() {
   const configs = useServerConfigs();
   const providerMap = useEnvironmentProviders();
   const clientSettings = useClientSettings();
-  const { defaultProjectRef, activeThread, activeDraftThread } = useHandleNewThread();
+  const { openScratchProject } = useScratchProject();
   const [open, setOpen] = useState(false);
   const [request, setRequest] = useState("");
   const [depth, setDepth] = useState<PrepfileDepth>("medium");
   const [generator, setGenerator] = useState<Generator>("chatgpt");
-  const [projectChoice, setProjectChoice] = useState("");
+  const [projectChoice, setProjectChoice] = useState("none");
   const [autoHandoff, setAutoHandoff] = useState(true);
+  const [createTaskboardTask, setCreateTaskboardTask] = useState(
+    () => localStorage.getItem("t3code:prepfile-create-taskboard:v1") === "true",
+  );
+  const [effortChoice, setEffortChoice] = useState("medium");
+  const [attachedImages, setAttachedImages] = useState<File[]>([]);
   const [handoffSelection, setHandoffSelection] = useState<ModelSelection | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, refreshPending] = useState(0);
   const submitting = useRef(false);
@@ -116,15 +121,7 @@ export function NewPrepfileAction() {
   const environmentProjects = projects.filter((project) =>
     project.environmentId === environmentId && project.archivedAt == null && !project.isScratch
   );
-  const currentProjectId =
-    activeThread?.environmentId === environmentId
-      ? activeThread.projectId
-      : activeDraftThread?.environmentId === environmentId
-        ? activeDraftThread.projectId
-        : defaultProjectRef?.environmentId === environmentId
-          ? defaultProjectRef.projectId
-          : null;
-  const projectId = projectChoice === "none" ? "" : projectChoice || currentProjectId || environmentProjects[0]?.id || "";
+  const projectId = projectChoice === "none" ? "" : projectChoice;
   const project = environmentProjects.find((item) => item.id === projectId) ?? null;
   const providers = environmentId ? providerMap.get(environmentId) ?? [] : [];
   const config = environmentId ? configs.get(environmentId) : null;
@@ -165,6 +162,28 @@ export function NewPrepfileAction() {
   const modelOptions = getCustomModelOptionsByInstance(
     settings, providers, effectiveHandoff?.instanceId, effectiveHandoff?.model,
   );
+  const selectedEntry = instanceEntries.find((item) => item.instanceId === effectiveHandoff?.instanceId);
+  const selectedModel = selectedEntry?.models.find((item) => item.slug === effectiveHandoff?.model);
+  const reasoning = selectedModel?.capabilities?.optionDescriptors?.find(
+    (item) => item.type === "select" && isReasoningControl(item),
+  );
+  const effortLevels = (reasoning?.type === "select" ? reasoning.options : []).filter(
+    (choice) => ["low", "medium", "high", "xhigh"].includes(choice.id),
+  );
+  const effectiveEffort = effortLevels.some((choice) => choice.id === effortChoice)
+    ? effortChoice
+    : effortLevels.find((choice) => choice.id === reasoning?.currentValue)?.id ??
+      effortLevels.find((choice) => choice.isDefault)?.id ??
+      effortLevels[0]?.id ??
+      null;
+  const implementationSelection: ModelSelection | null = effectiveHandoff
+    ? {
+        ...effectiveHandoff,
+        ...(reasoning && effectiveEffort
+          ? { options: [{ id: reasoning.id, value: effectiveEffort }] }
+          : {}),
+      }
+    : null;
 
   const createThread = useOrchestrationCommand(threadEnvironment.create, { reportFailure: false });
   const startTurn = useOrchestrationCommand(threadEnvironment.startTurn, { reportFailure: false });
@@ -282,91 +301,104 @@ export function NewPrepfileAction() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [environmentId]);
 
-  const submit = async () => {
+  const submit = () => {
     if (submitting.current || !environmentId || !request.trim()) return;
-    if (!project && generator !== "chatgpt") {
-      setError("Choose a project before starting a native prepfile agent.");
-      return;
-    }
-    if (autoHandoff && (!project || !effectiveHandoff?.model)) {
-      setError("Choose a project and an available handoff model.");
-      return;
-    }
     const generatorSelection = generator === "chatgpt" ? null : resolveGenerator(generator);
     if (generator !== "chatgpt" && !generatorSelection) {
-      setError("The selected generator model is not available in this project.");
+      setError("The selected preparation model is unavailable.");
       return;
     }
+    if (autoHandoff && !implementationSelection?.model) {
+      setError("Choose an available implementation model.");
+      return;
+    }
+    const captured = {
+      environmentId, request: request.trim(), depth, generator,
+      generatorSelection, project, autoHandoff, implementationSelection,
+      createTaskboardTask, images: [...attachedImages],
+    };
+    // Close on click. Session creation and prompt delivery can take minutes,
+    // and must not hold a user-facing dialog open.
     submitting.current = true;
-    setBusy(true);
+    setOpen(false);
+    requestAnimationFrame(() => { submitting.current = false; });
+    setRequest("");
+    setAttachedImages([]);
     setError(null);
-    const id = randomUUID();
-    const outputPath = prepfileOutputPath(id, request, project?.title ?? null);
-    const prompt = buildPrepfileInstruction({
-      request: request.trim(), outputPath, depth, hasAutomaticHandoff: autoHandoff,
-    });
-    const job: PendingPrepfileHandoff | null = autoHandoff && project && effectiveHandoff
-      ? {
-          id, environmentId, projectId: project.id,
-          modelSelection: effectiveHandoff,
-          outputPath, request: request.trim(), createdAt: Date.now(), state: "waiting",
+    void (async () => {
+      const id = randomUUID();
+      const outputPath = prepfileOutputPath(id, captured.request, captured.project?.title ?? null);
+      let targetProject = captured.project;
+      if (!targetProject && (captured.generator !== "chatgpt" || captured.autoHandoff)) {
+        const scratch = await openScratchProject(captured.environmentId, "Could not open a no-project workspace");
+        if (!scratch) throw new Error("Could not create a no-project workspace for the native agent.");
+        targetProject = scratch;
+      }
+      const imagePaths: string[] = [];
+      for (const file of captured.images) {
+        if (!file.type.startsWith("image/") || file.size > 8 * 1024 * 1024) {
+          throw new Error("Attached files must be images of at most 8 MiB.");
         }
-      : null;
-    try {
+        const save = window.desktopBridge?.savePrepfileImage;
+        if (!save) throw new Error("Saving pasted images requires the T3 desktop app.");
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error("Could not read the pasted image."));
+          reader.onload = () => resolve(String(reader.result));
+          reader.readAsDataURL(file);
+        });
+        imagePaths.push(await save({ mime: file.type, dataUrl }));
+      }
+      const prompt = buildPrepfileInstruction({
+        request: captured.request, outputPath, depth: captured.depth,
+        hasAutomaticHandoff: captured.autoHandoff,
+        createTaskboardTask: captured.createTaskboardTask,
+        imagePaths,
+      });
+      const job: PendingPrepfileHandoff | null =
+        captured.autoHandoff && targetProject && captured.implementationSelection
+          ? {
+              id, environmentId: captured.environmentId, projectId: targetProject.id,
+              modelSelection: captured.implementationSelection, outputPath,
+              request: captured.request, createdAt: Date.now(), state: "waiting",
+            }
+          : null;
       if (job) setPrepfileHandoffs([...readPrepfileHandoffs(), job]);
-      if (generator === "chatgpt") {
+      if (captured.generator === "chatgpt") {
         const outcome = await executeProviderBrowserCreate(
-          environmentId,
+          captured.environmentId,
           {
-            action: "create",
-            jobId: id,
-            environmentId,
-            clientRequestId: id,
-            title: "Prepare context file",
-            prompt,
-            ...(project ? { project: project.title } : {}),
+            action: "create", jobId: id, environmentId: captured.environmentId,
+            clientRequestId: id, title: "Prepare context file", prompt,
+            ...(captured.project ? { project: captured.project.title } : {}),
           },
           createSession,
         );
         if (!outcome.ok) throw new Error(outcome.message);
-        if (!outcome.data.created) {
-          throw new Error(outcome.data.reason ?? "ChatGPT session creation is unconfirmed.");
-        }
-        if (outcome.data.promptDelivery === "not_sent") {
-          throw new Error("ChatGPT session created, but the prepfile instruction was not sent.");
-        }
+        if (!outcome.data.created)
+          throw new Error(outcome.data.reason ?? "Prepfile session creation is unconfirmed.");
+        if (outcome.data.promptDelivery === "not_sent")
+          throw new Error("Session created, but the prepfile instruction was not sent. Inspect it before retrying.");
         if (outcome.data.promptDelivery === "unknown") {
           toastManager.add({
-            type: "warning",
-            title: "Prepfile prompt delivery uncertain",
-            description: "Inspect the new ChatGPT session. It will not be submitted twice.",
+            type: "warning", title: "Prepfile prompt delivery uncertain",
+            description: "Inspect the new ChatGPT session; the prompt will not be submitted twice.",
           });
         }
-        await navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: outcome.data.sessionId } });
-      } else if (project && generatorSelection) {
-        const threadId = await startNative({
-          environmentId, projectId: project.id, title: "Prepare context file",
-          prompt, modelSelection: generatorSelection,
+      } else if (targetProject && captured.generatorSelection) {
+        await startNative({
+          environmentId: captured.environmentId, projectId: targetProject.id,
+          title: "Prepare context file", prompt, modelSelection: captured.generatorSelection,
         });
-        await navigate({ to: "/$environmentId/$threadId", params: { environmentId, threadId } });
       }
-      setOpen(false);
-      setRequest("");
       toastManager.add({
         type: "success",
-        title: autoHandoff ? "Prepfile agent started; handoff armed" : "Prepfile agent started",
-        description: autoHandoff
-          ? "T3 will start the selected implementation model when the output file is complete."
-          : `Expected file: ${outputPath}`,
+        title: captured.autoHandoff ? "Prepfile started; automatic handoff armed" : "Prepfile started",
+        description: "The preparation session is running independently of this dialog.",
       });
-    } catch (cause) {
-      // The first request may have persisted even if its result is uncertain.
-      // Keep an armed job rather than invent a safe retry.
-      setError(failedMessage(cause));
-    } finally {
-      submitting.current = false;
-      setBusy(false);
-    }
+    })().catch((cause) => {
+      toastManager.add({ type: "error", title: "Prepfile start needs attention", description: failedMessage(cause) });
+    });
   };
 
   const pending = open ? readPrepfileHandoffs().filter((job) => job.environmentId === environmentId) : [];
@@ -379,14 +411,18 @@ export function NewPrepfileAction() {
       >
         <FilePlus2Icon />
       </SidebarHeaderIconButton>
-      <Dialog open={open} onOpenChange={(value) => { if (!busy) setOpen(value); }}>
+      <Dialog open={open} onOpenChange={setOpen}>
         <DialogPopup className="sm:max-w-xl">
-          <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <form onSubmit={(event) => { event.preventDefault(); submit(); }}
+            onPasteCapture={(event) => {
+              const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+              if (!files.length) return;
+              event.preventDefault();
+              setAttachedImages((previous) => [...previous, ...files].slice(0, 8));
+            }}
+          >
             <DialogHeader>
               <DialogTitle>New prepfile</DialogTitle>
-              <DialogDescription>
-                A cheap preparation agent collects source context; a separate implementation agent can use it without repeating discovery.
-              </DialogDescription>
             </DialogHeader>
             <DialogPanel>
               <div className="flex flex-col gap-4">
@@ -398,8 +434,21 @@ export function NewPrepfileAction() {
                     placeholder="Describe the task, paste an issue, or specify what context to collect…"
                     onChange={(event) => setRequest(event.target.value)}
                     className="min-h-32"
-                    disabled={busy}
                   />
+                  <label className="inline-flex w-fit cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                    Attach images (or Ctrl+V)
+                    <input type="file" accept="image/*" multiple className="max-w-32 text-xs"
+                      onChange={(event) => {
+                        setAttachedImages((previous) => [...previous, ...(event.target.files ?? [])].slice(0, 8));
+                        event.target.value = "";
+                      }} />
+                  </label>
+                  {attachedImages.map((image, index) => (
+                    <div key={index} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="truncate">{image.name || ("Pasted image " + (index + 1))} ({Math.round(image.size / 1024)} KiB)</span>
+                      <Button type="button" size="xs" variant="ghost" onClick={() => setAttachedImages((previous) => previous.filter((_, i) => i !== index))}>Remove</Button>
+                    </div>
+                  ))}
                 </Label>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Label className="flex flex-col gap-1.5">
@@ -437,11 +486,10 @@ export function NewPrepfileAction() {
                   Project / workspace
                   <select
                     className="h-9 rounded-lg border border-input bg-background px-3 text-sm"
-                    value={projectId}
+                    value={projectChoice}
                     onChange={(event) => setProjectChoice(event.target.value)}
-                    disabled={busy}
                   >
-                    {generator === "chatgpt" && <option value="none">No project</option>}
+                    <option value="none">No project</option>
                     {environmentProjects.map((item) => (
                       <option key={item.id} value={item.id}>{item.title}</option>
                     ))}
@@ -450,6 +498,14 @@ export function NewPrepfileAction() {
                 <label className="flex cursor-pointer items-center gap-2 text-sm">
                   <Checkbox checked={autoHandoff} onCheckedChange={(value) => setAutoHandoff(value === true)} />
                   Start an implementation agent automatically
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox checked={createTaskboardTask} onCheckedChange={(value) => {
+                    const enabled = value === true;
+                    setCreateTaskboardTask(enabled);
+                    localStorage.setItem("t3code:prepfile-create-taskboard:v1", String(enabled));
+                  }} />
+                  Prepfile writer creates a TaskBoard task
                 </label>
                 {autoHandoff && (
                   <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
@@ -462,13 +518,27 @@ export function NewPrepfileAction() {
                         lockedProvider={null}
                         instanceEntries={instanceEntries}
                         modelOptionsByInstance={modelOptions}
-                        triggerLabel="Choose handoff model"
                         onInstanceModelChange={(instanceId, model) =>
                           setHandoffSelection({ instanceId, model })}
                       />
                     ) : (
                       <p className="text-sm text-muted-foreground">No available native T3 model for this project.</p>
                     )}
+                    {effectiveHandoff && (
+                      <p className="text-xs text-muted-foreground">
+                        Selected: {selectedModel?.name ?? effectiveHandoff.model} ({selectedEntry?.displayName ?? effectiveHandoff.instanceId})
+                      </p>
+                    )}
+                    <Label className="flex flex-col gap-1">
+                      Implementation effort
+                      <select className="h-9 rounded-lg border border-input bg-background px-3 text-sm"
+                        value={effectiveEffort ?? ""} disabled={!effortLevels.length}
+                        onChange={(event) => setEffortChoice(event.target.value)}>
+                        {effortLevels.length
+                          ? effortLevels.map((level) => <option key={level.id} value={level.id}>{level.label}</option>)
+                          : <option value="">Not available for this model</option>}
+                      </select>
+                    </Label>
                     <p className="text-xs text-muted-foreground">
                       When preparation finishes, T3 creates a new implementation thread with this model. No second thread is created if delivery is uncertain.
                     </p>
@@ -501,9 +571,9 @@ export function NewPrepfileAction() {
               </div>
             </DialogPanel>
             <DialogFooter>
-              <Button type="button" variant="outline" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={busy || !request.trim() || !environmentId || (autoHandoff && !effectiveHandoff?.model)}>
-                {busy ? "Starting…" : "Create prepfile"}
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={!request.trim() || !environmentId || (autoHandoff && !effectiveHandoff?.model)}>
+                Start
               </Button>
             </DialogFooter>
           </form>
