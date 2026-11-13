@@ -65,6 +65,26 @@ test("opens a hidden claimed session instead of spawning a second", async () => 
   assert.ok(ctx.actions.some((a) => a.join(" ") === "task live start T3-9000"));
 });
 
+test("legacy bare UUID claim uses the same open-task path and does not spawn", async () => {
+  const ctx = await context();
+  const sessionId = "123e4567-e89b-42d3-a456-426614174000";
+  ctx.task.claimed_by = sessionId;
+  const calls = [];
+  const result = await openTaskSession(ctx.input, {
+    home: ctx.home,
+    command: ctx.command,
+    control: async (request) => {
+      calls.push(request.action);
+      return request.action === "list" ? { sessions: [{ id: sessionId, hidden: true }] } :
+        { sessionId };
+    },
+    exchange: async () => { throw Error("Existing claim must never spawn"); },
+  });
+  assert.equal(result.sessionId, sessionId);
+  assert.deepEqual(calls, ["list", "focus"]);
+  assert.ok(ctx.actions.some((args) => args.join(" ") === "task live start T3-9000"));
+});
+
 test("stable t3: public ChatGPT claim focuses the held session, never a native thread", async () => {
   const ctx = await context();
   ctx.task.claimed_by = "t3:public-id";

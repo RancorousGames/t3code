@@ -308,9 +308,10 @@ export async function openTaskSession(
     // "t3:" is a stable public ChatGPT session ID in newer Bootstrap flows
     // AND the legacy prefix for native threads. Resolve against actual T3
     // registries; the prefix alone must never decide which UI to open.
-    if (typeof claim === "string" && (claim.startsWith("t3-browser:") || claim.startsWith("t3:"))) {
-      const browserOnly = claim.startsWith("t3-browser:");
-      const claimedId = claim.slice(browserOnly ? "t3-browser:".length : 3);
+    if (typeof claim === "string" &&
+        (claim.startsWith("t3-browser:") || claim.startsWith("t3:") || UUID.test(claim))) {
+      const browserOnly = claim.startsWith("t3-browser:") || UUID.test(claim);
+      const claimedId = UUID.test(claim) ? claim : claim.slice(browserOnly ? "t3-browser:".length : 3);
       const listed = await control(
         { action: "list", which: "all", includeHidden: true },
         { home, exchange },
