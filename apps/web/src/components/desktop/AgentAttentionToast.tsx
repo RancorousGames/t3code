@@ -64,10 +64,12 @@ function change(id: string, status: AgentAttention["status"], nextAt = 0) {
 /** Single actionable in-app alert. Snoozing never counts as a dismissal. */
 export function AgentAttentionToast({ openSession, onDismiss }: {
   openSession: (sessionId: string) => boolean;
-  onDismiss: (request: AgentAttention) => void;
+  onDismiss: (request: AgentAttention) => Promise<boolean>;
 }) {
   const [items, setItems] = useState(load);
   const [now, setNow] = useState(Date.now);
+  const [dismissing, setDismissing] = useState(false);
+  const [dismissError, setDismissError] = useState(false);
   useEffect(() => {
     const refresh = () => { setItems(load()); setNow(Date.now()); };
     window.addEventListener(EVENT, refresh);
@@ -109,11 +111,22 @@ export function AgentAttentionToast({ openSession, onDismiss }: {
           change(visible.id, "snoozed", Date.now() + 15 * 60_000)}>15 min</button>
         <button className="rounded-md border px-2 py-2" onClick={() =>
           change(visible.id, "snoozed", Date.now() + 60 * 60_000)}>1 hour</button>
-        <button className="rounded-md border px-2 py-2" onClick={() => {
-          change(visible.id, "dismissed");
-          onDismiss(visible);
-        }}>Dismiss</button>
+        <button disabled={dismissing} className="rounded-md border px-2 py-2 disabled:opacity-50" onClick={async () => {
+          setDismissing(true);
+          setDismissError(false);
+          try {
+            // A dismissal cannot be acknowledged until its agent handoff is
+            // durably queued; otherwise the user loses the request silently.
+            if (await onDismiss(visible)) change(visible.id, "dismissed");
+            else setDismissError(true);
+          } catch {
+            setDismissError(true);
+          } finally {
+            setDismissing(false);
+          }
+        }}>{dismissing ? "Dismissing…" : "Dismiss"}</button>
       </div>
+      {dismissError && <p role="alert" className="mt-2 text-xs text-destructive">Could not notify the agent. Try again or open its session.</p>}
     </section>
   );
 }

@@ -2740,30 +2740,35 @@ export function DesktopAppActivationCoordinator() {
     };
   }, [activation, ready, primaryEnvironment?.environmentId]);
 
-  return <AgentAttentionToast onDismiss={(attention) => {
+  return <AgentAttentionToast onDismiss={async (attention) => {
     const environmentId = primaryEnvironment?.environmentId;
-    if (!environmentId) return;
+    if (!environmentId) return false;
     const session = readChatGPTBrowserSessions(environmentId).find(
       (entry) => entry.id === attention.sessionId ||
         entry.bootstrapIdentity?.publicId === attention.sessionId,
     );
-    if (!session) return;
+    if (!session) return false;
     const conversationId = session.bootstrapIdentity?.conversationId ??
       chatGPTConversationIdFromUrl(getLocalStorageItem(
         chatGPTBrowserLastUrlKey(environmentId, session.id), Schema.String,
       ));
-    if (!conversationId) return;
-    // User-triggered dismissal becomes a guarded, durable one-off to the exact
-    // existing conversation. A cold guest stays queued rather than being typed into a wrong tab.
-    void window.desktopBridge?.appActivation?.enqueueChatGPT({
-      messageId: attention.id, sessionId: session.id, conversationId,
-      body: `[T3 attention request ${attention.id}] User dismissed the request for direct
+    const enqueue = window.desktopBridge?.appActivation?.enqueueChatGPT;
+    if (!conversationId || !enqueue) return false;
+    // A dismissed request remains actionable until the exact conversation's
+    // guarded one-off is durably persisted, even if the guest is currently cold.
+    try {
+      const receipt = await enqueue({
+        messageId: attention.id, sessionId: session.id, conversationId,
+        body: `[T3 attention request ${attention.id}] User dismissed the request for direct
 attention: "${attention.message}". Do not notify again. Put the unresolved question
 on the ORIGINAL TaskBoard task using task ask-user, or request verification in
 the Review Inbox if implementation is finished.`,
-    }).catch((error: unknown) =>
-      console.warn("[Agent attention] Could not queue dismissal notice", error),
-    );
+      });
+      return receipt.status !== "cancelled" && receipt.status !== "needs_attention";
+    } catch (error) {
+      console.warn("[Agent attention] Could not queue dismissal notice", error);
+      return false;
+    }
   }} openSession={(sessionId) => {
     const environmentId = primaryEnvironment?.environmentId;
     if (!environmentId) return false;
