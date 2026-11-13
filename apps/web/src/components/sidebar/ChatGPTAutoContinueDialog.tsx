@@ -43,10 +43,14 @@ export interface AutoContinueRequest {
 
 export function ChatGPTAutoContinueDialog({
   existing,
+  legacyMonitors = [],
+  cancelLegacy,
   close,
   submit,
 }: {
   existing: AutoContinueConfig | null;
+  legacyMonitors?: readonly { id: string; targetId: string; status: string }[];
+  cancelLegacy?: (id: string, targetId: string) => Promise<void>;
   close: () => void;
   submit: (input: AutoContinueRequest) => Promise<void>;
 }) {
@@ -91,6 +95,21 @@ export function ChatGPTAutoContinueDialog({
   const [rebootEveryUnit, setRebootEveryUnit] = useState<TimeUnit>(rebootUnit);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cancelledLegacyIds, setCancelledLegacyIds] = useState<ReadonlySet<string>>(new Set());
+  const activeLegacy = legacyMonitors.filter((monitor) => !cancelledLegacyIds.has(monitor.id));
+  const cancelOldMonitor = async (id: string, targetId: string) => {
+    if (!cancelLegacy || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await cancelLegacy(id, targetId);
+      setCancelledLegacyIds((current) => new Set([...current, id]));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const intervalMinutes = Number(every) * unitMinutes[everyUnit];
   const durationMinutes =
@@ -154,6 +173,19 @@ export function ChatGPTAutoContinueDialog({
         </DialogHeader>
         <form onSubmit={(event) => void onSubmit(event)}>
           <div className="max-h-[70vh] space-y-4 overflow-y-auto px-6 pb-4">
+            {activeLegacy.length > 0 && (
+              <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                <p>An older OmniHub Caffy monitor still owns this session. It is separate from T3 Caffy,
+                  which is why the T3 monitor appears inactive. Cancel the old monitor before saving
+                  a new schedule to prevent duplicate wake messages.</p>
+                {activeLegacy.map((monitor, index) => (
+                  <Button key={monitor.id} type="button" variant="outline" disabled={busy || !cancelLegacy}
+                    onClick={() => void cancelOldMonitor(monitor.id, monitor.targetId)}>
+                    Stop legacy monitor {activeLegacy.length > 1 ? index + 1 : ""} ({monitor.status})
+                  </Button>
+                ))}
+              </div>
+            )}
             <label className="block text-sm">
               Trigger
               <select
@@ -303,7 +335,7 @@ export function ChatGPTAutoContinueDialog({
             <Button type="button" variant="outline" disabled={busy} onClick={close}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!valid || busy}>
+            <Button type="submit" disabled={!valid || busy || activeLegacy.length > 0}>
               {busy ? "Saving…" : "Save auto-continue"}
             </Button>
           </DialogFooter>

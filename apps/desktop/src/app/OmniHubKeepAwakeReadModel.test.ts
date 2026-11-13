@@ -55,7 +55,8 @@ describe("OmniHub temporary keep-awake read-only projection", () => {
       intervalMinutes: 20,
       nextAttemptAtMs: now + 60_000,
       lastSchedulerTickAtMs: now - 10_000,
-      target: { id: sid, title: "Omni Coordinator", url: sessions[0]!.url, visibility: "visible" },
+      target: { id: sid, title: "Omni Coordinator", url: sessions[0]!.url,
+        expectedConversationId: "abcdef", visibility: "visible" },
     });
     expect(JSON.stringify(result)).not.toMatch(/PRIVATE_|controlToken|ackToken|receipts|events/i);
   });
@@ -103,6 +104,7 @@ describe("OmniHub temporary keep-awake read-only projection", () => {
       monitor({ id: "indeterminate", state: "paused_indeterminate", expiresAtMs: now - 100 }),
       monitor({ id: "canceled", state: "cancelled", expiresAtMs: now - 100 }),
       monitor({ id: "done", state: "completed", expiresAtMs: now - 100 }),
+      monitor({ id: "exhausted", state: "exhausted", expiresAtMs: now - 100 }),
       monitor({ id: "unknown", state: "mystery", expiresAtMs: now - 100 }),
     ];
     const rows = projectOmniHubKeepAwakeSnapshot(snapshot(...monitors), now, sessions).monitors;
@@ -120,6 +122,7 @@ describe("OmniHub temporary keep-awake read-only projection", () => {
       finalWakePending: false,
     });
     expect(find("done")).toMatchObject({ status: "completed", activeOrPending: false });
+    expect(find("exhausted")).toMatchObject({ status: "history", activeOrPending: false });
     expect(find("unknown")).toMatchObject({ status: "unknown", activeOrPending: true });
     expect(rows[0]!.activeOrPending).toBe(true);
   });

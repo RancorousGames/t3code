@@ -35,6 +35,7 @@ const keepAwakeMonitorSchema = Schema.Struct({
   target: Schema.Struct({
     id: Schema.String,
     kind: Schema.Literals(["t3/chatgpt_browser", "t3/native_thread", "unknown"]),
+    expectedConversationId: Schema.optional(Schema.NullOr(Schema.String)),
     title: Schema.String,
     url: Schema.NullOr(Schema.String),
     visibility: Schema.Literals(["visible", "hidden", "missing", "unchecked"]),

@@ -12,6 +12,8 @@ export const OMNIHUB_KEEP_AWAKE_SOURCE = "omnihub-temporary-keep-awake" as const
 export type KeepAwakeTarget = {
   id: string;
   kind: "t3/chatgpt_browser" | "t3/native_thread" | "unknown";
+  /** Exact legacy conversation binding for resolving ownership after a T3 ID alias changes. */
+  expectedConversationId?: string | null;
   title: string;
   url: string | null;
   visibility: "visible" | "hidden" | "missing" | "unchecked";
@@ -173,6 +175,7 @@ export function projectOmniHubKeepAwakeSnapshot(
       "canceled",
       "expired",
       "failed",
+      "exhausted",
     ].includes(state);
     const lastOutcome = bounded(monitor.lastOutcome);
     const lastDelivery = bounded(monitor.lastDelivery);
@@ -188,7 +191,8 @@ export function projectOmniHubKeepAwakeSnapshot(
           : state === "expired" ||
               state === "failed" ||
               state === "mandate_finished" ||
-              state === "blocked"
+              state === "blocked" ||
+              state === "exhausted"
             ? "history"
             : state === "paused_indeterminate"
               ? "needs_attention"
@@ -232,7 +236,9 @@ export function projectOmniHubKeepAwakeSnapshot(
       source: OMNIHUB_KEEP_AWAKE_SOURCE,
       id,
       mandateId: string(monitor.mandateId) ?? "",
-      target: { id: targetId, kind, title: string(match?.title) ?? targetId, url, visibility },
+      target: { id: targetId, kind,
+        expectedConversationId: string(target.expectedConversationId),
+        title: string(match?.title) ?? targetId, url, visibility },
       status,
       activeOrPending,
       finalWakePending,

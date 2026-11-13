@@ -58,6 +58,8 @@ export function buildChatGPTSessionContextMenu(input: {
   working: boolean;
   hasTask: boolean;
   hasConversationUrl?: boolean;
+  /** Older OmniHub-owned monitors are separate from T3 Caffy state. */
+  legacyCaffyIds?: readonly string[];
   caffy?: { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
     onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
     intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null;
@@ -66,12 +68,14 @@ export function buildChatGPTSessionContextMenu(input: {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
   const activeCaffy = input.caffy;
+  const legacyIds = input.legacyCaffyIds ?? [];
   // One-click resume owns a one-shot Caffy monitor. Do not silently replace
   // another ongoing, periodic, or custom-prompt schedule.
   const quickResumeScheduled = Boolean(activeCaffy &&
     activeCaffy.mode === "queued" && activeCaffy.onceOnly && !activeCaffy.paused &&
     !activeCaffy.beginAt && !activeCaffy.repeatPrompt && !activeCaffy.delayedPrompt);
-  const wakeMode = activeCaffy?.mode === "idle" || activeCaffy?.mode === "queued" ? "Auto-continue" :
+  const wakeMode = !activeCaffy && legacyIds.length > 0 ? "Legacy OmniHub active" :
+    activeCaffy?.mode === "idle" || activeCaffy?.mode === "queued" ? "Auto-continue" :
     activeCaffy?.mode === "periodic" ? "Periodic auto-continue" :
     activeCaffy?.mode === "startup" ? "Startup only" : null;
 
@@ -177,9 +181,13 @@ export function buildChatGPTSessionContextMenu(input: {
           checked: input.caffy?.startup ?? false,
           separatorBefore: true,
         }),
-        item("caffy:stop", "Stop Caffy", {
-          disabled: !input.caffy,
+        item("caffy:stop", !activeCaffy && legacyIds.length > 0 ? "Stop legacy Caffy" : "Stop Caffy", {
+          disabled: !activeCaffy && legacyIds.length === 0,
           separatorBefore: true,
+          ...(legacyIds.length > 1 && !activeCaffy ? {
+            children: legacyIds.map((id, index) =>
+              item(`caffy:stop-legacy:${id}`, `Legacy monitor ${index + 1}`)),
+          } : {}),
         }),
       ],
     }),

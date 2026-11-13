@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { CaffyScheduler, type CaffyConfig } from "./CaffyScheduler.ts";
+import { CaffyScheduler, legacyMonitorOwnsConversation, type CaffyConfig } from "./CaffyScheduler.ts";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const ORIGINAL = "22222222-2222-4222-8222-222222222222";
@@ -87,6 +87,16 @@ const monitor = (scheduler: CaffyScheduler) =>
   scheduler.status(SESSION) as CaffyConfig | null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
+  it("rejects live legacy ownership but ignores stale terminal OmniHub monitors", () => {
+    const old = { state: "active", target: { sessionId: SESSION, expectedConversationId: ORIGINAL } };
+    expect(legacyMonitorOwnsConversation(old, SESSION, ORIGINAL)).toBe(true);
+    expect(legacyMonitorOwnsConversation({ ...old, state: "paused_indeterminate" }, SESSION, ORIGINAL))
+      .toBe(true);
+    for (const state of ["cancelled", "canceled", "completed", "exhausted",
+      "mandate_finished", "blocked", "expired", "failed"]) {
+      expect(legacyMonitorOwnsConversation({ ...old, state }, SESSION, ORIGINAL)).toBe(false);
+    }
+  });
   it("lists pending sessions without exposing prompts, and edits or cancels the same durable job", () => {
     const f = fixture();
     const c = f.open();

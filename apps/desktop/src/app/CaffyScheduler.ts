@@ -98,6 +98,20 @@ interface CaffyStore {
   agentStops?: AgentStoppedCaffy[];
 }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+const LEGACY_TERMINAL_STATES = new Set([
+  "cancelled", "canceled", "completed", "exhausted", "mandate_finished",
+  "blocked", "expired", "failed",
+]);
+
+/** A legacy monitor remains a separate scheduler owner until its state is terminal. */
+export function legacyMonitorOwnsConversation(
+  monitor: { state?: string; target?: { sessionId?: string; expectedConversationId?: string } },
+  sessionId: string, conversationId: string,
+): boolean {
+  return !LEGACY_TERMINAL_STATES.has(monitor.state ?? "") &&
+    (monitor.target?.sessionId === sessionId ||
+      monitor.target?.expectedConversationId === conversationId);
+}
 const WAKE_TEXT = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
 const CLOCK = 10_000;
 const valid = (row: CaffyConfig): boolean =>
@@ -281,9 +295,7 @@ export class CaffyScheduler {
         sessionId?: string; expectedConversationId?: string;
       }}>};
       return Object.values(store.monitors ?? {}).some(monitor =>
-        !["cancelled", "completed", "exhausted"].includes(monitor.state ?? "") &&
-        (monitor.target?.sessionId === sessionId ||
-         monitor.target?.expectedConversationId === conversationId));
+        legacyMonitorOwnsConversation(monitor, sessionId, conversationId));
     } catch { return false; }
   }
 

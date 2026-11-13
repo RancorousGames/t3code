@@ -118,6 +118,7 @@ import { useChatGPTLiveTasks, visibleReadyChatGPTLiveTasks } from "../../chatGPT
 import { useChatGPTReadyNudge } from "../../chatGPTReadyNudge";
 import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
 import { scheduleCaffyBegin } from "../../omniwork/chatGPTCaffyPauseResume";
+import { readOmniHubKeepAwakeForT3, controlOmniHubKeepAwakeForT3 } from "../../omniwork/omniHubKeepAwakeClient";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
 import {
   hibernateChatGPTGuest,
@@ -678,6 +679,7 @@ export function ChatGPTBrowserSidebarEntry({
   const [delayedPromptTarget, setDelayedPromptTarget] = useState<DelayedPromptTarget | null>(null);
   const [autoContinueTarget, setAutoContinueTarget] = useState<{
     sessionId: string; config: AutoContinueConfig | null;
+    legacyMonitors: Array<{ id: string; targetId: string; status: string }>;
   } | null>(null);
   const [keepAwakeFeedback, setKeepAwakeFeedback] = useState<string | null>(null);
   const scheduleDelayedPrompt = async (input: { title: string; prompt: string; beginAt: number | null; onIdle: boolean }) => {
@@ -1617,13 +1619,33 @@ export function ChatGPTBrowserSidebarEntry({
     const caffyState = caffyControl
       ? await caffyControl({ action: "status", sessionId }).catch(() => null)
       : null;
+    const legacyRead = await readOmniHubKeepAwakeForT3(environmentId).catch(() => null);
+    const legacySessionIds = new Set([sessionId, publicChatGPTSessionId(session)]);
+    const currentConversationId = chatGPTConversationIdFromUrl(savedUrl) ?? session.bootstrapIdentity?.conversationId;
+    const legacyMonitors = legacyRead?.availability === "ok"
+      ? legacyRead.monitors.filter((monitor) => monitor.activeOrPending &&
+          monitor.target.kind === "t3/chatgpt_browser" &&
+          (legacySessionIds.has(monitor.target.id) ||
+            (currentConversationId && monitor.target.expectedConversationId === currentConversationId)))
+        .map((monitor) => ({ id: monitor.id, targetId: monitor.target.id, status: monitor.status }))
+      : [];
+    const stopLegacyCaffy = async (id: string, targetId: string) => {
+      const receipt = await controlOmniHubKeepAwakeForT3({
+        monitorId: id, action: "cancel", confirmedTargetId: targetId, clientRequestId: randomUUID(),
+      });
+      if (!receipt || receipt.code !== "applied" || !receipt.ok)
+        throw new Error(receipt?.detail ?? "Legacy OmniHub Caffy cancellation unavailable.");
+      setKeepAwakeFeedback("Legacy OmniHub monitor cancelled. No future wakes will be initiated by it.");
+      window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+    };
     const activeCaffy = caffyState && typeof caffyState === "object" &&
       "mode" in caffyState && "startup" in caffyState &&
       ["idle", "periodic", "queued", "startup"].includes(String(caffyState.mode))
         ? caffyState as { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
             onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
             intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null;
-             autoRebootEveryRuns?: number | null; repeatPrompt?: string | null }
+             autoRebootEveryRuns?: number | null; repeatPrompt?: string | null;
+             delayedPrompt?: string | null }
         : null;
     // Manual Stop requires the actual ChatGPT control. Deferred Caffy wakes
     // treat Stop as best-effort so missing controls cannot block scheduling.
@@ -1642,6 +1664,7 @@ export function ChatGPTBrowserSidebarEntry({
           hasTask: !!session.binding?.taskRef,
           hasConversationUrl: !!savedUrl,
           caffy: activeCaffy,
+          legacyCaffyIds: legacyMonitors.map((monitor) => monitor.id),
         }).filter((item) => item.id !== "reboot" && item.id !== "snooze:clear"),
       ],
       position,
@@ -1800,10 +1823,18 @@ export function ChatGPTBrowserSidebarEntry({
         const control = window.desktopBridge?.caffyControl;
         if (!control) throw new Error("T3 Caffy v2 is unavailable; rebuild and restart T3.");
         if (action === "caffy:auto") {
-          setAutoContinueTarget({ sessionId, config: activeCaffy });
-        } else if (action === "caffy:stop") {
-          await control({ action: "stop", sessionId, stopInitiator: "user" });
-          setKeepAwakeFeedback("Caffy stopped for this session.");
+          setAutoContinueTarget({ sessionId, config: activeCaffy, legacyMonitors });
+        } else if (action === "caffy:stop" || action.startsWith("caffy:stop-legacy:")) {
+          if (activeCaffy && action === "caffy:stop") {
+            await control({ action: "stop", sessionId, stopInitiator: "user" });
+            setKeepAwakeFeedback("Caffy stopped for this session.");
+          } else {
+            const legacy = action.startsWith("caffy:stop-legacy:")
+              ? legacyMonitors.find((monitor) => monitor.id === action.slice("caffy:stop-legacy:".length))
+              : legacyMonitors.length === 1 ? legacyMonitors[0] : null;
+            if (!legacy) throw new Error("Legacy monitor selection is unavailable; refresh the menu.");
+            await stopLegacyCaffy(legacy.id, legacy.targetId);
+          }
         } else if (action === "caffy:queued") {
           await configureCaffy(sessionId, "queued");
         } else if (action.startsWith("caffy:begin:")) {
@@ -3377,6 +3408,15 @@ export function ChatGPTBrowserSidebarEntry({
         <ChatGPTAutoContinueDialog
           key={autoContinueTarget.sessionId}
           existing={autoContinueTarget.config}
+          legacyMonitors={autoContinueTarget.legacyMonitors}
+          cancelLegacy={async (id, targetId) => {
+            const receipt = await controlOmniHubKeepAwakeForT3({
+              monitorId: id, action: "cancel", confirmedTargetId: targetId, clientRequestId: randomUUID(),
+            });
+            if (!receipt || receipt.code !== "applied" || !receipt.ok)
+              throw new Error(receipt?.detail ?? "Legacy OmniHub cancellation unavailable.");
+            window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+          }}
           close={() => setAutoContinueTarget(null)}
           submit={async (input) => {
             await configureCaffy(autoContinueTarget.sessionId, input.mode,
