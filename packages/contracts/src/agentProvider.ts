@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { ModelSelection } from "./modelSelection.ts";
 
 /**
  * T3-owned execution provider for OmniHub (t3.agent-provider/v1).
@@ -283,6 +284,7 @@ export const AgentProviderV1CreateRequest = Schema.Struct({
   initialMessage: Schema.optional(Schema.String.check(Schema.isMaxLength(30_000))),
   project: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   parentSessionId: Schema.optional(OpaqueId),
+  modelSelection: Schema.optional(ModelSelection),
 });
 export const AgentProviderV1CreateReceipt = Schema.Struct({
   operationId: OpaqueId,
@@ -336,6 +338,8 @@ export type AgentProviderV1Hello = typeof AgentProviderV1Hello.Type;
  */
 export const AgentProviderV1Method = Schema.Literals([
   "hello",
+  "catalog.get",
+  "projects.create",
   "sessions.list",
   "sessions.get",
   "sessions.history",

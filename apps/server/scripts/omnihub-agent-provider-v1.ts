@@ -65,6 +65,88 @@ while (true) {
     if (typeof id !== "string" || !id || typeof message.method !== "string" ||
         typeof message.params !== "object" || message.params === null)
       throw new Error("Invalid bounded provider request");
+    // Reuse T3's established, authenticated project/model APIs immediately.
+    // The native provider catalog works even before a T3 server upgrade/restart.
+    if (message.method === "catalog.get") {
+      const endpoint = new URL(candidate.toString());
+      endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
+      endpoint.pathname = "/api/orchestration/shell";
+      endpoint.search = "";
+      const [snapshotResponse, providerResult] = await Promise.all([
+        fetch(endpoint, { headers: {
+          Authorization: "Bearer " + token,
+          "x-t3-orchestration-protocol": String(ORCHESTRATION_PROTOCOL_VERSION),
+        }, signal: AbortSignal.timeout(16_000) }),
+        Effect.runPromise(client[WS_METHODS.serverRefreshProviders]({})),
+      ]);
+      if (!snapshotResponse.ok) throw new Error("T3CatalogReadUnavailable");
+      const snapshot = await snapshotResponse.json() as {
+        projects: Array<{ id: string; title: string; workspaceRoot: string;
+          archivedAt?: string | null; defaultModelSelection?: unknown }>;
+      };
+      const providers = providerResult.providers;
+      const hello = await Effect.runPromise(client[WS_METHODS.agentProviderCall]({
+        apiVersion: T3_AGENT_PROVIDER_VERSION,
+        requestId: id + "-native-capability", method: "hello", params: {},
+      }));
+      const helloData = hello.ok ? hello.data as { nativeModelSelection?: boolean } : null;
+      const data = {
+        nativeModelSelectionReady: helloData?.nativeModelSelection === true,
+        projects: (snapshot.projects ?? []).filter((p) => !p.archivedAt)
+          .map((p) => ({ id: p.id, title: p.title,
+            workspaceRoot: p.workspaceRoot, defaultModelSelection: p.defaultModelSelection ?? null })),
+        models: providers.filter((p) => p.enabled && p.installed).flatMap((p) =>
+          p.models.map((model) => {
+            const effort = model.capabilities?.optionDescriptors?.find(
+              (d) => d.type === "select" &&
+                (d.id === "reasoningEffort" || d.id === "effort"),
+            );
+            return {
+              instanceId: p.instanceId, provider: p.driver,
+              slug: model.slug, label: model.slug, isDefault: model.isDefault === true,
+              effortId: effort?.id ?? null,
+              efforts: effort?.type === "select" ? effort.options.map((o) =>
+                ({ id: o.id, label: o.label })) : [],
+            };
+          }),
+        ),
+      };
+      process.stdout.write(JSON.stringify({ id, result: {
+        apiVersion: T3_AGENT_PROVIDER_VERSION, requestId: id, ok: true, data,
+      } }) + "\n");
+      continue;
+    }
+    if (message.method === "projects.create") {
+      const name = typeof message.params.name === "string" ? message.params.name.trim() : "";
+      if (!name || name.length > 80 || /[/\\\\]/.test(name))
+        throw new Error("InvalidProjectName");
+      const created = await Effect.runPromise(client[WS_METHODS.projectsCreateNew]({ name }));
+      process.stdout.write(JSON.stringify({ id, result: {
+        apiVersion: T3_AGENT_PROVIDER_VERSION, requestId: id, ok: true,
+        data: { id: created.projectId, title: name, workspaceRoot: created.workspaceRoot,
+          ...(created.commitError ? { warning: created.commitError } : {}) },
+      } }) + "\n");
+      continue;
+    }
+    // A pre-upgrade T3 server ignores unknown create fields. Never create a
+    // thread with the WRONG model/effort just because an older schema stripped them.
+    if (message.method === "sessions.create" &&
+        message.params.kind === "t3/thread" && message.params.modelSelection) {
+      const hello = await Effect.runPromise(client[WS_METHODS.agentProviderCall]({
+        apiVersion: T3_AGENT_PROVIDER_VERSION,
+        requestId: id + "-capabilities", method: "hello", params: {},
+      }));
+      const helloData = hello.ok ? hello.data as { nativeModelSelection?: boolean } : null;
+      if (!hello.ok || helloData?.nativeModelSelection !== true) {
+        process.stdout.write(JSON.stringify({ id, result: {
+          apiVersion: T3_AGENT_PROVIDER_VERSION, requestId: id, ok: false,
+          error: { code: "Unavailable",
+            message: "T3 server upgrade is required before native model/effort selections can be honored.",
+            retryable: false },
+        } }) + "\n");
+        continue;
+      }
+    }
     if (message.method === "sessions.history" &&
         typeof message.params.session === "object" &&
         message.params.session?.id?.startsWith("thread:")) {

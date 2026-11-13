@@ -2279,6 +2279,52 @@ export const layerWsRpc = (
                   "CreateSession",
                 ],
                 sourceUpdatesComplete: false,
+                nativeModelSelection: true,
+              });
+            }
+            if (request.method === "catalog.get") {
+              const projectRead = yield* Effect.result(projectStore.listShells());
+              if (Result.isFailure(projectRead))
+                return error("Unavailable", "T3 project catalog could not be read.");
+              const projects = projectRead.success;
+              const providers = yield* providerRegistry.getProviders;
+              return reply({
+                projects: projects.filter((p) => p.archivedAt == null).map((p) => ({
+                  id: p.id, title: p.title, workspaceRoot: p.workspaceRoot,
+                  defaultModelSelection: p.defaultModelSelection,
+                })),
+                models: providers.filter((p) => p.enabled && p.installed).flatMap((p) =>
+                  p.models.map((model) => {
+                    const effort = model.capabilities?.optionDescriptors?.find(
+                      (descriptor) => descriptor.type === "select" &&
+                        (descriptor.id === "reasoningEffort" || descriptor.id === "effort"),
+                    );
+                    return {
+                      instanceId: p.instanceId, provider: p.driver,
+                      slug: model.slug, label: model.slug,
+                      isDefault: model.isDefault === true,
+                      effortId: effort?.id ?? null,
+                      efforts: effort?.type === "select" ? effort.options.map((choice) => ({
+                        id: choice.id, label: choice.label,
+                      })) : [],
+                    };
+                  }),
+                ),
+              });
+            }
+            if (request.method === "projects.create") {
+              const p = request.params as { name?: unknown } | null;
+              const name = typeof p?.name === "string" ? p.name.trim() : "";
+              if (!name || name.length > 80 || /[/\\\\]/.test(name))
+                return error("InvalidInput", "Project name must be 1–80 characters without path separators.");
+              const created = yield* Effect.result(managedFolders.createNamedProject({ name }));
+              if (Result.isFailure(created))
+                return error("Unavailable", "T3 could not create the named project.");
+              return reply({
+                id: created.success.projectId,
+                title: name,
+                workspaceRoot: created.success.workspaceRoot,
+                ...(created.success.commitError ? { warning: created.success.commitError } : {}),
               });
             }
             if (request.method === "sessions.create" || request.method === "sessions.create.get") {
@@ -2357,21 +2403,50 @@ export const layerWsRpc = (
                 if (Result.isFailure(snapshot))
                   return error("Unavailable", "T3 native project catalog could not be read.");
                 const project = input.project?.replace(/\\/g, "/").toLowerCase();
+                const projectRead = yield* Effect.result(projectStore.listShells());
+                if (Result.isFailure(projectRead))
+                  return error("Unavailable", "Could not read T3 project settings.");
+                const allProjects = projectRead.success;
+                const selectedProject = allProjects.find((candidate) =>
+                  project !== undefined &&
+                  (candidate.id.toLowerCase() === project ||
+                   candidate.title.toLowerCase() === project ||
+                   candidate.workspaceRoot.replace(/\\/g, "/").toLowerCase() === project),
+                );
                 const sources = snapshot.success.threads.filter((thread) =>
                   project === undefined || thread.projectId.toLowerCase() === project ||
+                  selectedProject?.id === thread.projectId ||
                   thread.worktreePath?.replace(/\\/g, "/").toLowerCase() === project,
                 );
-                // Reuse the selected project model/runtime settings, not a fabricated default.
                 const source = sources.sort((a, b) => DateTime.toEpochMillis(b.updatedAt) -
                   DateTime.toEpochMillis(a.updatedAt))[0];
-                if (!source) return reply(receipt("NotCreated",
-                  "No matching native project/thread. Open a thread in that project on desktop first."));
+                const projectId = selectedProject?.id ?? source?.projectId;
+                const modelSelection = input.modelSelection ?? source?.modelSelection ??
+                  selectedProject?.defaultModelSelection ?? null;
+                if (!projectId || !modelSelection) return reply(receipt("NotCreated",
+                  "Select an existing T3 project and a model (or create a model-configured project)."));
+                if (input.modelSelection) {
+                  const providers = yield* providerRegistry.getProviders;
+                  const provider = providers.find((candidate) =>
+                    candidate.instanceId === modelSelection.instanceId && candidate.enabled);
+                  const model = provider?.models.find((candidate) =>
+                    candidate.slug === modelSelection.model);
+                  if (!model) return reply(receipt("NotCreated",
+                    "Selected model is not in T3's current provider catalog."));
+                  const descriptors = model.capabilities?.optionDescriptors ?? [];
+                  if (modelSelection.options?.some((option) =>
+                    !descriptors.some((d) => d.type === "select" && d.id === option.id &&
+                      d.options.some((candidate) => candidate.id === option.value)),
+                  )) return reply(receipt("NotCreated",
+                    "Selected reasoning effort is not supported by this model."));
+                }
                 const dispatched = yield* Effect.result(threadManagement.dispatch({
                   type: "thread.create", createdBy: "user", creationSource: "web",
-                  commandId, threadId, projectId: source.projectId, title: input.title,
-                  modelSelection: source.modelSelection, runtimeMode: source.runtimeMode,
-                  interactionMode: source.interactionMode, branch: source.branch,
-                  worktreePath: source.worktreePath,
+                  commandId, threadId, projectId, title: input.title,
+                  modelSelection, runtimeMode: source?.runtimeMode ?? "approval-required",
+                  interactionMode: source?.interactionMode ?? "default",
+                  branch: source?.branch ?? null,
+                  worktreePath: source?.worktreePath ?? null,
                 }));
                 if (Result.isFailure(dispatched))
                   return reply(receipt("Unknown",
