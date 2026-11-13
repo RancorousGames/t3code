@@ -445,6 +445,7 @@ export const make = Effect.gen(function* () {
                 onceOnly: request.onceOnly,
                 startup: request.startup,
                 keepAwake: request.keepAwake,
+                wakeNow: request.wakeNow,
                 beginAt: request.beginAt,
                 delayedPrompt: request.prompt,
                 repeatPrompt: request.repeatPrompt,

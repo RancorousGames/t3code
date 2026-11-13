@@ -1921,6 +1921,7 @@ export interface DesktopBridge {
     onceOnly?: boolean;
     startup?: boolean;
     keepAwake?: boolean;
+    wakeNow?: boolean;
     keepT3Busy?: boolean;
     busyForMinutes?: number;
     maxWorking?: number;

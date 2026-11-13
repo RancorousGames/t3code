@@ -723,7 +723,7 @@ export function ChatGPTBrowserSidebarEntry({
   const [menuDialog, setMenuDialog] = useState<ChatGPTSessionMenuDialogState | null>(null);
   const [delayedPromptTarget, setDelayedPromptTarget] = useState<DelayedPromptTarget | null>(null);
   const [autoContinueTarget, setAutoContinueTarget] = useState<{
-    sessionId: string; config: AutoContinueConfig | null;
+    sessionId: string; config: AutoContinueConfig | null; initiallyIdle: boolean;
     legacyMonitors: Array<{ id: string; targetId: string; status: string }>;
   } | null>(null);
   const [keepAwakeFeedback, setKeepAwakeFeedback] = useState<string | null>(null);
@@ -824,7 +824,7 @@ export function ChatGPTBrowserSidebarEntry({
   const configureCaffy = async (
     sessionId: string, mode: "idle" | "periodic" | "queued",
     durationMinutes?: number, onceOnly = false, intervalMinutes = 20,
-    options?: Pick<AutoContinueRequest, "repeatPrompt" | "autoRebootMinutes" | "autoRebootEveryRuns" | "beginAt">,
+    options?: Pick<AutoContinueRequest, "repeatPrompt" | "autoRebootMinutes" | "autoRebootEveryRuns" | "beginAt" | "wakeNow">,
   ) => {
     const control = window.desktopBridge?.caffyControl;
     if (!control) throw new Error("T3 Caffy v2 is not available in this desktop build.");
@@ -839,13 +839,14 @@ export function ChatGPTBrowserSidebarEntry({
       ...(conversationId ? { conversationId } : {}),
       ...(durationMinutes !== undefined ? { durationMinutes } : {}),
       intervalMinutes, startup: false, onceOnly, keepAwake: mode !== "periodic" && !onceOnly,
+      ...(options?.wakeNow !== undefined ? { wakeNow: options.wakeNow } : {}),
       ...(options?.repeatPrompt !== undefined ? { repeatPrompt: options.repeatPrompt } : {}),
       ...(options?.autoRebootMinutes !== undefined ? { rebootMinutes: options.autoRebootMinutes } : {}),
       ...(options?.autoRebootEveryRuns !== undefined ? { rebootEveryRuns: options.autoRebootEveryRuns } : {}),
       ...(options?.beginAt !== undefined ? { beginAt: options.beginAt } : {}),
     });
     setKeepAwakeFeedback(
-      `Auto-continue: ${mode === "queued" ? "when an agent slot is available" : mode === "periodic" ? `every ${intervalMinutes} minutes` : "when capacity is available"} · ${onceOnly ? "once" : durationMinutes === undefined ? "until stopped" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
+      `Auto-continue: ${mode === "queued" ? "when an agent slot is available" : mode === "periodic" ? `every ${intervalMinutes} minutes` : "on idle (no capacity limit)"} · ${onceOnly ? "once" : durationMinutes === undefined ? "until stopped" : Math.round(durationMinutes / 60 * 100) / 100 + "h"}.`,
     );
     window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
   };
@@ -1868,7 +1869,7 @@ export function ChatGPTBrowserSidebarEntry({
         const control = window.desktopBridge?.caffyControl;
         if (!control) throw new Error("T3 Caffy v2 is unavailable; rebuild and restart T3.");
         if (action === "caffy:auto") {
-          setAutoContinueTarget({ sessionId, config: activeCaffy, legacyMonitors });
+          setAutoContinueTarget({ sessionId, config: activeCaffy, initiallyIdle: liveActivity === "idle", legacyMonitors });
         } else if (action === "caffy:stop" || action.startsWith("caffy:stop-legacy:")) {
           if (activeCaffy && action === "caffy:stop") {
             await control({ action: "stop", sessionId, stopInitiator: "user" });
@@ -3446,6 +3447,7 @@ export function ChatGPTBrowserSidebarEntry({
         <ChatGPTAutoContinueDialog
           key={autoContinueTarget.sessionId}
           existing={autoContinueTarget.config}
+          initiallyIdle={autoContinueTarget.initiallyIdle}
           legacyMonitors={autoContinueTarget.legacyMonitors}
           cancelLegacy={async (id, targetId) => {
             const receipt = await controlOmniHubKeepAwakeForT3({

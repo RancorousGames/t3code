@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "../ui/button";
 import { Dialog, DialogFooter, DialogHeader, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
 
 type TimeUnit = "minutes" | "hours" | "days" | "weeks";
 const unitMinutes: Record<TimeUnit, number> = {
@@ -32,7 +33,8 @@ export interface AutoContinueConfig {
 }
 
 export interface AutoContinueRequest {
-  mode: "queued" | "periodic";
+  mode: "idle" | "queued" | "periodic";
+  wakeNow: boolean;
   durationMinutes?: number;
   intervalMinutes: number;
   beginAt?: number;
@@ -43,20 +45,23 @@ export interface AutoContinueRequest {
 
 export function ChatGPTAutoContinueDialog({
   existing,
+  initiallyIdle,
   legacyMonitors = [],
   cancelLegacy,
   close,
   submit,
 }: {
   existing: AutoContinueConfig | null;
+  initiallyIdle: boolean;
   legacyMonitors?: readonly { id: string; targetId: string; status: string }[];
   cancelLegacy?: (id: string, targetId: string) => Promise<void>;
   close: () => void;
   submit: (input: AutoContinueRequest) => Promise<void>;
 }) {
-  const [frequency, setFrequency] = useState<"slot" | "periodic">(
-    existing?.mode === "periodic" ? "periodic" : "slot",
+  const [frequency, setFrequency] = useState<"slot" | "idle" | "periodic">(
+    existing?.mode === "periodic" ? "periodic" : existing?.mode === "idle" ? "idle" : "slot",
   );
+  const [wakeNow, setWakeNow] = useState(initiallyIdle);
   const [intervalAmount, initialUnit] = timeScale(
     existing?.mode === "periodic" ? existing.intervalMinutes : 1440,
   );
@@ -144,8 +149,9 @@ export function ChatGPTAutoContinueDialog({
     setError(null);
     try {
       await submit({
-        mode: frequency === "slot" ? "queued" : "periodic",
-        intervalMinutes: frequency === "slot" ? 20 : intervalMinutes,
+        mode: frequency === "slot" ? "queued" : frequency,
+        wakeNow: wakeNow && !(frequency === "periodic" && firstDueAt !== undefined),
+        intervalMinutes: frequency === "periodic" ? intervalMinutes : 20,
         ...(durationMinutes === undefined ? {} : { durationMinutes }),
         ...(frequency === "periodic" && firstDueAt !== undefined ? { beginAt: firstDueAt } : {}),
         repeatPrompt: prompt.trim(),
@@ -194,9 +200,15 @@ export function ChatGPTAutoContinueDialog({
                 onChange={(event) => setFrequency(event.target.value as typeof frequency)}
               >
                 <option value="slot">Whenever an agent slot is available</option>
+                <option value="idle">On Idle — ignore agent slot capacity</option>
                 <option value="periodic">At a recurring interval</option>
               </select>
             </label>
+            {frequency === "idle" && (
+              <p className="text-xs text-muted-foreground">
+                Wake after every idle transition, even when all agent slots are occupied.
+              </p>
+            )}
             {frequency === "periodic" && (
               <>
                 <div className="grid grid-cols-[1fr_1fr] gap-2">
@@ -242,6 +254,14 @@ export function ChatGPTAutoContinueDialog({
                 </label>
               </>
             )}
+            <label className="flex items-center gap-2 text-sm">
+              <Switch
+                checked={wakeNow && !(frequency === "periodic" && firstDueAt !== undefined)}
+                disabled={frequency === "periodic" && firstDueAt !== undefined}
+                onCheckedChange={setWakeNow}
+              />
+              Trigger a wakeup now
+            </label>
             <label className="block text-sm">
               Stop auto-continue
               <select

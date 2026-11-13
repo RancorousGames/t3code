@@ -77,6 +77,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     onceOnly: Schema.optional(Schema.Boolean),
     startup: Schema.optional(Schema.Boolean),
     keepAwake: Schema.optional(Schema.Boolean),
+    wakeNow: Schema.optional(Schema.Boolean),
     keepT3Busy: Schema.optional(Schema.Boolean),
     busyForMinutes: Schema.optional(Schema.Number),
     maxWorking: Schema.optional(Schema.Number),

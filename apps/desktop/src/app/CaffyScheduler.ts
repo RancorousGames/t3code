@@ -185,14 +185,7 @@ export class CaffyScheduler {
     try {
       const saved = JSON.parse(NodeFS.readFileSync(this.file, "utf8")) as CaffyStore;
       if (saved.version === 2 && Array.isArray(saved.entries)) {
-        for (const row of saved.entries) if (valid(row)) {
-          // Old idle monitors now share the same capacity-aware admission as queued work.
-          if (row.mode === "idle") {
-            row.runWithoutBusy = row.onceOnly && row.beginAt != null;
-            row.mode = "queued";
-          }
-          this.entries.set(row.sessionId, row);
-        }
+        for (const row of saved.entries) if (valid(row)) this.entries.set(row.sessionId, row);
         for (const job of saved.scheduledSpawns ?? []) {
           if (!job || !UUID.test(job.id) ||
               !(job.onIdle === true ? job.beginAt === null : Number.isSafeInteger(job.beginAt)) ||
@@ -239,6 +232,7 @@ export class CaffyScheduler {
       const row = this.lookup(record.sessionId);
       if (!row || row.pendingMessageId !== record.messageId) return true;
       if (row.paused) return false;
+      if (row.mode === "idle") return true;
       const snapshot = await this.capacity().catch(() => null);
       // An already admitted wake may finish its exact pending send, but a
       // preexisting oversubscription must not authorize additional Caffy
@@ -593,6 +587,7 @@ export class CaffyScheduler {
     sessionId: string; conversationId: string; mode: Mode;
     durationMinutes?: number | undefined; onceOnly?: boolean | undefined; startup?: boolean | undefined;
     intervalMinutes?: number | undefined; keepAwake?: boolean | undefined;
+    wakeNow?: boolean | undefined;
     beginAt?: number | null | undefined;
     delayedPrompt?: string | null | undefined;
     repeatPrompt?: string | undefined;
@@ -659,7 +654,7 @@ export class CaffyScheduler {
     if (prior?.pendingMessageId &&
         (prior.conversationId !== input.conversationId || prior.sessionId !== canonicalId))
       throw new Error("Existing wake delivery needs reconciliation before changing its recipient identity.");
-    const mode = input.mode === "idle" ? "queued" : input.mode;
+    const mode = input.mode;
     const same = !!prior && prior.conversationId === input.conversationId &&
       prior.mode === mode && prior.expiresAt ===
         (input.durationMinutes === undefined ? null : prior.createdAt + input.durationMinutes * 60_000) &&
@@ -680,6 +675,12 @@ export class CaffyScheduler {
         this.save();
         this.backupConfiguration();
       }
+      if (input.wakeNow === true && !prior.pendingWake && !prior.pendingMessageId) {
+        prior.pendingWake = true;
+        prior.pendingReason = "manual";
+        this.save();
+        void this.pump();
+      }
       if (prior.paused) {
         prior.paused = false;
         prior.lastError = null;
@@ -699,8 +700,8 @@ export class CaffyScheduler {
       expiresAt: input.durationMinutes === undefined ? null :
         Math.max(now, input.beginAt ?? prior?.beginAt ?? now) + input.durationMinutes * 60_000,
       nextDueAt: mode === "periodic" ? input.beginAt ?? now + intervalMinutes * 60_000 : null,
-      pendingWake: mode === "queued" ? true : false,
-      pendingReason: mode === "queued" ? "manual" : null,
+      pendingWake: input.wakeNow ?? (mode === "queued"),
+      pendingReason: (input.wakeNow ?? (mode === "queued")) ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
       lastIdleSequence: Math.max(prior?.lastIdleSequence ?? 0, identity?.idleSequence ?? 0),
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
@@ -1605,7 +1606,8 @@ export class CaffyScheduler {
           continue;
         }
         const wakeTicket = `wake:${row.sessionId}:${row.conversationId}`;
-        if (!(await this.acquireAutomaticAdmission(
+        const bypassCapacity = row.mode === "idle";
+        if (!bypassCapacity && !(await this.acquireAutomaticAdmission(
           wakeTicket, row.sessionId, true,
         ))) continue;
         try {
@@ -1658,7 +1660,7 @@ export class CaffyScheduler {
           this.save();
         }
         } finally {
-          this.releaseAutomaticAdmission(wakeTicket);
+          if (!bypassCapacity) this.releaseAutomaticAdmission(wakeTicket);
         }
       }
     } finally {
