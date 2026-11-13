@@ -177,6 +177,7 @@ export async function controlSessions(
       "list",
       "preferences",
       "recovery_metrics",
+      "attention_status",
       "delivery_status",
       "delivery_list",
       "cancel_delivery",

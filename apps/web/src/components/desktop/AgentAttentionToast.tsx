@@ -82,6 +82,19 @@ export function AgentAttentionToast({ openSession, onDismiss }: {
   const visible = items
     .filter((item) => (item.status === "pending" || item.status === "snoozed") && item.nextAt <= now)
     .sort((a, b) => a.createdAt - b.createdAt)[0];
+  useEffect(() => {
+    if (!visible) return;
+    const key = `t3.agent-attention-spoken.${visible.id}`;
+    const stamp = String(visible.nextAt);
+    // Keyed by scheduled appearance, so a snoozed request speaks again once it resurfaces.
+    if (localStorage.getItem(key) === stamp) return;
+    localStorage.setItem(key, stamp);
+    void window.desktopBridge?.speakOpenRigPreview?.(
+      "An agent needs your attention. Please open T three to respond.",
+    ).catch((error: unknown) =>
+      console.warn("[Agent attention] Speech unavailable", error),
+    );
+  }, [visible?.id, visible?.nextAt]);
   if (!visible) return null;
   return (
     <section role="alertdialog" aria-label="Agent needs your attention"
