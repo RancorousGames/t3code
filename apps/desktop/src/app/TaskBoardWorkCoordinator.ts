@@ -27,7 +27,70 @@ interface QueueItem {
   legacyOpenRig: boolean;
   error?: string | null;
 }
-interface QueueSnapshot { boardRoot: string; items: QueueItem[]; dispatchEnabled: boolean; projectPriority: ProjectPriority }
+interface QueueSnapshot {
+  boardRoot: string; projectName: string; projectId: string;
+  items: QueueItem[]; dispatchEnabled: boolean; projectPriority: ProjectPriority;
+}
+interface QueueCandidate {
+  boardRoot: string; projectPriority: ProjectPriority;
+  item: Pick<QueueItem, "taskId" | "created" | "priority">;
+}
+
+/** Priority is global. Balancing and board preference apply only within a priority tier. */
+export function compareQueuedCandidates(
+  a: QueueCandidate, b: QueueCandidate, boardLoad: ReadonlyMap<string, number>, now: number,
+): number {
+  const urgency = (a.item.priority === "urgent" ? 0 : 1) - (b.item.priority === "urgent" ? 0 : 1);
+  const load = (boardLoad.get(rootKey(a.boardRoot)) ?? 0) - (boardLoad.get(rootKey(b.boardRoot)) ?? 0);
+  const rank = (priority: ProjectPriority) => priority === "high" ? 0 : priority === "low" ? 2 : 1;
+  const projectPriority = rank(a.projectPriority) - rank(b.projectPriority);
+  const isRecent = (created: string) => {
+    // TaskBoard legacy creation is a local date, not a timestamp. Treat its
+    // entire calendar day as potentially within the last 24h.
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(created);
+    const [year, month, day] = dateOnly ? created.split("-").map(Number) : [];
+    const time = dateOnly ? new Date(year!, month! - 1, day!).getTime() : Date.parse(created);
+    const end = dateOnly ? new Date(year!, month! - 1, day! + 1).getTime() : time;
+    return Number.isFinite(time) && time <= now && end >= now - 24 * 60 * 60_000;
+  };
+  const recent = Number(isRecent(b.item.created)) - Number(isRecent(a.item.created));
+  const number = (id: string) => Number(id.match(/-(\d+)$/)?.[1] ?? Number.MAX_SAFE_INTEGER);
+  return urgency || load || projectPriority || recent ||
+    number(a.item.taskId) - number(b.item.taskId) ||
+    a.boardRoot.localeCompare(b.boardRoot) || a.item.taskId.localeCompare(b.item.taskId);
+}
+interface SessionBoardIdentity {
+  id: string; project?: string | null;
+  binding?: {taskRef?: {board?: string}};
+}
+
+/** Exact task board wins; a session's project label is usable only if unambiguous. */
+export function boardOwnersFromSessions(
+  boards: ReadonlyArray<Pick<QueueSnapshot, "boardRoot" | "projectName" | "projectId">>,
+  sessions: ReadonlyArray<SessionBoardIdentity>,
+): Map<string, string> {
+  const byName = new Map<string, string | null>();
+  for (const board of boards) {
+    for (const name of [board.projectName, board.projectId]) {
+      const key = name.trim().toLowerCase();
+      const root = rootKey(board.boardRoot);
+      if (!key) continue;
+      if (!byName.has(key)) byName.set(key, root);
+      else if (byName.get(key) !== root) byName.set(key, null);
+    }
+  }
+  const roots = new Set(boards.map(board => rootKey(board.boardRoot)));
+  const owners = new Map<string, string>();
+  for (const session of sessions) {
+    const bound = session.binding?.taskRef?.board;
+    const taskRoot = bound && NodePath.isAbsolute(bound) ? rootKey(bound) : null;
+    const projectRoot = byName.get(session.project?.trim().toLowerCase() ?? "") ?? null;
+    const root = taskRoot && roots.has(taskRoot) ? taskRoot : projectRoot;
+    if (root) owners.set(session.id, root);
+  }
+  return owners;
+}
+
 interface RetiredGuestReceipt {
   boardRoot: string; taskId: string; queueRequest: string;
   requestId: string; sessionId: string;
@@ -125,6 +188,8 @@ export class TaskBoardWorkCoordinator {
   private lastCompletionScanAt = 0;
   private readonly completionMtimes = new Map<string, number>();
   private snapshots: QueueSnapshot[] = [];
+  private sessionBoardOwners = new Map<string, string>();
+  private lastSessionOwnerScanAt = 0;
   private lastPromptRecoveryAt = 0;
   private readonly promptRecoveryAttempts = new Map<string, number>();
   private readonly startingFirstSeen = new Map<string, number>();
@@ -239,8 +304,9 @@ export class TaskBoardWorkCoordinator {
             !Array.isArray(output.items)) {
           throw new Error(`TaskBoard ${project.name} returned an invalid dispatch queue snapshot.`);
         }
-        snapshots.push({ boardRoot: project.path, items: output.items,
-          projectPriority: project.priority ?? "normal", dispatchEnabled: project.dispatchEnabled });
+        snapshots.push({ boardRoot: project.path, projectName: project.name, projectId: project.id,
+          items: output.items, projectPriority: project.priority ?? "normal",
+          dispatchEnabled: project.dispatchEnabled });
         this.lastObservedAt = output.observedAt ?? new Date().toISOString();
       }
       this.snapshots = snapshots;
@@ -966,6 +1032,37 @@ export class TaskBoardWorkCoordinator {
       }), 35_000);
   }
 
+  /** Count live workers from every T3 session, not just auto-queued TaskBoard claims. */
+  private async liveSessionBoardOwners(boards: QueueSnapshot[]): Promise<Map<string, string>> {
+    if (Date.now() - this.lastSessionOwnerScanAt < 30_000)
+      return new Map(this.sessionBoardOwners);
+    try {
+      const listed = await cli("node.exe", [
+        NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+      ], JSON.stringify({
+        action: "list", which: "all", includeHidden: true, home: this.home,
+      }), 25_000) as {
+        sessions?: Array<{
+          id: string; project?: string | null;
+          binding?: {taskRef?: {board?: string}};
+        }>;
+        total?: number; hasMore?: boolean; incomplete?: boolean;
+      };
+      if (!Array.isArray(listed.sessions) || listed.hasMore || listed.incomplete ||
+          (listed.total !== undefined && listed.total !== listed.sessions.length))
+        throw new Error("T3 session inventory incomplete");
+
+      this.sessionBoardOwners = boardOwnersFromSessions(boards, listed.sessions);
+      this.lastSessionOwnerScanAt = Date.now();
+    } catch (error) {
+      // Retain known bindings; the queue snapshot remains a fallback for
+      // queued workers. Missing registry metadata must not stop dispatch.
+      this.lastError = `Project worker load lookup failed: ${String(error)}`;
+      this.lastSessionOwnerScanAt = Date.now() - 15_000;
+    }
+    return new Map(this.sessionBoardOwners);
+  }
+
   async pump() {
     if (!this.running) return;
     if (this.busy) {
@@ -1071,29 +1168,33 @@ export class TaskBoardWorkCoordinator {
         .filter(item => item.state === "queued" && item.readiness && !item.claimed &&
           !item.legacyOpenRig && UUID.test(item.queueRequest))
         .map(item => ({ boardRoot: board.boardRoot, projectPriority: board.projectPriority, item })) : []);
-      // Spread automatic admissions across boards already represented by live
-      // green workers. Historical Working claims must not bias selection.
+      // The queue snapshot omits manually started and non-queued workers.
+      // Map ALL green T3 sessions to their boards, using verified task bindings
+      // first, then unambiguous project names. Historical idle claims do not count.
       const workingIds = new Set((await this.caffy.capacity().catch(() => null))?.workingIds ?? []);
-      const boardLoad = new Map<string, number>();
+      const sessionOwners = await this.liveSessionBoardOwners(snapshots);
       for (const board of snapshots) {
-        const load = board.items.filter(item =>
-          (item.state === "working" && !!item.sessionId && workingIds.has(item.sessionId)) ||
+        for (const item of board.items) {
+          if (item.state === "working" && item.sessionId && !sessionOwners.has(item.sessionId))
+            sessionOwners.set(item.sessionId, rootKey(board.boardRoot));
+        }
+      }
+      const boardLoad = new Map(snapshots.map(board => [rootKey(board.boardRoot), 0]));
+      for (const id of workingIds) {
+        const board = sessionOwners.get(id);
+        if (board && boardLoad.has(board)) boardLoad.set(board, boardLoad.get(board)! + 1);
+      }
+      for (const board of snapshots) {
+        const pending = board.items.filter(item =>
           (item.state === "reserved" && !!item.reservationId &&
             Date.parse(item.reservationExpiresAt ?? "") > Date.now()) ||
           (item.state === "starting" && !!item.reservationId &&
             this.startingSince(board.boardRoot, item) + STARTING_HOLD_MS > Date.now()),
         ).length;
-        boardLoad.set(rootKey(board.boardRoot), load);
+        boardLoad.set(rootKey(board.boardRoot), (boardLoad.get(rootKey(board.boardRoot)) ?? 0) + pending);
       }
-      const priorityRank = (priority: ProjectPriority) => priority === "high" ? 0 : priority === "low" ? 2 : 1;
-      queued.sort((a, b) =>
-        // Choose an unrepresented board before another concurrent worker from
-        // a busy board; within the same load, prefer higher-priority projects.
-        (boardLoad.get(rootKey(a.boardRoot)) ?? 0) - (boardLoad.get(rootKey(b.boardRoot)) ?? 0) ||
-        priorityRank(a.projectPriority) - priorityRank(b.projectPriority) ||
-        (a.item.priority === "urgent" ? 0 : 1) - (b.item.priority === "urgent" ? 0 : 1) ||
-        a.item.created.localeCompare(b.item.created) ||
-        a.boardRoot.localeCompare(b.boardRoot) || a.item.taskId.localeCompare(b.item.taskId));
+      const rankingTime = Date.now();
+      queued.sort((a, b) => compareQueuedCandidates(a, b, boardLoad, rankingTime));
       if (!queued.length) {
         const pending = snapshots.reduce((n, board) => n + (board.dispatchEnabled
           ? board.items.filter(item => item.state === "queued").length : 0), 0);
