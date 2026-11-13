@@ -55,6 +55,7 @@ const HistorySchema = Schema.Record(
   ),
 );
 const COLORS = ["#4da3ff", "#ff8a3d"];
+const FABLE_COLOR = "#ffc078";
 const NAMES = ["Codex", "Claude"];
 
 function formatContextUsage(contextWindow: ContextWindowSnapshot) {
@@ -563,7 +564,7 @@ export function QuotaPacingWidget({
     }
   }, [history, rows, observedNow]);
 
-  if (!rows.some((row) => row.series.some(Boolean))) return null;
+  if (!rows.some((row) => row.series.some(Boolean) || row.fable)) return null;
   const hasRoom = canvas
     ? canvas.container.width - 292 >= canvas.layout.chat.left + canvas.layout.chat.width + 12 &&
       canvas.container.height >= 480 &&
@@ -611,6 +612,9 @@ export function QuotaPacingWidget({
             <span className="flex gap-2">
               <span style={{ color: COLORS[0] }}>Codex</span>
               <span style={{ color: COLORS[1] }}>Claude</span>
+              {rows.some((row) => row.fable) ? (
+                <span style={{ color: FABLE_COLOR }}>Fable</span>
+              ) : null}
             </span>
           ) : null}
           <span aria-hidden>{open ? "−" : "+"}</span>
@@ -727,7 +731,7 @@ export function QuotaPacingWidget({
                   viewBox="0 0 280 70"
                   className={`h-[70px] w-full rounded-md border bg-background/80 ${row.label === "week" && weeklyWarning ? "border-amber-400/80 ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(245,158,11,0.35)]" : "border-white"}`}
                   role="img"
-                  aria-label={`${row.label} usage; dashed diagonal is ideal consumption. Blue is Codex, orange is Claude. Solid vertical divider marks ${row.label === "5h" ? "one hour" : "one day"} before reset. History begins with the first observed reading.${row.label === "week" && weeklyWarning ? ` Warning: ${weeklyWarning}` : ""}`}
+                  aria-label={`${row.label} usage; dashed diagonal is ideal consumption. Blue is Codex, orange is Claude${row.fable ? ", light orange is Fable's weekly limit" : ""}. Solid vertical divider marks ${row.label === "5h" ? "one hour" : "one day"} before reset. History begins with the first observed reading.${row.label === "week" && weeklyWarning ? ` Warning: ${weeklyWarning}` : ""}`}
                 >
                   {row.label === "week" && weeklyWarning ? <title>{weeklyWarning}</title> : null}
                   {[20, 35, 50].map((y) => (
@@ -750,13 +754,14 @@ export function QuotaPacingWidget({
                     strokeWidth="1.25"
                     opacity="0.8"
                   />
-                  {row.series.map((series, index) => {
+                  {[...row.series, row.fable].map((series, index) => {
                     if (!series) return null;
+                    const color = COLORS[index] ?? FABLE_COLOR;
                     const samples = history[series.key] ?? [];
                     const last = samples[samples.length - 1];
                     const x = 5 + 270 * (elapsedShare(series.window, now) ?? 0);
                     return (
-                      <g key={series.key} stroke={COLORS[index]}>
+                      <g key={series.key} stroke={color}>
                         <line x1={x} x2={x} y1="5" y2="65" strokeDasharray="2 3" opacity="0.4" />
                         <path
                           d={quotaPath(samples, series.window)}
@@ -770,7 +775,7 @@ export function QuotaPacingWidget({
                             cx={5 + 270 * (elapsedShare(series.window, last.at) ?? 0)}
                             cy={65 - last.used * 0.6}
                             r="3"
-                            fill={COLORS[index]}
+                            fill={color}
                           />
                         ) : null}
                       </g>

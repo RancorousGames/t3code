@@ -67,32 +67,40 @@ export function normalizeQuotaHistory(history: QuotaHistory): QuotaHistory {
 }
 
 export function quotaWindows(accounts: readonly LimitAccount[], now: number) {
+  const pickSeries = (
+    driver: "codex" | "claudeAgent",
+    kind: "session" | "weekly",
+    fable = false,
+  ) => {
+    // With multiple subscriptions, show the most constrained account rather than
+    // averaging away a nearly exhausted quota. The tooltip identifies the account.
+    const candidates = accounts
+      .filter((account) => account.driver === driver)
+      .flatMap((account) =>
+        account.limits.windows
+          .filter(
+            (window) =>
+              window.kind === kind &&
+              (fable
+                ? window.id === "seven_day_fable"
+                : !(driver === "claudeAgent" && window.id.startsWith("seven_day_"))) &&
+              window.windowDurationMins === (kind === "weekly" ? 10080 : 300) &&
+              window.resetsAt !== undefined &&
+              Date.parse(window.resetsAt) > now &&
+              elapsedShare(window, now) !== null,
+          )
+          .map((window) => ({ account, window, key: quotaSeriesKey(account, window) })),
+      );
+    return (
+      candidates.sort(
+        (a, b) => b.window.usedPercent - a.window.usedPercent || a.key.localeCompare(b.key),
+      )[0] ?? null
+    );
+  };
   return (["session", "weekly"] as const).map((kind) => ({
     label: kind === "weekly" ? "week" : "5h",
-    series: (["codex", "claudeAgent"] as const).map((driver) => {
-      // With multiple subscriptions, show the most constrained account rather than
-      // averaging away a nearly exhausted quota. The tooltip identifies the account.
-      const candidates = accounts
-        .filter((account) => account.driver === driver)
-        .flatMap((account) =>
-          account.limits.windows
-            .filter(
-              (window) =>
-                window.kind === kind &&
-                !(driver === "claudeAgent" && window.id.startsWith("seven_day_")) &&
-                window.windowDurationMins === (kind === "weekly" ? 10080 : 300) &&
-                window.resetsAt !== undefined &&
-                Date.parse(window.resetsAt) > now &&
-                elapsedShare(window, now) !== null,
-            )
-            .map((window) => ({ account, window, key: quotaSeriesKey(account, window) })),
-        );
-      return (
-        candidates.sort(
-          (a, b) => b.window.usedPercent - a.window.usedPercent || a.key.localeCompare(b.key),
-        )[0] ?? null
-      );
-    }),
+    series: (["codex", "claudeAgent"] as const).map((driver) => pickSeries(driver, kind)),
+    fable: kind === "weekly" ? pickSeries("claudeAgent", kind, true) : null,
   }));
 }
 
@@ -108,7 +116,7 @@ export function recordQuotaSamples(
       .slice(0, 32),
   );
   for (const row of rows)
-    for (const series of row.series) {
+    for (const series of [...row.series, row.fable]) {
       if (!series) continue;
       const { window, account, key } = series;
       const start = Date.parse(window.resetsAt!) - window.windowDurationMins! * 60_000;
