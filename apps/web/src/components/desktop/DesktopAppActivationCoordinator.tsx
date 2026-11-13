@@ -1794,6 +1794,7 @@ export function DesktopAppActivationCoordinator() {
               sessionId: request.sessionId,
               priorConversationId: request.priorConversationId,
               prompt: request.prompt,
+              contextMode: request.contextMode,
               phase: request.phase,
             });
           } finally {
@@ -2385,9 +2386,11 @@ export function DesktopAppActivationCoordinator() {
                   const result = await restoreChatGPTSessionUrl(environmentId, entry, false);
                   return { ok: true as const, data: { url: result.url, source: result.source } };
                 } else if (command === "reboot") {
+                  const requested = str("contextMode") ?? "handoff";
+                  if (requested !== "handoff" && requested !== "fresh")
+                    throw new Error("Reboot context mode must be handoff or fresh.");
                   const receipt = await beginSidebarReboot({
-                    environmentId, sessionId: id,
-                    prompt: `Resume your previous work in this same T3 browser session (${entry.title}). Review the relevant TaskBoard task and project instructions and continue.`,
+                    environmentId, sessionId: id, contextMode: requested,
                   });
                   return { ok: true as const, data: { status: receipt.status, requestId: receipt.operationId } };
                 } else if (command === "keep_loaded") {

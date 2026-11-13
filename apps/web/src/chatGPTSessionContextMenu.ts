@@ -141,7 +141,13 @@ export function buildChatGPTSessionContextMenu(input: {
     }),
     item("task:open", "Open TaskBoard task", { disabled: !hasTask }),
     item("url:restore", "Restore URL", { separatorBefore: true }),
-    item("reboot", "Reboot agent"),
+    item("reboot", "Reboot agent", {
+      children: [
+        item("reboot:handoff", "Keep context (handover)"),
+        item("reboot:fresh", "Fresh start"),
+        item("reboot:custom", "Custom handover…", { separatorBefore: true }),
+      ],
+    }),
     item("stop", "Stop generation", { disabled: !working }),
     item(
       "verification:toggle",

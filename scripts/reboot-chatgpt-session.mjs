@@ -53,6 +53,7 @@ export function parseRebootArgs(argv) {
         "--request-id",
         "--message",
         "--message-file",
+        "--context-mode",
         "--phase",
         "--home",
       ].includes(flag)
@@ -85,12 +86,14 @@ export function parseRebootArgs(argv) {
     throw new Error("--request-id must be an exact UUID");
   if (out.phase !== "begin" && !out.requestId)
     throw new Error("Status/finalize require --request-id; do not guess a new reboot.");
+  if (out.contextMode && !["handoff", "fresh"].includes(out.contextMode))
+    throw new Error("--context-mode must be handoff or fresh");
   if (out.message && out.messageFile) throw new Error("Choose --message or --message-file.");
   if (out.messageFile) out.message = fs.readFileSync(path.resolve(out.messageFile), "utf8");
-  if (out.phase === "begin" && !out.message?.trim())
-    throw new Error("Write a continuation summary and supply --message or --message-file.");
-  if (out.phase !== "begin" && (out.message || out.messageFile))
-    throw new Error("Status/finalize never resend an initial message.");
+  if (out.phase === "begin" && !out.message?.trim() && !out.contextMode)
+    throw new Error("Supply --context-mode handoff|fresh or a --message/--message-file.");
+  if (out.phase !== "begin" && (out.message || out.messageFile || out.contextMode))
+    throw new Error("Status/finalize never resend an initial message or context mode.");
   return out;
 }
 
@@ -106,6 +109,7 @@ export function parseRebootJsonInput(input) {
     requestId: "--request-id",
     phase: "--phase",
     message: "--message",
+    contextMode: "--context-mode",
   };
   const argv = [];
   for (const [key, value] of Object.entries(input)) {
@@ -156,7 +160,8 @@ export async function rebootExistingT3Session(args, { exchange = sendAppControlR
     type: "chatgpt.reboot",
     sessionId,
     phase: args.phase,
-    ...(args.phase === "begin" ? { prompt: args.message.trim() } : {}),
+    ...(args.phase === "begin" && args.message?.trim() ? { prompt: args.message.trim() } : {}),
+    ...(args.phase === "begin" && args.contextMode ? { contextMode: args.contextMode } : {}),
   };
   // New T3 protocol omits ChatGPT conversation ID entirely. The renderer
   // resolves the currently attached conversation and persists operation receipt.

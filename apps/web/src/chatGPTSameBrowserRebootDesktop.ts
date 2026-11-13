@@ -21,6 +21,7 @@ import {
   type RebootBrowserSlot,
 } from "./chatGPTRebootAnyState";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
+import { buildChatGPTRebootContextPrompt, type ChatGPTRebootContextMode, type ChatGPTRebootExcerpt } from "./chatGPTRebootContext";
 import { publicChatGPTParentId, publicChatGPTSessionId } from "./chatGPTBootstrapIdentity";
 import { resolveT3RebootPredecessor } from "./chatGPTRebootCurrentConversation";
 
@@ -37,6 +38,7 @@ export async function rebootChatGPTDesktop(input: {
   sessionId: string;
   priorConversationId?: string | undefined;
   prompt?: string | undefined;
+  contextMode?: ChatGPTRebootContextMode | undefined;
   phase: "begin" | "status" | "restore" | "finalize";
 }) {
   const sessions = readChatGPTBrowserSessions(input.environmentId);
@@ -74,15 +76,50 @@ export async function rebootChatGPTDesktop(input: {
   let browserSlot: RebootBrowserSlot | null = null;
   let prepared = false;
   const existing = read().find((r) => r.operationId === input.operationId);
-  if (!input.prompt && (input.phase === "begin" || !existing))
-    throw new Error("Initial reboot requires a prompt.");
+  // Only begin reads the predecessor. Status/finalize MUST reuse the original
+  // operation's hash and must never invent a different handover.
+  let prompt = input.prompt;
+  if (input.phase === "begin" && input.contextMode) {
+    const readExcerpts = async (from: "start" | "end", count: number):
+      Promise<ChatGPTRebootExcerpt[]> => {
+      try {
+        const result = await runChatGPTSessionControl({
+          environmentId: input.environmentId,
+          sessions,
+          action: "read",
+          sessionId: session.id,
+          from,
+          count,
+          maxMessageChars: 2400,
+          neverWake: true,
+        }) as { session?: { messages?: ChatGPTRebootExcerpt[] } };
+        return result.session?.messages ?? [];
+      } catch {
+        // A stuck or unavailable predecessor must not prevent a reboot.
+        return [];
+      }
+    };
+    const opening = session.binding?.taskRef ? [] : await readExcerpts("start", 2);
+    const recent = input.contextMode === "handoff" ? await readExcerpts("end", 12) : [];
+    prompt = buildChatGPTRebootContextPrompt({
+      mode: input.contextMode,
+      title: session.title,
+      ...(session.project ? { project: session.project } : {}),
+      ...(session.binding ? { role: session.binding.role, taskRef: session.binding.taskRef } : {}),
+      opening,
+      recent,
+      ...(input.prompt ? { extraInstructions: input.prompt } : {}),
+    });
+  }
+  if (!prompt?.trim() && (input.phase === "begin" || !existing))
+    throw new Error("Initial reboot requires a prompt or context mode.");
   // Only ongoing Slave/continuous-worker roles need an execution cue after routing.
   const resumeWorkAfterReboot = /\bslave\b|\bcontinuous[\s-]+worker\b/iu.test(
-    `${session.title}\n${input.prompt ?? ""}`,
+    `${session.title}\n${prompt ?? ""}`,
   );
-  const bootstrapHash = input.prompt
+  const bootstrapHash = prompt
     ? await hash(
-        buildChatGPTSessionHandoffPrompt(input.prompt, publicChatGPTSessionId(session), publicChatGPTParentId(sessions, session), {
+        buildChatGPTSessionHandoffPrompt(prompt, publicChatGPTSessionId(session), publicChatGPTParentId(sessions, session), {
           resumeWorkAfterReboot,
           ...(session.project === undefined ? {} : { project: session.project }),
           ...(session.binding ? { role: session.binding.role } : {}),
@@ -148,7 +185,7 @@ export async function rebootChatGPTDesktop(input: {
       send: async () => {
         const receipt = await sendInitialChatGPTPrompt({
           ...input,
-          prompt: input.prompt!,
+          prompt: prompt!,
           requestId: input.operationId,
           newManagedWorker: false,
           resumeWorkAfterReboot,

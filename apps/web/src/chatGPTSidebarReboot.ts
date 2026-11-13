@@ -3,6 +3,7 @@ import { randomUUID } from "./lib/utils";
 import { readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
 import { rebootChatGPTDesktop } from "./chatGPTSameBrowserRebootDesktop";
 import type { RebootReceipt } from "./chatGPTSameBrowserReboot";
+import type { ChatGPTRebootContextMode } from "./chatGPTRebootContext";
 
 const active = new Set<string>();
 const keyFor = (environmentId: EnvironmentId, sessionId: string) => `${environmentId}:${sessionId}`;
@@ -41,7 +42,8 @@ export function pendingSidebarReboot(
 export async function beginSidebarReboot(input: {
   environmentId: EnvironmentId;
   sessionId: string;
-  prompt: string;
+  prompt?: string;
+  contextMode?: ChatGPTRebootContextMode;
 }): Promise<RebootReceipt> {
   const key = keyFor(input.environmentId, input.sessionId);
   if (active.has(key)) throw new Error("Agent Reboot already executing for this session.");
@@ -49,11 +51,13 @@ export async function beginSidebarReboot(input: {
   try {
     if (!readChatGPTBrowserSessions(input.environmentId).some((s) => s.id === input.sessionId))
       throw new Error("The exact T3 session is no longer present.");
-    if (!input.prompt.trim()) throw new Error("A continuation handoff is required.");
+    if (!input.prompt?.trim() && !input.contextMode)
+      throw new Error("A continuation handoff or reboot mode is required.");
     return await rebootChatGPTDesktop({
       ...input,
       operationId: randomUUID(),
-      prompt: input.prompt.trim(),
+      ...(input.prompt?.trim() ? { prompt: input.prompt.trim() } : {}),
+      ...(input.contextMode ? { contextMode: input.contextMode } : {}),
       phase: "begin",
     });
   } finally {

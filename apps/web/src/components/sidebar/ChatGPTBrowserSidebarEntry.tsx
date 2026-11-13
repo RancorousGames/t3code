@@ -1698,7 +1698,7 @@ export function ChatGPTBrowserSidebarEntry({
     const stopGeneration = () => stopChatGPTGenerationForSchedule(environmentId, sessionId);
     const action = await api.contextMenu.show(
       [
-        ...chatGPTNativeActionMenu(registryContext),
+        ...chatGPTNativeActionMenu(registryContext).filter((item) => item.id !== "registry:agent_reboot"),
         ...buildChatGPTSessionContextMenu({
           session,
           sessions,
@@ -1711,7 +1711,7 @@ export function ChatGPTBrowserSidebarEntry({
           hasConversationUrl: !!savedUrl,
           caffy: activeCaffy,
           legacyCaffyIds: legacyMonitors.map((monitor) => monitor.id),
-        }).filter((item) => item.id !== "reboot" && item.id !== "snooze:clear"),
+        }).filter((item) => item.id !== "snooze:clear"),
       ],
       position,
     );
@@ -1811,17 +1811,13 @@ export function ChatGPTBrowserSidebarEntry({
         const note = `${board}/Tasks/Active/${id}`;
         const url = `obsidian://open?vault=jjj&file=${encodeURIComponent(note)}`;
         await api.shell.openExternal(url);
-      } else if (action === "reboot") {
-        // Reboot any T3 browser slot by its exact session ID. An OpenRig seat is
-        // optional metadata, not a prerequisite or an alternate reboot route.
-        // Each explicit click begins the same guarded operation as reboot(id).
-        const receipt = await beginSidebarReboot({
-          environmentId,
-          sessionId,
-          prompt: `Resume your previous work in this same T3 browser session (${session.title}). Review the relevant TaskBoard task and project instructions and continue.`,
-        });
+      } else if (action === "reboot:custom") {
+        setMenuDialog({ kind: "reboot", sessionId, prompt: "" });
+      } else if (action === "reboot:handoff" || action === "reboot:fresh") {
+        const contextMode = action === "reboot:fresh" ? "fresh" : "handoff";
+        const receipt = await beginSidebarReboot({ environmentId, sessionId, contextMode });
         setMenuFeedback(
-          `Agent Reboot: ${receipt.status}; request ${receipt.operationId}. The same T3 session is retained.`,
+          `Agent Reboot (${contextMode === "fresh" ? "fresh start" : "keep context"}): ${receipt.status}; request ${receipt.operationId}. The same T3 session is retained.`,
         );
       } else if (action === "stop") {
         await stopGeneration();
