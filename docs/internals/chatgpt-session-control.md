@@ -1,5 +1,11 @@
 # T3 Code ChatGPT browser session control (local)
 
+## Sending images through OMCPT
+
+` t3_sessions(action="send", sessionId="<T3 UUID>", message="...", imagePath="E:\\path\\image.png") ` uploads a PNG, JPEG or WebP (up to 2 MiB) from the T3 PC and sends it with the text as **one** ChatGPT user turn. The existing text-only send retains its durable registry queue. Image sends instead use `scripts/chatgpt-image-send.mjs` through the exact mounted guest: guarded read, React file selection, upload completion, direct React submission with `preserveDraft: false`, and a DOM check for the image on the marked user turn. Images are not represented by URLs or by literal file paths in the chat message.
+
+The image branch persists an immutable `requestId` receipt in `.t3/userdata/chatgpt-image-deliveries-v1`. A lost callback acknowledgment is **UNKNOWN** and never auto-resubmitted. Use `t3_sessions(action="receipt", requestId="<same UUID>")` to inspect the recorded outcome; a new requestId would be a new send. The image branch requires the actual browser guest and cannot send to an unloaded/unavailable recipient without mounting it. Rebuilding the OMCPT sidecar is required for its `imagePath` tool schema to appear; existing text sends do not require a T3 desktop restart.
+
 The custom desktop renderer retains ownership of web ChatGPT sessions. OmniMCP-Lite v0.5.8 adds one MCP tool, **`t3_sessions`**, which uses T3's existing local-only named-pipe control channel, not ChatGPT HTTP APIs or legacy OmniHub MCP forwarding.
 
 Unknown sends retain their original/composed message and pre-send turn identity in the desktop's existing local storage. After a renderer restart, `read` and `send` restore that evidence and clear the reservation only when the exact sent user turn is observed. Confirming delivery does not click Send again. New messages can proceed after the previous delivery is reconciled.

@@ -43,6 +43,22 @@ export async function controlSessions(
     const { openTaskSession } = await import("./open-task-session.mjs");
     return openTaskSession(input, { home, exchange, control: controlSessions });
   }
+  if (input?.action === "send" && input.imagePath !== undefined) {
+    const { sendChatGPTImage } = await import("./chatgpt-image-send.mjs");
+    return sendChatGPTImage(input, {
+      home,
+      control: (request) => controlSessions(request, { home, exchange }),
+    });
+  }
+  if (input?.action === "image_receipt") {
+    const { imageSendReceipt } = await import("./chatgpt-image-send.mjs");
+    const receipt = imageSendReceipt(home, input.requestId);
+    return receipt ? { ...receipt, action: "receipt" } : {
+      action: "receipt", requestId: input.requestId, status: "not_found", imageDelivery: true,
+    };
+  }
+  if (input?.imagePath !== undefined)
+    throw new Error("imagePath is supported only for send.");
   const allowed = [
     "list",
     "preferences",
