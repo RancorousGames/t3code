@@ -114,6 +114,7 @@ export function SidebarThreadHeader({
             </SidebarHeaderIconButton>
           </>
         ) : null}
+        {prepfileAction}
         <SidebarHeaderIconButton
           label="New thread"
           tooltip={
@@ -135,7 +136,6 @@ export function SidebarThreadHeader({
           <SquarePenIcon />
         </SidebarHeaderIconButton>
         {chatGPTSessionAction}
-        {prepfileAction}
       </div>
     </div>
   );
