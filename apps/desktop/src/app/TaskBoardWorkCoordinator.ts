@@ -525,7 +525,14 @@ export class TaskBoardWorkCoordinator {
   start() {
     if (this.running) return;
     this.running = true;
-    this.timer = setInterval(() => { void this.pump(); }, PUMP_INTERVAL_MS);
+    let lastTick = Date.now();
+    this.timer = setInterval(() => {
+      const status = this.caffy.status();
+      const hadWake = status != null && "entries" in status &&
+        status.entries.some(row => (row.lastWakeAt ?? 0) > lastTick);
+      lastTick = Date.now();
+      if (!hadWake) void this.pump();
+    }, PUMP_INTERVAL_MS);
     this.timer.unref?.();
     // Refresh TaskBoard-owned reservations immediately for accurate capacity;
     // delay only admission until T3's working-session inventory has recovered.
