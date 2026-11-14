@@ -160,7 +160,7 @@ import {
   type ChatGPTRecoveryPhase,
 } from "./ChatGPTBrowserRecoveryCoordinator";
 import { recordSessionClick } from "./chatGPTConversationRecovery";
-import { workingDoubleClickAction } from "./chatGPTWorkingDoubleClick";
+import { chatGPTDoubleClickSnoozeUntil } from "./chatGPTDoubleClickSnooze";
 import { readChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { prioritizePendingChatGPTQuestions } from "./chatGPTSessionQuestionPriority";
 import { chatGPTRecoveryHoverDetails } from "./chatGPTRecoveryHoverDetails";
@@ -918,7 +918,7 @@ export function ChatGPTBrowserSidebarEntry({
   );
   const singleClickResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstSessionClick = useRef<{
-    id: string; wasWorking: boolean; previousId: string | null; at: number;
+    id: string; previousId: string | null;
   } | null>(null);
   const [questionRevision, setQuestionRevision] = useState(0);
   useEffect(() => {
@@ -957,7 +957,6 @@ export function ChatGPTBrowserSidebarEntry({
   );
   // Presentation-only: unlike persistent Hidden, active-only hiding must not
   // unload, stop monitoring or exclude the session from automation/keep-awake.
-  const [workingHiddenIds, setWorkingHiddenIds] = useState<ReadonlySet<string>>(() => new Set());
   const recordActivity = useCallback(
     (id: string, activity: ReturnType<typeof useChatGPTBrowserSessionActivity> | null) => {
       setActivities((current) => {
@@ -982,25 +981,13 @@ export function ChatGPTBrowserSidebarEntry({
   );
   useEffect(() => {
     for (const session of sessions) {
-      if (session.quickSnoozeStep !== undefined && activities[session.id]?.age === "working")
-        resetQuickSnooze(session.id);
       if (session.returnMarker) {
         const age = activities[session.id]?.age;
         if (age === "working" || age === "recent" || age === "inactive")
           observeSessionReturnMarker(session.id, age);
       }
     }
-    // Once a hidden working session stops being green, release the temporary
-    // flag. It must stay visible if it starts working again later.
-    setWorkingHiddenIds((previous) => {
-      const retained = [...previous].filter(
-        (id) =>
-          sessions.some((session) => session.id === id && !session.hidden) &&
-          activities[id]?.age === "working",
-      );
-      return retained.length === previous.size ? previous : new Set(retained);
-    });
-  }, [activities, sessions, resetQuickSnooze, observeSessionReturnMarker]);
+  }, [activities, sessions, observeSessionReturnMarker]);
   const registeredProjects = useMemo(
     () =>
       projects
@@ -1155,7 +1142,6 @@ export function ChatGPTBrowserSidebarEntry({
   const visibleSessions = sessions.filter((session) => !session.hidden && matchesProjectScope(session));
   const sidebarVisibleSessions = visibleSessions.filter(
     (session) =>
-      !(workingHiddenIds.has(session.id) && activities[session.id]?.age === "working") &&
       // Activity sorting must still show sessions used yesterday even when every
       // guest is currently unloaded and Hide Unloaded is enabled.
       !hideChatGPTSessionAsUnloaded(
@@ -3232,10 +3218,7 @@ export function ChatGPTBrowserSidebarEntry({
                                                 if (event.detail === 1) {
                                                   firstSessionClick.current = {
                                                     id: session.id,
-                                                    wasWorking:
-                                                      activities[session.id]?.age === "working",
                                                     previousId: activeSessionId ?? null,
-                                                    at: Date.now(),
                                                   };
                                                 }
                                                 event.currentTarget.blur();
@@ -3295,42 +3278,15 @@ export function ChatGPTBrowserSidebarEntry({
                                                   clearTimeout(singleClickResetRef.current);
                                                 const first = firstSessionClick.current;
                                                 firstSessionClick.current = null;
-                                                const wasWorking =
-                                                  first?.id === session.id &&
-                                                  Date.now() - first.at < 1200
-                                                    ? first.wasWorking
-                                                    : null;
-                                                const action = workingDoubleClickAction(
-                                                  wasWorking,
-                                                  activities[session.id]?.age === "working",
-                                                );
-                                                if (action === "ignore") return;
                                                 const previousId = first?.id === session.id
                                                   ? first.previousId === session.id
                                                     ? selectionBeforeCurrent.current
                                                     : first.previousId
                                                   : selectionBeforeCurrent.current;
-                                                if (action === "hide-working") {
-                                                  preserveSidebarScroll();
-                                                  event.currentTarget.blur();
-                                                  setWorkingHiddenIds(
-                                                    (previous) =>
-                                                      new Set([...previous, session.id]),
-                                                  );
-                                                  void navigateAfterSessionRemoved([session.id], previousId);
-                                                  return;
-                                                }
-                                                // Three consecutive double-click snoozes: 24h, 72h, 7d.
-                                                // Only actual interaction resets quickSnoozeStep.
-                                                const nextStep = Math.min(
-                                                  (session.quickSnoozeStep ?? -1) + 1, 2,
-                                                );
-                                                const durations = [24, 72, 168];
-                                                const until =
-                                                  Date.now() + durations[nextStep]! * 3_600_000;
+                                                const until = chatGPTDoubleClickSnoozeUntil(Date.now());
                                                 preserveSidebarScroll();
                                                 event.currentTarget.blur();
-                                                quickSnoozeSession(session.id, until, nextStep);
+                                                quickSnoozeSession(session.id, until, 0);
                                                 void navigateAfterSessionRemoved([session.id], previousId);
                                               }}
                                             >

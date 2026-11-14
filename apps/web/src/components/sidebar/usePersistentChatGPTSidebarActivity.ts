@@ -220,7 +220,7 @@ export function usePersistentChatGPTSidebarActivity(
         observed.activity !== "unknown" &&
         previousActivity !== observed.activity
       ) {
-        wakeChatGPTBrowserSession(environmentId, sessionId);
+        wakeChatGPTBrowserSession(environmentId, sessionId, "activity");
       }
       if (
         (observed.activity === "working" && previousActivity !== "working") ||

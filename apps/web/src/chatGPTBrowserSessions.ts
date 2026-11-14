@@ -166,12 +166,20 @@ export function readChatGPTBrowserSessions(
 const INITIAL_SESSIONS: readonly BrowserSession[] = [{ id: "chatgpt", title: "ChatGPT 1" }];
 
 /** Wake an existing snoozed slot for a real message or externally observed state change. */
-export function wakeChatGPTBrowserSession(environmentId: string, sessionId: string): void {
+export function wakeChatGPTBrowserSession(
+  environmentId: string,
+  sessionId: string,
+  source: "message" | "activity" = "message",
+): void {
   const store = getChatGPTSessionPersistedStore(environmentId);
   const current = store.getState().sessions;
   const now = Date.now();
-  if (!current.some((session) => session.id === sessionId && (session.snoozedUntil ?? 0) > now))
-    return;
+  if (!current.some((session) =>
+    session.id === sessionId &&
+    (session.snoozedUntil ?? 0) > now &&
+    // An observed status transition is not a user action or message during a double-click snooze.
+    (source !== "activity" || session.quickSnoozeStep === undefined)
+  )) return;
   const next = current.map((session) =>
     session.id === sessionId
       ? { ...session, snoozedUntil: undefined, snoozedAt: undefined, quickSnoozeStep: undefined }
@@ -967,6 +975,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
                 ...session,
                 snoozedUntil: until ?? undefined,
                 snoozedAt: until === null ? undefined : Date.now(),
+                quickSnoozeStep: undefined,
                 autoCloseExempt: session.autoCloseExempt === true || until !== null,
               }
             : session,
@@ -986,9 +995,11 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             ? {
                 ...session,
                 verificationPending: pending || undefined,
-                snoozedUntil: pending ? Date.now() + 60 * 60_000 : session.snoozedUntil,
-                snoozedAt: pending ? Date.now() : session.snoozedAt,
-                quickSnoozeStep: pending ? 0 : session.quickSnoozeStep,
+                snoozedUntil: pending
+                  ? Math.max(session.snoozedUntil ?? 0, Date.now() + 60 * 60_000)
+                  : session.snoozedUntil,
+                snoozedAt: pending ? (session.snoozedAt ?? Date.now()) : session.snoozedAt,
+                quickSnoozeStep: pending ? (session.quickSnoozeStep ?? 0) : session.quickSnoozeStep,
                 autoCloseExempt: true,
               }
             : session,

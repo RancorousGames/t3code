@@ -479,7 +479,7 @@ export function useChatGPTBrowserSessionActivity(
       const detail = `source=${source} nav=${navTag} health=${healthTag} probeMs=${probeMs} sincePushMs=${sincePushMs}`;
       if (previous !== next) {
         if (snoozed && !hibernated && previous !== "unknown" && next !== "unknown") {
-          wakeChatGPTBrowserSession(environmentId, sessionId);
+          wakeChatGPTBrowserSession(environmentId, sessionId, "activity");
         }
         recordWarmActivityObservation(environmentId, sessionId, next);
         // This describes the detector's evidence, not the conversation's contents.
