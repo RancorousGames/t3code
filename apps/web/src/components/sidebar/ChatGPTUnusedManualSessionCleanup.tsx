@@ -31,6 +31,7 @@ import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { closePreviewSession } from "../preview/closePreviewSession";
 import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
+import { ChatGPTBlankSessionCleanup } from "./ChatGPTBlankSessionCleanup";
 
 /** Inspection timeout is a refusal, not a reason to reload or reset the guest. */
 async function provenUnusedGuest(
@@ -218,5 +219,10 @@ export function ChatGPTUnusedManualSessionCleanup({
       cancelled = true;
     };
   }, [activeSessionId, close, environmentId, managerIds, now, removeSession, sessions]);
-  return null;
+  return <ChatGPTBlankSessionCleanup
+    environmentId={environmentId}
+    activeSessionId={activeSessionId}
+    managerIds={managerIds}
+    now={now}
+  />;
 }

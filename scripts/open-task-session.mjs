@@ -453,19 +453,23 @@ export async function openTaskSession(
           message:
             "Spawn outcome unknown. Inspect exact request ID before attempting anything else.",
         };
-      // Backend-created sessions have permanent IDs at spawn. The canonical
-      // public t3: prefix also works with the new Bootstrap session registry.
-      if (input.requireQueue === true) {
-        await command(board, [
-          "task", "queue", "working", id,
-          "--queue-request", input.queueRequest,
-          "--request-id", input.reservationId,
-          "--session-id", result.sessionId,
-        ]);
-      } else {
-        await command(board, ["task", "claim", "--agent", `t3:${result.sessionId}`, id]);
+      // A created browser slot is not an agent. Preserve the existing Starting
+      // reservation (or the durable manual journal) until ChatGPT has actually
+      // shown the initial user turn. UNKNOWN deliveries must not acquire a
+      // TaskBoard claim: blank guests are retired separately without replay.
+      if (result.promptDelivery === "user_turn_observed") {
+        if (input.requireQueue === true) {
+          await command(board, [
+            "task", "queue", "working", id,
+            "--queue-request", input.queueRequest,
+            "--request-id", input.reservationId,
+            "--session-id", result.sessionId,
+          ]);
+        } else {
+          await command(board, ["task", "claim", "--agent", `t3:${result.sessionId}`, id]);
+        }
+        if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
       }
-      if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
       if (!input.background)
         await control({ action: "focus", sessionId: result.sessionId }, { home, exchange });
       return {

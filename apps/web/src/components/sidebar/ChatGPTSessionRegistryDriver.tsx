@@ -668,9 +668,17 @@ export function ChatGPTSessionRegistryDriver() {
             entry.timeline,
             entry.appliedMetadataRevision,
           ]);
+        // New task workers must become addressable before a large migration of
+        // idle historical sessions. Otherwise a failed first prompt can leave
+        // a TaskBoard-claimed guest absent from the recovery registry.
         const changed = current.filter(
           (entry) => lastHashes.get(entry.sessionId) !== revisionHash(entry),
-        );
+        ).sort((a, b) => {
+          const urgent = (entry: SyncRecord) => entry.record.spawnRequestId ? 1 : 0;
+          const created = (entry: SyncRecord) =>
+            typeof entry.record.createdAt === "number" ? entry.record.createdAt : 0;
+          return urgent(b) - urgent(a) || created(b) - created(a);
+        });
         if (changed.length) {
           const known = new Set(remote.value.sessions.map((row) => row.sessionId));
           // Existing rows MUST receive the desktop's latest snapshot on
@@ -678,8 +686,8 @@ export function ChatGPTSessionRegistryDriver() {
           // identities only; otherwise it silently loses all subsequent edits.
           const groups = migrating
             ? [
-                { initial: false, entries: changed.filter((entry) => known.has(entry.sessionId)) },
                 { initial: true, entries: changed.filter((entry) => !known.has(entry.sessionId)) },
+                { initial: false, entries: changed.filter((entry) => known.has(entry.sessionId)) },
               ]
             : [{ initial: false, entries: changed }];
           for (const group of groups) {

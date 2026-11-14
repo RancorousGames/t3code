@@ -126,7 +126,7 @@ const RESERVATION_LEASE_SECONDS = 180;
 const STARTING_HOLD_MS = 5 * 60_000;
 const STARTING_RECHECK_MS = 45_000;
 // A guest stuck at the original prompt must not monopolize a queue item for hours.
-const UNSTARTED_GUEST_GRACE_MS = 5 * 60_000;
+const UNSTARTED_GUEST_GRACE_MS = 2 * 60_000;
 const PUMP_INTERVAL_MS = 15_000;
 const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 10 * 60_000;
@@ -593,10 +593,10 @@ export class TaskBoardWorkCoordinator {
     this.lastError = `Task ${item.taskId}: ${result.status ?? "unknown"}; retaining the same Starting reservation.`;
   }
 
-  /** A Queue task is claimed at guest allocation, not when its agent starts.
-   * Retire only provably unbootstrapped, noncanonical, idle guests after one
-   * hour; persist the exact receipt before closing so crashes cannot strand
-   * the TaskBoard claim. Never replay an UNKNOWN prompt in that old guest. */
+  /** Legacy claimed guests (from pre-delivery-acknowledgment launches) can
+   * retain In Progress forever. Retire only unbootstrapped, blank, idle guests
+   * after two minutes, with a durable close receipt before reclaiming the
+   * exact TaskBoard reservation. Never replay the original UNKNOWN prompt. */
   private async recoverUnstartedGuests(snapshots: QueueSnapshot[]): Promise<void> {
     NodeFS.mkdirSync(this.retiredGuestDir, { recursive: true });
     const outstanding = NodeFS.readdirSync(this.retiredGuestDir)
@@ -693,24 +693,41 @@ export class TaskBoardWorkCoordinator {
           rootKey(session.binding.taskRef.board) !== rootKey(boardRoot) ||
           session.bootstrapIdentity?.state !== "awaiting_marker" ||
           session.bootstrapIdentity.conversationId || session.conversationId ||
-          session.closedAt != null || session.hidden || session.humanControlled ||
+          session.hidden || session.humanControlled ||
           session.autoCloseExempt || session.borderColor || session.verificationPending ||
           !session.autoClose ||
           ![null, undefined, "user"].includes(session.lastRole) ||
-          !session.observedGuestUrl ||
+          (session.closedAt == null &&
+            !/^https:\/\/chatgpt\.com\/?(?:[?#].*)?$/i.test(session.observedGuestUrl ?? "")) ||
           (session.lastWorkingAt != null && session.lastWorkingAt > 0) ||
-          (session.totalTurns != null && session.totalTurns > 1) ||
+          (session.totalTurns != null && session.totalTurns > 0) ||
           session.activity === "working" ||
-          !["new", "pending_or_stalled"].includes(session.status ?? "")) continue;
+          (session.closedAt == null &&
+            !["new", "pending_or_stalled", "done_or_idle", "idle"].includes(session.status ?? ""))) continue;
       const boundAt = Date.parse(session.binding.boundAt ?? "");
       const observedAt = Date.parse(session.statusObservedAt ?? "");
       if (!Number.isFinite(boundAt) || now - boundAt < UNSTARTED_GUEST_GRACE_MS ||
-          !Number.isFinite(observedAt) || observedAt > now + 1_000 ||
-          now - observedAt > 15_000) continue;
+          (session.closedAt == null && (!Number.isFinite(observedAt) ||
+            observedAt > now + 1_000 || now - observedAt > 15_000))) continue;
       const receipt: RetiredGuestReceipt = {
         boardRoot, taskId: item.taskId, queueRequest: item.queueRequest,
         requestId: item.reservationId!, sessionId: item.sessionId!,
       };
+      // A separately verified UI close may precede this sweep. Its server
+      // tombstone is positive closure evidence; reclaim without asking the
+      // (already absent) browser to close again.
+      if (session.closedAt != null) {
+        await this.taskCommand(boardRoot, [
+          "task", "queue", "reclaim", receipt.taskId,
+          "--queue-request", receipt.queueRequest,
+          "--request-id", receipt.requestId,
+          "--session-id", receipt.sessionId,
+          "--reason", "Unbootstrapped blank ChatGPT guest closed; original queue slot recovered.",
+          "--confirmed-session-closed",
+        ]);
+        await this.readQueues();
+        return;
+      }
       const hash = NodeCrypto.createHash("sha256")
         .update(rootKey(boardRoot) + "\\0" + receipt.taskId + "\\0" + receipt.requestId)
         .digest("hex");
@@ -733,7 +750,7 @@ export class TaskBoardWorkCoordinator {
     const stranded = snapshots.flatMap(board => board.items
       .filter(item => item.state === "starting" && item.reservationId &&
         UUID.test(item.queueRequest) && !item.legacyOpenRig && !item.claimed &&
-        item.readiness && now - this.startingSince(board.boardRoot, item) >= 30 * 60_000)
+        item.readiness && now - this.startingSince(board.boardRoot, item) >= UNSTARTED_GUEST_GRACE_MS)
       .map(item => ({boardRoot: board.boardRoot, item})));
     if (!stranded.length) return;
     const listed = await cli("node.exe", [
@@ -743,6 +760,9 @@ export class TaskBoardWorkCoordinator {
     }), 25_000) as {sessions?: Array<{
       id: string; spawnRequestId?: string;
       binding?: {taskRef?: {board?: string; id?: string}};
+      closedAt?: unknown; conversationId?: string | null;
+      bootstrapIdentity?: {state?: string; conversationId?: string | null};
+      lastRole?: string | null; totalTurns?: number | null;
     }>; hasMore?: boolean; incomplete?: boolean; total?: number};
     if (!Array.isArray(listed.sessions) || listed.hasMore || listed.incomplete ||
         (listed.total !== undefined && listed.total !== listed.sessions.length)) {
@@ -754,25 +774,41 @@ export class TaskBoardWorkCoordinator {
         (session.binding?.taskRef?.id === item.taskId && session.binding?.taskRef?.board &&
           rootKey(session.binding.taskRef.board) === rootKey(boardRoot)));
       if (matches.length !== 0) {
-        // A live created guest still owns this queue request. If its durable
-        // correlation matches, repair the claim atomically instead of
-        // creating a duplicate. Ambiguous/mismatched guests stay quarantined.
-        if (matches.length === 1 &&
-            matches[0]?.spawnRequestId === item.reservationId &&
-            matches[0]?.binding?.taskRef?.id === item.taskId &&
-            matches[0]?.binding?.taskRef?.board &&
-            rootKey(matches[0].binding.taskRef.board) === rootKey(boardRoot) &&
-            UUID.test(matches[0].id)) {
+        // Only a bootstrapped, positively bound conversation becomes a worker.
+        // A browser slot with an UNKNOWN first message keeps its reservation
+        // until it is definitively closed, never an In Progress task claim.
+        const matched = matches.length === 1 &&
+          matches[0]?.spawnRequestId === item.reservationId &&
+          matches[0]?.binding?.taskRef?.id === item.taskId &&
+          matches[0]?.binding?.taskRef?.board &&
+          rootKey(matches[0].binding.taskRef.board) === rootKey(boardRoot) &&
+          UUID.test(matches[0].id) ? matches[0] : null;
+        if (matched?.closedAt != null && !matched.conversationId &&
+            matched.bootstrapIdentity?.state === "awaiting_marker") {
+          await this.taskCommand(boardRoot, [
+            "task", "queue", "abandon", item.taskId,
+            "--queue-request", item.queueRequest,
+            "--request-id", item.reservationId!,
+            "--reason", "Unbootstrapped ChatGPT guest closed before first prompt; returned to Queue.",
+            "--verified-no-live-session",
+          ]);
+          await this.readQueues();
+        } else if (matched?.closedAt == null &&
+            matched?.bootstrapIdentity?.state === "registered" &&
+            matched.conversationId &&
+            matched.bootstrapIdentity.conversationId === matched.conversationId &&
+            matched.lastRole === "assistant" && (matched.totalTurns ?? 0) >= 1) {
           await this.taskCommand(boardRoot, [
             "task", "queue", "working", item.taskId,
             "--queue-request", item.queueRequest,
             "--request-id", item.reservationId!,
-            "--session-id", matches[0].id,
+            "--session-id", matched.id,
           ]);
           await this.readQueues();
         }
         return;
       }
+      if (now - this.startingSince(boardRoot, item) < 30 * 60_000) continue;
       await this.taskCommand(boardRoot, [
         "task", "queue", "abandon", item.taskId,
         "--queue-request", item.queueRequest,

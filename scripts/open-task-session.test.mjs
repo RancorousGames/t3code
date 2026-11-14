@@ -323,7 +323,8 @@ test("unknown queue spawn is reconciled with the same reservation and never resu
   assert.equal(second.status, "prompt_unknown");
   assert.equal(spawnCalls, 1);
   assert.equal(second.sessionId, "recovered-session");
-  assert.equal(queueIntent.queue_state, "working");
+  assert.equal(queueIntent.queue_state, "starting");
+  assert.equal(ctx.task.claimed_by, null);
 });
 
 test("a definite T3 rejection releases its journal for a new TaskBoard reservation", async () => {
