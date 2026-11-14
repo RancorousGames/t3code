@@ -220,7 +220,7 @@ export function NewPrepfileAction() {
         projectId: input.projectId,
         title: input.title,
         modelSelection: input.modelSelection,
-        runtimeMode: "approval-required",
+        runtimeMode: "full-access",
         interactionMode: "default",
         branch: null,
         worktreePath: null,
@@ -237,7 +237,7 @@ export function NewPrepfileAction() {
         threadId,
         message: { messageId: newMessageId(), role: "user", text: input.prompt, attachments: [] },
         modelSelection: input.modelSelection,
-        runtimeMode: "approval-required",
+        runtimeMode: "full-access",
         interactionMode: "default",
         dispatchMode: "queue",
       },
@@ -336,6 +336,22 @@ export function NewPrepfileAction() {
             observedFiles.current.set(job.id, fingerprint);
             continue;
           }
+          // The prepfile can be written before the preparer has created the
+          // TaskBoard card. Wait for the originating agent to finish all work;
+          // file stability alone is not a handoff receipt.
+          if (job.generatorKind) {
+            if (!job.generatorSessionId) continue;
+            if (job.generatorKind === "native") {
+              const shell = readThreadShell(scopeThreadRef(job.environmentId,
+                job.generatorSessionId as ReturnType<typeof newThreadId>));
+              if (shell && (shell.latestRun?.status !== "completed" || threadRuntimeIsActive(shell.runtime))) continue;
+              if (!shell && Date.now() - file.modifiedAtMs < 90_000) continue;
+            } else {
+              const activity = readChatGPTProviderActivity(job.environmentId, job.generatorSessionId);
+              if (activity === "working" || activity === "interrupted" || activity === "delivery-timeout") continue;
+              if (activity !== "idle" && Date.now() - file.modifiedAtMs < 90_000) continue;
+            }
+          }
           // Durable, single-shot dispatch guard: an uncertain creation is never replayed.
           if (cancelled) return;
           const targetThreadId = newThreadId();
@@ -366,7 +382,7 @@ export function NewPrepfileAction() {
             if (activity === "working" || activity === "interrupted" || activity === "delivery-timeout") continue;
             // An unloaded guest may not report idle; the stable output remains the
             // authoritative signal after a short grace period.
-            if (activity === "unknown" && now - file.modifiedAtMs < 20_000) continue;
+            if (activity !== "idle" && now - file.modifiedAtMs < 90_000) continue;
           }
           if (cancelled) return;
           updatePrepfileGeneratorCleanupJob(job.id, (entry) => ({ ...entry, state: "disposing" }));
@@ -451,6 +467,8 @@ export function NewPrepfileAction() {
               id, environmentId: captured.environmentId, projectId: targetProject.id,
               modelSelection: captured.implementationSelection, outputPath,
               request: captured.request, createdAt: Date.now(), state: "waiting",
+              createTaskboardTask: captured.createTaskboardTask,
+              generatorKind: captured.generator === "chatgpt" ? "chatgpt" : "native",
             }
           : null;
       if (job) setPrepfileHandoffs([...readPrepfileHandoffs(), job]);
@@ -475,6 +493,8 @@ export function NewPrepfileAction() {
             description: "Inspect the new ChatGPT session; the prompt will not be submitted twice.",
           });
         }
+        const generatorSessionId = outcome.data.sessionId;
+        updatePrepfileHandoff(id, (entry) => ({ ...entry, generatorSessionId }));
         setPrepfileGeneratorCleanupJobs([
           ...readPrepfileGeneratorCleanupJobs(),
           {
@@ -488,6 +508,7 @@ export function NewPrepfileAction() {
           environmentId: captured.environmentId, projectId: targetProject.id,
           title: "Prepare context file", prompt, modelSelection: captured.generatorSelection,
         });
+        updatePrepfileHandoff(id, (entry) => ({ ...entry, generatorSessionId: threadId }));
         setPrepfileGeneratorCleanupJobs([
           ...readPrepfileGeneratorCleanupJobs(),
           {

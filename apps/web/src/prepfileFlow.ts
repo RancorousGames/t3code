@@ -12,6 +12,10 @@ export interface PendingPrepfileHandoff {
   readonly createdAt: number;
   readonly state: "waiting" | "dispatching";
   readonly targetThreadId?: ThreadId;
+  /** Present on new jobs; old persisted handoffs remain readable. */
+  readonly createTaskboardTask?: boolean;
+  readonly generatorKind?: "chatgpt" | "native";
+  readonly generatorSessionId?: string;
 }
 
 export interface PrepfileGeneratorCleanupJob {
@@ -87,14 +91,14 @@ export function buildPrepfileInstruction(input: {
     `Depth: ${input.depth}. Save the ONLY final prepfile as UTF-8 Markdown at this exact absolute path:`,
     input.outputPath,
     "",
-    "Create the destination folder and use the prepfile skill's bundled build_context.py writer with --output set to the exact path above. Do not save a different filename: T3 monitors this path and triggers handoff only when it is stable. Verify the completed output according to the skill. Preserve the verbatim user request at the top, with source-labelled excerpts and the skill's deletion instruction. Do NOT implement the requested work or modify project files.",
+    ...(input.createTaskboardTask
+      ? ["TASKBOARD: After gathering context, find or create ONE matching TaskBoard task on the correct board before writing the final prepfile. Avoid duplicates, record the prepfile path in its AI Notes, and include the exact task ID and owning board root in the final prepfile. Do not implement the task yourself. If its board cannot be identified, ask rather than inventing a location.", ""]
+      : ["Do not create a TaskBoard task.", ""]),
+    "Create the destination folder and use the prepfile skill's bundled build_context.py writer with --output set to the exact path above. Write the final file only after finishing other preparation work, including any requested TaskBoard creation: T3 uses it as the handoff signal. Do not save a different filename. Verify the completed output according to the skill. Preserve the verbatim request at the top, source-labelled excerpts and the deletion instruction. Do NOT implement the requested work or modify project files.",
     input.hasAutomaticHandoff
       ? "The T3 app will detect this exact file and create the selected implementation thread automatically; do NOT hand over or start implementation yourself."
       : "Do not hand over or start implementation. Return the absolute file path when complete.",
     "",
-    ...(input.createTaskboardTask
-      ? ["", "TASKBOARD: After gathering context, create ONE TaskBoard task for this request if none exists already. Search the appropriate board and avoid duplicates. Include the generated prepfile path in task AI Notes. Do not implement it. If the correct board cannot be identified, ask for it rather than inventing a location."]
-      : ["", "Do not create a TaskBoard task."]),
     ...(input.imagePaths?.length
       ? ["", "ATTACHED IMAGES (absolute local paths; inspect all and reference their contents in your prepfile):", ...input.imagePaths]
       : []),
@@ -108,6 +112,10 @@ export function buildPrepfileHandoffInstruction(job: PendingPrepfileHandoff): st
   return [
     "Implement the original request using this freshly generated, disposable PREPFILE context:",
     job.outputPath,
+    ...(job.createTaskboardTask
+      ? ["", "The preparer also created or located a TaskBoard task. Read its exact ID and board root from the prepfile, then claim that task before implementing. Keep its progress/status updated; do not create another task. If it is already claimed, reconcile the existing owner rather than starting duplicate work.",
+          ...(job.targetThreadId ? [`This implementation thread's TaskBoard claimant is t3:${job.targetThreadId}.`] : [])]
+      : []),
     "",
     "ORIGINAL REQUEST:",
     job.request,
