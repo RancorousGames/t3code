@@ -424,6 +424,25 @@ describe("ChatGPT last-active/status sorting", () => {
     ]);
   });
 
+  it("places blue recently working sessions above grey recently clicked sessions", () => {
+    const now = 2_000_000_000;
+    const hour = 60 * 60_000;
+    const sessions = [
+      { id: "grey", title: "Grey", lastDirectInteractionAt: now - 1_000 },
+      { id: "blue", title: "Blue" },
+      { id: "dark-blue", title: "Unloaded blue" },
+    ];
+    const activity = {
+      grey: { age: "inactive" as const, lastWorkingAt: now - 3 * hour },
+      blue: { age: "recent" as const, lastWorkingAt: now - hour },
+      "dark-blue": { age: "unloaded-recent" as const, lastWorkingAt: now - 30 * 60_000 },
+    };
+    const ids = layoutChatGPTSessions(
+      sessions, [], "activity", activity, [], undefined, true, now,
+    ).flatMap((group) => group.rows.map(({ session }) => session.id));
+    expect(ids).toEqual(["dark-blue", "blue", "grey"]);
+  });
+
   it("uses interaction timestamps even if an unloaded session never produced a working heartbeat", () => {
     const now = 2_000_000_000;
     const hour = 60 * 60_000;

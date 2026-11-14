@@ -1,5 +1,5 @@
-import type { ChatGPTSidebarGroup } from "./chatGPTSessionGrouping";
-import type { ChatGPTSessionSortActivity } from "./chatGPTSessionGrouping";
+import { chatGPTSessionActivityPriority } from "./chatGPTSessionGrouping";
+import type { ChatGPTSessionSortActivity, ChatGPTSidebarGroup } from "./chatGPTSessionGrouping";
 
 export interface ChatGPTActivityOrderSnapshot {
   readonly context: string;
@@ -7,9 +7,8 @@ export interface ChatGPTActivityOrderSnapshot {
 }
 
 /**
- * A status probe may change recent/idle/unloaded colors without any new user
- * action or work. Keep those rows in place; only new work, a direct interaction,
- * or entry/exit from the 24-hour activity queue should change their order.
+ * Preserve relative order within each activity-color band during status probes.
+ * Crossing a band still reorders rows so recently working blue guests precede grey.
  */
 export function stabilizeChatGPTActivityOrder(
   groups: readonly ChatGPTSidebarGroup[],
@@ -35,7 +34,12 @@ export function stabilizeChatGPTActivityOrder(
     let next = 0;
     return {
       ...group,
-      rows: group.rows.map((row) => stableIds.has(row.session.id) ? stable[next++]! : row),
+      rows: group.rows
+        .map((row) => stableIds.has(row.session.id) ? stable[next++]! : row)
+        .toSorted((a, b) =>
+          chatGPTSessionActivityPriority(activity[a.session.id]?.age) -
+          chatGPTSessionActivityPriority(activity[b.session.id]?.age),
+        ),
     };
   });
 }

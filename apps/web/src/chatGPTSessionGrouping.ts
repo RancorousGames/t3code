@@ -414,6 +414,21 @@ export type ChatGPTSessionSortActivity = {
   /** Includes verified work and deliberate user interaction, even while unloaded. */
   readonly lastActivityAt?: number;
 };
+
+/** Sort by visible activity status before recency; a grey session cannot outrank a blue one. */
+export function chatGPTSessionActivityPriority(age?: ChatGPTSessionSortActivity["age"]): number {
+  switch (age) {
+    case "working": return 0;
+    case "unloaded-working": return 1;
+    case "recent":
+    case "unloaded-recent": return 2;
+    case "interrupted":
+    case "delivery-timeout": return 4;
+    case "invalid": return 5;
+    default: return 3;
+  }
+}
+
 export function layoutChatGPTSessions(
   sessions: readonly BrowserSession[],
   projects: readonly ChatGPTGroupingProject[],
@@ -427,19 +442,6 @@ export function layoutChatGPTSessions(
 ): ChatGPTSidebarGroup[] {
   if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects, taskBoardProjects);
   void selectedSessionId;
-  const rank: Record<ChatGPTSessionSortActivity["age"], number> = {
-    working: 0,
-    "unloaded-working": 0,
-    recent: 1,
-    "unloaded-recent": 1,
-    inactive: 2,
-    unloaded: 2,
-    snoozed: 2,
-    unknown: 2,
-    interrupted: 3,
-    "delivery-timeout": 3,
-    invalid: 4,
-  };
   const order = new Map(sessions.map((session, index) => [session.id, index]));
   const lastActivityAt = (session: BrowserSession) => Math.max(
     activityById[session.id]?.lastActivityAt ?? 0,
@@ -471,14 +473,14 @@ export function layoutChatGPTSessions(
   const inactive = enriched
     .filter((session) => activityById[session.id]?.age !== "working")
     .sort((a, b) => {
-      const aRank = rank[activityById[a.id]?.age ?? "unknown"];
-      const bRank = rank[activityById[b.id]?.age ?? "unknown"];
+      const aRank = chatGPTSessionActivityPriority(activityById[a.id]?.age);
+      const bRank = chatGPTSessionActivityPriority(activityById[b.id]?.age);
       const aRecent = isRecentlyActive(a);
       const bRecent = isRecentlyActive(b);
       return (
         Number(bRecent) - Number(aRecent) ||
-        (aRecent && bRecent ? lastActivityAt(b) - lastActivityAt(a) : 0) ||
         aRank - bRank ||
+        (aRecent && bRecent ? lastActivityAt(b) - lastActivityAt(a) : 0) ||
         lastActivityAt(b) - lastActivityAt(a) ||
         (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)
       );

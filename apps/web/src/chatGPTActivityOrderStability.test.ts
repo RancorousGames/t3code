@@ -15,7 +15,7 @@ describe("ChatGPT sidebar activity order stability", () => {
   const ids = (groups: ReturnType<typeof layoutChatGPTSessions>) =>
     groups.flatMap((group) => group.rows.map(({ session }) => session.id));
 
-  it("does not reshuffle idle guests on recent/unloaded transitions or timestamp refreshes", () => {
+  it("keeps stable order within a status band but never pins grey above blue", () => {
     const initial = {
       a: { age: "recent" as const, lastWorkingAt: now - 1_000 },
       b: { age: "unloaded-recent" as const, lastWorkingAt: now - 2_000 },
@@ -31,12 +31,12 @@ describe("ChatGPT sidebar activity order stability", () => {
       c: { age: "unloaded-recent" as const, lastWorkingAt: now - 2_500 },
     };
     const raw = layoutChatGPTSessions(sessions, [], "activity", observed, [], undefined, true, now);
-    expect(ids(raw)).toEqual(["b", "c", "a"]);
+    expect(ids(raw)).toEqual(["c", "b", "a"]);
     expect(ids(stabilizeChatGPTActivityOrder(raw, previous, "activity", observed)))
-      .toEqual(["a", "b", "c"]);
+      .toEqual(["c", "a", "b"]);
   });
 
-  it("still promotes a directly used guest and one that starts working", () => {
+  it("keeps blue above a directly used grey guest and promotes new work", () => {
     const initial = {
       a: { age: "recent" as const, lastWorkingAt: now - 1_000 },
       b: { age: "unloaded" as const, lastWorkingAt: now - 2_000 },
@@ -51,7 +51,7 @@ describe("ChatGPT sidebar activity order stability", () => {
     );
     const interacted = layoutChatGPTSessions(clicked, [], "activity", initial, [], undefined, true, now);
     expect(ids(stabilizeChatGPTActivityOrder(interacted, previous, "activity", initial)))
-      .toEqual(["c", "a", "b"]);
+      .toEqual(["a", "c", "b"]);
 
     const working = { ...initial, b: { age: "working" as const, lastWorkingAt: now } };
     const active = layoutChatGPTSessions(sessions, [], "activity", working, [], undefined, true, now);
