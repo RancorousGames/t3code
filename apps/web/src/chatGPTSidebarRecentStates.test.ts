@@ -6,7 +6,7 @@ import {
   CHATGPT_RECENT_ACTIVITY_MS,
 } from "./components/sidebar/chatGPTActivity";
 import { layoutChatGPTSessions } from "./chatGPTSessionGrouping";
-import { freshManualSessionIds, prioritizeFreshManualSession } from "./chatGPTFreshManualSession";
+import { FRESH_MANUAL_PRIORITY_MAX_AGE_MS, freshManualSessionIds, prioritizeFreshManualSession } from "./chatGPTFreshManualSession";
 
 describe("sidebar unloaded recency", () => {
   const now = 100_000_000;
@@ -58,9 +58,9 @@ describe("T3-0235 fresh chat priority", () => {
     { id: "new", title: "New", createdAt: 200, manualEmptyCandidateCreatedAt: 200 },
     { id: "newer", title: "Newer", createdAt: 300, manualEmptyCandidateCreatedAt: 300 },
   ];
-  it("pins new Ctrl-Shift-T sessions after deselection and drops them only after first work", () => {
+  it("pins new Ctrl-Shift-T sessions after deselection until first work or expiry", () => {
     const timestamps: Record<string, number> = {};
-    expect(freshManualSessionIds(created, (id) => timestamps[id] ?? 0)).toEqual(["newer", "new"]);
+    expect(freshManualSessionIds(created, (id) => timestamps[id] ?? 0, 400)).toEqual(["newer", "new"]);
     const groups = [
       {
         key: "group",
@@ -74,12 +74,56 @@ describe("T3-0235 fresh chat priority", () => {
     ];
     const pinned = prioritizeFreshManualSession(
       groups,
-      freshManualSessionIds(created, () => 0),
+      freshManualSessionIds(created, () => 0, 400),
     );
     expect(pinned.flatMap((g) => g.rows.map((r) => r.session.id))).toEqual(["newer", "new", "old"]);
     timestamps.newer = 500;
-    expect(freshManualSessionIds(created, (id) => timestamps[id] ?? 0)).toEqual(["new"]);
+    expect(freshManualSessionIds(created, (id) => timestamps[id] ?? 0, 400)).toEqual(["new"]);
     timestamps.new = 700;
-    expect(freshManualSessionIds(created, (id) => timestamps[id] ?? 0)).toEqual([]);
+    expect(freshManualSessionIds(created, (id) => timestamps[id] ?? 0, 400)).toEqual([]);
+  });
+
+  it("never re-pins an old or explicitly disqualified session, even without recorded work", () => {
+    const recent = 10_000_000;
+    const candidates = [
+      {
+        id: "higgsfield",
+        title: "Existing conversation",
+        createdAt: recent - 1_000,
+        manualEmptyCandidateCreatedAt: recent - 1_000,
+        manualEmptyCandidateDisqualified: true,
+      },
+      {
+        id: "stale",
+        title: "Old empty chat",
+        createdAt: recent - FRESH_MANUAL_PRIORITY_MAX_AGE_MS,
+        manualEmptyCandidateCreatedAt: recent - FRESH_MANUAL_PRIORITY_MAX_AGE_MS,
+      },
+      {
+        id: "fresh",
+        title: "Actually new empty chat",
+        createdAt: recent - 1_000,
+        manualEmptyCandidateCreatedAt: recent - 1_000,
+      },
+    ];
+    expect(freshManualSessionIds(candidates, () => 0, recent)).toEqual(["fresh"]);
+  });
+
+  it("pins a fresh blank chat after working sessions but before the rest of the activity queue", () => {
+    const sessions = [
+      { id: "fresh", title: "New chat" },
+      { id: "working", title: "Active" },
+      { id: "idle", title: "Inactive" },
+    ];
+    const activity = {
+      working: { age: "working" as const, lastWorkingAt: 300 },
+      fresh: { age: "unknown" as const, lastWorkingAt: 0 },
+      idle: { age: "inactive" as const, lastWorkingAt: 200 },
+    };
+    const groups = layoutChatGPTSessions(sessions, [], "activity", activity);
+    const prioritized = prioritizeFreshManualSession(groups, ["fresh"], activity);
+    expect(prioritized.flatMap((group) => group.rows.map((row) => row.session.id)))
+      .toEqual(["working", "fresh", "idle"]);
+    expect(prioritized).toHaveLength(1);
   });
 });

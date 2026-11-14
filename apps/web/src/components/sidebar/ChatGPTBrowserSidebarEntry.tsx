@@ -882,16 +882,16 @@ export function ChatGPTBrowserSidebarEntry({
   const [activities, setActivities] = useState<
     Record<string, ReturnType<typeof useChatGPTBrowserSessionActivity>>
   >({});
-  // An explicitly created blank chat keeps its priority until its first
-  // verified working timestamp, even if deselected or T3 restarts.
+  // Only genuinely new, undisqualified blank chats get temporary priority.
   const freshPinnedIds = freshManualSessionIds(
     sessions,
-    (id) =>
-      activities[id]?.lastWorkingAt ??
-      (environmentId
-        ? getLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, id), Schema.Number)
-        : null) ??
-      0,
+    (id) => Math.max(
+      activities[id]?.lastWorkingAt ?? 0,
+      environmentId
+        ? getLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, id), Schema.Number) ?? 0
+        : 0,
+    ),
+    clockNow,
   );
   const singleClickResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstSessionClick = useRef<{
@@ -1400,6 +1400,7 @@ export function ChatGPTBrowserSidebarEntry({
           pendingQuestionIds,
         ),
         freshPinnedIds,
+        sortActivityById,
       );
     const aiRows = layoutChatGPTSessions(
       aiInterfaceSessions,
@@ -1423,6 +1424,7 @@ export function ChatGPTBrowserSidebarEntry({
         pendingQuestionIds,
       ),
       freshPinnedIds,
+      sortActivityById,
     );
   }, [
     displayedSessions,

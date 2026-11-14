@@ -1,24 +1,32 @@
-import type { ChatGPTSidebarGroup } from "./chatGPTSessionGrouping";
+import type { ChatGPTSessionSortActivity, ChatGPTSidebarGroup } from "./chatGPTSessionGrouping";
 import type { BrowserSession } from "./chatGPTBrowserSessions";
 
-/** Only UI-created blank chats with no observed work retain the pinned tier. */
+/** Only genuinely new, still-blank manual chats qualify for a temporary priority tier. */
+export const FRESH_MANUAL_PRIORITY_MAX_AGE_MS = 30 * 60_000;
 export function freshManualSessionIds(
   sessions: readonly BrowserSession[],
   lastWorkingAt: (id: string) => number,
+  now = Date.now(),
 ): string[] {
   return sessions
     .filter(
       (session) =>
-        session.manualEmptyCandidateCreatedAt !== undefined && lastWorkingAt(session.id) <= 0,
+        session.manualEmptyCandidateDisqualified !== true &&
+        session.manualEmptyCandidateCreatedAt !== undefined &&
+        session.manualEmptyCandidateCreatedAt > 0 &&
+        session.manualEmptyCandidateCreatedAt <= now &&
+        now - session.manualEmptyCandidateCreatedAt < FRESH_MANUAL_PRIORITY_MAX_AGE_MS &&
+        lastWorkingAt(session.id) <= 0,
     )
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
     .map((session) => session.id);
 }
 
-/** Keep brand-new user-created conversations at the top until first observed work. */
+/** Fresh manual chats are prioritized below working sessions, never over them. */
 export function prioritizeFreshManualSession(
   groups: readonly ChatGPTSidebarGroup[],
   pendingIds: readonly string[],
+  activityById: Readonly<Record<string, ChatGPTSessionSortActivity>> = {},
 ): ChatGPTSidebarGroup[] {
   if (!pendingIds.length) return [...groups];
   const rowsById = new Map(
@@ -30,11 +38,28 @@ export function prioritizeFreshManualSession(
   });
   if (!pinned.length) return [...groups];
   const pinnedIds = new Set(pinned.map((row) => row.session.id));
-  return [
-    { key: "status:fresh-manual", title: null, rows: pinned },
-    ...groups.map((group) => ({
-      ...group,
-      rows: group.rows.filter(({ session }) => !pinnedIds.has(session.id)),
-    })),
-  ];
+  const rest = groups.map((group) => ({
+    ...group,
+    rows: group.rows.filter(({ session }) => !pinnedIds.has(session.id)),
+  }));
+  // The activity queue begins with working sessions; insert fresh chats immediately
+  // afterwards without splitting the queue or moving its working sessions down.
+  const activityIndex = rest.findIndex((group) => group.key === "status:activity");
+  if (activityIndex >= 0) {
+    const group = rest[activityIndex]!;
+    const firstIdle = group.rows.findIndex(
+      ({ session }) => activityById[session.id]?.age !== "working",
+    );
+    const position = firstIdle < 0 ? group.rows.length : firstIdle;
+    return rest.map((entry, index) =>
+      index === activityIndex
+        ? { ...entry, rows: [
+            ...entry.rows.slice(0, position),
+            ...pinned,
+            ...entry.rows.slice(position),
+          ] }
+        : entry,
+    );
+  }
+  return [{ key: "status:fresh-manual", title: null, rows: pinned }, ...rest];
 }
