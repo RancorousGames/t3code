@@ -153,7 +153,7 @@ export function legacyMonitorOwnsConversation(
       monitor.target?.expectedConversationId === conversationId);
 }
 const WAKE_TEXT = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
-const CLOCK = 10_000;
+const CLOCK = 20_000;
 const valid = (row: CaffyConfig): boolean =>
   !!row && UUID.test(row.sessionId) && UUID.test(row.conversationId) &&
   ["idle", "periodic", "queued", "startup"].includes(row.mode) &&
@@ -1376,53 +1376,15 @@ export class CaffyScheduler {
       reason: "Live ChatGPT sidebar green-session count unavailable",
     };
 
-    // Separate *admission protection* from capacity USAGE. Only pending
-    // delivery/start attempts may temporarily withhold a future slot. A
-    // TaskBoard task remaining Working while its agent is idle or unavailable
-    // does not reserve capacity. Expired attempts must not block indefinitely.
-    const pendingIds = new Set<string>();
-    const pendingRequests = new Set<string>();
-    let unboundPending = 0;
-    for (const row of this.entries.values()) {
-      // Paused Caffy configuration cannot autonomously start generation.
-      // In particular an old failed/paused delivery isn't a phantom seat.
-      if (!row.paused && row.pendingMessageId !== null)
-        pendingIds.add(row.sessionId);
-    }
-    for (const claim of this.capacityClaims.values()) {
-      if (claim.state !== "waiting") pendingIds.add(claim.sessionId);
-    }
-    for (const job of this.scheduledSpawns.values()) {
-      if (job.status === "created" && job.sessionId && (job.holdUntil ?? 0) > now)
-        pendingIds.add(job.sessionId);
-    }
-    for (const row of this.taskReservations) {
-      if (row.holdUntil === undefined || row.holdUntil <= now) continue;
-      pendingRequests.add(row.requestId);
-      if (row.sessionId) pendingIds.add(row.sessionId);
-      else unboundPending++;
-    }
-    for (const id of workingIds) pendingIds.delete(id);
-    // The same new TaskBoard start is represented by its admission ticket
-    // and its atomic TaskBoard reservation. Count it only once.
-    const unpairedAdmissions = [...this.automaticAdmissions]
-      .filter(ticket => !pendingRequests.has(ticket)).length;
-    const reserved = pendingIds.size + unboundPending +
-      extraReserved + unpairedAdmissions;
-    const admissionUsed = used + reserved;
-    if (!this.taskBoardInventoryReady) return {
-      ...observed, reserved, unknown: 1, admissible: false,
-      reason: "TaskBoard queue admission inventory unavailable",
-    };
+    // Keep T3 Busy capacity is solely the live ChatGPT green-session count.
+    // Pending messages, task reservations and startup attempts are not workers.
     return {
-      ...observed, reserved, unknown: 0,
-      admissible: policy && admissionUsed < this.maxWorking,
+      ...observed, reserved: 0, unknown: 0,
+      admissible: policy && used < this.maxWorking,
       reason: !policy ? "Keep T3 Busy disabled" :
-        used >= this.maxWorking ? "At capacity" :
-        admissionUsed >= this.maxWorking ? "Pending starts or deliveries" : null,
+        used >= this.maxWorking ? "At capacity" : null,
     };
   }
-
   /** Do not force a shutdown on a transient zero or stale observation.
    * Error/orange/red sessions are not working. Persist OFF before /s /f /t 0.
    * No fallback to guessed zero when the live header or inventory is missing. */
@@ -1598,15 +1560,11 @@ export class CaffyScheduler {
           row.pendingMessageId !== null));
       const available = await this.capacity().catch(() => null);
       const reason = !this.keepT3Busy && !allowWhenBusyDisabled ? "Keep T3 Busy disabled" :
-        !alreadyHeld && this.hasPriorityCapacityMessage() ? "User capacity message has priority" :
-        !alreadyHeld && this.hasPendingQueuedWakes &&
-          !ticket.startsWith("wake:") && !ticket.startsWith("scheduled-spawn:")
-          ? "Existing queued wake has priority" :
         !available || available.unknown !== 0
           ? available?.reason ?? "Capacity inventory unavailable" :
-        available.used + available.reserved >= available.limit + Number(alreadyHeld)
+        available.used >= available.limit
           ? available.reason ?? "At capacity" :
-        this.automaticAdmissionJournal.delayMs > 0 ? "Automatic launch cooldown" : null;
+        null;
       this.automaticAdmissionJournal.record({
         ticket, ...(target ? { target } : {}), alreadyHeld,
         decision: reason ? "deferred" : "admitted",

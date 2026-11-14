@@ -134,7 +134,7 @@ const STARTING_HOLD_MS = 5 * 60_000;
 const STARTING_RECHECK_MS = 45_000;
 // A guest stuck at the original prompt must not monopolize a queue item for hours.
 const UNSTARTED_GUEST_GRACE_MS = 2 * 60_000;
-const PUMP_INTERVAL_MS = 15_000;
+const PUMP_INTERVAL_MS = 20_000;
 const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 10 * 60_000;
 const PUMP_STUCK_MS = 4 * 60_000;
@@ -1219,13 +1219,12 @@ export class TaskBoardWorkCoordinator {
           // Starting if actual workers + all reservations now exceed the cap.
           const capacity = await this.caffy.capacity().catch(() => null);
           if (!capacity || capacity.unknown > 0 ||
-              capacity.used + capacity.reserved > capacity.limit) return;
+              capacity.used >= capacity.limit) return;
           await this.startReserved(next.boardRoot, next.item, next.item.reservationId!);
           return;
         }
         // The previous lease never reached Starting, so no spawn was authorized.
         // Give unloaded queued-Caffy recipients first use of a newly free slot.
-        if (this.caffy.hasPendingQueuedWakes) return;
         // The TaskBoard and Caffy queues share one atomic admission gate.
         const requestId = NodeCrypto.randomUUID();
         if (!(await this.caffy.acquireAutomaticAdmission(requestId, undefined, false, `task:${next.item.taskId}`))) return;
@@ -1294,10 +1293,6 @@ export class TaskBoardWorkCoordinator {
       }
       for (const candidate of candidates.slice(0, 20)) {
         if (!this.running || !this.caffy.policyEnabled) return;
-        if (this.caffy.hasPendingQueuedWakes) {
-          this.lastIdleReason = "An earlier queued Caffy wake has dispatch priority.";
-          return;
-        }
         const requestId = NodeCrypto.randomUUID();
         if (!(await this.caffy.acquireAutomaticAdmission(requestId, undefined, false, `task:${candidate.item.taskId}`))) {
           const capacity = await this.caffy.capacity().catch(() => null);
