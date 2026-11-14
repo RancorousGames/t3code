@@ -61,6 +61,12 @@ function fixture() {
     setDispatchPermission: () => {},
     setDispatchAdmission: () => {},
     resumeAllowed: () => {},
+    status: () => ({messageId: WAKE, sessionId: SESSION, conversationId: ORIGINAL,
+      status: "queued", attempts: 0, updatedAt: Date.now()}),
+    cancel: () => {
+      retirementCount++;
+      onDelivery?.({ sessionId: SESSION, conversationId: ORIGINAL, status: "cancelled", messageId: WAKE });
+    },
     retireRecipient: () => {
       retirementCount++;
       onDelivery?.({ sessionId: SESSION, conversationId: ORIGINAL, status: "cancelled", messageId: WAKE });
@@ -103,7 +109,7 @@ function fixture() {
 }
 
 const monitor = (scheduler: CaffyScheduler) =>
-  scheduler.status(SESSION) as CaffyConfig | null;
+  (scheduler as unknown as { entries: Map<string, CaffyConfig> }).entries.get(SESSION) ?? null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
   it("runs user-scheduled work at free capacity with TaskBoard autofill off", async () => {
@@ -327,7 +333,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false);
       expect(row.lastCheckedAt).toBeGreaterThan(0);
-      expect(row.lastCheckResult).toContain("Waiting for assistant response");
+      expect(row.lastCheckResult).toContain("waiting for verified quiescence");
     } finally { c.close(); f.dispose(); }
   });
 
@@ -362,8 +368,8 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       expect(row.pendingWake).toBe(false); // Stale roster cannot override a live read.
       f.setReadStatus("done_or_idle");
       await c.reconcileIdentityAliases(true);
-      expect(row.pendingWake).toBe(true); // New finished turn had no journal event.
-      expect(row.lastHandledIdleTurnCount).toBe(4);
+      expect(row.pendingWake).toBe(false); // A count is not a verified event, even when it increases.
+      expect(row.lastHandledIdleTurnCount).toBe(3);
       row.pendingWake = false;
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false); // Same turn cannot trigger twice.
@@ -773,12 +779,9 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       await c.reconcileLifecycle();
       f.setRoster([]);
       await c.reconcileLifecycle();
-      const missing = (c as unknown as {
-        missingSessions: Map<string, {firstSeenAt: number; misses: number}>;
-      }).missingSessions.get(SESSION);
-      expect(missing).toBeDefined();
-      if (missing) missing.firstSeenAt -= 31_000;
       await c.reconcileLifecycle();
+      expect(monitor(c)).not.toBeNull(); // Renderer inventory loss never proves a durable close.
+      c.retire(SESSION, "closed");
       expect(monitor(c)).toBeNull();
     } finally { c.close(); f.dispose(); }
   });

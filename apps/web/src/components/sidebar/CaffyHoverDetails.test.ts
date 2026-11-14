@@ -16,7 +16,7 @@ const monitor = (overrides: Partial<T3CaffyEntry> = {}): T3CaffyEntry => ({
 describe("Caffy hover diagnostics", () => {
   it("does not promise a time-based wake for event-driven idle mode", () => {
     const lines = caffyDiagnosticLines(monitor(), NOW).join("\n");
-    expect(lines).toContain("Event-driven: after the next verified assistant reply");
+    expect(lines).toContain("Event-driven: after the next verified idle event");
     expect(lines).toContain("Last scheduler check:");
     expect(lines).toContain("Next scheduler check:");
     expect(lines).toContain("Last wake sent:");

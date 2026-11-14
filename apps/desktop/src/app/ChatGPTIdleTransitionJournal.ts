@@ -9,6 +9,7 @@ export interface VerifiedChatGPTIdleTransition {
   readonly bindingRevision: string | null;
   readonly sequence: number;
   readonly eventId: string;
+  readonly evidenceKey?: string | undefined;
   readonly observedAt: number;
   readonly turnCount: number;
   readonly kind?: "completed" | "stopped" | "quiescent";
@@ -28,6 +29,8 @@ function valid(event: VerifiedChatGPTIdleTransition): boolean {
       event.kind === "completed" ||
       event.kind === "stopped" ||
       event.kind === "quiescent") &&
+    (event.evidenceKey === undefined ||
+      (typeof event.evidenceKey === "string" && event.evidenceKey.length <= 256)) &&
     Number.isSafeInteger(event.sequence) &&
     event.sequence > 0 &&
     Number.isSafeInteger(event.turnCount) &&

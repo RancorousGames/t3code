@@ -2250,6 +2250,7 @@ export interface DesktopBridge {
       bindingRevision: string | null;
       sequence: number;
       eventId: string;
+      evidenceKey?: string;
       observedAt: number;
       turnCount: number;
       kind?: "completed" | "stopped" | "quiescent";

@@ -24,6 +24,15 @@ export interface T3CaffyEntry {
   lastCheckedAt?: number | null;
   lastCheckResult?: string | null;
   lastError?: string | null;
+  nextCheckAt?: number | null;
+  wakePhase?: string;
+  availability?: string;
+  transitionVersion?: number;
+  deliveryStatus?: string | null;
+  lastDeliveryResult?: string | null;
+  deliveryAwaitingGuest?: boolean;
+  admissionReason?: string | null;
+  bindingObservedAt?: number | null;
 }
 
 export interface T3CaffyAgentStop {
@@ -55,8 +64,9 @@ export function readVerifiedT3CaffyOverview(): T3CaffyOverview | null {
 
 /** Polling also notices schedules changed by agents, not only right-click UI. */
 export function useT3CaffyOverview(): T3CaffyOverview | null {
-  const [overview, setOverview] = useState<T3CaffyOverview | null>(null);
+  const [overview, setOverview] = useState<T3CaffyOverview | null>(lastVerifiedOverview);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Mirrors external desktop IPC scheduler state into React across updates and reconnects.
   useEffect(() => {
     const control = window.desktopBridge?.caffyControl;
     if (!control) return;
@@ -75,7 +85,7 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
             !("keepT3Busy" in data) || typeof data.keepT3Busy !== "boolean" ||
             !("shutdownWhenIdle" in data) || typeof data.shutdownWhenIdle !== "boolean" ||
             !("entries" in data) || !Array.isArray(data.entries)) {
-          setOverview(null);
+          setOverview(lastVerifiedOverview);
           return;
         }
         const entries: T3CaffyEntry[] = data.entries.filter((entry): entry is T3CaffyEntry =>
@@ -108,7 +118,7 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
         };
         setOverview(lastVerifiedOverview);
       } catch {
-        if (mounted) setOverview(null);
+        if (mounted) setOverview(lastVerifiedOverview);
       } finally {
         busy = false;
       }

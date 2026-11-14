@@ -15,6 +15,7 @@ export interface ChatGPTIdleTransition {
   readonly bindingRevision: string | null;
   readonly sequence: number;
   readonly eventId: string;
+  readonly evidenceKey?: string;
   readonly observedAt: number;
   readonly turnCount: number;
   /** A trusted Stop click ends a user-stopped turn, not an assistant completion. */
@@ -150,16 +151,15 @@ export function advanceChatGPTIdleTransition(
   const kind = explicitlyStopped ? "stopped" : completed ? "completed" : "quiescent";
   if (
     (!completed && !explicitlyStopped && !quiescent) ||
-    ((completed || explicitlyStopped) && current.workingTurn !== snapshot.turnCount)
+    (explicitlyStopped && current.workingTurn !== snapshot.turnCount) ||
+    // Recover an assistant completion missed while the renderer was down only
+    // when its stable message identity is available. A count is not identity.
+    (completed && current.workingTurn !== snapshot.turnCount && !snapshot.lastTurnKey)
   )
-    return { journal: current, event: null, confirmAgain: false, changed: !sameBinding };
-  // Never re-emit the same initial user-only idle when the observer remounts.
-  // A new generation/turn or a different kind of transition remains eligible.
-  if (
-    quiescent &&
-    current.lastEvent?.kind === "quiescent" &&
-    current.lastEvent.turnCount === snapshot.turnCount
-  )
+    return current.candidate ? update({ candidate: null })
+      : { journal: current, event: null, confirmAgain: false, changed: !sameBinding };
+  const evidenceKey = `${snapshot.conversationId}:${snapshot.lastTurnKey ?? snapshot.contentHash}:${kind}`;
+  if (current.lastEvent?.evidenceKey === evidenceKey && current.workingTurn === null)
     return { journal: current, event: null, confirmAgain: false, changed: !sameBinding };
   if (
     !current.candidate ||
@@ -184,7 +184,9 @@ export function advanceChatGPTIdleTransition(
     (quiescent ? USER_ONLY_IDLE_CONFIRM_MS : IDLE_CONFIRM_MS)
   )
     return { journal: current, event: null, confirmAgain: true, changed: !sameBinding };
-  const sequence = current.sequence + 1;
+  // Wall-clock floor survives renderer storage loss; the previous durable
+  // sequence remains the lower bound when local time moves backwards.
+  const sequence = Math.max(current.sequence + 1, snapshot.observedAt);
   const event: ChatGPTIdleTransition = {
     environmentId,
     sessionId,
@@ -192,6 +194,7 @@ export function advanceChatGPTIdleTransition(
     bindingRevision,
     sequence,
     eventId: `${sessionId}:${snapshot.conversationId}:${sequence}`,
+    evidenceKey,
     observedAt: snapshot.observedAt,
     turnCount: snapshot.turnCount,
     kind,

@@ -24,6 +24,8 @@
     readonly endsWithQuestion: boolean;
   };
   readonly contentHash: string;
+  /** Stable DOM message ID, independent of visible/virtualized turn count. */
+  readonly lastTurnKey?: string;
 }
 
 /**
@@ -201,7 +203,12 @@ export function inspectChatGPTPageSnapshot(activityState: string): ChatGPTPageSn
       : activityState.startsWith("invalid:") || activityState === "delivery-timeout"
         ? "failed"
         : "unknown";
+  const lastNode = lastTurnRole === "user" ? lastUserNode : lastAssistantNode;
+  const lastTurnKey = lastNode?.getAttribute("data-message-id") ??
+    lastNode?.querySelector("[data-message-id]")?.getAttribute("data-message-id") ??
+    lastNode?.getAttribute("data-content-search-unit-key");
   return {
+    ...(lastTurnKey ? { lastTurnKey } : {}),
     observedAt: Date.now(),
     url: location.href,
     conversationId: match[1]!,

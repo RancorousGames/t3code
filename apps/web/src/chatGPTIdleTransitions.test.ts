@@ -51,6 +51,34 @@ function emit(
   return observeChatGPTIdleSnapshot(env, sid, "2026-10-30T12:00Z", snap(at, activity, opts), store);
 }
 describe("T3-0228 ChatGPT idle-completion events", () => {
+  it("recovers a cold completion by stable message identity, not increasing DOM counts", () => {
+    const s = storage();
+    const reply = { lastTurnKey: "assistant-message-one", turnCount: 5 };
+    expect(emit(s, 1000, "idle", reply).confirmAgain).toBe(true);
+    const recovered = emit(s, 1800, "idle", reply).event!;
+    expect(recovered.kind).toBe("completed");
+    expect(emit(s, 3000, "idle", { ...reply, turnCount: 4 }).event).toBeNull();
+    expect(emit(s, 4000, "idle", { ...reply, turnCount: 4 }).event).toBeNull();
+    // A different message with fewer virtualized turns is still a new reply.
+    const next = { lastTurnKey: "assistant-message-two", turnCount: 2 };
+    emit(s, 5000, "idle", next);
+    expect(emit(s, 5800, "idle", next).event?.sequence).toBeGreaterThan(recovered.sequence);
+    // Storage loss does not reset the event sequence to one.
+    const reset = storage();
+    emit(reset, 6000, "idle", next);
+    expect(emit(reset, 6800, "idle", next).event?.sequence).toBeGreaterThan(5800);
+  });
+
+  it("requires three seconds of continuously safe user-only quiescence", () => {
+    const s = storage();
+    const user = { lastTurnKey: "user-message", lastTurnRole: "user" as const,
+      lastUser: { text: "Continue", truncated: false }, lastAssistant: { text: "", truncated: false, endsWithQuestion: false } };
+    expect(emit(s, 1000, "idle", user).confirmAgain).toBe(true);
+    expect(emit(s, 2000, "idle", user).event).toBeNull();
+    const event = emit(s, 4100, "idle", user).event!;
+    expect(event.kind).toBe("quiescent");
+    expect(emit(s, 8000, "idle", { ...user, turnCount: 1 }).event).toBeNull();
+  });
   it("emits once after independently confirmed completion, never for repeated idle snapshots", () => {
     const s = storage();
     expect(emit(s, 1000, "working").event).toBeNull();
@@ -61,7 +89,7 @@ describe("T3-0228 ChatGPT idle-completion events", () => {
       sessionId: sid,
       environmentId: env,
       conversationId: conversation,
-      sequence: 1,
+      sequence: 2000,
       turnCount: 2,
       bindingRevision: "2026-10-30T12:00Z",
     });
@@ -85,7 +113,7 @@ describe("T3-0228 ChatGPT idle-completion events", () => {
     const s = storage();
     const userOnly = {
       lastTurnRole: "user" as const,
-      lastAssistant: undefined,
+      lastAssistant: { text: "", truncated: false, endsWithQuestion: false },
     };
     expect(emit(s, 1000, "working", userOnly).event).toBeNull();
     expect(emit(s, 1100, "idle", userOnly).event).toBeNull();
@@ -95,7 +123,7 @@ describe("T3-0228 ChatGPT idle-completion events", () => {
     };
     expect(emit(s, 1900, "idle", stopped).confirmAgain).toBe(true);
     const accepted = emit(s, 2800, "idle", stopped).event;
-    expect(accepted).toMatchObject({ sequence: 1, kind: "stopped" });
+    expect(accepted).toMatchObject({ sequence: 2800, kind: "stopped" });
     expect(emit(s, 3000, "idle", stopped).event).toBeNull();
     emit(s, 3100, "working", userOnly);
     expect(emit(s, 4000, "idle", {
@@ -111,7 +139,7 @@ describe("T3-0228 ChatGPT idle-completion events", () => {
     expect(emit(s, 1100, "idle").confirmAgain).toBe(true);
     expect(emit(s, 2000, "idle", { contentHash: "87654321" }).confirmAgain).toBe(true);
     expect(emit(s, 2200, "idle", { contentHash: "87654321" }).event).toBeNull();
-    expect(emit(s, 2800, "idle", { contentHash: "87654321" }).event?.sequence).toBe(1);
+    expect(emit(s, 2800, "idle", { contentHash: "87654321" }).event?.sequence).toBe(2800);
     emit(s, 4000, "working", {
       conversationId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       url: "https://chatgpt.com/c/cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -124,11 +152,11 @@ describe("T3-0228 ChatGPT idle-completion events", () => {
     // Storage survives; the observer module/state does not need a mounted React component.
     emit(s, 2000, "idle");
     const first = emit(s, 2800, "idle").event!;
-    expect(first.sequence).toBe(1);
+    expect(first.sequence).toBe(2800);
     emit(s, 3000, "working"); // User pressed regenerate on same turn.
     emit(s, 4000, "idle", { contentHash: "87654321" });
     const second = emit(s, 4800, "idle", { contentHash: "87654321" }).event!;
-    expect(second.sequence).toBe(2);
+    expect(second.sequence).toBe(4800);
     expect(first.eventId).not.toBe(second.eventId);
   });
   it("does not notify when persistence is unavailable or the page URL is wrong", () => {

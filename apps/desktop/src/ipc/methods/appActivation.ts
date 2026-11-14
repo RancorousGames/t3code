@@ -136,6 +136,7 @@ export const recordIdle = DesktopIpc.makeIpcMethod({
     bindingRevision: Schema.NullOr(Schema.String),
     sequence: Schema.Number,
     eventId: Schema.String,
+    evidenceKey: Schema.optional(Schema.String),
     observedAt: Schema.Number,
     turnCount: Schema.Number,
     kind: Schema.optional(Schema.Literals(["completed", "stopped", "quiescent"])),

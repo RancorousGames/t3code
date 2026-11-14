@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Temporary filesystem fixtures for the durable outbox.
+// @effect-diagnostics globalDate:off nodeBuiltinImport:off -- Temporary filesystem fixtures for the durable outbox.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -45,6 +45,16 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) NodeFS.rmSync(dir, { recursive: true, force: true });
 });
 
+/** These transport tests begin with mounted recipients. The first case below
+ * uses the raw queue to verify that enqueue alone never establishes readiness. */
+class MountedRecipientQueue extends ChatGPTDeliveryQueue {
+  override enqueue(input: Parameters<ChatGPTDeliveryQueue["enqueue"]>[0]) {
+    const receipt = super.enqueue(input);
+    this.onRecipientMounted(input);
+    return receipt;
+  }
+}
+
 describe("durable ChatGPT delivery queue", () => {
   it("does not even attempt the first send until recipient mount is verified", async () => {
     const sends: Request[] = [];
@@ -71,7 +81,7 @@ describe("durable ChatGPT delivery queue", () => {
   it("parks an unloaded recipient without retrying, then releases exact FIFO on verified mount", async () => {
     const actions: string[] = [];
     let mounted = false;
-    const queue = new ChatGPTDeliveryQueue(makeDir(), async (request) => {
+    const queue = new MountedRecipientQueue(makeDir(), async (request) => {
       if (request.type !== "chatgpt.sessions") throw Error("wrong route");
       actions.push(request.action);
       return mounted ? observed(request) : failure(request,
@@ -103,7 +113,7 @@ describe("durable ChatGPT delivery queue", () => {
       attempts++;
       return failure(request, "IPC response lost");
     };
-    let queue = new ChatGPTDeliveryQueue(dir, sender, (record) => notices.push(record.messageId));
+    let queue = new MountedRecipientQueue(dir, sender, (record) => notices.push(record.messageId));
     queue.enqueue(input);
     queue.close();
     const file = NodePath.join(dir, "chatgpt-deliveries-v1.json");
@@ -111,7 +121,7 @@ describe("durable ChatGPT delivery queue", () => {
     journal[0].attempts = 99;
     journal[0].status = "uncertain";
     NodeFS.writeFileSync(file, JSON.stringify(journal));
-    queue = new ChatGPTDeliveryQueue(dir, sender, (record) => notices.push(record.messageId));
+    queue = new MountedRecipientQueue(dir, sender, (record) => notices.push(record.messageId));
     try {
       await queue.pulse();
       expect(queue.status(id)).toMatchObject({status: "needs_attention", attempts: 100});
@@ -124,7 +134,7 @@ describe("durable ChatGPT delivery queue", () => {
 
   it("never blindly retries a wake after an ambiguous direct submission", async () => {
     const sends: Request[] = [];
-    const queue = new ChatGPTDeliveryQueue(makeDir(), async (request) => {
+    const queue = new MountedRecipientQueue(makeDir(), async (request) => {
       if (request.type !== "chatgpt.sessions") throw Error("wrong route");
       sends.push(request);
       return failure(request, "Outcome UNKNOWN after direct submission");
@@ -152,7 +162,7 @@ describe("durable ChatGPT delivery queue", () => {
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     let draftHeld = true;
     const requests: Request[] = [];
-    const queue = new ChatGPTDeliveryQueue(makeDir(), async (request) => {
+    const queue = new MountedRecipientQueue(makeDir(), async (request) => {
       if (request.type !== "chatgpt.sessions") throw Error("wrong route");
       requests.push(request);
       return draftHeld && request.message?.startsWith("[T3-MSG:" + id)
@@ -195,27 +205,33 @@ describe("durable ChatGPT delivery queue", () => {
   });
 
   it("rotates available conversation slots when earlier lanes remain busy", async () => {
-    let now = Date.now();
+    let now = 30_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     const requests: Request[] = [];
     const pending: Array<() => void> = [];
-    const queue = new ChatGPTDeliveryQueue(makeDir(), (request) => {
+    let started!: () => void;
+    let batchStarted = new Promise<void>(resolve => { started = resolve; });
+    const queue = new MountedRecipientQueue(makeDir(), (request) => {
       if (request.type !== "chatgpt.sessions") throw Error("wrong route");
       requests.push(request);
-      return new Promise((resolve) =>
-        pending.push(() => resolve(failure(request, "not observable"))),
-      );
+      return new Promise((resolve) => {
+        pending.push(() => resolve(failure(request, "not observable")));
+        if (requests.length % 4 === 0) started();
+      });
     });
     for (let n = 1; n <= 6; n++) {
       const uuid = `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
       queue.enqueue({ messageId: uuid, conversationId: uuid, sessionId: uuid, body: "message" });
     }
     const first = queue.pulse();
+    await batchStarted;
     expect(requests).toHaveLength(4);
     for (const resolve of pending) resolve();
     await first;
     now += 61_000;
+    batchStarted = new Promise<void>(resolve => { started = resolve; });
     const next = queue.pulse();
+    await batchStarted;
     expect(requests[4]?.sessionId).toBe("00000000-0000-4000-8000-000000000005");
     for (const resolve of pending.slice(4)) resolve();
     await next;
@@ -229,14 +245,14 @@ describe("durable ChatGPT delivery queue", () => {
         throw Error("should not send until started");
       },
     );
-    const first = new ChatGPTDeliveryQueue(dir, sender);
+    const first = new MountedRecipientQueue(dir, sender);
     expect(first.enqueue(input).status).toBe("queued");
     expect(first.enqueue(input).messageId).toBe(id);
     expect(() => first.enqueue({ ...input, body: "Different" })).toThrow("already belongs");
     first.enqueue({ ...input, messageId: anotherConversation, body: "Later turn" });
     const order = first.list().map((r) => r.messageId);
     first.close();
-    const second = new ChatGPTDeliveryQueue(dir, sender);
+    const second = new MountedRecipientQueue(dir, sender);
     expect(second.list().map((r) => r.messageId)).toEqual(order);
     expect(second.diagnose(conversationId).oldestMessageId).toBe(id);
     second.close();
@@ -246,11 +262,11 @@ describe("durable ChatGPT delivery queue", () => {
   it("provides the last observed message as residue evidence after restart", async () => {
     const dir = makeDir();
     const sender = vi.fn(async (request: DesktopAppActivationRequest) => observed(request));
-    const first = new ChatGPTDeliveryQueue(dir, sender);
+    const first = new MountedRecipientQueue(dir, sender);
     first.enqueue(input);
     await first.pulse();
     first.close();
-    const second = new ChatGPTDeliveryQueue(dir, sender);
+    const second = new MountedRecipientQueue(dir, sender);
     second.enqueue({ ...input, messageId: anotherConversation, body: "Next" });
     await second.pulse();
     expect(sender.mock.calls[1]?.[0]).toMatchObject({
@@ -265,7 +281,7 @@ describe("durable ChatGPT delivery queue", () => {
     const firstSender = vi.fn(async () => {
       throw Error("lost IPC acknowledgement");
     });
-    const first = new ChatGPTDeliveryQueue(dir, firstSender);
+    const first = new MountedRecipientQueue(dir, firstSender);
     first.enqueue(input);
     await first.pulse();
     expect(first.status(id).status).toBe("uncertain");
@@ -274,7 +290,7 @@ describe("durable ChatGPT delivery queue", () => {
       async (request: DesktopAppActivationRequest): Promise<DesktopAppActivationResponse> =>
         observed(request),
     );
-    const second = new ChatGPTDeliveryQueue(dir, recover);
+    const second = new MountedRecipientQueue(dir, recover);
     await second.pulse();
     expect(recover.mock.calls.map(([r]) => (r as Request).action)).toEqual(["reconcile_send"]);
     expect(second.status(id).status).toBe("delivered");
@@ -308,7 +324,7 @@ describe("durable ChatGPT delivery queue", () => {
       },
     );
     try {
-      const queue = new ChatGPTDeliveryQueue(dir, sender);
+      const queue = new MountedRecipientQueue(dir, sender);
       queue.enqueue(input);
       await queue.pulse();
       const deadline = calls[0]?.sendExpiresAt;
@@ -337,7 +353,7 @@ describe("durable ChatGPT delivery queue", () => {
       (_, n) => `00000000-0000-4000-8000-${(n + 1).toString().padStart(12, "0")}`,
     );
     try {
-      const initial = new ChatGPTDeliveryQueue(dir, async () => {
+      const initial = new MountedRecipientQueue(dir, async () => {
         throw Error("lost ack after Enter");
       });
       initial.enqueue(input);
@@ -366,7 +382,7 @@ describe("durable ChatGPT delivery queue", () => {
           return observed(request);
         },
       );
-      const reopened = new ChatGPTDeliveryQueue(dir, sender);
+      const reopened = new MountedRecipientQueue(dir, sender);
       now += 120_000;
       await reopened.pulse();
       expect(reopened.status(id).status).toBe("uncertain");
@@ -374,7 +390,7 @@ describe("durable ChatGPT delivery queue", () => {
       expect(calls.filter((r) => r.action === "send")).toHaveLength(0);
       reopened.close();
 
-      const again = new ChatGPTDeliveryQueue(dir, sender);
+      const again = new MountedRecipientQueue(dir, sender);
       acknowledged = true;
       await again.pulse();
       expect(again.status(id).status).toBe("delivered");
@@ -417,12 +433,12 @@ describe("durable ChatGPT delivery queue", () => {
         return observed(request, anotherConversation);
       },
     );
-    const queue = new ChatGPTDeliveryQueue(dir, sender);
+    const queue = new MountedRecipientQueue(dir, sender);
     queue.enqueue(input);
     await queue.pulse();
     expect(queue.status(id).status).toBe("uncertain");
     queue.close();
-    const restored = new ChatGPTDeliveryQueue(dir, sender);
+    const restored = new MountedRecipientQueue(dir, sender);
     await restored.pulse();
     expect(restored.status(id).status).toBe("uncertain");
     expect(sender.mock.calls.map(([r]) => (r as Request).action)).toEqual([
@@ -460,7 +476,7 @@ describe("durable ChatGPT delivery queue", () => {
           }
           return observed(request, request.expectedConversationId);
         };
-        const queue = new ChatGPTDeliveryQueue(dir, sender);
+        const queue = new MountedRecipientQueue(dir, sender);
         queue.enqueue({
           ...input,
           messageId: anotherConversation,
@@ -507,7 +523,7 @@ describe("durable ChatGPT delivery queue", () => {
       // User typing into A must never be projected onto B: A defers, B sends once.
       const dir = makeDir();
       const requests: Request[] = [];
-      const queue = new ChatGPTDeliveryQueue(dir, async (request) => {
+      const queue = new MountedRecipientQueue(dir, async (request) => {
         if (request.type !== "chatgpt.sessions") throw Error("wrong route");
         requests.push(request);
         return request.expectedConversationId === anotherConversation
@@ -556,7 +572,7 @@ describe("durable ChatGPT delivery queue", () => {
           return failure(request, "Original user turn not observable; outcome indeterminate.");
         },
       );
-      const queue = new ChatGPTDeliveryQueue(dir, sender);
+      const queue = new MountedRecipientQueue(dir, sender);
       queue.enqueue(input);
       await queue.pulse();
       expect(queue.status(id).status).toBe("queued");
@@ -594,7 +610,7 @@ describe("durable ChatGPT delivery queue", () => {
     };
     const MARKER_ID = `[T3-MSG:${id}]`;
     try {
-      let queue = new ChatGPTDeliveryQueue(dir, sender);
+      let queue = new MountedRecipientQueue(dir, sender);
       queue.enqueue(input);
       queue.enqueue({
         ...input,
@@ -612,7 +628,7 @@ describe("durable ChatGPT delivery queue", () => {
       expect(calls.at(-1)?.message).toContain("Potential duplicate");
       expect(calls.at(-1)?.message).toContain(MARKER_ID);
       queue.close();
-      queue = new ChatGPTDeliveryQueue(dir, sender);
+      queue = new MountedRecipientQueue(dir, sender);
       now += 10 * 60_000;
       await queue.pulse();
       expect(queue.status(id).duplicateResends).toBe(2);
@@ -622,7 +638,7 @@ describe("durable ChatGPT delivery queue", () => {
       expect(queue.status(anotherConversation).status).toBe("queued");
       expect(queue.diagnose(conversationId)).toMatchObject({ blocked: true, queuedBehind: 1 });
       queue.close();
-      queue = new ChatGPTDeliveryQueue(dir, sender);
+      queue = new MountedRecipientQueue(dir, sender);
       now += 24 * 60 * 60_000;
       await queue.pulse();
       expect(
@@ -644,7 +660,7 @@ describe("durable ChatGPT delivery queue", () => {
     let now = 20_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     let refusal = true;
-    const queue = new ChatGPTDeliveryQueue(makeDir(), async (request) => {
+    const queue = new MountedRecipientQueue(makeDir(), async (request) => {
       if (request.type !== "chatgpt.sessions") throw Error("wrong route");
       if (request.allowPossibleDuplicate)
         return refusal
@@ -676,7 +692,7 @@ describe("durable ChatGPT delivery queue", () => {
     "ChatGPT page is unavailable before typing; no message sent.",
     "Conversation is not confirmed idle; refusing to send into pending/working/blocked thread.",
   ])("keeps a definite pre-submit refusal queued: %s", async (message) => {
-    const queue = new ChatGPTDeliveryQueue(makeDir(), async (request) => failure(request, message));
+    const queue = new MountedRecipientQueue(makeDir(), async (request) => failure(request, message));
     queue.enqueue(input);
     await queue.pulse();
     expect(queue.status(id)).toMatchObject({ status: "queued", duplicateResends: 0 });
@@ -711,11 +727,11 @@ describe("durable ChatGPT delivery queue", () => {
       return request.action === "send" ? observed(request) : failure(request, "Not observed");
     };
     try {
-      let queue = new ChatGPTDeliveryQueue(dir, sender);
+      let queue = new MountedRecipientQueue(dir, sender);
       expect(queue.status(id)).toMatchObject({ status: "uncertain", duplicateResends: 2 });
       await queue.pulse();
       queue.close();
-      queue = new ChatGPTDeliveryQueue(dir, sender);
+      queue = new MountedRecipientQueue(dir, sender);
       now += 14 * 60_000;
       await queue.pulse();
       expect(calls.filter((r) => r.action === "send")).toHaveLength(0);
@@ -729,7 +745,7 @@ describe("durable ChatGPT delivery queue", () => {
     }
   });
 
-  it("drops missing recipients durably while other messages progress", async () => {
+  it("retains missing T3 recipients for a verified remount while other lanes progress", async () => {
     const dir = makeDir();
     const calls: Request[] = [];
     const sender = async (request: DesktopAppActivationRequest) => {
@@ -742,7 +758,7 @@ describe("durable ChatGPT delivery queue", () => {
         );
       return observed(request, request.expectedConversationId);
     };
-    let queue = new ChatGPTDeliveryQueue(dir, sender);
+    let queue = new MountedRecipientQueue(dir, sender);
     const secondId = "dddddddd-dddd-4ddd-addd-dddddddddddd";
     queue.enqueue(input);
     queue.enqueue({ ...input, messageId: secondId });
@@ -754,24 +770,25 @@ describe("durable ChatGPT delivery queue", () => {
     await queue.pulse();
     await queue.pulse();
     expect(queue.status(id)).toMatchObject({
-      status: "cancelled",
-      sessionId: input.sessionId,
-      conversationId,
-      lastError: "Delivery dropped: recipient session is missing; this attempt was not sent.",
+      status: "queued", awaitingGuest: true,
+      sessionId: input.sessionId, conversationId,
+      lastError: "Recipient unavailable before submission; awaiting verified mount of the original T3 session.",
     });
-    expect(queue.status(secondId).status).toBe("cancelled");
+    expect(queue.status(secondId).status).toBe("queued");
     expect(queue.status(anotherConversation).status).toBe("delivered");
     expect(queue.list().find((record) => record.messageId === id)).not.toHaveProperty("body");
     const updatedAt = queue.status(id).updatedAt;
     queue.close();
-    queue = new ChatGPTDeliveryQueue(dir, sender);
-    expect(queue.enqueue(input)).toMatchObject({ status: "cancelled", updatedAt });
-    await queue.pulse();
-    expect(calls).toHaveLength(3);
+    // Restart does not imply a remount; the raw queue cannot fabricate one.
+    const coldQueue = new ChatGPTDeliveryQueue(dir, sender);
+    expect(coldQueue.enqueue(input)).toMatchObject({ status: "queued", awaitingGuest: true, updatedAt });
+    await coldQueue.pulse();
+    expect(calls).toHaveLength(2); // No repeated send without a fresh recipient-mount proof.
+    coldQueue.close();
     queue.close();
   });
 
-  it("drops a missing recipient during reconciliation without claiming the earlier send failed", async () => {
+  it("pins an uncertain send across missing recipient and restart without submitting again", async () => {
     const dir = makeDir();
     const sender = vi.fn(async (request: DesktopAppActivationRequest) =>
       failure(
@@ -781,29 +798,29 @@ describe("durable ChatGPT delivery queue", () => {
           : "T3 browser session is missing; original recipient retained, no message sent.",
       ),
     );
-    let queue = new ChatGPTDeliveryQueue(dir, sender);
+    let queue = new MountedRecipientQueue(dir, sender);
     queue.enqueue(input);
     await queue.pulse();
     expect(queue.status(id).status).toBe("uncertain");
     queue.close();
-    queue = new ChatGPTDeliveryQueue(dir, sender);
+    queue = new MountedRecipientQueue(dir, sender);
     await queue.pulse();
     expect(queue.status(id)).toMatchObject({
-      status: "cancelled",
-      lastError:
-        "Delivery dropped: recipient session is missing; an earlier submission may have occurred.",
+      status: "uncertain",
+      lastError: "Recipient unavailable; earlier submission outcome unknown. No additional send authorized.",
     });
     queue.close();
-    queue = new ChatGPTDeliveryQueue(dir, sender);
+    queue = new MountedRecipientQueue(dir, sender);
     await queue.pulse();
-    expect(sender).toHaveBeenCalledTimes(2);
+    expect(sender.mock.calls.map(([request]) => request.type === "chatgpt.sessions" ? request.action : "other"))
+      .toEqual(["send", "reconcile_send", "reconcile_send"]);
     queue.close();
   });
 
   it("keeps an unmounted registered recipient queued beyond thirty minutes", async () => {
     let now = 30_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const queue = new ChatGPTDeliveryQueue(makeDir(), async (request) =>
+    const queue = new MountedRecipientQueue(makeDir(), async (request) =>
       failure(
         request,
         "ChatGPT conversation not yet mounted with verified messages; original session retained, no message sent.",
@@ -824,7 +841,7 @@ describe("durable ChatGPT delivery queue", () => {
   it("does not let an unavailable recipient block another conversation or concurrent pulses double-dispatch", async () => {
     let resolveSlow!: (response: DesktopAppActivationResponse) => void;
     const calls: Request[] = [];
-    const queue = new ChatGPTDeliveryQueue(makeDir(), async (request) => {
+    const queue = new MountedRecipientQueue(makeDir(), async (request) => {
       if (request.type !== "chatgpt.sessions") throw Error("wrong route");
       calls.push(request);
       if (request.expectedConversationId === conversationId)

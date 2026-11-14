@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off -- T3 owns local durable timers and power requests.
 // T3-owned Caffy. No OpenRig or OmniHub scheduler dependency.
 import * as NodeCrypto from "node:crypto";
-import * as NodeCP from "node:child_process";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import type {
@@ -12,6 +12,7 @@ import type { ChatGPTDeliveryQueue, DeliveryRecord } from "./ChatGPTDeliveryQueu
 import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 import { AutoworkThroughput } from "./AutoworkThroughput.ts";
 import { AutomaticAdmissionJournal } from "./AutomaticAdmissionJournal.ts";
+import { caffyWakePhase, reduceCaffyWake } from "./CaffyWakeMachine.ts";
 
 type Mode = "idle" | "periodic" | "queued" | "startup";
 type Trigger = "idle" | "periodic" | "queued" | "startup" | "manual";
@@ -37,12 +38,25 @@ export interface CaffyConfig {
   lastIdleSequence: number;
   /** Last answered ChatGPT user turn handled by idle mode; survives restarts. */
   lastHandledIdleTurnCount?: number;
+  /** Durable idle event claim. Unlike DOM turnCount, this is an event receipt. */
+  lastHandledIdleEventId?: string | null;
+  lastIdleEvidenceKey?: string | null;
+  transitionVersion?: number;
+  availability?: "ready" | "working" | "unmounted" | "recovering" | "unavailable";
+  admissionReason?: string | null;
+  deliveryUpdatedAt?: number | null;
+  deliveryAwaitingGuest?: boolean;
+  bindingObservedAt?: number | null;
   lastWakeAt: number | null;
   lastError: string | null;
   /** Last scheduler observation of this T3 session, regardless of wake eligibility. */
   lastCheckedAt?: number | null;
   /** Why the scheduler did or did not request a continuation at that check. */
   lastCheckResult?: string | null;
+  nextCheckAt?: number | null;
+  wakePhase?: ReturnType<typeof caffyWakePhase>;
+  deliveryStatus?: DeliveryRecord["status"] | null;
+  lastDeliveryResult?: string | null;
   /** Absolute future start, persisted through full desktop restarts. */
   beginAt?: number | null;
   /** Optional one-time instruction for the next delayed wake. */
@@ -92,6 +106,26 @@ interface ScheduledChatGPTSpawn {
   sessionId?: string;
   error?: string;
 }
+interface CaffyRosterEntry {
+  id?: string; browserSessionId?: string; publicSessionId?: string;
+  conversationId?: string;
+  bootstrapIdentity?: { state?: string; publicId?: string; conversationId?: string };
+  lastIdleTransition?: { eventId?: string; conversationId?: string; sequence?: number };
+  activity?: string; status?: string; lastRole?: string; statusObservedAt?: string;
+  hidden?: boolean; snoozedUntil?: number; closedAt?: unknown;
+}
+interface CaffyRoster {
+  sessions: CaffyRosterEntry[]; total?: number; hasMore?: boolean; incomplete?: boolean;
+}
+
+/** Ownership is resolved only by T3 IDs. Undefined aliases never match. */
+function matchesCaffyOwner(entry: CaffyRosterEntry, ids: readonly (string | undefined)[]) {
+  const wanted = new Set(ids.filter((id): id is string => !!id));
+  return [entry.id, entry.browserSessionId, entry.publicSessionId,
+    entry.bootstrapIdentity?.publicId, entry.lastIdleTransition?.eventId?.split(":")[0]]
+    .some(id => !!id && wanted.has(id));
+}
+
 interface CaffyStore {
   version: 2;
   entries: CaffyConfig[];
@@ -155,11 +189,7 @@ export class CaffyScheduler {
   private pumping = false;
   private pumpRequested = false;
   private lastIdentityReconcileAt = 0;
-  private readonly missingSessions = new Map<string, {firstSeenAt: number; misses: number}>();
-  /** A startup inventory may be temporarily empty or partially hydrated.
-   * Only retire an absent recipient after we observed that exact session in
-   * this process, or after an explicit close/missing-delivery receipt. */
-  private readonly observedLifecycleIds = new Set<string>();
+  private identityReconciliation: Promise<void> | null = null;
   private blockerId: number | null = null;
   private readonly deliveries: ChatGPTDeliveryQueue;
   private readonly request: Request;
@@ -172,10 +202,11 @@ export class CaffyScheduler {
     request: Request,
     power: { start: () => number; stop: (id: number) => void },
     shutdownPC: () => void = () => {
+      // oxlint-disable-next-line t3code/no-global-process-runtime -- Desktop main shutdown is Windows-only; tests inject this callback.
       if (process.platform !== "win32")
         throw new Error("Forced shutdown supported only on Windows.");
       // /f forcibly closes unsaved apps; /t 0 requests immediate poweroff.
-      const result = NodeCP.spawnSync("shutdown.exe", ["/s", "/f", "/t", "0"], {
+      const result = NodeChildProcess.spawnSync("shutdown.exe", ["/s", "/f", "/t", "0"], {
         windowsHide: true, encoding: "utf8", timeout: 5_000,
       });
       if (result.error || result.status !== 0)
@@ -192,7 +223,14 @@ export class CaffyScheduler {
     try {
       const saved = JSON.parse(NodeFS.readFileSync(this.file, "utf8")) as CaffyStore;
       if (saved.version === 2 && Array.isArray(saved.entries)) {
-        for (const row of saved.entries) if (valid(row)) this.entries.set(row.sessionId, row);
+        for (const row of saved.entries) if (valid(row)) {
+          // Older periodic stores can lack a deadline; restore the original
+          // cadence, never an arbitrary "20 minutes from every restart" timer.
+          if (row.mode === "periodic" && !Number.isFinite(row.nextDueAt))
+            row.nextDueAt = row.createdAt + row.intervalMinutes * 60_000;
+          if (row.mode === "idle") row.nextDueAt = null;
+          this.entries.set(row.sessionId, row);
+        }
         for (const job of saved.scheduledSpawns ?? []) {
           if (!job || !UUID.test(job.id) ||
               !(job.onIdle === true ? job.beginAt === null : Number.isSafeInteger(job.beginAt)) ||
@@ -233,11 +271,14 @@ export class CaffyScheduler {
       if (!row || row.pendingMessageId !== record.messageId) return true;
       // Keep T3 Busy controls only TaskBoard autofill. User-created Caffy
       // schedules remain eligible even when TaskBoard autofill is off.
-      return !row.paused;
+      const state = this.deliveries.status(record.messageId).status;
+      return state === "uncertain" || state === "sending" || !row.paused;
     });
     this.deliveries.setDispatchAdmission(async record => {
       const row = this.lookup(record.sessionId);
       if (!row || row.pendingMessageId !== record.messageId) return true;
+      const state = this.deliveries.status(record.messageId).status;
+      if (state === "uncertain" || state === "sending") return true;
       if (row.paused) return false;
       if (row.mode === "idle") return true;
       const snapshot = await this.capacity().catch(() => null);
@@ -361,181 +402,115 @@ export class CaffyScheduler {
         row.browserSessionId === sessionId || row.publicSessionId === sessionId);
   }
 
-  /**
-   * T3's session roster may switch from the original browser UUID to the
-   * Bootstrap public T3_ID after a chat initializes. Keep the original
-   * browser ID as delivery identity, while accepting either ID for control.
-   *
-   * Never infer an alias from the conversation alone: registered() requires
-   * the exact ID or the verified idle event's original browser-ID prefix.
-   */
+  /** Resolve public Bootstrap aliases to the durable browser owner, never by conversation ID. */
   async reconcileIdentityAliases(force = false): Promise<void> {
+    if (this.identityReconciliation) return this.identityReconciliation;
+    this.identityReconciliation = this.reconcileOwners(force);
+    try { await this.identityReconciliation; }
+    finally { this.identityReconciliation = null; }
+  }
+
+  private async reconcileOwners(force: boolean): Promise<void> {
     const now = Date.now();
     if (!force && now - this.lastIdentityReconcileAt < 30_000) return;
     this.lastIdentityReconcileAt = now;
+    const roster = await this.loadRoster().catch(() => null);
+    // Resolve the durable T3 owner first. A changed ChatGPT conversation is a
+    // binding migration, not a Caffy stop/recreate or a new monitor.
+    if (roster) await this.reconcileLifecycle(roster);
     let changed = false;
+    // oxlint-disable-next-line unicorn/no-useless-spread -- Snapshot keys before lifecycle migration mutates this map.
     for (const row of [...this.entries.values()]) {
       const checked = (reason: string) => {
         row.lastCheckedAt = Date.now();
+        row.nextCheckAt = row.lastCheckedAt + 30_000;
         row.lastCheckResult = reason;
         changed = true;
       };
       if (row.rebootOperationId) {
-        checked("Conversation reboot being reconciled.");
+        checked("Reboot in progress; retaining the T3 session policy and delivery guard.");
         await this.reconcileReboot(row).catch(() => {});
         continue;
       }
-      const binding = await this.registered(row.sessionId, row.conversationId).catch(() => null);
+      const binding = roster
+        ? this.bindingInRoster(roster, row.sessionId, row.conversationId)
+        : null;
       if (!binding) {
-        checked("T3 session or current conversation not verified in the live roster.");
+        row.availability = "unavailable";
+        checked(roster
+          ? "T3 session exists but its current conversation is not verified; retaining the schedule."
+          : "T3 roster unavailable; retaining the schedule until the next check.");
         continue;
       }
-      if (row.paused) checked("Paused; automatic wakes disabled.");
-      else if (row.pendingMessageId) checked("Wake delivery pending; waiting for a delivery receipt.");
-      else if (row.pendingWake) checked("Wake requested; awaiting scheduler dispatch.");
-      else if (row.mode === "idle" && binding.lastRole === "user")
-        checked("Waiting for assistant response; page may appear idle before a reply is complete.");
-      else if (row.mode === "idle" && binding.status === "pending_or_stalled")
-        checked("ChatGPT reply pending or stalled; no completed assistant turn verified.");
-      else if (row.mode === "idle" && binding.status === "stuck")
-        checked("ChatGPT tab stuck; browser recovery needed before continuation.");
-      else if (row.mode === "idle" && binding.working)
-        checked("Assistant generating; waiting for completion.");
-      else if (row.mode === "idle")
-        checked(`Observed ${binding.status ?? "unknown"}; waiting for a new completed assistant turn.`);
-      else checked(`Observed ${binding.status ?? "unknown"}; ${row.mode} scheduler active.`);
-      // Recover idle edges missed during restart, even when the guest is now
-      // unloaded. The roster verifies the session/conversation; the outbox
-      // still requires a guarded live read before any composer submission.
+      row.bindingObservedAt = now;
+      row.availability = binding.working ? "working" : binding.status === "stuck"
+        ? "recovering" : binding.activity === "unknown" ? "unavailable" : "ready";
+      // Aliases route controls, but never replace the durable monitor owner.
+      row.publicSessionId = binding.id;
+      row.browserSessionId = binding.browserSessionId;
+
+      // Both live notifications and startup journal recovery enter the SAME
+      // deterministic transition model. DOM totalTurns is never an event key.
       const idle = this.latestIdle(binding.browserSessionId);
-      if (idle && idle.sessionId === binding.browserSessionId &&
-          idle.conversationId === row.conversationId &&
-          idle.sequence > row.lastIdleSequence) {
-        this.onIdle(idle);
-      }
-      // An idle transition may be consumed before a restart or never reach
-      // this process. Recheck the live guest even when the journal sequence
-      // hasn't advanced. A post-wake verified idle edge can be a completed
-      // reply or a stable quiescent user turn. Do NOT use statusObservedAt as
-      // a completion clock: T3 refreshes it on every read.
-      if (row.mode === "idle" && !row.paused && !row.pendingWake &&
-          !row.pendingMessageId && !row.rebootOperationId &&
-          (row.beginAt == null || row.beginAt <= now) &&
-          (row.expiresAt === null || row.expiresAt > now) &&
-          !binding.working && binding.activity === "idle" &&
-          ((binding.lastRole === "assistant" &&
-            (binding.status === "done_or_idle" || binding.status === "waiting_for_input")) ||
-            (binding.lastRole === "user" && binding.status === "pending_or_stalled" &&
-              idle?.conversationId === row.conversationId &&
-              (idle.kind === "quiescent" || idle.kind === "stopped")))) {
-        const proof = await this.read(binding.browserSessionId, row.conversationId).catch(() => null);
-        const guest = proof?.session as {
-          conversationId?: string; activity?: string; status?: string;
-          lastRole?: string; totalTurns?: number;
-        } | undefined;
-        const turnCount = guest?.totalTurns;
-        const journalTurnCount = idle?.conversationId === row.conversationId &&
-          idle.sessionId === binding.browserSessionId &&
-          idle.sequence <= row.lastIdleSequence ? idle.turnCount : 0;
-        const handled = row.lastHandledIdleTurnCount ?? journalTurnCount;
-        const newerTurn = Number.isSafeInteger(turnCount) &&
-          (turnCount ?? 0) > handled;
-        // An edge can be newer than the wake yet already marked consumed.
-        const uncontinuedEdge = !!idle && idle.conversationId === row.conversationId &&
-          idle.sessionId === binding.browserSessionId &&
-          idle.observedAt > (row.lastWakeAt ?? row.createdAt);
-        // A new verified idle edge is independent of the DOM's totalTurns:
-        // rehydration, pagination and conversation replacement can decrease it.
-        // Stable, verified user-only quiescence is also a legitimate idle edge.
-        const liveAssistantIdle = guest?.lastRole === "assistant" &&
-          (guest.status === "done_or_idle" || guest.status === "waiting_for_input");
-        const liveUserQuiescent = uncontinuedEdge &&
-          (idle?.kind === "quiescent" || idle?.kind === "stopped") &&
-          guest?.lastRole === "user" && guest.status === "pending_or_stalled" &&
-          turnCount === idle?.turnCount;
-        if (this.entries.get(row.sessionId) === row && !row.paused &&
-            !row.pendingWake && !row.pendingMessageId &&
-            proof?.conversationGuardValidated === true &&
-            proof.verifiedConversationId === row.conversationId &&
-            guest?.conversationId === row.conversationId &&
-            guest.activity === "idle" &&
-            (liveAssistantIdle || liveUserQuiescent) &&
-            Number.isSafeInteger(turnCount) && (turnCount ?? 0) > 0 &&
-            ((liveAssistantIdle && newerTurn) || uncontinuedEdge)) {
-          row.lastHandledIdleTurnCount = Math.max(handled, turnCount ?? 0);
-          row.pendingWake = true;
-          row.pendingReason = "idle";
-          checked("New completed assistant turn verified; wake requested.");
+      if (idle && idle.sessionId === binding.browserSessionId) {
+        const transition = reduceCaffyWake(row, { type: "idle", idle, now });
+        if (Object.keys(transition.patch).length) {
+          this.applyWakeTransition(row, transition.patch);
+          changed = true;
         }
       }
+
+      // Cold renderer recovery publishes through the same idle journal. A
+      // roster label or DOM totalTurns alone never creates a second wake path.
+      if (row.paused) checked("Paused; scheduler will not dispatch.");
+      else if (row.pendingMessageId)
+        checked(`Delivery ${row.deliveryStatus ?? "queued"}; awaiting exact recipient receipt.`);
+      else if (row.pendingWake)
+        checked(row.lastCheckResult?.includes("wake requested")
+          ? row.lastCheckResult : "Wake requested; awaiting safe scheduler dispatch.");
+      else if (binding.status === "stuck")
+        checked("Browser guest stuck; recovery needed. No reload will overwrite a draft.");
+      else if (binding.working)
+        checked("Assistant working; awaiting a verified idle transition.");
+      else if (row.mode === "idle" && binding.lastRole === "user")
+        checked(idle?.conversationId === row.conversationId
+          ? "User-only turn observed; waiting for a newer verified quiescent edge."
+          : "User-only pending or stalled; waiting for verified quiescence, not a generic idle label.");
+      else if (row.mode === "idle")
+        checked("Waiting for a newer verified idle edge or a new guarded assistant reply.");
+      else if (row.mode === "periodic")
+        checked(`Periodic deadline ${row.nextDueAt == null ? "not scheduled" : new Date(row.nextDueAt).toISOString()}.`);
+      else checked(`${row.mode} monitor awaiting its activation conditions.`);
       if (binding.working && !row.lastActivatedAt) {
-        row.lastActivatedAt = Date.now();
-        changed = true;
-      }
-      if (row.publicSessionId !== binding.id) {
-        row.publicSessionId = binding.id;
-        changed = true;
-      }
-      if (row.browserSessionId !== binding.browserSessionId &&
-          UUID.test(binding.browserSessionId) && !row.pendingMessageId &&
-          !this.entries.has(binding.browserSessionId)) {
-        // A not-yet-enqueued monitor can safely adopt the verified recipient.
-        // In-flight UNKNOWN deliveries must retain their exact old identity.
-        this.observedLifecycleIds.delete(row.sessionId);
-        this.missingSessions.delete(row.sessionId);
-        this.entries.delete(row.sessionId);
-        row.sessionId = binding.browserSessionId;
-        row.browserSessionId = binding.browserSessionId;
-        this.entries.set(row.sessionId, row);
+        row.lastActivatedAt = now;
         changed = true;
       }
     }
     if (changed) this.save();
-    await this.reconcileLifecycle();
   }
 
   /**
    * A normal unloaded guest remains in T3's persisted catalog, so only a
-   * *complete* inventory can prove removal. Two misses 30s apart avoid
-   * erasing valid monitors during renderer hydration/recovery.
+   * inventory resolves its current binding. Even repeated missing renderer
+   * rows cannot prove durable removal; only explicit lifecycle actions retire.
    */
-  async reconcileLifecycle(): Promise<void> {
-    const reply = await this.request({
-      version: 1, requestId: NodeCrypto.randomUUID(),
-      type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
-    }).catch(() => null);
-    const data = reply?.ok && "data" in reply && reply.data &&
-      typeof reply.data === "object" ? reply.data as {
-        sessions?: Array<{
-          id?: string; publicSessionId?: string; browserSessionId?: string;
-          conversationId?: string; bootstrapIdentity?: {
-            state?: string; publicId?: string; conversationId?: string;
-          };
-          lastIdleTransition?: {eventId?: string; conversationId?: string; sequence?: number};
-          hidden?: boolean; snoozedUntil?: number; closedAt?: unknown;
-        }>; total?: number; hasMore?: boolean; incomplete?: boolean;
-      } : null;
+  async reconcileLifecycle(roster?: CaffyRoster | null): Promise<void> {
+    const data = roster === undefined ? await this.loadRoster().catch(() => null) : roster;
     const entries = data?.sessions;
     if (!Array.isArray(entries) || data?.hasMore || data?.incomplete ||
         data?.total === undefined || data.total !== entries.length) return;
     const now = Date.now();
+    // oxlint-disable-next-line unicorn/no-useless-spread -- Retiring a session must not alter this roster iteration.
     for (const row of [...this.entries.values()]) {
       const ids = [row.sessionId, row.browserSessionId, row.publicSessionId]
         .filter((id): id is string => !!id);
       // Existence is a property of the stable T3 session, NOT its current
       // conversation. Reboots and restored tabs may change conversation IDs
       // while the Caffy schedule (including its delayed start) must survive.
-      const matches = entries.filter(entry =>
-        [entry.id, entry.browserSessionId, entry.publicSessionId,
-          entry.bootstrapIdentity?.publicId,
-          entry.lastIdleTransition?.eventId?.split(":")[0],
-        ].some(id => id && ids.includes(id)));
-      const key = row.sessionId;
-      if (matches.length > 1) { this.missingSessions.delete(key); continue; }
+      const matches = entries.filter(entry => matchesCaffyOwner(entry, ids));
+      if (matches.length > 1) continue;
       const found = matches[0];
       if (found) {
-        this.observedLifecycleIds.add(key);
-        this.missingSessions.delete(key);
         if (found.closedAt != null || found.hidden ||
             (typeof found.snoozedUntil === "number" && found.snoozedUntil > now)) {
           this.retire(row.sessionId,
@@ -553,7 +528,7 @@ export class CaffyScheduler {
           found.bootstrapIdentity?.state === "registered" &&
           found.bootstrapIdentity.conversationId === nextId;
         const proof = registeredNew ? null : UUID.test(nextId) && found.id
-          ? await this.read(found.id, nextId).catch(() => null) : null;
+          ? await this.read(row.browserSessionId ?? row.sessionId, nextId).catch(() => null) : null;
         const verified = registeredNew ||
           (proof?.conversationGuardValidated === true &&
             proof.verifiedConversationId === nextId);
@@ -563,42 +538,65 @@ export class CaffyScheduler {
           if (row.lastError !== detail) { row.lastError = detail; this.save(); }
           continue;
         }
-        const oldConversationId = row.conversationId;
-        // Retire the old conversation's wake before switching identities.
-        // Clear the pending ID first: its cancelled receipt must not remove
-        // this still-active Caffy monitor through onDelivery().
-        row.pendingMessageId = null;
-        this.deliveries.retireRecipient(ids, oldConversationId,
-          "Caffy session migrated to a verified new conversation.", true);
+        if (row.pendingMessageId) {
+          // A pinned receipt wins over a new browser binding. Only a proven
+          // unsent queued record can be cancelled and retargeted safely.
+          let receipt: Omit<DeliveryRecord, "body"> | null = null;
+          try { receipt = this.deliveries.status(row.pendingMessageId); } catch { /* absent journal is ambiguous */ }
+          if (!receipt || receipt.status !== "queued" || receipt.lastSubmissionAt || receipt.uncertainSince) {
+            if (receipt) this.onDelivery(receipt);
+            if (row.pendingMessageId) {
+              row.lastError = "Session binding changed with an unresolved delivery; retaining the original receipt, no retarget or resend.";
+              this.save();
+              continue;
+            }
+          } else {
+            // Persist intent with the old receipt still pinned before cancel.
+            // Either side of a crash can then finish the same migration.
+            const oldMessageId = row.pendingMessageId;
+            row.delayedPrompt = row.pendingMessageBody ?? row.delayedPrompt ?? null;
+            row.pendingWake = true;
+            row.pendingReason = "manual";
+            this.save();
+            this.deliveries.cancel(oldMessageId);
+          }
+        }
         row.conversationId = nextId;
-        row.lastIdleSequence =
-          found.lastIdleTransition?.conversationId === nextId
-            ? found.lastIdleTransition.sequence ?? 0 : 0;
+        // Keep the owner cursor. Do not consume the new conversation's first
+        // idle event during rebinding; the reducer must decide eligibility.
+        row.lastIdleEvidenceKey = null;
         row.lastHandledIdleTurnCount = 0;
-        row.lastWakeAt = null;
         row.lastActivatedAt = now;
         row.lastRebootAt = now;
         row.lastError = null;
         this.save();
         continue;
       }
-      // A cold session list can be reported as complete before the browser
-      // catalog hydrates. Never erase a persisted monitor on that evidence.
-      if (!this.observedLifecycleIds.has(key)) continue;
-      const previous = this.missingSessions.get(key);
-      if (previous && previous.misses >= 1 && now - previous.firstSeenAt >= 30_000)
-        this.retire(row.sessionId, "missing");
-      else this.missingSessions.set(key, {
-        firstSeenAt: previous?.firstSeenAt ?? now, misses: (previous?.misses ?? 0) + 1,
-      });
+      row.availability = "unavailable";
+      row.lastCheckResult = "T3 owner absent from renderer inventory; schedule retained until inventory recovers or the session is explicitly closed.";
+      this.save();
     }
+  }
+
+  private publicStatus(row: CaffyConfig): CaffyConfig {
+    let receipt: Omit<DeliveryRecord, "body"> | null = null;
+    if (row.pendingMessageId) {
+      try { receipt = this.deliveries.status(row.pendingMessageId); } catch { /* pending journal commit */ }
+    }
+    const view = { ...row,
+      deliveryStatus: receipt?.status ?? row.deliveryStatus ?? null,
+      deliveryUpdatedAt: receipt?.updatedAt ?? row.deliveryUpdatedAt ?? null,
+      deliveryAwaitingGuest: receipt?.awaitingGuest ?? row.deliveryAwaitingGuest ?? false,
+      lastDeliveryResult: receipt?.lastError ?? row.lastDeliveryResult ?? null,
+    };
+    return { ...view, wakePhase: caffyWakePhase(view, Date.now(), view.deliveryStatus) };
   }
 
   status(sessionId?: string) {
     this.expireTimedBusy();
-    if (sessionId) return this.lookup(sessionId) ?? null;
+    if (sessionId) { const row = this.lookup(sessionId); return row ? this.publicStatus(row) : null; }
     return {
-      entries: [...this.entries.values()],
+      entries: [...this.entries.values()].map(row => this.publicStatus(row)),
       scheduledSpawns: [...this.scheduledSpawns.values()].map(({ prompt: _prompt, ...job }) => job),
       agentStops: [...this.agentStops.values()],
       capacityClaims: [...this.capacityClaims.values()].map(row => ({
@@ -741,8 +739,7 @@ export class CaffyScheduler {
         (!Number.isSafeInteger(input.beginAt) || input.beginAt <= now ||
           input.beginAt > now + 90 * 24 * 60 * 60_000))
       throw new Error("Scheduled start must be in the next 90 days.");
-    const prior = this.lookup(input.sessionId) ??
-      [...this.entries.values()].find(row => row.conversationId === input.conversationId);
+    const prior = this.lookup(input.sessionId);
     // Turning on idle mode while the agent is already idle must not require
     // another completed turn. Verify the guest rather than trusting a stale
     // roster's non-working flag; the guarded outbox still checks the composer.
@@ -830,8 +827,10 @@ export class CaffyScheduler {
         continuingSameMonitor ? (prior?.lastIdleSequence ?? 0) : initialIdleSequence,
         identity?.idleSequence ?? 0,
       ),
+      lastHandledIdleEventId: (continuingSameMonitor ? prior?.lastHandledIdleEventId : journalIdle?.eventId) ?? null,
+      lastIdleEvidenceKey: (continuingSameMonitor ? prior?.lastIdleEvidenceKey : journalIdle?.evidenceKey) ?? null,
       lastHandledIdleTurnCount: continuingSameMonitor
-        ? prior?.lastHandledIdleTurnCount
+        ? prior?.lastHandledIdleTurnCount ?? 0
         : journalIdle?.conversationId === input.conversationId &&
           journalIdle.sessionId === browserSessionId ? journalIdle.turnCount : 0,
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
@@ -890,9 +889,7 @@ export class CaffyScheduler {
     const cancelled = this.deliveries.retireRecipient(ids, row?.conversationId ?? null,
       detail, reason === "snoozed" || reason === "hidden" || reason === "stopped");
     if (row) {
-      this.missingSessions.delete(row.sessionId);
-      this.observedLifecycleIds.delete(row.sessionId);
-      this.save();
+          this.save();
     }
     return { stopped: !!row, cancelled };
   }
@@ -1126,10 +1123,8 @@ export class CaffyScheduler {
         state?: string; publicId?: string; conversationId?: string;
       }; lastIdleTransition?: {conversationId?: string; sequence?: number};
     }>};
-    const matches = (data.sessions ?? []).filter(entry =>
-      entry.id === row.sessionId || entry.browserSessionId === row.browserSessionId ||
-      entry.publicSessionId === row.publicSessionId ||
-      entry.bootstrapIdentity?.publicId === row.publicSessionId);
+    const matches = (data.sessions ?? []).filter(entry => matchesCaffyOwner(entry,
+      [row.sessionId, row.browserSessionId, row.publicSessionId]));
     if (matches.length !== 1) return;
     const entry = matches[0]!;
     const nextId = entry.conversationId;
@@ -1138,8 +1133,7 @@ export class CaffyScheduler {
         entry.bootstrapIdentity?.state !== "registered") return;
     row.conversationId = nextId;
     row.publicSessionId = entry.bootstrapIdentity.publicId ?? row.publicSessionId;
-    row.lastIdleSequence = entry.lastIdleTransition?.conversationId === nextId
-      ? entry.lastIdleTransition.sequence ?? 0 : 0;
+    row.lastIdleEvidenceKey = null;
     row.lastHandledIdleTurnCount = 0;
     row.lastActivatedAt = Date.now();
     row.lastRebootAt = Date.now();
@@ -1249,119 +1243,87 @@ export class CaffyScheduler {
   }
 
   onIdle(event: VerifiedChatGPTIdleTransition) {
-    const row = this.lookup(event.sessionId) ??
-      [...this.entries.values()].find(item =>
-        item.conversationId === event.conversationId &&
-        (event.eventId.startsWith(`${item.sessionId}:${event.conversationId}:`) ||
-          (item.browserSessionId &&
-            event.eventId.startsWith(`${item.browserSessionId}:${event.conversationId}:`))));
-    if (!row || row.paused || row.conversationId !== event.conversationId ||
-        event.sequence <= row.lastIdleSequence) return;
-    // Sequence identifies an idle edge; totalTurns is only diagnostic and can
-    // decrease after DOM remount or conversation rehydration. Comparing counts
-    // made Caffy ignore a genuinely NEW idle event for the same T3 session.
-    const newerThanWake = event.observedAt > (row.lastWakeAt ?? row.createdAt);
-    row.lastIdleSequence = event.sequence;
-    row.lastHandledIdleTurnCount = event.turnCount;
+    // The T3 browser/session ID is the owner. Matching by conversation alone
+    // can redirect a wake across reboots or unrelated sessions.
+    const row = this.lookup(event.sessionId);
+    if (!row) return;
+    const transition = reduceCaffyWake(row, { type: "idle", idle: event, now: Date.now() });
+    if (!Object.keys(transition.patch).length) return;
+    this.applyWakeTransition(row, transition.patch);
     if (event.kind === "completed" && row.lastWakeAt !== null &&
         event.observedAt > row.lastWakeAt &&
         row.lastWakeAt > (row.lastCountedWakeAt ?? 0)) {
       row.wakesSinceReboot = (row.wakesSinceReboot ?? 0) + 1;
       row.lastCountedWakeAt = row.lastWakeAt;
     }
-    if ((row.mode === "idle" || row.mode === "queued") &&
-        newerThanWake && !row.pendingMessageId && !row.rebootOperationId &&
-        (row.beginAt === null || row.beginAt === undefined || row.beginAt <= Date.now())) {
-      row.pendingWake = true;
-      row.pendingReason = "idle";
-      row.lastCheckResult = `New verified ${event.kind ?? "idle"} event #${event.sequence}; wake requested.`;
-      row.lastCheckedAt = Date.now();
-    }
+    row.lastCheckedAt = Date.now();
+    row.nextCheckAt = row.lastCheckedAt + 30_000;
     this.save();
-    void this.pump();
+    if (transition.requested) void this.pump();
+  }
+
+  private applyWakeTransition(row: CaffyConfig, patch: Partial<CaffyConfig>) {
+    if (!Object.keys(patch).length) return;
+    Object.assign(row, patch);
+    row.transitionVersion = (row.transitionVersion ?? 0) + 1;
   }
 
   private onDelivery(record: Omit<DeliveryRecord, "body">) {
     const row = this.lookup(record.sessionId);
     if (!row || row.pendingMessageId !== record.messageId) return;
-    if (record.status === "delivered") {
-      row.pendingMessageId = null;
-      row.pendingMessageBody = null;
-      row.delayedPrompt = null;
-      row.runWithoutBusy = false;
-      row.lastWakeAt = Date.now();
-      row.lastActivatedAt ??= row.lastWakeAt;
-      row.lastCheckResult = "Wake delivered; awaiting the next verified idle event.";
-      row.lastError = null;
-      if (row.onceOnly) { this.entries.delete(row.sessionId); }
-    } else if (record.status === "cancelled") {
-      // The recipient was removed, or a pending Caffy wake was cancelled.
-      // A stopped monitor must never keep a phantom registration.
-      this.entries.delete(row.sessionId);
-    } else if (record.status === "needs_attention") {
-      row.lastError = record.lastError ?? record.status;
-      row.paused = true; // no unbounded speculative new message
-    }
+    this.applyWakeTransition(row, reduceCaffyWake(row, {
+      type: "delivery", receipt: record, now: Date.now(),
+    }).patch);
+    if (record.status === "delivered" && row.onceOnly) this.entries.delete(row.sessionId);
     this.save();
   }
 
-  private async registered(sessionId: string, conversationId: string): Promise<{
-    id: string; browserSessionId: string; working: boolean; idleSequence: number;
-    activity?: string; status?: string; lastRole?: string;
-  } | null> {
+  private async loadRoster(): Promise<CaffyRoster | null> {
     const reply = await this.request({
       version: 1, requestId: NodeCrypto.randomUUID(),
       type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
-    }).catch(() => null);
-    if (!reply?.ok || !("data" in reply) || !reply.data || typeof reply.data !== "object")
-      return null;
-    const entries = (reply.data as { sessions?: Array<{
-      id?: string; publicSessionId?: string; browserSessionId?: string;
-      conversationId?: string; bootstrapIdentity?: {conversationId?:string; publicId?:string};
-      activity?: string; status?: string; lastRole?: string; statusObservedAt?: string;
-      lastIdleTransition?: {conversationId?: string; sequence?: number; eventId?: string};
-      closedAt?: unknown;
-    }> }).sessions;
-    if (!Array.isArray(entries)) return null;
-    const known = this.lookup(sessionId);
-    const matches = entries.filter(entry => {
-      const idle = entry.lastIdleTransition;
-      const observedBrowserId = idle?.conversationId === conversationId &&
-        typeof idle.eventId === "string" && idle.eventId.includes(":")
-          ? idle.eventId.split(":")[0] : null;
-      return entry.id === sessionId || entry.browserSessionId === sessionId ||
-        entry.publicSessionId === sessionId || entry.bootstrapIdentity?.publicId === sessionId ||
-        observedBrowserId === sessionId ||
-        (known?.publicSessionId !== undefined &&
-          (entry.id === known.publicSessionId || entry.bootstrapIdentity?.publicId === known.publicSessionId));
     });
+    if (!reply.ok || !("data" in reply) || !reply.data ||
+        typeof reply.data !== "object") return null;
+    const data = reply.data as Partial<CaffyRoster>;
+    return Array.isArray(data.sessions) ? data as CaffyRoster : null;
+  }
+
+  private bindingInRoster(
+    roster: CaffyRoster, sessionId: string, conversationId: string,
+  ): { id: string; browserSessionId: string; working: boolean; idleSequence: number;
+      activity?: string | undefined; status?: string | undefined; lastRole?: string | undefined } | null {
+    const known = this.lookup(sessionId);
+    const matches = roster.sessions.filter(entry => matchesCaffyOwner(entry,
+      [sessionId, known?.browserSessionId, known?.publicSessionId]));
     const entry = matches.length === 1 ? matches[0] : null;
-    return entry?.id && entry.closedAt == null &&
-      // If the browser is visibly on another conversation, an older Bootstrap
-      // marker cannot authorize a wake to its obsolete conversation ID.
-      (entry.conversationId
-        ? entry.conversationId === conversationId
-        : entry.bootstrapIdentity?.conversationId === conversationId)
-      ? {
-          id: entry.bootstrapIdentity?.publicId ?? entry.publicSessionId ?? entry.id,
-          // Bootstrap replaces the public ID; the renderer still mounts using
-          // its original browser UUID embedded in the verified idle event.
-          browserSessionId: entry.browserSessionId ??
-            (entry.lastIdleTransition?.conversationId === conversationId &&
-              UUID.test(entry.lastIdleTransition.eventId?.split(":")[0] ?? "")
-              ? entry.lastIdleTransition.eventId!.split(":")[0]! :
-                known?.browserSessionId ?? known?.sessionId ?? entry.id),
-          idleSequence: entry.lastIdleTransition?.conversationId === conversationId &&
-            Number.isSafeInteger(entry.lastIdleTransition.sequence)
-            ? Math.max(0, entry.lastIdleTransition.sequence ?? 0) : 0,
-          activity: entry.activity, status: entry.status, lastRole: entry.lastRole,
-          working: (() => {
-            const observedAt = Date.parse(entry.statusObservedAt ?? "");
-            return Number.isFinite(observedAt) && observedAt <= Date.now() + 1000 &&
-              Date.now() - observedAt < 15_000 &&
-              (entry.activity === "working" || entry.status === "working");
-          })(),
-        } : null;
+    if (!entry?.id || entry.closedAt != null ||
+        // Current T3 roster binding outranks an obsolete Bootstrap identity.
+        (entry.conversationId
+          ? entry.conversationId !== conversationId
+          : entry.bootstrapIdentity?.conversationId !== conversationId)) return null;
+    const browserSessionId = entry.browserSessionId ??
+      (entry.lastIdleTransition?.conversationId === conversationId &&
+        UUID.test(entry.lastIdleTransition.eventId?.split(":")[0] ?? "")
+        ? entry.lastIdleTransition.eventId!.split(":")[0]!
+        : known?.browserSessionId ?? known?.sessionId ?? entry.id);
+    const observedAt = Date.parse(entry.statusObservedAt ?? "");
+    return {
+      id: entry.bootstrapIdentity?.publicId ?? entry.publicSessionId ?? entry.id,
+      browserSessionId,
+      idleSequence: entry.lastIdleTransition?.conversationId === conversationId &&
+        Number.isSafeInteger(entry.lastIdleTransition.sequence)
+          ? Math.max(0, entry.lastIdleTransition.sequence ?? 0) : 0,
+      activity: entry.activity, status: entry.status, lastRole: entry.lastRole,
+      working: Number.isFinite(observedAt) && observedAt <= Date.now() + 1000 &&
+        Date.now() - observedAt < 15_000 &&
+        (entry.activity === "working" || entry.status === "working"),
+    };
+  }
+
+  private async registered(sessionId: string, conversationId: string) {
+    const roster = await this.loadRoster();
+    return roster ? this.bindingInRoster(roster, sessionId, conversationId) : null;
   }
 
   private async read(sessionId: string, conversationId: string) {
@@ -1733,12 +1695,9 @@ export class CaffyScheduler {
           continue;
         }
         if (row.paused) continue;
-        if (row.mode === "periodic" && row.nextDueAt !== null && row.nextDueAt <= now) {
-          const intervalMs = row.intervalMinutes * 60_000;
-          // Preserve the original local-time cadence; coalesce missed runs into one.
-          row.nextDueAt += (Math.floor((now - row.nextDueAt) / intervalMs) + 1) * intervalMs;
-          row.pendingWake = true;
-          row.pendingReason = "periodic";
+        const due = reduceCaffyWake(row, { type: "due", now });
+        if (Object.keys(due.patch).length) {
+          this.applyWakeTransition(row, due.patch);
           this.save();
         }
         if (!row.pendingWake) continue;
@@ -1752,7 +1711,12 @@ export class CaffyScheduler {
         const bypassCapacity = row.mode === "idle";
         if (!bypassCapacity && !(await this.acquireAutomaticAdmission(
           wakeTicket, row.sessionId, true,
-        ))) continue;
+        ))) {
+          row.admissionReason = "Waiting for available capacity / admission inventory.";
+          this.save();
+          continue;
+        }
+        row.admissionReason = null;
         try {
         // A cold or errored session cannot pass a live guarded read until
         // it has been mounted. Enqueue from the exact registry binding so
@@ -1770,6 +1734,7 @@ export class CaffyScheduler {
           continue;
         }
         if (bound.working) {
+          row.lastCheckResult = "Assistant working; wake intent retained until safe idle.";
           if (!row.lastActivatedAt) { row.lastActivatedAt = Date.now(); this.save(); }
           continue;
         }
@@ -1784,11 +1749,12 @@ export class CaffyScheduler {
         // Persist the exact stable message ID before enqueue; an ambiguous
         // result is reconciled by this ID rather than generating another wake.
         const messageId = NodeCrypto.randomUUID();
-        row.pendingMessageId = messageId;
-        row.pendingMessageBody = row.delayedPrompt ?? row.repeatPrompt ?? WAKE_TEXT;
-        row.delayedPrompt = null;
-        row.pendingWake = false;
-        row.pendingReason = null;
+        const claimed = reduceCaffyWake(row, {
+          type: "claim", messageId, body: row.delayedPrompt ?? row.repeatPrompt ?? WAKE_TEXT,
+          now: Date.now(),
+        });
+        if (!Object.keys(claimed.patch).length) continue;
+        this.applyWakeTransition(row, claimed.patch);
         if (row.mode === "queued") row.capacityHeld = true;
         this.save();
         try {

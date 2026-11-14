@@ -724,7 +724,7 @@ export function ChatGPTBrowserSidebarEntry({
   const activeCaffyMonitors = useMemo(() => {
     const entries = new Map<string, NonNullable<typeof caffyOverview>["entries"][number]>();
     for (const monitor of caffyOverview?.entries ?? []) {
-      if (monitor.paused || (monitor.expiresAt !== null && monitor.expiresAt <= clockNow)) continue;
+      if (monitor.expiresAt !== null && monitor.expiresAt <= clockNow && !monitor.pendingMessageId) continue;
       entries.set(monitor.sessionId, monitor);
       if (monitor.browserSessionId) entries.set(monitor.browserSessionId, monitor);
       if (monitor.publicSessionId) entries.set(monitor.publicSessionId, monitor);
@@ -3037,7 +3037,7 @@ export function ChatGPTBrowserSidebarEntry({
                                 ? `Caffy: ${caffyMonitor.mode === "queued" ? "Auto-continue on free slot" :
                                     caffyMonitor.mode === "idle" ? "Auto-continue on idle" :
                                     caffyMonitor.mode === "periodic" ? `Periodic every ${caffyMonitor.intervalMinutes} min` :
-                                    "Wake on startup"}${caffyMonitor.onceOnly ? " (once)" : ""}${caffyMonitor.beginAt && caffyMonitor.beginAt > clockNow
+                                    "Wake on startup"}${caffyMonitor.paused ? " (paused)" : ""}${caffyMonitor.onceOnly ? " (once)" : ""}${caffyMonitor.beginAt && caffyMonitor.beginAt > clockNow
                                         ? ` — starts ${new Date(caffyMonitor.beginAt).toLocaleString()}` : ""}${
                                           caffyMonitor.autoRebootMinutes
                                             ? ` — auto-reboot every ${caffyMonitor.autoRebootMinutes}m when idle`
