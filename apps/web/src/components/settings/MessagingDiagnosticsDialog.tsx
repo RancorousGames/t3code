@@ -152,6 +152,7 @@ export function MessagingDiagnosticsDialog({
               onClick={() => void refresh()}
               disabled={refreshing}
             >
+              <Button variant="outline" size="sm" disabled={!data} onClick={() => { if (data) void navigator.clipboard.writeText(JSON.stringify(data, null, 2)); }}>Copy JSON report</Button>
               <RefreshCwIcon className={refreshing ? "animate-spin" : ""} /> Refresh
             </Button>
           </div>

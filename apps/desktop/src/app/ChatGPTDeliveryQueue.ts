@@ -65,7 +65,7 @@ const LONG_RETRY_MS = 15 * 60_000;
 const RECONCILE_RETRY_MS = 60_000;
 const PREFLIGHT_RETRY_MS = 15_000;
 const MAX_ACTIVE_CONVERSATIONS = 4;
-const MAX_DELIVERY_ATTEMPTS = 100;
+const ABANDON_UNREACHABLE_MS = 30 * 60_000;
 const isUuid = (id: string) => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id);
 
 // These failures happen before the renderer touches the composer. Keep this
@@ -95,6 +95,7 @@ function invalidRecipient(detail: string) {
 /** Accepted means persisted, never that a model read the message. */
 export class ChatGPTDeliveryQueue {
   private readonly file: string;
+  private readonly eventFile: string;
   private readonly send: Sender;
   private readonly records = new Map<string, DeliveryRecord>();
   private readonly transitionListeners = new Set<(record: Omit<DeliveryRecord, "body">) => void>();
@@ -114,6 +115,7 @@ export class ChatGPTDeliveryQueue {
     this.send = send;
     NodeFS.mkdirSync(directory, { recursive: true });
     this.file = NodePath.join(directory, "chatgpt-deliveries-v1.json");
+    this.eventFile = NodePath.join(directory, "chatgpt-delivery-events.ndjson");
     if (NodeFS.existsSync(this.file)) {
       const loaded: unknown = JSON.parse(NodeFS.readFileSync(this.file, "utf8"));
       if (!Array.isArray(loaded)) throw new Error("ChatGPT delivery journal is not an array.");
@@ -134,7 +136,6 @@ export class ChatGPTDeliveryQueue {
           status:
             r.status === "sending" ||
             (r.status === "needs_attention" &&
-              r.attempts < MAX_DELIVERY_ATTEMPTS &&
               !invalidRecipient(r.lastError ?? "") &&
               !(r.draftRefusals && r.draftRefusals >= 3))
               ? "uncertain"
@@ -194,7 +195,6 @@ export class ChatGPTDeliveryQueue {
       if (
         record.status === "delivered" ||
         record.status === "cancelled" ||
-        record.attempts >= MAX_DELIVERY_ATTEMPTS ||
         seen.has(record.conversationId)
       )
         continue;
@@ -493,11 +493,18 @@ export class ChatGPTDeliveryQueue {
     // Lifecycle retirement wins even if an earlier asynchronous send or
     // reconciliation returns after the recipient was closed or snoozed.
     if (record.status === "cancelled" && status !== "cancelled") return;
+    const previousStatus = record.status;
+    const previousError = record.lastError;
     record.status = status;
     record.updatedAt = Date.now();
     if (error === undefined) delete record.lastError;
     else record.lastError = error;
     this.save();
+    if (previousStatus !== status || previousError !== record.lastError) {
+      try {
+        NodeFS.appendFileSync(this.eventFile, JSON.stringify({ at: record.updatedAt, messageId: record.messageId, sessionId: record.sessionId, from: previousStatus, to: status, attempts: record.attempts, reason: record.lastError ?? null }) + "\n");
+      } catch { /* diagnostics must not prevent delivery */ }
+    }
     this.notifyTransition(record);
   }
 
@@ -649,11 +656,7 @@ export class ChatGPTDeliveryQueue {
 
   private async process(record: DeliveryRecord) {
     if (record.status === "cancelled") return;
-    if (record.attempts >= MAX_DELIVERY_ATTEMPTS) {
-      this.update(record, "needs_attention", `Delivery stopped after ${record.attempts} attempts; retained for debugging.`);
-      try { this.notifyExhausted(this.publicRecord(record)); } catch { /* notification failure must not resume retries */ }
-      return;
-    }
+
     record.attempts++;
     this.nextTry.set(record.messageId, Date.now() + RECONCILE_RETRY_MS);
     try {
@@ -675,8 +678,11 @@ export class ChatGPTDeliveryQueue {
         // Absence cannot disprove an earlier send. Keep this ID unresolved,
         // including across reboots or conversation migration.
         record.uncertainSince ??= record.lastSubmissionAt ?? record.createdAt;
-        this.update(record, "uncertain",
-          "Recipient unavailable; earlier submission outcome unknown. No additional send authorized.");
+        if (Date.now() - (record.uncertainSince ?? Date.now()) >= ABANDON_UNREACHABLE_MS) {
+          this.update(record, "cancelled", "Abandoned after 30 minutes of recipient unavailability.");
+        } else {
+          this.update(record, "uncertain", "Recipient unavailable; retrying after reconciliation.");
+        }
         return;
       }
       // An identity mismatch needs resolution; do not retarget or submit.
@@ -719,14 +725,6 @@ export class ChatGPTDeliveryQueue {
         record.status === "needs_attention" ? "needs_attention" : "uncertain",
         String(error),
       );
-    } finally {
-      if (record.attempts >= MAX_DELIVERY_ATTEMPTS &&
-          !["delivered", "cancelled"].includes(record.status) &&
-          !record.awaitingGuest) {
-        this.update(record, "needs_attention",
-          `Delivery stopped after ${record.attempts} attempts; retained for debugging.`);
-        try { this.notifyExhausted(this.publicRecord(record)); } catch { /* notification is advisory */ }
-      }
     }
   }
 
@@ -745,7 +743,7 @@ export class ChatGPTDeliveryQueue {
     if (this.closed) return;
     const conversations = new Map<string, DeliveryRecord[]>();
     for (const record of this.records.values()) {
-      if (record.status === "delivered" || record.status === "cancelled" || record.attempts >= MAX_DELIVERY_ATTEMPTS) continue;
+      if (record.status === "delivered" || record.status === "cancelled") continue;
       const group = conversations.get(record.conversationId) ?? [];
       group.push(record);
       conversations.set(record.conversationId, group);

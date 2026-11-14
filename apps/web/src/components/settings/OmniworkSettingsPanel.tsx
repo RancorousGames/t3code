@@ -1,5 +1,7 @@
 // Visual composition supplied by Claude Sonnet for T3-0036.
 import { useMemo, useState } from "react";
+import { Button } from "../ui/button";
+import { MessagingDiagnosticsDialog } from "./MessagingDiagnosticsDialog";
 
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import {
@@ -98,6 +100,7 @@ export function OmniworkSettingsPanel() {
     setErroredSessionsAtBottom,
   } = useOmniworkPreferences();
   const desktop = isDesktop();
+  const [messageDiagnosticsOpen, setMessageDiagnosticsOpen] = useState(false);
   const [browserEngine, setBrowserEngine] = useState<ChatGPTBrowserEngine>(
     configuredChatGPTBrowserEngine,
   );
@@ -480,6 +483,12 @@ export function OmniworkSettingsPanel() {
           }
         />
       </SettingsSection>
+      {desktop && (
+        <SettingsSection title="Messaging">
+          <SettingsRow id="omniwork-message-diagnostics" title="Message diagnostics" description="Inspect delivery outcomes, retries, and blocked messages." control={<Button variant="outline" size="sm" onClick={() => setMessageDiagnosticsOpen(true)}>View diagnostics</Button>} />
+        </SettingsSection>
+      )}
+      <MessagingDiagnosticsDialog open={messageDiagnosticsOpen} onOpenChange={setMessageDiagnosticsOpen} />
       <OmniworkToolsSection />
     </SettingsPageContainer>
   );
