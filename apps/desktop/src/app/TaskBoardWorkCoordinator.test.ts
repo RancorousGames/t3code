@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Path normalization is the behavior under test.
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { boardOwnersFromSessions, compareQueuedCandidates } from "./TaskBoardWorkCoordinator.ts";
+import { boardOwnersFromSessions, compareQueuedCandidates, completedQueueTask } from "./TaskBoardWorkCoordinator.ts";
 
 const WT = "B:\\GDrive\\Test\\Wartribes\\Tasks";
 const T3 = "B:\\GDrive\\Test\\t3code\\Tasks";
@@ -14,6 +14,27 @@ const task = (boardRoot: string, taskId: string, created: string,
   });
 
 describe("TaskBoard Keep Busy selection", () => {
+  it("counts Done queue tasks after the worker session closes, but never unrelated queue runs", () => {
+    const at = "2026-11-14T05:40:40.060677200Z";
+    const frontmatter = [
+      "---", "id: REA-0029", "column: done", "queue_state: completed",
+      "queue_request: stable-queue-request", "execution_mode: queue",
+      `completed_at: ${at}`, "---",
+    ].join("\n");
+    const closed = {
+      state: "completed" as const,
+      queueRequest: "stable-queue-request",
+      legacyOpenRig: false,
+    };
+    expect(completedQueueTask(closed, frontmatter)).toEqual({ at: Date.parse(at), stamp: at });
+    expect(completedQueueTask({ ...closed, queueRequest: "new-run" }, frontmatter)).toBeNull();
+    expect(completedQueueTask({ ...closed, state: "working" }, frontmatter)).toBeNull();
+    expect(completedQueueTask(closed, frontmatter.replace("column: done", "column: in_progress")))
+      .toBeNull();
+    expect(completedQueueTask(closed, frontmatter.replace("execution_mode: queue", "execution_mode: manual")))
+      .toBeNull();
+  });
+
   it("gives ! Priority global precedence, then balances projects, then prefers fresh cards and numeric IDs", () => {
     const load = new Map([[root(WT), 3], [root(T3), 0]]);
     // An urgent task beats even an empty project and a high-priority project.

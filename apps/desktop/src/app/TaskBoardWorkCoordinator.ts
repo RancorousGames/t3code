@@ -171,6 +171,21 @@ function cli(command: string, args: string[], stdin?: string, timeout = 35_000):
 
 function rootKey(value: string) { return NodePath.resolve(value).toLowerCase(); }
 
+/** Durable queue identity survives worker-session closure and TaskBoard cleanup. */
+export function completedQueueTask(
+  item: Pick<QueueItem, "state" | "queueRequest" | "legacyOpenRig">,
+  frontmatter: string,
+): { at: number; stamp: string } | null {
+  if (item.state !== "completed" || item.legacyOpenRig) return null;
+  const field = (name: string) =>
+    new RegExp(`^\\s*${name}:\\s*(.*?)\\s*$`, "m").exec(frontmatter)?.[1];
+  if (field("column") !== "done" || field("execution_mode") !== "queue" ||
+      !item.queueRequest || field("queue_request") !== item.queueRequest) return null;
+  const stamp = field("completed_at") ?? "";
+  const at = Date.parse(stamp);
+  return Number.isFinite(at) ? { at, stamp } : null;
+}
+
 export class TaskBoardWorkCoordinator {
   private readonly caffy: CaffyScheduler;
   private readonly home: string;
@@ -338,14 +353,14 @@ export class TaskBoardWorkCoordinator {
     }
   }
 
-  /** Queue completion is not the same as Done: verify the actual task frontmatter. */
+/** Queue completion is not the same as Done: verify the actual task frontmatter. */
   private scanCompletions(snapshots: QueueSnapshot[]) {
     const now = Date.now();
     if (now - this.lastCompletionScanAt < 60_000) return;
     this.lastCompletionScanAt = now;
     for (const board of snapshots) {
       for (const item of board.items) {
-        if (item.state !== "completed" || !item.sessionId || item.legacyOpenRig) continue;
+        if (item.state !== "completed" || item.legacyOpenRig) continue;
         const name = item.taskId + ".md";
         const active = NodePath.join(board.boardRoot, "Active", name);
         const archived = NodePath.join(board.boardRoot, "Archive", name);
@@ -356,15 +371,11 @@ export class TaskBoardWorkCoordinator {
               this.completionMtimes.get(file) === stat.mtimeMs) continue;
           const body = NodeFS.readFileSync(file, "utf8").split("\n---", 2)[0] ?? "";
           this.completionMtimes.set(file, stat.mtimeMs);
-          const field = (name: string) => new RegExp(`^\\s*${name}:\\s*(.*?)\\s*$`, "m").exec(body)?.[1];
-          if (field("column") !== "done" || field("execution_mode") !== "queue" ||
-              field("queue_session_id") !== item.sessionId ||
-              field("queue_request") !== item.queueRequest) continue;
-          const stamp = field("completed_at");
-          const at = Date.parse(stamp ?? "");
-          if (Number.isFinite(at)) {
+          const completion = completedQueueTask(item, body);
+          if (completion !== null) {
+            // Retain the old journal key for idempotent historical backfill.
             this.caffy.throughput.recordCompletion(
-              `${rootKey(board.boardRoot)}:${item.taskId}:${stamp}`, at);
+              `${rootKey(board.boardRoot)}:${item.taskId}:${completion.stamp}`, completion.at);
           }
         } catch { /* Cloud-synced task can move mid-scan; retry the next sweep. */ }
       }
