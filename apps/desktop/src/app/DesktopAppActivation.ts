@@ -380,6 +380,7 @@ export const make = Effect.gen(function* () {
       stop: (id) => { if (powerSaveBlocker.isStarted(id)) powerSaveBlocker.stop(id); },
     },
   );
+  caffy.setLatestIdleSource(sessionId => idleJournal.latestForSession(sessionId));
   const taskBoardCoordinator = new TaskBoardWorkCoordinator(
     path.resolve(desktopEnvironment.stateDir), caffy,
   );
@@ -648,6 +649,8 @@ export const make = Effect.gen(function* () {
       broker.registerRenderer((request) => {
         webContents.send(DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL, request);
       });
+      // Reconcile missed idle events as soon as the renderer becomes reachable.
+      void caffy.reconcileIdentityAliases(true).catch(() => {});
     }),
     // The IPC handler owns the activation-completion span.
     complete: Effect.fnUntraced(function* (response) {

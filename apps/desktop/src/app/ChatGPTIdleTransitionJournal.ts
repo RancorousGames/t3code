@@ -101,6 +101,14 @@ export class ChatGPTIdleTransitionJournal {
   get(environmentId: string, sessionId: string): VerifiedChatGPTIdleTransition | null {
     return this.latestBySession[key(environmentId, sessionId)] ?? null;
   }
+
+  /** A desktop Caffy monitor has a stable browser UUID but no environment ID.
+   * Refuse ambiguous matches rather than replaying another environment's idle edge. */
+  latestForSession(sessionId: string): VerifiedChatGPTIdleTransition | null {
+    const matches = Object.values(this.latestBySession).filter(event => event.sessionId === sessionId);
+    return matches.length === 1 ? matches[0]! : null;
+  }
+
   /** Event-driven wait for one exact recipient. Timeout means unchanged, not idle. */
   wait(environmentId: string, sessionId: string, afterSequence: number, timeoutMs = 25_000) {
     const current = this.get(environmentId, sessionId);

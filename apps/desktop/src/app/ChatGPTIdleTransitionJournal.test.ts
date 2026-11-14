@@ -2,7 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { ChatGPTIdleTransitionJournal } from "./ChatGPTIdleTransitionJournal.ts";
 
 const sid = "11111111-1111-4111-8111-111111111111";
@@ -28,6 +28,9 @@ describe("ChatGPT idle journal", () => {
       expect(first.record(one)).toBe(false);
       const recovered = new ChatGPTIdleTransitionJournal(dir);
       expect(recovered.get("local", sid)?.eventId).toBe(one.eventId);
+      expect(recovered.latestForSession(sid)?.eventId).toBe(one.eventId);
+      expect(recovered.record({ ...event(2), environmentId: "other" })).toBe(true);
+      expect(recovered.latestForSession(sid)).toBeNull(); // environment collision is not a wake
       expect(recovered.record(event(0))).toBe(false);
       expect(recovered.record(event(2))).toBe(true);
       expect(recovered.get("local", sid)?.sequence).toBe(2);

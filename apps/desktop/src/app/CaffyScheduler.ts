@@ -157,6 +157,7 @@ export class CaffyScheduler {
   private blockerId: number | null = null;
   private readonly deliveries: ChatGPTDeliveryQueue;
   private readonly request: Request;
+  private latestIdle: (sessionId: string) => VerifiedChatGPTIdleTransition | null = () => null;
   private readonly power: { start: () => number; stop: (id: number) => void };
 
   constructor(
@@ -240,6 +241,11 @@ export class CaffyScheduler {
       return snapshot?.unknown === 0 &&
         snapshot.used + snapshot.reserved <= snapshot.limit;
     });
+  }
+
+  /** The main process supplies the same durable journal used to dispatch live idle events. */
+  setLatestIdleSource(source: (sessionId: string) => VerifiedChatGPTIdleTransition | null) {
+    this.latestIdle = source;
   }
 
   /** Retain recent durable configuration snapshots so a bad lifecycle
@@ -369,6 +375,15 @@ export class CaffyScheduler {
       }
       const binding = await this.registered(row.sessionId, row.conversationId).catch(() => null);
       if (!binding) continue;
+      // Recover idle edges missed during restart, even when the guest is now
+      // unloaded. The roster verifies the session/conversation; the outbox
+      // still requires a guarded live read before any composer submission.
+      const idle = this.latestIdle(binding.browserSessionId);
+      if (idle && idle.sessionId === binding.browserSessionId &&
+          idle.conversationId === row.conversationId &&
+          idle.sequence > row.lastIdleSequence) {
+        this.onIdle(idle);
+      }
       if (binding.working && !row.lastActivatedAt) {
         row.lastActivatedAt = Date.now();
         changed = true;
@@ -643,6 +658,24 @@ export class CaffyScheduler {
       throw new Error("Scheduled start must be in the next 90 days.");
     const prior = this.lookup(input.sessionId) ??
       [...this.entries.values()].find(row => row.conversationId === input.conversationId);
+    // Turning on idle mode while the agent is already idle must not require
+    // another completed turn. Verify the guest rather than trusting a stale
+    // roster's non-working flag; the guarded outbox still checks the composer.
+    const newIdleSchedule = input.mode === "idle" && input.wakeNow === undefined &&
+      (!prior || prior.paused || prior.mode !== "idle" ||
+        prior.conversationId !== input.conversationId);
+    const observed = newIdleSchedule
+      ? await this.read(canonicalId, input.conversationId).catch(() => null) : null;
+    const observedSession = observed?.session as {
+      conversationId?: string; activity?: string; status?: string; lastRole?: string;
+    } | undefined;
+    const initialIdleWake = newIdleSchedule &&
+      observed?.conversationGuardValidated === true &&
+      observed.verifiedConversationId === input.conversationId &&
+      observedSession?.conversationId === input.conversationId &&
+      observedSession?.activity === "idle" &&
+      (observedSession.status === "done_or_idle" || observedSession.status === "waiting_for_input") &&
+      observedSession.lastRole === "assistant";
     // A fresh manual Caffy setup supersedes any earlier "agent stopped" marker.
     for (const [key, mark] of this.agentStops) {
       if ([mark.sessionId, mark.browserSessionId, mark.publicSessionId].some(id =>
@@ -675,7 +708,7 @@ export class CaffyScheduler {
         this.save();
         this.backupConfiguration();
       }
-      if (input.wakeNow === true && !prior.pendingWake && !prior.pendingMessageId) {
+      if ((input.wakeNow === true || initialIdleWake) && !prior.pendingWake && !prior.pendingMessageId) {
         prior.pendingWake = true;
         prior.pendingReason = "manual";
         this.save();
@@ -690,6 +723,11 @@ export class CaffyScheduler {
       }
       return prior;
     }
+    const journalIdle = this.latestIdle(browserSessionId);
+    const initialIdleSequence = journalIdle?.conversationId === input.conversationId &&
+      journalIdle.sessionId === browserSessionId ? journalIdle.sequence : 0;
+    const continuingSameMonitor = prior?.mode === mode &&
+      prior.conversationId === input.conversationId;
     const row: CaffyConfig = {
       sessionId: canonicalId, browserSessionId,
       publicSessionId: identity?.id ?? prior?.publicSessionId,
@@ -700,10 +738,13 @@ export class CaffyScheduler {
       expiresAt: input.durationMinutes === undefined ? null :
         Math.max(now, input.beginAt ?? prior?.beginAt ?? now) + input.durationMinutes * 60_000,
       nextDueAt: mode === "periodic" ? input.beginAt ?? now + intervalMinutes * 60_000 : null,
-      pendingWake: input.wakeNow ?? (mode === "queued"),
-      pendingReason: (input.wakeNow ?? (mode === "queued")) ? "manual" : null,
+      pendingWake: input.wakeNow ?? (mode === "queued" || initialIdleWake),
+      pendingReason: (input.wakeNow ?? (mode === "queued" || initialIdleWake)) ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
-      lastIdleSequence: Math.max(prior?.lastIdleSequence ?? 0, identity?.idleSequence ?? 0),
+      lastIdleSequence: Math.max(
+        continuingSameMonitor ? (prior?.lastIdleSequence ?? 0) : initialIdleSequence,
+        identity?.idleSequence ?? 0,
+      ),
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
       beginAt: input.beginAt !== undefined ? input.beginAt : prior?.beginAt ?? null,
       delayedPrompt: input.delayedPrompt !== undefined ? input.delayedPrompt : prior?.delayedPrompt ?? null,

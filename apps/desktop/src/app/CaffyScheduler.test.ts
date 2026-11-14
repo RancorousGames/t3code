@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import { CaffyScheduler, legacyMonitorOwnsConversation, type CaffyConfig } from "./CaffyScheduler.ts";
+import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const ORIGINAL = "22222222-2222-4222-8222-222222222222";
@@ -44,8 +45,11 @@ function fixture() {
       state: string; publicId: string; conversationId: string;
     }; hidden?: boolean; status?: string; activity?: string; statusObservedAt?: string;
     lastRole?: string; binding?: {boundAt?: string};
+    lastIdleTransition?: {conversationId: string; sequence: number};
   }> = [];
   let guardedRead = false;
+  let idleReadStatus = "done_or_idle";
+  let lastIdle: VerifiedChatGPTIdleTransition | null = null;
   let retirementCount = 0;
   let onDelivery: ((record: {
     sessionId: string; conversationId: string; status: "cancelled"; messageId: string;
@@ -68,17 +72,25 @@ function fixture() {
     data: input.type === "chatgpt.spawn"
       ? { sessionId: REPLACEMENT }
       : input.action === "read"
-        ? { conversationGuardValidated: guardedRead, verifiedConversationId: REPLACEMENT }
+        ? { conversationGuardValidated: guardedRead,
+            verifiedConversationId: guardedRead ? (roster[0]?.conversationId ?? REPLACEMENT) : REPLACEMENT,
+            session: {conversationId: roster[0]?.conversationId ?? REPLACEMENT,
+              status: idleReadStatus, activity: "idle", lastRole: "assistant"} }
         : { sessions: roster, total: roster.length },
   })) as ConstructorParameters<typeof CaffyScheduler>[2];
-  const open = (shutdownPC: () => void = () => { throw new Error("Never call OS shutdown in tests."); }) =>
-    new CaffyScheduler(directory, deliveries, request, {
+  const open = (shutdownPC: () => void = () => { throw new Error("Never call OS shutdown in tests."); }) => {
+    const c = new CaffyScheduler(directory, deliveries, request, {
       start: () => 1, stop: () => {},
     }, shutdownPC);
+    c.setLatestIdleSource(() => lastIdle);
+    return c;
+  };
   return {
     initial, open,
     setRoster: (rows: typeof roster) => { roster = rows; },
     verifyRead: () => { guardedRead = true; },
+    setReadStatus: (status: string) => { idleReadStatus = status; },
+    setLatestIdle: (event: VerifiedChatGPTIdleTransition | null) => { lastIdle = event; },
     retired: () => retirementCount,
     dispose: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
     directory,
@@ -125,6 +137,96 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       });
     } finally { scheduler.close(); g.dispose(); }
   });
+  it("starts an idle-mode monitor immediately only with a verified idle guest", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.mode = "periodic";
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.beginAt = null;
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+      }]);
+      f.verifyRead();
+      const ready = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
+      expect(ready).toMatchObject({ pendingWake: true, pendingReason: "manual" });
+      ready.pendingWake = false;
+      const again = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
+      expect(again.pendingWake).toBe(false); // same configuration does not keep re-waking
+      again.paused = true;
+      const resumed = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
+      expect(resumed).toMatchObject({ paused: false, pendingWake: true });
+      resumed.pendingWake = false;
+      resumed.mode = "periodic";
+      f.setReadStatus("pending_or_stalled");
+      const unfinished = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
+      expect(unfinished.pendingWake).toBe(false);
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("replays only a missed, verified idle transition after renderer recovery", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.beginAt = null;
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+        // No renderer idle cache: this simulates a hibernated guest after restart.
+      }]);
+      f.setLatestIdle({
+        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
+        bindingRevision: null, sequence: 2, eventId: `${SESSION}:${ORIGINAL}:2`,
+        observedAt: Date.now(), turnCount: 3, kind: "completed",
+      });
+      await c.reconcileIdentityAliases(true);
+      expect(row).toMatchObject({lastIdleSequence: 2, pendingWake: true, pendingReason: "idle"});
+      row.pendingWake = false;
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false); // no duplicate continuation
+      row.lastIdleSequence = 2;
+      f.setLatestIdle({
+        environmentId: "local", sessionId: SESSION, conversationId: REPLACEMENT,
+        bindingRevision: null, sequence: 3, eventId: `${SESSION}:${REPLACEMENT}:3`,
+        observedAt: Date.now(), turnCount: 1, kind: "completed",
+      });
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false); // wrong conversation cannot authorize delivery
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("does not replay a historical idle edge when the user explicitly disables Wake now", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.mode = "periodic";
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.beginAt = null;
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+      }]);
+      f.setLatestIdle({
+        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
+        bindingRevision: null, sequence: 3, eventId: `${SESSION}:${ORIGINAL}:3`,
+        observedAt: Date.now(), turnCount: 3, kind: "completed",
+      });
+      const scheduled = await c.set({sessionId: SESSION, conversationId: ORIGINAL,
+        mode: "idle", wakeNow: false});
+      expect(scheduled).toMatchObject({pendingWake: false, lastIdleSequence: 3});
+      await c.reconcileIdentityAliases(true);
+      expect(scheduled.pendingWake).toBe(false);
+    } finally { c.close(); f.dispose(); }
+  });
+
   it("rejects live legacy ownership but ignores stale terminal OmniHub monitors", () => {
     const old = { state: "active", target: { sessionId: SESSION, expectedConversationId: ORIGINAL } };
     expect(legacyMonitorOwnsConversation(old, SESSION, ORIGINAL)).toBe(true);
@@ -451,13 +553,13 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       restarted.close();
     } finally { f.dispose(); }
   });
-  it("preserves settings through a conversation change and only rebinds with positive evidence", async () => {
+  it("preserves settings through a mismatched Bootstrap conversation and only rebinds with positive evidence", async () => {
     const f = fixture();
     const c = f.open();
     try {
       f.setRoster([{
         id: SESSION, conversationId: REPLACEMENT,
-        bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+        bootstrapIdentity: { state: "mismatch", publicId: SESSION, conversationId: ORIGINAL },
       }]);
       await c.reconcileLifecycle();
       await c.reconcileLifecycle();
