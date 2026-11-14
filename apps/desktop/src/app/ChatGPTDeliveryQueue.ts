@@ -59,9 +59,9 @@ const isCaffyRecord = (record: DeliveryRecord) => record.caffyWake === true || i
 const isCustomCaffyRecord = (record: DeliveryRecord) => record.caffyWake === true && !isCaffyWakeBody(record.body);
 const deliveryText = (record: DeliveryRecord) =>
   isWakeBody(record.body) || (isCaffyRecord(record) && !isCustomCaffyRecord(record) && record.receiptVersion !== 2) ? record.body : `${MARKER(record.messageId)}\n${record.body}`;
-// Existing marked messages use bounded retry; wake messages remain reconciliation-only.
-const DUPLICATE_RETRY_DELAYS_MS = [5 * 60_000, 15 * 60_000];
-const LONG_RETRY_MS = 15 * 60_000;
+// All message types use the same guarded retry policy after reconciliation.
+const DUPLICATE_RETRY_DELAYS_MS = [60_000, 3 * 60_000];
+const LONG_RETRY_MS = 5 * 60_000;
 const RECONCILE_RETRY_MS = 60_000;
 const PREFLIGHT_RETRY_MS = 15_000;
 const MAX_ACTIVE_CONVERSATIONS = 4;
@@ -699,12 +699,6 @@ export class ChatGPTDeliveryQueue {
         return;
       }
       record.uncertainSince ??= record.lastSubmissionAt ?? record.createdAt;
-      if (isWakeBody(record.body) || isCaffyRecord(record)) {
-        // The wake uses composer-free direct submission. Unknown means reconcile,
-        // never submit another wake without proof the first was not sent.
-        this.update(record, "uncertain", detail);
-        return;
-      }
       const retryCount = record.duplicateResends ?? 0;
       const retryDelay = DUPLICATE_RETRY_DELAYS_MS[retryCount];
       const retryDue =
