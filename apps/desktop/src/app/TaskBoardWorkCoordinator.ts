@@ -817,6 +817,7 @@ export class TaskBoardWorkCoordinator {
             "--verified-no-live-session",
           ]);
           await this.readQueues();
+          return;
         } else if (matched?.closedAt == null &&
             matched?.bootstrapIdentity?.state === "registered" &&
             matched.conversationId &&
@@ -829,8 +830,11 @@ export class TaskBoardWorkCoordinator {
             "--session-id", matched.id,
           ]);
           await this.readQueues();
+          return;
         }
-        return;
+        // An ambiguous existing guest may require manual intervention, but
+        // must never starve the other Starting requests in this sweep.
+        continue;
       }
       if (now - this.startingSince(boardRoot, item) < 30 * 60_000) continue;
       await this.taskCommand(boardRoot, [
