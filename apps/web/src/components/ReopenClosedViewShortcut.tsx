@@ -209,6 +209,7 @@ export function ReopenClosedViewShortcut() {
       ...(hasHistory ? (["view.reopenClosed"] as const) : []),
       ...PREVIEW_FORWARDED_COMMANDS,
       "chatgpt.newSession",
+      "chatgpt.returnMarker",
       "chatgpt.openDashboard",
       "chatgpt.reloadSession",
       "chatgpt.snoozeSession",

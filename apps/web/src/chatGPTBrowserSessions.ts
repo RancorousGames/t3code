@@ -103,6 +103,8 @@ export const BrowserSession = Schema.Struct({
   project: Schema.optional(Schema.String),
   // User-chosen sidebar border color name; unknown names render no border.
   borderColor: Schema.optional(Schema.String),
+  // Armed until the next observed working -> idle transition; ready until clicked.
+  returnMarker: Schema.optional(Schema.Literals(["armed", "working", "ready"])),
   completion: Schema.optional(
     Schema.Struct({
       declaredAt: Schema.String,
@@ -1035,6 +1037,56 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     [setSessions],
   );
 
+  const toggleSessionReturnMarker = useCallback(
+    (id: string) =>
+      setSessions((current) =>
+        current.map((session) =>
+          session.id !== id
+            ? session
+            : {
+                ...session,
+                returnMarker: session.returnMarker ? undefined : ("armed" as const),
+                humanControlled: true,
+                autoCloseExempt: true,
+                snoozedUntil: undefined,
+                snoozedAt: undefined,
+              },
+        ),
+      ),
+    [setSessions],
+  );
+
+  const clearSessionReturnMarker = useCallback(
+    (id: string) =>
+      setSessions((current) =>
+        current.some((session) => session.id === id && session.returnMarker)
+          ? current.map((session) =>
+              session.id === id ? { ...session, returnMarker: undefined } : session,
+            )
+          : current,
+      ),
+    [setSessions],
+  );
+
+  const observeSessionReturnMarker = useCallback(
+    (id: string, age: "working" | "recent" | "inactive" | "unknown") =>
+      setSessions((current) => {
+        const entry = current.find((session) => session.id === id);
+        if (!entry?.returnMarker) return current;
+        const next =
+          age === "working" && entry.returnMarker === "armed"
+            ? "working"
+            : (age === "recent" || age === "inactive") && entry.returnMarker === "working"
+              ? "ready"
+              : entry.returnMarker;
+        if (next === entry.returnMarker) return current;
+        return current.map((session) =>
+          session.id === id ? { ...session, returnMarker: next } : session,
+        );
+      }),
+    [setSessions],
+  );
+
   const markHumanControlled = useCallback(
     (id: string) =>
       setSessions((current) =>
@@ -1235,6 +1287,9 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     quickSnoozeSession,
     resetQuickSnooze,
     setSessionBorderColor,
+    toggleSessionReturnMarker,
+    clearSessionReturnMarker,
+    observeSessionReturnMarker,
     markHumanControlled,
     markDirectInteraction,
     setSessionCompletion,

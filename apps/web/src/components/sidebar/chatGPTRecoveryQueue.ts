@@ -20,6 +20,7 @@ export interface RecoveryQueueEntry {
   id: string;
   reason: string;
   manager: boolean;
+  returnMarked?: boolean;
   /** Red browser/load failure is always scheduled before orange stalls. */
   red?: boolean;
   firstSeenAt: number;
@@ -80,6 +81,7 @@ export interface RecoveryQueueContext {
   failingIds: readonly string[];
   selectedId?: string | null;
   managerIds?: readonly string[];
+  returnMarkerIds?: readonly string[];
   recentClicks?: readonly string[];
   /** IDs from observed interrupted/delivery-timeout statuses, not guessed from titles. */
   interruptedIds?: readonly string[];
@@ -200,10 +202,11 @@ function tier(entry: RecoveryQueueEntry): number {
   // Mere selection is a recent click, not an explicit recovery request.
   // Only manuallyRetryRecovery may promote a guest above trusted managers.
   if (entry.manualPriority) return 0;
-  if (entry.manager) return 1;
-  if (entry.interrupted) return 2;
-  if (entry.recentlyClicked) return 3;
-  return 4;
+  if (entry.returnMarked) return 1;
+  if (entry.manager) return 2;
+  if (entry.interrupted) return 3;
+  if (entry.recentlyClicked) return 4;
+  return 5;
 }
 
 function byPriority(a: RecoveryQueueEntry, b: RecoveryQueueEntry): number {
@@ -221,6 +224,7 @@ function byPriority(a: RecoveryQueueEntry, b: RecoveryQueueEntry): number {
 }
 
 function priorityReason(id: string, context: RecoveryQueueContext): string {
+  if (context.returnMarkerIds?.includes(id)) return "Return marker";
   if (context.managerIds?.includes(id)) return "trusted manager";
   if (context.interruptedIds?.includes(id)) return "confirmed interrupted work";
   if (id === context.selectedId || context.recentClicks?.includes(id))
@@ -296,6 +300,7 @@ export function reconcileRecoveryQueue(
         id,
         reason: priorityReason(id, context),
         manager: context.managerIds?.includes(id) ?? false,
+        returnMarked: context.returnMarkerIds?.includes(id) ?? false,
         red: true,
         selected: id === context.selectedId,
         firstSeenAt: Date.now(),
@@ -330,6 +335,11 @@ export function reconcileRecoveryQueue(
     const manager = context.managerIds?.includes(entry.id) ?? false;
     if (entry.manager !== manager) {
       entry.manager = manager;
+      changed = true;
+    }
+    const returnMarked = context.returnMarkerIds?.includes(entry.id) ?? false;
+    if (entry.returnMarked !== returnMarked) {
+      entry.returnMarked = returnMarked;
       changed = true;
     }
     const interrupted = context.interruptedIds?.includes(entry.id) ?? false;
@@ -432,6 +442,7 @@ export function noteRecoveryFailure(
     id,
     reason: priorityReason(id, context),
     manager: context.managerIds?.includes(id) ?? false,
+    returnMarked: context.returnMarkerIds?.includes(id) ?? false,
     red: reason === "load-failure" || reason === "browser-unresponsive",
     selected: id === context.selectedId,
     firstSeenAt: Date.now(),

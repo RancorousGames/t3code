@@ -136,6 +136,7 @@ export function ChatGPTIdleOverflowUnloader({
             session.lastDirectInteractionAt ?? 0,
             chatGPTGuestTouchedAt(key) ?? 0,
           );
+          if (session.returnMarker) return false;
           return canEvictChatGPTOverflowSession({
             now: Date.now(),
             lastUsedAt,

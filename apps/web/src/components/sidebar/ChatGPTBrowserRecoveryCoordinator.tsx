@@ -20,6 +20,7 @@ import {
   chatGPTBrowserLastUrlKey,
   chatGPTBrowserThreadRef,
   isChatGPTConversationUrl,
+  readChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { chatGPTDirectSubmitExpression } from "../../chatGPTDirectSubmit";
@@ -586,6 +587,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
       failingIds: currentRedIds(),
       selectedId: currentSelectedId() ?? null,
       managerIds: currentManagerIds(),
+      returnMarkerIds: readChatGPTBrowserSessions(envId).filter((session) => session.returnMarker).map((session) => session.id),
       interruptedIds: currentInterruptedIds(),
       recentClicks: readRecentSessionClicks(envId),
       lastActive: currentLastActive(),

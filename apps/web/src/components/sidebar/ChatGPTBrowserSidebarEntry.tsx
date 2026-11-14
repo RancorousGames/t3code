@@ -502,6 +502,8 @@ export function ChatGPTBrowserSidebarEntry({
     quickSnoozeSession,
     resetQuickSnooze,
     setSessionBorderColor,
+    clearSessionReturnMarker,
+    observeSessionReturnMarker,
     setSessionWorker,
     markDirectInteraction,
     syncInferredMetadata,
@@ -961,6 +963,11 @@ export function ChatGPTBrowserSidebarEntry({
     for (const session of sessions) {
       if (session.quickSnoozeStep !== undefined && activities[session.id]?.age === "working")
         resetQuickSnooze(session.id);
+      if (session.returnMarker) {
+        const age = activities[session.id]?.age;
+        if (age === "working" || age === "recent" || age === "inactive")
+          observeSessionReturnMarker(session.id, age);
+      }
     }
     // Once a hidden working session stops being green, release the temporary
     // flag. It must stay visible if it starts working again later.
@@ -972,7 +979,7 @@ export function ChatGPTBrowserSidebarEntry({
       );
       return retained.length === previous.size ? previous : new Set(retained);
     });
-  }, [activities, sessions, resetQuickSnooze]);
+  }, [activities, sessions, resetQuickSnooze, observeSessionReturnMarker]);
   const registeredProjects = useMemo(
     () =>
       projects
@@ -1956,6 +1963,7 @@ export function ChatGPTBrowserSidebarEntry({
           setShowHidden(false);
         } else await hideSession(sessionId);
       } else if (action === "unload") {
+        if (session.returnMarker) throw new Error("Clear the Return marker before unloading this session.");
         if (
           activities[sessionId]?.age === "working" ||
           hasUncertainChatGPTSend(environmentId, sessionId)
@@ -3109,7 +3117,8 @@ export function ChatGPTBrowserSidebarEntry({
                                 <div
                                   data-chatgpt-selected-session={activeSessionId === session.id}
                                   data-chatgpt-visible-pane={displayedSessionIds.has(session.id)}
-                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
+                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${session.returnMarker === "ready" ? "ring-4 ring-inset ring-yellow-400/90" : activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
+                                  title={session.returnMarker === "ready" ? "Return marker: answer ready — click to clear" : session.returnMarker ? "Return marker armed — waiting for the next answer" : undefined}
                                   onContextMenu={(event) => {
                                     event.preventDefault();
                                     void showSessionContextMenu(session.id, {
@@ -3208,6 +3217,7 @@ export function ChatGPTBrowserSidebarEntry({
                                                   };
                                                 }
                                                 event.currentTarget.blur();
+                                                clearSessionReturnMarker(session.id);
                                                 setClickedForSort(session.id);
                                                 setSelectionRecoveryClick((value) => value + 1);
                                                 recordSessionClick(

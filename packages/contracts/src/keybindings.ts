@@ -103,6 +103,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "chat.newLocal",
   "chat.newWithoutProject",
   "chatgpt.newSession",
+  "chatgpt.returnMarker",
   "prepfile.new",
   "chatgpt.openDashboard",
   "chatgpt.reloadSession",

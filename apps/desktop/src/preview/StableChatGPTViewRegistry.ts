@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { WebContentsView, type BrowserWindow, type Rectangle } from "electron";
 import { MENU_ACTION_CHANNEL, STABLE_CHATGPT_VIEW_STATE_CHANNEL } from "../ipc/channels.ts";
+import { activeChatGPTBrowserSessionId } from "../window/ChatGPTCloseShortcut.ts";
 import { RENAME_CHATGPT_SESSION_MENU_ACTION } from "../window/ChatGPTCloseShortcut.ts";
 import { installChatGPTInstantRetry } from "./ChatGPTInstantRetry.ts";
 import {
@@ -183,7 +184,7 @@ export function createStableChatGPTViewRegistry(owner: BrowserWindow) {
       const key = input.key.toLowerCase();
       const appChord = (input.control || input.meta) && (input.shift || input.alt);
       const appWindowChord =
-        (input.control || input.meta) && !input.shift && !input.alt && (key === "w" || key === "f");
+        (input.control || input.meta) && !input.shift && !input.alt && (key === "w" || key === "f" || (key === "d" && activeChatGPTBrowserSessionId(owner.webContents.getURL()) === identity.sessionId));
       if (!appChord && !appWindowChord) return;
       event.preventDefault();
       // Dispatch to the existing shortcut handling, not a competing native map.

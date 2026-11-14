@@ -15,7 +15,7 @@ export function ChatGPTNewSessionShortcut() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const environmentId = usePrimaryEnvironmentId();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { createSession } = useChatGPTBrowserSessions(environmentId);
+  const { createSession, toggleSessionReturnMarker } = useChatGPTBrowserSessions(environmentId);
 
   const createNewSession = useEffectEvent(() => {
     if (!isElectron || !environmentId) return;
@@ -31,6 +31,17 @@ export function ChatGPTNewSessionShortcut() {
 
     const unregisterKeydown = registerCommands(
       {
+        "chatgpt.returnMarker": (event) => {
+          const sessionId = pathname.match(/^\/browser\/([^/]+)\/?$/)?.[1];
+          if (!sessionId || !environmentId || event.repeat || event.isComposing ||
+              isCommandPaletteOpen() ||
+              (event.target instanceof Element && event.target.closest("[data-keybinding-capture]")))
+            return false;
+          event.preventDefault();
+          event.stopPropagation();
+          toggleSessionReturnMarker(sessionId);
+          return true;
+        },
         "chatgpt.newSession": (event) => {
           if (
             event.repeat ||
@@ -60,7 +71,7 @@ export function ChatGPTNewSessionShortcut() {
       unregisterKeydown();
       unregisterMenuAction();
     };
-  }, [environmentId, keybindings, pathname]);
+  }, [environmentId, keybindings, pathname, toggleSessionReturnMarker]);
 
   return null;
 }

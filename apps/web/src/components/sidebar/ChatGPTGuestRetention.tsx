@@ -259,7 +259,7 @@ export function ChatGPTGuestRetention({
     const candidates = sessions.flatMap((session) => {
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
-      if (autoEvicted?.[key] && !displayedSessionIds.has(session.id) &&
+      if (!session.returnMarker && autoEvicted?.[key] && !displayedSessionIds.has(session.id) &&
           !deliveryRequests[`${environmentId}:${session.id}`] &&
           !imminentCaffyIds.has(session.id)) return [];
       const recentUseAt = Math.max(
@@ -278,6 +278,7 @@ export function ChatGPTGuestRetention({
             !session.parentSessionId));
       const withinLongIdle = recentUseAt > now - 4 * 60 * 60_000;
       const important =
+        Boolean(session.returnMarker) ||
         imminentCaffyIds.has(session.id) ||
         deliveryRequests[`${environmentId}:${session.id}`] === true ||
         (warmedIds.includes(session.id) &&

@@ -362,6 +362,7 @@ export function ChatGPTNativeRecoveryCoordinator({
         failingIds: input.redIds,
         selectedId: input.selectedId ?? null,
         managerIds: input.managerIds,
+        returnMarkerIds: readChatGPTBrowserSessions(env).filter((session) => session.returnMarker).map((session) => session.id),
         interruptedIds: input.interruptedIds,
         suspendedIds: [...suspendedIds],
       };

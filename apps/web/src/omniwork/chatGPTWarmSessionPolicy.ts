@@ -74,6 +74,7 @@ export interface WarmCandidate {
   readonly id: string;
   readonly manager: boolean;
   readonly highlighted: boolean;
+  readonly returnMarked?: boolean;
   readonly selected: boolean;
   readonly keepLoaded?: boolean;
   readonly deliveryPending?: boolean;
@@ -121,6 +122,7 @@ export function nextWarmChatGPTSession(input: WarmSelection): string | null {
   const priority = (c: WarmCandidate): number => {
     if (c.selected) return 0;
     if (c.deliveryPending) return 1;
+    if (c.returnMarked) return 2;
     if (c.keepLoaded) return 2;
     if (c.caffyDueSoon) return 3;
     if (c.recoveryQueued) return 4;
