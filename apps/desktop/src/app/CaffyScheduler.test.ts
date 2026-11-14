@@ -49,6 +49,7 @@ function fixture() {
   }> = [];
   let guardedRead = false;
   let idleReadStatus = "done_or_idle";
+  let idleReadRole: "assistant" | "user" = "assistant";
   let idleReadTurns = 3;
   let lastIdle: VerifiedChatGPTIdleTransition | null = null;
   let retirementCount = 0;
@@ -76,7 +77,7 @@ function fixture() {
         ? { conversationGuardValidated: guardedRead,
             verifiedConversationId: guardedRead ? (roster[0]?.conversationId ?? REPLACEMENT) : REPLACEMENT,
             session: {conversationId: roster[0]?.conversationId ?? REPLACEMENT,
-              status: idleReadStatus, activity: "idle", lastRole: "assistant",
+              status: idleReadStatus, activity: "idle", lastRole: idleReadRole,
               totalTurns: idleReadTurns} }
         : { sessions: roster, total: roster.length },
   })) as ConstructorParameters<typeof CaffyScheduler>[2];
@@ -92,6 +93,7 @@ function fixture() {
     setRoster: (rows: typeof roster) => { roster = rows; },
     verifyRead: () => { guardedRead = true; },
     setReadStatus: (status: string) => { idleReadStatus = status; },
+    setReadRole: (role: "assistant" | "user") => { idleReadRole = role; },
     setReadTurns: (turns: number) => { idleReadTurns = turns; },
     setLatestIdle: (event: VerifiedChatGPTIdleTransition | null) => { lastIdle = event; },
     retired: () => retirementCount,
@@ -238,6 +240,94 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.lastWakeAt = Date.now();
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false);
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("honors a fresh quiescent idle event even if DOM turn count decreased", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.beginAt = null;
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.lastIdleSequence = 60;
+      row.lastHandledIdleTurnCount = 5;
+      row.lastWakeAt = Date.now() - 60_000;
+      const event: VerifiedChatGPTIdleTransition = {
+        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
+        bindingRevision: null, sequence: 61, eventId: `${SESSION}:${ORIGINAL}:61`,
+        observedAt: Date.now() - 5_000, turnCount: 4, kind: "quiescent",
+      };
+      c.onIdle(event);
+      expect(row.pendingWake).toBe(true);
+      expect(row.lastIdleSequence).toBe(61);
+      expect(row.lastHandledIdleTurnCount).toBe(4);
+      expect(row.lastCheckResult).toContain("quiescent event #61");
+      row.pendingWake = false;
+      c.onIdle(event);
+      expect(row.pendingWake).toBe(false); // Same event sequence cannot wake again.
+      row.lastWakeAt = Date.now();
+      c.onIdle({...event, sequence: 62, eventId: `${SESSION}:${ORIGINAL}:62`});
+      expect(row.pendingWake).toBe(false); // Older observation than delivered wake.
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("reconciles a previously consumed quiescent edge despite lower turn count", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.beginAt = null;
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.lastIdleSequence = 61;
+      row.lastHandledIdleTurnCount = 5;
+      row.lastWakeAt = Date.now() - 60_000;
+      f.setLatestIdle({
+        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
+        bindingRevision: null, sequence: 61, eventId: `${SESSION}:${ORIGINAL}:61`,
+        observedAt: Date.now() - 5_000, turnCount: 4, kind: "quiescent",
+      });
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+        status: "pending_or_stalled", activity: "idle", lastRole: "user",
+        statusObservedAt: new Date().toISOString(),
+        lastIdleTransition: {conversationId: ORIGINAL, sequence: 61},
+      }]);
+      f.verifyRead();
+      f.setReadStatus("pending_or_stalled");
+      f.setReadRole("user");
+      f.setReadTurns(4);
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(true);
+      expect(row.lastCheckResult).toContain("wake requested");
+      row.pendingWake = false;
+      row.lastWakeAt = Date.now();
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false);
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("reports why the idle monitor has not fired after a scheduler check", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.beginAt = null;
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+        status: "pending_or_stalled", activity: "idle", lastRole: "user",
+        statusObservedAt: new Date().toISOString(),
+      }]);
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false);
+      expect(row.lastCheckedAt).toBeGreaterThan(0);
+      expect(row.lastCheckResult).toContain("Waiting for assistant response");
     } finally { c.close(); f.dispose(); }
   });
 

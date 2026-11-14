@@ -172,6 +172,7 @@ import { isAIInterfaceSession } from "../../chatGPTAIInterfaceSessions";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import { useT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "../../hooks/useT3CaffyOverview";
 import { CaffyCoffeePotIcon } from "./CaffyCoffeePotIcon";
+import { caffyDiagnosticLines } from "./CaffyHoverDetails";
 import { ChatGPTDelayedPromptDialog, type DelayedPromptTarget, type ScheduledChatGPTJob } from "./ChatGPTDelayedPromptDialog";
 import { ChatGPTAutoContinueDialog, type AutoContinueConfig, type AutoContinueRequest } from "./ChatGPTAutoContinueDialog";
 import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
@@ -329,6 +330,25 @@ function SortableBrowserSessionRow({
     >
       {children(sortable, activity, model)}
     </SidebarMenuItem>
+  );
+}
+
+// Defer date work until the hover-card portal actually mounts its contents.
+function ChatGPTSessionDates({ timeline }: {
+  timeline: {
+    createdAt: number | null;
+    lastActiveAt: number | null;
+    lastRefreshAt: number | null;
+    lastRebootAt: number | null;
+  };
+}) {
+  return (
+    <div className="grid gap-1 border-t border-border/50 pt-2 text-[11px]">
+      <div>Created: {formatChatGPTSessionDateTime(timeline.createdAt)}</div>
+      <div>Last active: {formatChatGPTSessionDateTime(timeline.lastActiveAt)}</div>
+      <div>Last browser reload: {formatChatGPTSessionDateTime(timeline.lastRefreshAt)}</div>
+      <div>Last Agent Reboot: {formatChatGPTSessionDateTime(timeline.lastRebootAt)}</div>
+    </div>
   );
 }
 
@@ -3015,7 +3035,7 @@ export function ChatGPTBrowserSidebarEntry({
                                 : null;
                               const caffyLabel = caffyMonitor
                                 ? `Caffy: ${caffyMonitor.mode === "queued" ? "Auto-continue on free slot" :
-                                    caffyMonitor.mode === "idle" ? "Auto-continue on free slot" :
+                                    caffyMonitor.mode === "idle" ? "Auto-continue on idle" :
                                     caffyMonitor.mode === "periodic" ? `Periodic every ${caffyMonitor.intervalMinutes} min` :
                                     "Wake on startup"}${caffyMonitor.onceOnly ? " (once)" : ""}${caffyMonitor.beginAt && caffyMonitor.beginAt > clockNow
                                         ? ` — starts ${new Date(caffyMonitor.beginAt).toLocaleString()}` : ""}${
@@ -3023,6 +3043,9 @@ export function ChatGPTBrowserSidebarEntry({
                                             ? ` — auto-reboot every ${caffyMonitor.autoRebootMinutes}m when idle`
                                             : ""}${caffyMonitor.rebootOperationId ? " — reboot pending reconciliation" : ""}`
                                 : null;
+                              const caffyDiagnostics = caffyMonitor
+                                ? caffyDiagnosticLines(caffyMonitor, clockNow)
+                                : [];
                               const isVerifiedManager = managerIds.has(session.id);
                               const displayRole = chatGPTSessionDisplayRole(
                                 session,
@@ -3054,7 +3077,12 @@ export function ChatGPTBrowserSidebarEntry({
                                       <div className="text-foreground/75">{pendingLoad.title}</div>
                                     )}
                                     {caffyLabel && (
-                                      <div className="text-sky-400/90">{caffyLabel}</div>
+                                      <div className="grid gap-1 border-t border-sky-400/25 pt-2 text-[11px]">
+                                        <div className="font-medium text-sky-400">{caffyLabel}</div>
+                                        {caffyDiagnostics.map((line) => (
+                                          <div key={line} className="text-foreground/75 break-words">{line}</div>
+                                        ))}
+                                      </div>
                                     )}
                                     {caffyStoppedLabel && (
                                       <div className="text-red-400/90">{caffyStoppedLabel}</div>
@@ -3078,23 +3106,7 @@ export function ChatGPTBrowserSidebarEntry({
                                           : ""}
                                       </div>
                                     )}
-                                    <div className="grid gap-1 border-t border-border/50 pt-2 text-[11px]">
-                                      <div>
-                                        Created: {formatChatGPTSessionDateTime(timeline.createdAt)}
-                                      </div>
-                                      <div>
-                                        Last active:{" "}
-                                        {formatChatGPTSessionDateTime(timeline.lastActiveAt)}
-                                      </div>
-                                      <div>
-                                        Last browser reload:{" "}
-                                        {formatChatGPTSessionDateTime(timeline.lastRefreshAt)}
-                                      </div>
-                                      <div>
-                                        Last Agent Reboot:{" "}
-                                        {formatChatGPTSessionDateTime(timeline.lastRebootAt)}
-                                      </div>
-                                    </div>
+                                    <ChatGPTSessionDates timeline={timeline} />
                                     {recoveryDetails && (
                                       <div className="grid gap-1 border-t border-border/50 pt-2 text-[11px]">
                                         {recoveryDetails.map((detail) => (
@@ -3375,10 +3387,10 @@ export function ChatGPTBrowserSidebarEntry({
                                               )}
                                               {caffyLabel && (
                                                 <CaffyCoffeePotIcon
-                                                  aria-label={caffyLabel}
+                                                  aria-label={[caffyLabel, ...caffyDiagnostics].join(". ")}
                                                   className="size-3.5 shrink-0 text-sky-400"
                                                 >
-                                                  <title>{caffyLabel}</title>
+                                                  <title>{[caffyLabel, ...caffyDiagnostics].join("\n")}</title>
                                                 </CaffyCoffeePotIcon>
                                               )}
                                               {caffyStoppedLabel && (

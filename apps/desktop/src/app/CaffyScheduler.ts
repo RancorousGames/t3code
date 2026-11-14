@@ -39,6 +39,10 @@ export interface CaffyConfig {
   lastHandledIdleTurnCount?: number;
   lastWakeAt: number | null;
   lastError: string | null;
+  /** Last scheduler observation of this T3 session, regardless of wake eligibility. */
+  lastCheckedAt?: number | null;
+  /** Why the scheduler did or did not request a continuation at that check. */
+  lastCheckResult?: string | null;
   /** Absolute future start, persisted through full desktop restarts. */
   beginAt?: number | null;
   /** Optional one-time instruction for the next delayed wake. */
@@ -371,12 +375,35 @@ export class CaffyScheduler {
     this.lastIdentityReconcileAt = now;
     let changed = false;
     for (const row of [...this.entries.values()]) {
+      const checked = (reason: string) => {
+        row.lastCheckedAt = Date.now();
+        row.lastCheckResult = reason;
+        changed = true;
+      };
       if (row.rebootOperationId) {
+        checked("Conversation reboot being reconciled.");
         await this.reconcileReboot(row).catch(() => {});
         continue;
       }
       const binding = await this.registered(row.sessionId, row.conversationId).catch(() => null);
-      if (!binding) continue;
+      if (!binding) {
+        checked("T3 session or current conversation not verified in the live roster.");
+        continue;
+      }
+      if (row.paused) checked("Paused; automatic wakes disabled.");
+      else if (row.pendingMessageId) checked("Wake delivery pending; waiting for a delivery receipt.");
+      else if (row.pendingWake) checked("Wake requested; awaiting scheduler dispatch.");
+      else if (row.mode === "idle" && binding.lastRole === "user")
+        checked("Waiting for assistant response; page may appear idle before a reply is complete.");
+      else if (row.mode === "idle" && binding.status === "pending_or_stalled")
+        checked("ChatGPT reply pending or stalled; no completed assistant turn verified.");
+      else if (row.mode === "idle" && binding.status === "stuck")
+        checked("ChatGPT tab stuck; browser recovery needed before continuation.");
+      else if (row.mode === "idle" && binding.working)
+        checked("Assistant generating; waiting for completion.");
+      else if (row.mode === "idle")
+        checked(`Observed ${binding.status ?? "unknown"}; waiting for a new completed assistant turn.`);
+      else checked(`Observed ${binding.status ?? "unknown"}; ${row.mode} scheduler active.`);
       // Recover idle edges missed during restart, even when the guest is now
       // unloaded. The roster verifies the session/conversation; the outbox
       // still requires a guarded live read before any composer submission.
@@ -388,15 +415,19 @@ export class CaffyScheduler {
       }
       // An idle transition may be consumed before a restart or never reach
       // this process. Recheck the live guest even when the journal sequence
-      // hasn't advanced, but only for a newly answered user turn. Do NOT use
-      // statusObservedAt as a completion clock: T3 refreshes it on every read.
+      // hasn't advanced. A post-wake verified idle edge can be a completed
+      // reply or a stable quiescent user turn. Do NOT use statusObservedAt as
+      // a completion clock: T3 refreshes it on every read.
       if (row.mode === "idle" && !row.paused && !row.pendingWake &&
           !row.pendingMessageId && !row.rebootOperationId &&
           (row.beginAt == null || row.beginAt <= now) &&
           (row.expiresAt === null || row.expiresAt > now) &&
           !binding.working && binding.activity === "idle" &&
-          (binding.status === "done_or_idle" || binding.status === "waiting_for_input") &&
-          binding.lastRole === "assistant") {
+          ((binding.lastRole === "assistant" &&
+            (binding.status === "done_or_idle" || binding.status === "waiting_for_input")) ||
+            (binding.lastRole === "user" && binding.status === "pending_or_stalled" &&
+              idle?.conversationId === row.conversationId &&
+              (idle.kind === "quiescent" || idle.kind === "stopped")))) {
         const proof = await this.read(binding.browserSessionId, row.conversationId).catch(() => null);
         const guest = proof?.session as {
           conversationId?: string; activity?: string; status?: string;
@@ -412,22 +443,29 @@ export class CaffyScheduler {
         // An edge can be newer than the wake yet already marked consumed.
         const uncontinuedEdge = !!idle && idle.conversationId === row.conversationId &&
           idle.sessionId === binding.browserSessionId &&
-          idle.observedAt > (row.lastWakeAt ?? row.createdAt) &&
-          idle.turnCount >= handled;
+          idle.observedAt > (row.lastWakeAt ?? row.createdAt);
+        // A new verified idle edge is independent of the DOM's totalTurns:
+        // rehydration, pagination and conversation replacement can decrease it.
+        // Stable, verified user-only quiescence is also a legitimate idle edge.
+        const liveAssistantIdle = guest?.lastRole === "assistant" &&
+          (guest.status === "done_or_idle" || guest.status === "waiting_for_input");
+        const liveUserQuiescent = uncontinuedEdge &&
+          (idle?.kind === "quiescent" || idle?.kind === "stopped") &&
+          guest?.lastRole === "user" && guest.status === "pending_or_stalled" &&
+          turnCount === idle?.turnCount;
         if (this.entries.get(row.sessionId) === row && !row.paused &&
             !row.pendingWake && !row.pendingMessageId &&
             proof?.conversationGuardValidated === true &&
             proof.verifiedConversationId === row.conversationId &&
             guest?.conversationId === row.conversationId &&
             guest.activity === "idle" &&
-            (guest.status === "done_or_idle" || guest.status === "waiting_for_input") &&
-            guest.lastRole === "assistant" &&
+            (liveAssistantIdle || liveUserQuiescent) &&
             Number.isSafeInteger(turnCount) && (turnCount ?? 0) > 0 &&
-            (newerTurn || uncontinuedEdge)) {
+            ((liveAssistantIdle && newerTurn) || uncontinuedEdge)) {
           row.lastHandledIdleTurnCount = Math.max(handled, turnCount ?? 0);
           row.pendingWake = true;
           row.pendingReason = "idle";
-          changed = true;
+          checked("New completed assistant turn verified; wake requested.");
         }
       }
       if (binding.working && !row.lastActivatedAt) {
@@ -1219,9 +1257,12 @@ export class CaffyScheduler {
             event.eventId.startsWith(`${item.browserSessionId}:${event.conversationId}:`))));
     if (!row || row.paused || row.conversationId !== event.conversationId ||
         event.sequence <= row.lastIdleSequence) return;
-    const alreadyHandledTurn = event.turnCount <= (row.lastHandledIdleTurnCount ?? 0);
+    // Sequence identifies an idle edge; totalTurns is only diagnostic and can
+    // decrease after DOM remount or conversation rehydration. Comparing counts
+    // made Caffy ignore a genuinely NEW idle event for the same T3 session.
+    const newerThanWake = event.observedAt > (row.lastWakeAt ?? row.createdAt);
     row.lastIdleSequence = event.sequence;
-    row.lastHandledIdleTurnCount = Math.max(row.lastHandledIdleTurnCount ?? 0, event.turnCount);
+    row.lastHandledIdleTurnCount = event.turnCount;
     if (event.kind === "completed" && row.lastWakeAt !== null &&
         event.observedAt > row.lastWakeAt &&
         row.lastWakeAt > (row.lastCountedWakeAt ?? 0)) {
@@ -1229,10 +1270,12 @@ export class CaffyScheduler {
       row.lastCountedWakeAt = row.lastWakeAt;
     }
     if ((row.mode === "idle" || row.mode === "queued") &&
-        !alreadyHandledTurn && !row.pendingMessageId && !row.rebootOperationId &&
+        newerThanWake && !row.pendingMessageId && !row.rebootOperationId &&
         (row.beginAt === null || row.beginAt === undefined || row.beginAt <= Date.now())) {
       row.pendingWake = true;
       row.pendingReason = "idle";
+      row.lastCheckResult = `New verified ${event.kind ?? "idle"} event #${event.sequence}; wake requested.`;
+      row.lastCheckedAt = Date.now();
     }
     this.save();
     void this.pump();
@@ -1248,6 +1291,7 @@ export class CaffyScheduler {
       row.runWithoutBusy = false;
       row.lastWakeAt = Date.now();
       row.lastActivatedAt ??= row.lastWakeAt;
+      row.lastCheckResult = "Wake delivered; awaiting the next verified idle event.";
       row.lastError = null;
       if (row.onceOnly) { this.entries.delete(row.sessionId); }
     } else if (record.status === "cancelled") {

@@ -20,6 +20,10 @@ export interface T3CaffyEntry {
   nextDueAt?: number | null;
   pendingWake?: boolean;
   pendingMessageId?: string | null;
+  lastWakeAt?: number | null;
+  lastCheckedAt?: number | null;
+  lastCheckResult?: string | null;
+  lastError?: string | null;
 }
 
 export interface T3CaffyAgentStop {
