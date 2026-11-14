@@ -35,6 +35,8 @@ export interface CaffyConfig {
   pendingReason: Trigger | null;
   pendingMessageId: string | null;
   lastIdleSequence: number;
+  /** Last answered ChatGPT user turn handled by idle mode; survives restarts. */
+  lastHandledIdleTurnCount?: number;
   lastWakeAt: number | null;
   lastError: string | null;
   /** Absolute future start, persisted through full desktop restarts. */
@@ -384,6 +386,50 @@ export class CaffyScheduler {
           idle.sequence > row.lastIdleSequence) {
         this.onIdle(idle);
       }
+      // An idle transition may be consumed before a restart or never reach
+      // this process. Recheck the live guest even when the journal sequence
+      // hasn't advanced, but only for a newly answered user turn. Do NOT use
+      // statusObservedAt as a completion clock: T3 refreshes it on every read.
+      if (row.mode === "idle" && !row.paused && !row.pendingWake &&
+          !row.pendingMessageId && !row.rebootOperationId &&
+          (row.beginAt == null || row.beginAt <= now) &&
+          (row.expiresAt === null || row.expiresAt > now) &&
+          !binding.working && binding.activity === "idle" &&
+          (binding.status === "done_or_idle" || binding.status === "waiting_for_input") &&
+          binding.lastRole === "assistant") {
+        const proof = await this.read(binding.browserSessionId, row.conversationId).catch(() => null);
+        const guest = proof?.session as {
+          conversationId?: string; activity?: string; status?: string;
+          lastRole?: string; totalTurns?: number;
+        } | undefined;
+        const turnCount = guest?.totalTurns;
+        const journalTurnCount = idle?.conversationId === row.conversationId &&
+          idle.sessionId === binding.browserSessionId &&
+          idle.sequence <= row.lastIdleSequence ? idle.turnCount : 0;
+        const handled = row.lastHandledIdleTurnCount ?? journalTurnCount;
+        const newerTurn = Number.isSafeInteger(turnCount) &&
+          (turnCount ?? 0) > handled;
+        // An edge can be newer than the wake yet already marked consumed.
+        const uncontinuedEdge = !!idle && idle.conversationId === row.conversationId &&
+          idle.sessionId === binding.browserSessionId &&
+          idle.observedAt > (row.lastWakeAt ?? row.createdAt) &&
+          idle.turnCount >= handled;
+        if (this.entries.get(row.sessionId) === row && !row.paused &&
+            !row.pendingWake && !row.pendingMessageId &&
+            proof?.conversationGuardValidated === true &&
+            proof.verifiedConversationId === row.conversationId &&
+            guest?.conversationId === row.conversationId &&
+            guest.activity === "idle" &&
+            (guest.status === "done_or_idle" || guest.status === "waiting_for_input") &&
+            guest.lastRole === "assistant" &&
+            Number.isSafeInteger(turnCount) && (turnCount ?? 0) > 0 &&
+            (newerTurn || uncontinuedEdge)) {
+          row.lastHandledIdleTurnCount = Math.max(handled, turnCount ?? 0);
+          row.pendingWake = true;
+          row.pendingReason = "idle";
+          changed = true;
+        }
+      }
       if (binding.working && !row.lastActivatedAt) {
         row.lastActivatedAt = Date.now();
         changed = true;
@@ -490,6 +536,7 @@ export class CaffyScheduler {
         row.lastIdleSequence =
           found.lastIdleTransition?.conversationId === nextId
             ? found.lastIdleTransition.sequence ?? 0 : 0;
+        row.lastHandledIdleTurnCount = 0;
         row.lastWakeAt = null;
         row.lastActivatedAt = now;
         row.lastRebootAt = now;
@@ -745,6 +792,10 @@ export class CaffyScheduler {
         continuingSameMonitor ? (prior?.lastIdleSequence ?? 0) : initialIdleSequence,
         identity?.idleSequence ?? 0,
       ),
+      lastHandledIdleTurnCount: continuingSameMonitor
+        ? prior?.lastHandledIdleTurnCount
+        : journalIdle?.conversationId === input.conversationId &&
+          journalIdle.sessionId === browserSessionId ? journalIdle.turnCount : 0,
       lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
       beginAt: input.beginAt !== undefined ? input.beginAt : prior?.beginAt ?? null,
       delayedPrompt: input.delayedPrompt !== undefined ? input.delayedPrompt : prior?.delayedPrompt ?? null,
@@ -1051,6 +1102,7 @@ export class CaffyScheduler {
     row.publicSessionId = entry.bootstrapIdentity.publicId ?? row.publicSessionId;
     row.lastIdleSequence = entry.lastIdleTransition?.conversationId === nextId
       ? entry.lastIdleTransition.sequence ?? 0 : 0;
+    row.lastHandledIdleTurnCount = 0;
     row.lastActivatedAt = Date.now();
     row.lastRebootAt = Date.now();
     row.wakesSinceReboot = 0;
@@ -1167,7 +1219,9 @@ export class CaffyScheduler {
             event.eventId.startsWith(`${item.browserSessionId}:${event.conversationId}:`))));
     if (!row || row.paused || row.conversationId !== event.conversationId ||
         event.sequence <= row.lastIdleSequence) return;
+    const alreadyHandledTurn = event.turnCount <= (row.lastHandledIdleTurnCount ?? 0);
     row.lastIdleSequence = event.sequence;
+    row.lastHandledIdleTurnCount = Math.max(row.lastHandledIdleTurnCount ?? 0, event.turnCount);
     if (event.kind === "completed" && row.lastWakeAt !== null &&
         event.observedAt > row.lastWakeAt &&
         row.lastWakeAt > (row.lastCountedWakeAt ?? 0)) {
@@ -1175,7 +1229,7 @@ export class CaffyScheduler {
       row.lastCountedWakeAt = row.lastWakeAt;
     }
     if ((row.mode === "idle" || row.mode === "queued") &&
-        !row.pendingMessageId && !row.rebootOperationId &&
+        !alreadyHandledTurn && !row.pendingMessageId && !row.rebootOperationId &&
         (row.beginAt === null || row.beginAt === undefined || row.beginAt <= Date.now())) {
       row.pendingWake = true;
       row.pendingReason = "idle";
@@ -1207,7 +1261,10 @@ export class CaffyScheduler {
     this.save();
   }
 
-  private async registered(sessionId: string, conversationId: string): Promise<{ id: string; browserSessionId: string; working: boolean; idleSequence: number } | null> {
+  private async registered(sessionId: string, conversationId: string): Promise<{
+    id: string; browserSessionId: string; working: boolean; idleSequence: number;
+    activity?: string; status?: string; lastRole?: string;
+  } | null> {
     const reply = await this.request({
       version: 1, requestId: NodeCrypto.randomUUID(),
       type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
@@ -1217,7 +1274,7 @@ export class CaffyScheduler {
     const entries = (reply.data as { sessions?: Array<{
       id?: string; publicSessionId?: string; browserSessionId?: string;
       conversationId?: string; bootstrapIdentity?: {conversationId?:string; publicId?:string};
-      activity?: string; status?: string; statusObservedAt?: string;
+      activity?: string; status?: string; lastRole?: string; statusObservedAt?: string;
       lastIdleTransition?: {conversationId?: string; sequence?: number; eventId?: string};
       closedAt?: unknown;
     }> }).sessions;
@@ -1253,6 +1310,7 @@ export class CaffyScheduler {
           idleSequence: entry.lastIdleTransition?.conversationId === conversationId &&
             Number.isSafeInteger(entry.lastIdleTransition.sequence)
             ? Math.max(0, entry.lastIdleTransition.sequence ?? 0) : 0,
+          activity: entry.activity, status: entry.status, lastRole: entry.lastRole,
           working: (() => {
             const observedAt = Date.parse(entry.statusObservedAt ?? "");
             return Number.isFinite(observedAt) && observedAt <= Date.now() + 1000 &&

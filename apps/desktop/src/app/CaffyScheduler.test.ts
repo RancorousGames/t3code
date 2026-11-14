@@ -49,6 +49,7 @@ function fixture() {
   }> = [];
   let guardedRead = false;
   let idleReadStatus = "done_or_idle";
+  let idleReadTurns = 3;
   let lastIdle: VerifiedChatGPTIdleTransition | null = null;
   let retirementCount = 0;
   let onDelivery: ((record: {
@@ -75,7 +76,8 @@ function fixture() {
         ? { conversationGuardValidated: guardedRead,
             verifiedConversationId: guardedRead ? (roster[0]?.conversationId ?? REPLACEMENT) : REPLACEMENT,
             session: {conversationId: roster[0]?.conversationId ?? REPLACEMENT,
-              status: idleReadStatus, activity: "idle", lastRole: "assistant"} }
+              status: idleReadStatus, activity: "idle", lastRole: "assistant",
+              totalTurns: idleReadTurns} }
         : { sessions: roster, total: roster.length },
   })) as ConstructorParameters<typeof CaffyScheduler>[2];
   const open = (shutdownPC: () => void = () => { throw new Error("Never call OS shutdown in tests."); }) => {
@@ -90,6 +92,7 @@ function fixture() {
     setRoster: (rows: typeof roster) => { roster = rows; },
     verifyRead: () => { guardedRead = true; },
     setReadStatus: (status: string) => { idleReadStatus = status; },
+    setReadTurns: (turns: number) => { idleReadTurns = turns; },
     setLatestIdle: (event: VerifiedChatGPTIdleTransition | null) => { lastIdle = event; },
     retired: () => retirementCount,
     dispose: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
@@ -198,6 +201,82 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       });
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false); // wrong conversation cannot authorize delivery
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("rechecks already-idle assistants after restart even if the idle sequence was consumed", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.beginAt = null;
+      row.lastIdleSequence = 52; // The journal edge was consumed before T3 restarted.
+      row.lastWakeAt = Date.now() - 90_000;
+      const repliedAt = new Date(Date.now() - 30_000).toISOString();
+      f.setLatestIdle({
+        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
+        bindingRevision: null, sequence: 52, eventId: `${SESSION}:${ORIGINAL}:52`,
+        observedAt: Date.now() - 30_000, turnCount: 3, kind: "completed",
+      });
+      row.lastHandledIdleTurnCount = 3;
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+        status: "done_or_idle", activity: "idle", lastRole: "assistant",
+        statusObservedAt: repliedAt,
+        lastIdleTransition: {conversationId: ORIGINAL, sequence: 52},
+      }]);
+      f.verifyRead();
+      await c.reconcileIdentityAliases(true);
+      expect(row).toMatchObject({
+        lastIdleSequence: 52, pendingWake: true, pendingReason: "idle",
+      });
+      // After sending the continuation, the same idle state cannot trigger it again.
+      row.pendingWake = false;
+      row.lastWakeAt = Date.now();
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false);
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("refuses startup idle recovery without newer verified assistant completion", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.beginAt = null;
+      row.lastWakeAt = Date.now() - 30_000;
+      row.lastHandledIdleTurnCount = 3;
+      const oldStatus = new Date(Date.now() - 60_000).toISOString();
+      const base = {
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+        status: "done_or_idle", activity: "idle",
+      };
+      f.verifyRead();
+      f.setRoster([{...base, lastRole: "assistant", statusObservedAt: oldStatus}]);
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false); // Same assistant turn was already handled.
+      const recent = new Date(Date.now()).toISOString();
+      f.setRoster([{...base, lastRole: "user", statusObservedAt: recent}]);
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false); // Unanswered prompt is not a completed run.
+      f.setRoster([{...base, lastRole: "assistant", statusObservedAt: recent}]);
+      f.setReadTurns(4);
+      f.setReadStatus("pending_or_stalled");
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false); // Stale roster cannot override a live read.
+      f.setReadStatus("done_or_idle");
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(true); // New finished turn had no journal event.
+      expect(row.lastHandledIdleTurnCount).toBe(4);
+      row.pendingWake = false;
+      await c.reconcileIdentityAliases(true);
+      expect(row.pendingWake).toBe(false); // Same turn cannot trigger twice.
     } finally { c.close(); f.dispose(); }
   });
 
