@@ -199,7 +199,7 @@ export class ChatGPTDeliveryQueue {
       )
         continue;
       seen.add(record.conversationId);
-      if (record.awaitingGuest || !this.dispatchAllowed(record)) continue;
+      if (!this.dispatchAllowed(record)) continue;
       if (this.activeConversations.has(record.conversationId)) continue;
       next = Math.min(next, this.nextTry.get(record.messageId) ?? 0);
     }
@@ -751,7 +751,15 @@ export class ChatGPTDeliveryQueue {
       if (this.activeConversations.size >= MAX_ACTIVE_CONVERSATIONS) break;
       if (this.activeConversations.has(conversationId)) continue;
       const head = records[0];
-      if (!head || head.awaitingGuest || !this.dispatchAllowed(head) || !due(head)) continue;
+      if (!head || !this.dispatchAllowed(head) || !due(head)) continue;
+      if (head.awaitingGuest) {
+        if (Date.now() - head.createdAt >= ABANDON_UNREACHABLE_MS) {
+          this.update(head, "cancelled", "Recipient did not mount within 30 minutes; message abandoned.");
+        } else {
+          this.nextTry.set(head.messageId, Date.now() + RECONCILE_RETRY_MS);
+        }
+        continue;
+      }
       // Revalidate queued-worker capacity immediately before the actual send.
       // This matters when manual sessions start after a wake was reserved.
       let admitted = false;

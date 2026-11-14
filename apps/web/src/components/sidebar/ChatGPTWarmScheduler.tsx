@@ -69,7 +69,7 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
     }
     beginChatGPTRecoveryTimeline(environmentId, "all",
       `Warm scheduler initialized: ${sessions.length} sessions, target ${warmCount}, load-all-restored=${loadAllStartup}, selected=${selectedId ?? "none"}, paused=${autoMaintenancePaused}.`);
-    if ((warmCount <= 0 && !sessions.some((session) => session.returnMarker)) || autoMaintenancePaused) {
+    if (autoMaintenancePaused) {
       publishWarmChatGPTForecast(environmentId, []);
       logChatGPTRecoveryPriority(environmentId, "all", [], [],
         autoMaintenancePaused ? "Automatic loading/recovery paused in settings." : "Warm capacity is zero; no automatic loading.", "paused");
@@ -165,7 +165,7 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
             keepLoaded: keepLoadedIds.has(session.id),
             caffyDueSoon: imminentCaffyIds.has(session.id),
             recoveryQueued: queuedRecovery.has(session.id),
-            exceedTarget: imminentCaffyIds.has(session.id) || Boolean(session.returnMarker),
+            exceedTarget: pendingGuestIds.current.has(session.id) || imminentCaffyIds.has(session.id) || Boolean(session.returnMarker),
             returnMarked: Boolean(session.returnMarker),
             activeBeforeFailure: wasWarmSessionActiveBeforeFailure(environmentId, session.id),
             recentlyClicked: warmRecentClickRanks(environmentId, selectedId ?? null).get(session.id) ?? -1,
@@ -326,7 +326,7 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
           deliveryPending: pendingGuestIds.current.has(session.id),
           keepLoaded: keepLoadedIds.has(session.id),
           caffyDueSoon: imminentCaffyIds.has(session.id),
-          exceedTarget: imminentCaffyIds.has(session.id) || Boolean(session.returnMarker),
+          exceedTarget: pendingGuestIds.current.has(session.id) || imminentCaffyIds.has(session.id) || Boolean(session.returnMarker),
           returnMarked: Boolean(session.returnMarker),
           activeBeforeFailure: wasWarmSessionActiveBeforeFailure(environmentId, session.id),
           recentlyClicked: clickRanks.get(session.id) ?? -1,
