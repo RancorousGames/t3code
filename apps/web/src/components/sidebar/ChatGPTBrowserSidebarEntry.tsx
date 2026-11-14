@@ -2834,34 +2834,31 @@ export function ChatGPTBrowserSidebarEntry({
                 )}
                 {(group.key === null || isSearching || !collapsedGroups.has(group.key)) &&
                   group.rows.map(({ session, depth, childCount, inactiveParentHeader }, index) => {
-                    const sectionFor = (id: string): "error" | "idle" | null => {
-                      const age = activities[id]?.age;
-                      if (age === "invalid" || age === "interrupted" || age === "delivery-timeout")
-                        return "error";
-                      if (age !== "working") return "idle";
-                      return null;
-                    };
-                    const section = sectionFor(session.id);
-                    const previousSection =
-                      index > 0 ? sectionFor(group.rows[index - 1]!.session.id) : null;
+                    // Show only the true boundary after a contiguous working block.
+                    // Errors and recently active sessions are individual row states,
+                    // not sections; selected-row anchoring can also break the block.
                     const divider =
                       sortMode === "activity" &&
                       !isSearching &&
                       !showingHidden &&
                       group.key === "status:activity" &&
-                      section !== null &&
-                      section !== previousSection;
+                      index > 0 &&
+                      activities[group.rows[index - 1]!.session.id]?.age === "working" &&
+                      activities[session.id]?.age !== "working" &&
+                      group.rows.slice(0, index).every(
+                        (row) => activities[row.session.id]?.age === "working",
+                      ) &&
+                      group.rows.slice(index).every(
+                        (row) => activities[row.session.id]?.age !== "working",
+                      );
                     return (
                       <Fragment key={session.id}>
                         {divider && (
                           <div
-                            className="mx-1 my-1 flex items-center gap-2 text-[10px] leading-none text-muted-foreground"
+                            className="mx-1 my-1 h-px bg-border/50"
                             role="separator"
-                            aria-label={section === "error" ? "Error sessions" : "Idle sessions"}
-                          >
-                            <span>{section === "error" ? "Error" : "Idle"}</span>
-                            <span className="h-px min-w-0 flex-1 bg-border/70" />
-                          </div>
+                            aria-label="Working sessions above; other sessions below"
+                          />
                         )}
                         {sortMode === "activity" &&
                           inactiveParentHeader &&
