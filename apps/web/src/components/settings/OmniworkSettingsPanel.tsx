@@ -21,6 +21,7 @@ import { CaffyV2Settings } from "./CaffyV2Settings";
 import { ChatGPTRecoverySettingsControls } from "../sidebar/ChatGPTRecoverySettingsControls";
 import { useChatGPTDefaultView } from "../../chatGPTSessionViewPreferences";
 import { useChatGPTRestartContinuationEnabled } from "../../omniwork/chatGPTRestartContinuationSetting";
+import { useChatGPTSessionSortPreference } from "../../chatGPTSessionSortPreference";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 const UNLOAD_PROFILES = [
@@ -101,6 +102,7 @@ export function OmniworkSettingsPanel() {
     configuredChatGPTBrowserEngine,
   );
   const [defaultChatGPTView, setDefaultChatGPTView] = useChatGPTDefaultView();
+  const [activitySortPreference, setActivitySortPreference] = useChatGPTSessionSortPreference();
   const [resumeManagedAfterRestart, setResumeManagedAfterRestart] =
     useChatGPTRestartContinuationEnabled();
   const recoverySettings = useChatGPTRecoverySettings();
@@ -252,6 +254,29 @@ export function OmniworkSettingsPanel() {
         />
       </SettingsSection>
       <SettingsSection title="ChatGPT session view">
+        <SettingsRow
+          id="omniwork-chatgpt-sidebar-sort-preference"
+          title="ChatGPT sidebar activity sorting"
+          description="When the sidebar is set to activity order, keep working sessions first, then sort all remaining sessions by last activity or creation time. The selected session stays in place until deselected."
+          control={
+            <Select
+              value={activitySortPreference}
+              onValueChange={(value) => {
+                if (value === "activity" || value === "created") setActivitySortPreference(value);
+              }}
+            >
+              <SelectTrigger size="sm" aria-label="ChatGPT sidebar activity sorting">
+                <SelectValue>
+                  {activitySortPreference === "activity" ? "Working → Last activity" : "Working → Creation date"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="activity">Working → Last activity (default)</SelectItem>
+                <SelectItem value="created">Working → Creation date</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
         <SettingsRow
           id="omniwork-chatgpt-default-view"
           title="Default ChatGPT view"

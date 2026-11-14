@@ -66,12 +66,7 @@ import {
   type ChatGPTPermanentProject,
   withTaskBoardPermanentProjects,
 } from "../../chatGPTSessionGrouping";
-import {
-  sameChatGPTActivityOrder,
-  snapshotChatGPTActivityOrder,
-  stabilizeChatGPTActivityOrder,
-  type ChatGPTActivityOrderSnapshot,
-} from "../../chatGPTActivityOrderStability";
+import { useChatGPTSessionSortPreference } from "../../chatGPTSessionSortPreference";
 import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { searchChatGPTSessionCatalog } from "../../chatGPTSessionSearch";
@@ -603,6 +598,7 @@ export function ChatGPTBrowserSidebarEntry({
     "started" as ChatGPTSessionSortMode,
     Schema.Literals(["started", "activity"]),
   );
+  const [activitySortPreference] = useChatGPTSessionSortPreference();
   const [sectionCollapsed, setSectionCollapsed] = useLocalStorage(
     `t3code:chatgpt-browser:collapsed:${environmentId ?? "unconnected"}`,
     false,
@@ -1355,7 +1351,7 @@ export function ChatGPTBrowserSidebarEntry({
     const groups = layoutChatGPTSessions(
       displayedSessions.filter((session) => !isAIInterfaceSession(session)),
       registeredProjects,
-      showingHidden ? "started" : sortMode,
+      showingHidden ? "started" : sortMode === "activity" ? activitySortPreference : sortMode,
       groupingActivity as Readonly<Record<string, ChatGPTSessionSortActivity>>,
       allPermanentProjects,
       freshPinnedIds[0],
@@ -1438,6 +1434,7 @@ export function ChatGPTBrowserSidebarEntry({
     showingHidden,
     showingSnoozed,
     sortMode,
+    activitySortPreference,
     activities,
     allPermanentProjects,
     taskBoardProjects,
@@ -1452,13 +1449,6 @@ export function ChatGPTBrowserSidebarEntry({
     environmentId,
     sortActivityById,
   ]);
-  const [activityOrderSnapshot, setActivityOrderSnapshot] = useState<ChatGPTActivityOrderSnapshot | null>(null);
-  const activityOrderContext = JSON.stringify([
-    environmentId, sortMode, showingHidden, showingSnoozed, hideUnloaded,
-    showWorkers, showAIInterfaceSessions, erroredSessionsAtBottom,
-    selectedColors, pendingQuestionIds, freshPinnedIds,
-    sessions.map((session) => [session.id, session.borderColor ?? null]),
-  ]);
   const lastRenderedOrder = useRef<{
     environmentId: string | null | undefined;
     groups: typeof rawGroupedSessions;
@@ -1468,24 +1458,19 @@ export function ChatGPTBrowserSidebarEntry({
   useEffect(() => {
     if (clickedForSort && activeSessionId === clickedForSort) setClickedForSort(null);
   }, [activeSessionId, clickedForSort]);
-  const stableGroups = stabilizeChatGPTActivityOrder(
-    rawGroupedSessions, activityOrderSnapshot, activityOrderContext, sortActivityById,
-  );
-  const priorityGroups = prioritizeChatGPTSessionHighlights(
-    stableGroups, sortActivityById, permanentProjectKeys,
-  );
+  const priorityGroups = sortMode === "started"
+    ? prioritizeChatGPTSessionHighlights(rawGroupedSessions, sortActivityById, permanentProjectKeys)
+    : rawGroupedSessions;
   const groupedSessions = preserveSelectedChatGPTSessionPosition(
     priorityGroups,
     lastRenderedOrder.current?.environmentId === environmentId
       ? lastRenderedOrder.current.groups : null,
     clickedForSort ?? activeSessionId,
   );
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Preserve the last committed visual order across asynchronous status probes.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Anchor the selected row to the last committed visual position.
   useLayoutEffect(() => {
     lastRenderedOrder.current = { environmentId, groups: groupedSessions };
-    const next = snapshotChatGPTActivityOrder(groupedSessions, activityOrderContext, sortActivityById);
-    setActivityOrderSnapshot((previous) => sameChatGPTActivityOrder(previous, next) ? previous : next);
-  }, [groupedSessions, activityOrderContext, sortActivityById, environmentId]);
+  }, [groupedSessions, environmentId]);
   const searchResults = useMemo(
     () =>
       searchChatGPTSessionCatalog({
@@ -2361,11 +2346,11 @@ export function ChatGPTBrowserSidebarEntry({
             <Button
               size="icon-xs"
               variant="ghost-muted"
-              aria-label={`Sort ChatGPT sessions: ${sortMode === "started" ? "Started" : "Last active/status"}. Click to switch to ${sortMode === "started" ? "Last active/status" : "Started"}.`}
+              aria-label={`Sort ChatGPT sessions: ${sortMode === "started" ? "Started" : activitySortPreference === "created" ? "Creation date" : "Last activity"}. Click to switch to ${sortMode === "started" ? "your preferred activity mode" : "Started"}.`}
               title={
                 sortMode === "started"
-                  ? "Started order (switch to last active/status)"
-                  : "Last active/status (switch to started order)"
+                  ? "Started order (switch to activity sorting configured in Settings)"
+                  : `${activitySortPreference === "created" ? "Creation date" : "Last activity"} (switch to started order)`
               }
               onClick={() =>
                 setSortMode((current) => (current === "started" ? "activity" : "started"))

@@ -390,7 +390,7 @@ export function groupChatGPTSessions(
   return groups;
 }
 
-export type ChatGPTSessionSortMode = "started" | "activity";
+export type ChatGPTSessionSortMode = "started" | "activity" | "created";
 export const CHATGPT_ACTIVITY_PROJECT_FALLBACK_MS = 24 * 60 * 60_000;
 
 export function wasChatGPTSessionActiveWithinDay(lastActivityAt: number, now: number): boolean {
@@ -415,7 +415,7 @@ export type ChatGPTSessionSortActivity = {
   readonly lastActivityAt?: number;
 };
 
-/** Sort by visible activity status before recency; a grey session cannot outrank a blue one. */
+/** Retained for the legacy snapshot utility; live activity ordering uses timestamps. */
 export function chatGPTSessionActivityPriority(age?: ChatGPTSessionSortActivity["age"]): number {
   switch (age) {
     case "working": return 0;
@@ -429,6 +429,7 @@ export function chatGPTSessionActivityPriority(age?: ChatGPTSessionSortActivity[
   }
 }
 
+/** Activity modes are global queues, never parent/project trees. */
 export function layoutChatGPTSessions(
   sessions: readonly BrowserSession[],
   projects: readonly ChatGPTGroupingProject[],
@@ -440,208 +441,34 @@ export function layoutChatGPTSessions(
   now = Date.now(),
   taskBoardProjects: readonly ChatGPTTaskBoardProject[] = [],
 ): ChatGPTSidebarGroup[] {
-  if (sortMode === "started") return groupChatGPTSessions(sessions, projects, permanentProjects, taskBoardProjects);
+  if (sortMode === "started")
+    return groupChatGPTSessions(sessions, projects, permanentProjects, taskBoardProjects);
   void selectedSessionId;
-  const order = new Map(sessions.map((session, index) => [session.id, index]));
-  const lastActivityAt = (session: BrowserSession) => Math.max(
-    activityById[session.id]?.lastActivityAt ?? 0,
-    activityById[session.id]?.lastWorkingAt ?? 0,
-    session.lastDirectInteractionAt ?? 0,
-  );
-  const isError = (session: BrowserSession) =>
-    ["interrupted", "delivery-timeout", "invalid"].includes(
-      activityById[session.id]?.age ?? "unknown",
-    );
-  // Recent conversations stay in one global recency list even after they turn
-  // grey or are unloaded. After 24 h they return to project-tree ordering.
-  const isRecentlyActive = (session: BrowserSession) => {
-    if (erroredSessionsAtBottom && isError(session)) return false;
-    const at = lastActivityAt(session);
-    return wasChatGPTSessionActiveWithinDay(at, now) ||
-      ["recent", "unloaded-recent", "unloaded-working"].includes(
-        activityById[session.id]?.age ?? "unknown",
-      );
-  };
-  const enriched = applyConfirmedChatGPTSessionMetadata(sessions);
-  // Activity mode is a global queue. A working child must never be held below
-  // an inactive manager, and parent labels are visual context, not sessions.
-  const parents = chatGPTParentIndex(enriched);
-  const byId = new Map(enriched.map((session) => [session.id, session]));
-  const active = enriched
-    .filter((session) => activityById[session.id]?.age === "working")
-    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-  const inactive = enriched
-    .filter((session) => activityById[session.id]?.age !== "working")
+  void erroredSessionsAtBottom;
+  void now;
+
+  // Work time (the source of blue/grey status), not sidebar clicks, decides recency.
+  const timestamp = (session: BrowserSession) => activityById[session.id]?.lastWorkingAt ?? 0;
+  const ordered = applyConfirmedChatGPTSessionMetadata(sessions)
+    .map((session, index) => ({ session, index }))
     .sort((a, b) => {
-      const aRank = chatGPTSessionActivityPriority(activityById[a.id]?.age);
-      const bRank = chatGPTSessionActivityPriority(activityById[b.id]?.age);
-      const aRecent = isRecentlyActive(a);
-      const bRecent = isRecentlyActive(b);
+      const aWorking = activityById[a.session.id]?.age === "working";
+      const bWorking = activityById[b.session.id]?.age === "working";
       return (
-        Number(bRecent) - Number(aRecent) ||
-        aRank - bRank ||
-        (aRecent && bRecent ? lastActivityAt(b) - lastActivityAt(a) : 0) ||
-        lastActivityAt(b) - lastActivityAt(a) ||
-        (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)
+        Number(bWorking) - Number(aWorking) ||
+        (aWorking && bWorking ? a.index - b.index : 0) ||
+        (sortMode === "created"
+          ? (b.session.createdAt ?? 0) - (a.session.createdAt ?? 0)
+          : timestamp(b.session) - timestamp(a.session) ||
+            (b.session.createdAt ?? 0) - (a.session.createdAt ?? 0)) ||
+        a.index - b.index
       );
     });
-  const activeRows: ChatGPTSidebarSession[] = [];
-  // Working descendants stay immediately below their working parent, even if
-  // unrelated sessions were started between them. Preserve root ordering.
-  const workingChildren = new Map<string, BrowserSession[]>();
-  for (const session of active) {
-    const parentId = parents.get(session.id);
-    if (!parentId || activityById[parentId]?.age !== "working") continue;
-    const children = workingChildren.get(parentId) ?? [];
-    children.push(session);
-    workingChildren.set(parentId, children);
-  }
-  // Keep active children with the same inactive immediate parent together.
-  // Only one thin label precedes the contiguous group.
-  const emitted = new Set<string>();
-  const parentGroups = new Map<string, BrowserSession[]>();
-  for (const session of active) {
-    const parentId = parents.get(session.id);
-    if (!parentId || activityById[parentId]?.age === "working") continue;
-    const group = parentGroups.get(parentId) ?? [];
-    group.push(session);
-    parentGroups.set(parentId, group);
-  }
-  const pushActive = (session: BrowserSession, depth = 0, label?: string) => {
-    if (emitted.has(session.id)) return;
-    emitted.add(session.id);
-    const children = workingChildren.get(session.id) ?? [];
-    activeRows.push({
-      session,
-      depth,
-      childCount: children.length,
-      ...(label ? { inactiveParentHeader: label } : {}),
-    });
-    children.forEach((child) => pushActive(child, depth + 1));
-  };
-  for (const session of active) {
-    if (emitted.has(session.id)) continue;
-    const parentId = parents.get(session.id);
-    if (parentId && activityById[parentId]?.age === "working") continue;
-    if (!parentId) {
-      pushActive(session);
-      continue;
-    }
-    const group = parentGroups.get(parentId) ?? [session];
-    group.forEach((child, index) =>
-      pushActive(child, 0, index === 0 ? byId.get(parentId)?.title : undefined),
-    );
-  }
-  // Work within the past 24 h stays globally ordered by latest activity, even
-  // for idle/unloaded/unknown guests. Older guests fall back to project trees.
-  const inactiveById = new Map(inactive.map((session) => [session.id, session]));
-  const inactiveChildren = new Map<string, BrowserSession[]>();
-  for (const session of inactive) {
-    const parentId = parents.get(session.id);
-    const parent = parentId ? inactiveById.get(parentId) : undefined;
-    if (
-      !parent ||
-      isRecentlyActive(parent) ||
-      isRecentlyActive(session) ||
-      (erroredSessionsAtBottom && isError(parent) !== isError(session))
-    )
-      continue;
-    const siblings = inactiveChildren.get(parent.id) ?? [];
-    siblings.push(session);
-    inactiveChildren.set(parent.id, siblings);
-  }
-  const remainingRows: ChatGPTSidebarSession[] = [];
-  const visited = new Set<string>();
-  const emitInactive = (session: BrowserSession, depth: number) => {
-    if (visited.has(session.id)) return;
-    visited.add(session.id);
-    const children = inactiveChildren.get(session.id) ?? [];
-    remainingRows.push({ session, depth, childCount: children.length });
-    children.forEach((child) => emitInactive(child, depth + 1));
-  };
-  const roots = inactive.filter((session) => {
-    const parentId = parents.get(session.id);
-    return !parentId || !inactiveChildren.get(parentId)?.some((child) => child.id === session.id);
-  });
-  const regularRoots = roots.filter((session) => isRecentlyActive(session));
-  const projectRoots = roots.filter((session) => !isRecentlyActive(session));
-  // Sort standalone trees by project without disturbing intra-tree ancestry.
-  const assignedProject = new Map<string, string>();
-  for (const group of groupChatGPTSessions(enriched, projects, permanentProjects)) {
-    for (const { session } of group.rows) assignedProject.set(session.id, group.title ?? "");
-  }
-  const projectName = (session: BrowserSession) =>
-    (session.project ?? assignedProject.get(session.id) ?? "").toLocaleLowerCase().replace(/[\s_-]+/g, "");
-  projectRoots.sort(
-    (a, b) =>
-      (erroredSessionsAtBottom ? Number(isError(a)) - Number(isError(b)) : 0) ||
-      projectName(a).localeCompare(projectName(b)) ||
-      lastActivityAt(b) - lastActivityAt(a) ||
-      (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
-  );
-  for (const session of [...regularRoots, ...projectRoots]) emitInactive(session, 0);
-  inactive.forEach((session) => emitInactive(session, 0));
-
-  // A flat activity queue and inline per-row headings made the same project
-  // appear repeatedly whenever an old project row followed an ungrouped row.
-  // Keep the <24h queue flat, then render ONE real group for each older project.
-  const recentRows = [
-    ...activeRows,
-    ...remainingRows.filter(({ session }) => isRecentlyActive(session)),
-  ];
-  const originalGroups = groupChatGPTSessions(enriched, projects, permanentProjects, taskBoardProjects);
-  const assignedGroup = new Map(
-    originalGroups.flatMap((group) =>
-      group.rows.map(({ session }) => [session.id, group] as const),
-    ),
-  );
-  const projectIdentity = (title: string) => title.toLocaleLowerCase().replace(/[\s_-]+/g, "");
-  const preferredGroup = new Map<string, ChatGPTSidebarGroup>();
-  for (const group of originalGroups) {
-    if (group.key === "other" || !group.title) continue;
-    const identity = projectIdentity(group.title);
-    const previous = preferredGroup.get(identity);
-    if (!previous || (previous.key?.startsWith("hint:") && group.key?.startsWith("project:")))
-      preferredGroup.set(identity, group);
-  }
-  const olderGroups = new Map<string, { key: string; title: string; rows: ChatGPTSidebarSession[] }>();
-  let root: BrowserSession | null = null;
-  for (const row of remainingRows) {
-    if (isRecentlyActive(row.session)) continue;
-    if (row.depth === 0 || root === null) root = row.session;
-
-    const error = erroredSessionsAtBottom && isError(root);
-    const original = assignedGroup.get(root.id);
-    // Do not reclassify an explicitly assigned singleton as projectless merely
-    // because Started mode omits headings for one-session projects.
-    const title = error ? "Errors"
-      : original?.key && original.key !== "other" ? original.title ?? "Other"
-      : root.project?.trim() && root.project.toLowerCase() !== "other" &&
-          !isGenericChatGPTProjectName(root.project)
-        ? root.project.trim() : "Other";
-    // Aliases and separately inferred project keys share the same header,
-    // preferring durable registered/permanent identity for collapse and drag.
-    const canonical = error ? "status:errors" : projectIdentity(title);
-    const preferred = preferredGroup.get(canonical);
-    const displayTitle = !error && preferred?.title ? preferred.title : title;
-    const key = error ? "status:errors"
-      : preferred?.key ?? (original?.key && original.key !== "other" ? original.key
-        : title === "Other" ? "other" : `hint:${canonical}`);
-    let group = olderGroups.get(canonical);
-    if (!group) {
-      group = { key, title: displayTitle, rows: [] };
-      olderGroups.set(canonical, group);
-    }
-    group.rows.push(row);
-  }
-  const groups: ChatGPTSidebarGroup[] = [];
-  if (recentRows.length)
-    groups.push({ key: "status:activity", title: null, rows: recentRows });
-  const orderedGroups = [...olderGroups.values()].sort((a, b) =>
-    Number(a.key === "status:errors") - Number(b.key === "status:errors") ||
-    Number(a.title === "Other") - Number(b.title === "Other") ||
-    a.title.localeCompare(b.title),
-  );
-  groups.push(...orderedGroups);
-  return groups;
+  return ordered.length
+    ? [{
+        key: "status:activity",
+        title: null,
+        rows: ordered.map(({ session }) => ({ session, depth: 0, childCount: 0 })),
+      }]
+    : [];
 }
