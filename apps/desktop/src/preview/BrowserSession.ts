@@ -288,6 +288,41 @@ export const make = Effect.gen(function* BrowserSessionMake() {
           const browserSession = session.fromPartition(partition);
           // Like Chrome, clipboard reads ask once per origin; both answers last for the session.
           const clipboardReadDecisions = new Map<string, boolean>();
+          const microphoneGrants = new Set<string>();
+          const confirmMicrophoneAccess = (
+            requester: WebContents,
+            rawUrl: string | undefined,
+            mediaTypes: ReadonlyArray<"audio" | "video"> | undefined,
+            callback: (granted: boolean) => void,
+          ): void => {
+            // A media request may include a camera; never approve it with microphone consent.
+            if (mediaTypes?.length !== 1 || mediaTypes[0] !== "audio") {
+              callback(false);
+              return;
+            }
+            const origin = permissionOrigin(rawUrl);
+            if (origin === null) {
+              callback(false);
+              return;
+            }
+            if (microphoneGrants.has(origin)) {
+              callback(true);
+              return;
+            }
+            promptPermission(
+              requester,
+              {
+                buttons: ["Allow microphone", "Block"],
+                message: `${truncateForPrompt(origin)} wants to use your microphone`,
+                detail:
+                  "Allow this site to record audio through your microphone? Camera access is not included.",
+              },
+              (answer) => {
+                if (answer === true) microphoneGrants.add(origin);
+                callback(answer === true);
+              },
+            );
+          };
           const confirmClipboardRead = (
             requester: WebContents,
             rawUrl: string | undefined,
@@ -334,13 +369,34 @@ export const make = Effect.gen(function* BrowserSessionMake() {
                 );
                 return;
               }
+              if (permission === "media") {
+                confirmMicrophoneAccess(
+                  webContents,
+                  ("securityOrigin" in details ? details.securityOrigin : undefined) ??
+                    details.requestingUrl,
+                  "mediaTypes" in details ? details.mediaTypes : undefined,
+                  callback,
+                );
+                return;
+              }
               callback(ALLOWED_PREVIEW_PERMISSIONS.has(permission));
             },
           );
-          browserSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) =>
-            permission === "clipboard-read"
-              ? clipboardReadDecisions.get(permissionOrigin(requestingOrigin) ?? "") === true
-              : ALLOWED_PREVIEW_PERMISSIONS.has(permission),
+          browserSession.setPermissionCheckHandler(
+            (_webContents, permission, requestingOrigin, details) => {
+              if (permission === "clipboard-read")
+                return (
+                  clipboardReadDecisions.get(permissionOrigin(requestingOrigin) ?? "") === true
+                );
+              if (permission === "media")
+                return (
+                  details.mediaType === "audio" &&
+                  microphoneGrants.has(
+                    permissionOrigin(details.securityOrigin ?? requestingOrigin) ?? "",
+                  )
+                );
+              return ALLOWED_PREVIEW_PERMISSIONS.has(permission);
+            },
           );
           const next = new Map(sessions);
           next.set(partition, browserSession);

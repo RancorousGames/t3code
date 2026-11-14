@@ -282,6 +282,62 @@ describe("BrowserSession", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("prompts for audio-only microphone access and remembers grants by origin", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const partition = yield* browserSessions.getPartition("voice-profile");
+      yield* browserSessions.getSession("voice-profile");
+      const browserSession = sessions.get(partition);
+      assert.isDefined(browserSession);
+      const requestHandler = browserSession.setPermissionRequestHandler.mock.calls[0]?.[0];
+      const checkHandler = browserSession.setPermissionCheckHandler.mock.calls[0]?.[0];
+      assert.isFunction(requestHandler);
+      assert.isFunction(checkHandler);
+
+      const requestMedia = (
+        requestingUrl: string,
+        mediaTypes: Array<"audio" | "video"> | undefined,
+      ) =>
+        Effect.callback<boolean>((resume) => {
+          requestHandler(null, "media", (granted: boolean) => resume(Effect.succeed(granted)), {
+            requestingUrl,
+            securityOrigin: requestingUrl,
+            mediaTypes,
+          });
+        });
+      const checkMedia = (origin: string, mediaType: string): boolean =>
+        checkHandler(null, "media", origin, { mediaType, securityOrigin: origin }) as boolean;
+
+      showMessageBox.mockReset();
+      showMessageBox.mockReturnValueOnce(0).mockReturnValueOnce(1).mockReturnValueOnce(0);
+
+      assert.isFalse(checkMedia("https://chatgpt.com", "audio"));
+      assert.isFalse(yield* requestMedia("https://chatgpt.com/c/test", ["video"]));
+      assert.isFalse(yield* requestMedia("https://chatgpt.com/c/test", ["audio", "video"]));
+      assert.isFalse(yield* requestMedia("https://chatgpt.com/c/test", undefined));
+      assert.isFalse(yield* requestMedia("file:///tmp/untrusted.html", ["audio"]));
+      assert.strictEqual(showMessageBox.mock.calls.length, 0);
+
+      assert.isTrue(yield* requestMedia("https://chatgpt.com/c/test", ["audio"]));
+      assert.deepStrictEqual(showMessageBox.mock.calls[0]?.[0].buttons, [
+        "Allow microphone",
+        "Block",
+      ]);
+      assert.strictEqual(showMessageBox.mock.calls[0]?.[0].defaultId, 1);
+      assert.isTrue(checkMedia("https://chatgpt.com", "audio"));
+      assert.isFalse(checkMedia("https://chatgpt.com", "video"));
+      assert.isFalse(checkMedia("https://other.test", "audio"));
+      assert.isTrue(yield* requestMedia("https://chatgpt.com/c/another", ["audio"]));
+      assert.strictEqual(showMessageBox.mock.calls.length, 1);
+
+      assert.isFalse(yield* requestMedia("https://other.test", ["audio"]));
+      assert.isFalse(checkMedia("https://other.test", "audio"));
+      // A blocked site can retry after clicking the microphone again.
+      assert.isTrue(yield* requestMedia("https://other.test", ["audio"]));
+      assert.strictEqual(showMessageBox.mock.calls.length, 3);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("clears a partition whose session has not been opened yet", () =>
     Effect.gen(function* () {
       const browserSessions = yield* BrowserSession.BrowserSession;
