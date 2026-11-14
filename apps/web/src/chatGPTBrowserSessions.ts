@@ -103,7 +103,7 @@ export const BrowserSession = Schema.Struct({
   project: Schema.optional(Schema.String),
   // User-chosen sidebar border color name; unknown names render no border.
   borderColor: Schema.optional(Schema.String),
-  // Armed until the next observed working -> idle transition; ready until clicked.
+  // Persisted across T3 restarts: armed needs a new working observation before becoming ready.
   returnMarker: Schema.optional(Schema.Literals(["armed", "working", "ready"])),
   completion: Schema.optional(
     Schema.Struct({
@@ -114,6 +114,18 @@ export const BrowserSession = Schema.Struct({
   ),
 });
 export type BrowserSession = typeof BrowserSession.Type;
+
+/** Only a post-arming observed working -> idle cycle may turn a Return marker yellow.
+ * This state lives on the persisted session, not in renderer-local activity history,
+ * so reopening T3 cannot falsely complete a marker armed while idle. */
+export function advanceChatGPTReturnMarker(
+  marker: NonNullable<BrowserSession["returnMarker"]>,
+  age: "working" | "recent" | "inactive" | "unknown",
+): NonNullable<BrowserSession["returnMarker"]> {
+  if (marker === "armed" && age === "working") return "working";
+  if (marker === "working" && (age === "recent" || age === "inactive")) return "ready";
+  return marker;
+}
 
 /** Persisted origin has priority except where a backend reservation proves otherwise. */
 export function chatGPTSessionCreationOrigin(
@@ -1047,11 +1059,9 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
                 ...session,
                 returnMarker: session.returnMarker
                   ? undefined
-                  : activity === "idle"
-                    ? "ready"
-                    : activity === "working"
-                      ? "working"
-                      : "armed",
+                  : activity === "working"
+                    ? "working"
+                    : "armed",
                 snoozedUntil: undefined,
                 snoozedAt: undefined,
               },
@@ -1077,12 +1087,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       setSessions((current) => {
         const entry = current.find((session) => session.id === id);
         if (!entry?.returnMarker) return current;
-        const next =
-          age === "working" && entry.returnMarker === "armed"
-            ? "working"
-            : (age === "recent" || age === "inactive") && entry.returnMarker !== "ready"
-              ? "ready"
-              : entry.returnMarker;
+        const next = advanceChatGPTReturnMarker(entry.returnMarker, age);
         if (next === entry.returnMarker) return current;
         return current.map((session) =>
           session.id === id ? { ...session, returnMarker: next } : session,

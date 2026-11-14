@@ -69,7 +69,7 @@ function ctrlY(target: EventTarget = window, repeat = false) {
 }
 
 describe("Return marker shortcut", () => {
-  it("immediately highlights idle sessions, confirms the change and toggles off", async () => {
+  it("arms idle sessions without an immediate yellow highlight, confirms the change and toggles off", async () => {
     state.pathname = "/browser/selected-session";
     state.activity = "idle";
     state.marker = undefined;
@@ -79,9 +79,9 @@ describe("Return marker shortcut", () => {
 
     await act(() => dispatchMenuAction("chatgpt.return-marker"));
     expect(state.toggleReturnMarker).toHaveBeenLastCalledWith("selected-session", "idle");
-    expect(state.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Return marker highlighted" }));
+    expect(state.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Return marker armed" }));
 
-    state.marker = "ready";
+    state.marker = "armed";
     await act(() => dispatchMenuAction("chatgpt.return-marker"));
     expect(state.toggleReturnMarker).toHaveBeenCalledTimes(2);
     expect(state.toast).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Return marker removed" }));

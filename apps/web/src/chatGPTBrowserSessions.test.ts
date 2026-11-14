@@ -1,6 +1,9 @@
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  advanceChatGPTReturnMarker,
+  BrowserSession,
   chatGPTSessionTitleFromPage,
   cleanChatGPTSessionTitle,
   updateChatGPTAutoTitle,
@@ -12,6 +15,35 @@ import {
   setChatGPTSessionArchived,
   setChatGPTSessionHidden,
 } from "./chatGPTBrowserSessions";
+
+describe("Return marker across activity changes and T3 restarts", () => {
+  it("arms on idle; repeated idle readings do not highlight until the next working -> idle", () => {
+    const armed = "armed" as const;
+    expect(advanceChatGPTReturnMarker(armed, "recent")).toBe("armed");
+    expect(advanceChatGPTReturnMarker(armed, "inactive")).toBe("armed");
+
+    // The marker is stored on BrowserSession and survives JSON/localStorage
+    // rehydration; an idle probe after restarting T3 must not mark it ready.
+    const restored = Schema.decodeUnknownSync(BrowserSession)(
+      JSON.parse(JSON.stringify({ id: "return-test", title: "Return test", returnMarker: armed })),
+    );
+    expect(restored.returnMarker).toBe("armed");
+    expect(advanceChatGPTReturnMarker(restored.returnMarker!, "inactive")).toBe("armed");
+
+    const working = advanceChatGPTReturnMarker(restored.returnMarker!, "working");
+    expect(working).toBe("working");
+    expect(advanceChatGPTReturnMarker(working, "recent")).toBe("ready");
+  });
+
+  it("keeps an already-working marker pending over restart until idle, then stays ready", () => {
+    const restored = Schema.decodeUnknownSync(BrowserSession)(
+      JSON.parse(JSON.stringify({ id: "return-test", title: "Return test", returnMarker: "working" })),
+    );
+    expect(advanceChatGPTReturnMarker(restored.returnMarker!, "unknown")).toBe("working");
+    expect(advanceChatGPTReturnMarker(restored.returnMarker!, "inactive")).toBe("ready");
+    expect(advanceChatGPTReturnMarker("ready", "working")).toBe("ready");
+  });
+});
 
 describe("existing ChatGPT conversation resolution", () => {
   const a = "https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

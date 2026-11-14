@@ -43,9 +43,13 @@ export function ChatGPTNewSessionShortcut() {
     toastManager.add(
       session.returnMarker
         ? { type: "success", title: "Return marker removed", description: session.title }
-        : activity === "idle"
-          ? { type: "success", title: "Return marker highlighted", description: session.title }
-          : { type: "success", title: "Return marker armed", description: `${session.title} — yellow border when idle` },
+        : {
+            type: "success",
+            title: "Return marker armed",
+            description: activity === "working"
+              ? `${session.title} — yellow border when this response finishes`
+              : `${session.title} — yellow border after the next response finishes`,
+          },
     );
   });
 
