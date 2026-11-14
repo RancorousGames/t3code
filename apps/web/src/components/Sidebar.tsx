@@ -3217,7 +3217,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         <SidebarGroup className="flex-1" role="presentation">
           <OpenRigOperatorInbox />
           <TooltipProvider delay={700} closeDelay={0} timeout={0}>
-            {isElectron ? <ChatGPTBrowserSidebarEntry showCreateAction={false} /> : <ChatGPTRegistryRemoteSidebarEntry />}
+            {isElectron ? (
+              <ChatGPTBrowserSidebarEntry
+                showCreateAction={false}
+                projectScopeTitles={scopedProjectGroups.flatMap((group) => [
+                  group.displayName,
+                  ...group.memberProjects.map((project) => project.title),
+                ])}
+              />
+            ) : <ChatGPTRegistryRemoteSidebarEntry />}
           </TooltipProvider>
           <OpenRigAgentsSidebarEntry />
           {isElectron && (

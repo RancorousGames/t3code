@@ -463,8 +463,10 @@ function BusyCapacitySlider({
 
 export function ChatGPTBrowserSidebarEntry({
   showCreateAction = true,
+  projectScopeTitles = [],
 }: {
   showCreateAction?: boolean;
+  projectScopeTitles?: readonly string[];
 }) {
   const requiredForDelivery = useChatGPTDeliveryMountRequests((state) => state.required);
   const navigate = useNavigate();
@@ -1118,7 +1120,15 @@ export function ChatGPTBrowserSidebarEntry({
   }, [sessions, activities, environmentId]);
   // Visibility only affects sidebar rows. Recovery, activity monitoring and
   // webview runtime all continue using the full non-hidden session list.
-  const visibleSessions = sessions.filter((session) => !session.hidden);
+  const projectScopeNames = new Set(projectScopeTitles.map((title) =>
+    title.toLocaleLowerCase().replace(/[\s_-]+/g, ""),
+  ));
+  const visibleSessions = sessions.filter((session) =>
+    !session.hidden && (projectScopeNames.size === 0 || projectScopeNames.has(
+      (projectTitles.get(session.id) ?? session.project ?? "")
+        .toLocaleLowerCase().replace(/[\s_-]+/g, ""),
+    )),
+  );
   const sidebarVisibleSessions = visibleSessions.filter(
     (session) =>
       !(workingHiddenIds.has(session.id) && activities[session.id]?.age === "working") &&
@@ -1453,6 +1463,11 @@ export function ChatGPTBrowserSidebarEntry({
     environmentId: string | null | undefined;
     groups: typeof rawGroupedSessions;
   } | null>(null);
+  const [clickedForSort, setClickedForSort] = useState<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Drop the optimistic click pin after the route confirms selection.
+  useEffect(() => {
+    if (clickedForSort && activeSessionId === clickedForSort) setClickedForSort(null);
+  }, [activeSessionId, clickedForSort]);
   const stableGroups = stabilizeChatGPTActivityOrder(
     rawGroupedSessions, activityOrderSnapshot, activityOrderContext, sortActivityById,
   );
@@ -1463,7 +1478,7 @@ export function ChatGPTBrowserSidebarEntry({
     priorityGroups,
     lastRenderedOrder.current?.environmentId === environmentId
       ? lastRenderedOrder.current.groups : null,
-    activeSessionId,
+    clickedForSort ?? activeSessionId,
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Preserve the last committed visual order across asynchronous status probes.
   useLayoutEffect(() => {
@@ -3209,6 +3224,7 @@ export function ChatGPTBrowserSidebarEntry({
                                                   };
                                                 }
                                                 event.currentTarget.blur();
+                                                setClickedForSort(session.id);
                                                 setSelectionRecoveryClick((value) => value + 1);
                                                 recordSessionClick(
                                                   environmentId,
