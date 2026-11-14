@@ -1038,14 +1038,20 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   );
 
   const toggleSessionReturnMarker = useCallback(
-    (id: string) =>
+    (id: string, activity: "idle" | "working" | "unknown") =>
       setSessions((current) =>
         current.map((session) =>
           session.id !== id
             ? session
             : {
                 ...session,
-                returnMarker: session.returnMarker ? undefined : ("armed" as const),
+                returnMarker: session.returnMarker
+                  ? undefined
+                  : activity === "idle"
+                    ? "ready"
+                    : activity === "working"
+                      ? "working"
+                      : "armed",
                 snoozedUntil: undefined,
                 snoozedAt: undefined,
               },
@@ -1074,7 +1080,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
         const next =
           age === "working" && entry.returnMarker === "armed"
             ? "working"
-            : (age === "recent" || age === "inactive") && entry.returnMarker === "working"
+            : (age === "recent" || age === "inactive") && entry.returnMarker !== "ready"
               ? "ready"
               : entry.returnMarker;
         if (next === entry.returnMarker) return current;

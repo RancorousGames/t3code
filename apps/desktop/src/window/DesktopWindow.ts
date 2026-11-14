@@ -29,6 +29,7 @@ import {
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import { PASSKEY_BRIDGE_ARGUMENT } from "../preview/GuestProtocol.ts";
+import { isChatGPTReturnMarkerShortcut, RETURN_CHATGPT_SESSION_MENU_ACTION } from "../preview/NativeChatGPTGuestShortcut.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -667,6 +668,15 @@ export const make = Effect.gen(function* () {
       },
     });
     window.webContents.on("before-input-event", (event, input) => {
+      if (
+        isChatGPTReturnMarkerShortcut(input) &&
+        activeChatGPTBrowserSessionId(window.webContents.getURL()) !== null
+      ) {
+        event.preventDefault();
+        if (!input.isAutoRepeat)
+          window.webContents.send(MENU_ACTION_CHANNEL, RETURN_CHATGPT_SESSION_MENU_ACTION);
+        return;
+      }
       // When focus is retained by the host, open the same find UI as a guest
       // Ctrl/Cmd+F rather than allowing a native menu or browser find to win.
       const findModifier = environment.platform === "darwin" ? input.meta : input.control;

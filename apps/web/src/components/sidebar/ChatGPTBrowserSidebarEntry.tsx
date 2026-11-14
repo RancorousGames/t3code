@@ -10,6 +10,7 @@ import {
   CalendarClockIcon,
   ArrowDownUpIcon,
   BotIcon,
+  BookmarkCheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ChevronUpIcon,
@@ -3176,6 +3177,15 @@ export function ChatGPTBrowserSidebarEntry({
                                     )}
                                     {hoverCard}
                                   </Tooltip>
+                                  {session.returnMarker && (
+                                    <span
+                                      aria-label={session.returnMarker === "ready" ? "Return marker ready" : "Return marker armed"}
+                                      title={session.returnMarker === "ready" ? "Return marker ready" : "Return marker armed"}
+                                      className="flex shrink-0 items-center text-yellow-400"
+                                    >
+                                      <BookmarkCheckIcon className="size-3.5" aria-hidden="true" />
+                                    </span>
+                                  )}
                                   <div className="min-w-0 flex-1">
                                     {renamingId === session.id ? (
                                       <Input

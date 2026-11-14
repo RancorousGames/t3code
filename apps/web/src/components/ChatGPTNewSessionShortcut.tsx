@@ -2,7 +2,9 @@ import { useAtomValue } from "@effect/atom-react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent } from "react";
 
-import { useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
+import { readChatGPTBrowserSessions, useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
+import { readChatGPTProviderActivity } from "../chatGPTProviderActivity";
+import { toastManager } from "./ui/toast";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
 import { registerCommands, registerMenuAction } from "../shortcuts/dispatcher";
@@ -25,6 +27,28 @@ export function ChatGPTNewSessionShortcut() {
     });
   });
 
+  const toggleSelectedReturnMarker = useEffectEvent(() => {
+    if (!isElectron || !environmentId || isCommandPaletteOpen()) return;
+    const sessionId = pathname.match(/^\/browser\/([^/]+)\/?$/)?.[1];
+    if (!sessionId) return;
+    const session = readChatGPTBrowserSessions(environmentId).find((item) => item.id === sessionId);
+    if (!session) {
+      toastManager.add({ type: "error", title: "Return marker: session not found" });
+      return;
+    }
+
+    const observed = readChatGPTProviderActivity(environmentId, sessionId);
+    const activity = observed === "working" || observed === "idle" ? observed : "unknown";
+    toggleSessionReturnMarker(sessionId, activity);
+    toastManager.add(
+      session.returnMarker
+        ? { type: "success", title: "Return marker removed", description: session.title }
+        : activity === "idle"
+          ? { type: "success", title: "Return marker highlighted", description: session.title }
+          : { type: "success", title: "Return marker armed", description: `${session.title} — yellow border when idle` },
+    );
+  });
+
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the desktop shortcut and guest menu action while the app shell is mounted
   useEffect(() => {
     if (!isElectron || !environmentId) return;
@@ -39,7 +63,7 @@ export function ChatGPTNewSessionShortcut() {
             return false;
           event.preventDefault();
           event.stopPropagation();
-          toggleSessionReturnMarker(sessionId);
+          toggleSelectedReturnMarker();
           return true;
         },
         "chatgpt.newSession": (event) => {
@@ -67,9 +91,13 @@ export function ChatGPTNewSessionShortcut() {
     const unregisterMenuAction = registerMenuAction("chatgpt.newSession", () => {
       if (!isCommandPaletteOpen()) createNewSession();
     });
+    const unregisterReturnMarkerAction = registerMenuAction("chatgpt.return-marker", () => {
+      toggleSelectedReturnMarker();
+    });
     return () => {
       unregisterKeydown();
       unregisterMenuAction();
+      unregisterReturnMarkerAction();
     };
   }, [environmentId, keybindings, pathname, toggleSessionReturnMarker]);
 

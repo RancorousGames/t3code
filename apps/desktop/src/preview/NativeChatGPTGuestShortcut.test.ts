@@ -29,6 +29,15 @@ describe("native ChatGPT guest accelerator routing", () => {
       nativeChatGPTGuestShortcut({ ...ctrlW, type: "keyUp" }, "win32", ownerUrl, selected),
     ).toBeNull();
   });
+  it("routes Ctrl+D Return marker only for the selected guest", () => {
+    const ctrlD = { ...ctrlW, key: "d" };
+    expect(nativeChatGPTGuestShortcut(ctrlD, "win32", ownerUrl, selected)).toBe(
+      "chatgpt.return-marker",
+    );
+    expect(nativeChatGPTGuestShortcut(ctrlD, "win32", ownerUrl, other)).toBeNull();
+    expect(nativeChatGPTGuestShortcut({ ...ctrlD, alt: true }, "win32", ownerUrl, selected)).toBeNull();
+    expect(nativeChatGPTGuestShortcut({ ...ctrlD, type: "keyUp" }, "win32", ownerUrl, selected)).toBeNull();
+  });
   it("routes F2 rename only from the selected ChatGPT guest", () => {
     const f2 = { ...ctrlW, key: "F2", control: false };
     expect(nativeChatGPTGuestShortcut(f2, "win32", ownerUrl, selected)).toBe(
