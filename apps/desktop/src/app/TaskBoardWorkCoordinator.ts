@@ -59,6 +59,13 @@ export function compareQueuedCandidates(
     number(a.item.taskId) - number(b.item.taskId) ||
     a.boardRoot.localeCompare(b.boardRoot) || a.item.taskId.localeCompare(b.item.taskId);
 }
+/** A prior session for the same task must not hold a newer Starting request. */
+export function sessionsForStartRequest<T extends {spawnRequestId?: string}>(
+  sessions: ReadonlyArray<T>, requestId: string,
+): T[] {
+  return sessions.filter(session => session.spawnRequestId === requestId);
+}
+
 interface SessionBoardIdentity {
   id: string; project?: string | null;
   binding?: {taskRef?: {board?: string}};
@@ -762,7 +769,12 @@ export class TaskBoardWorkCoordinator {
       .filter(item => item.state === "starting" && item.reservationId &&
         UUID.test(item.queueRequest) && !item.legacyOpenRig && !item.claimed &&
         item.readiness && now - this.startingSince(board.boardRoot, item) >= UNSTARTED_GUEST_GRACE_MS)
-      .map(item => ({boardRoot: board.boardRoot, item})));
+      .map(item => ({boardRoot: board.boardRoot, projectPriority: board.projectPriority, item})))
+      .sort((a, b) => (a.item.priority === "urgent" ? 0 : 1) -
+          (b.item.priority === "urgent" ? 0 : 1) ||
+        (a.projectPriority === "high" ? 0 : a.projectPriority === "low" ? 2 : 1) -
+          (b.projectPriority === "high" ? 0 : b.projectPriority === "low" ? 2 : 1) ||
+        a.item.created.localeCompare(b.item.created));
     if (!stranded.length) return;
     const listed = await cli("node.exe", [
       NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
@@ -780,10 +792,11 @@ export class TaskBoardWorkCoordinator {
       throw new Error("Stale Starting recovery requires a complete T3 session registry");
     }
     for (const {boardRoot, item} of stranded) {
-      const matches = listed.sessions.filter(session =>
-        session.spawnRequestId === item.reservationId ||
-        (session.binding?.taskRef?.id === item.taskId && session.binding?.taskRef?.board &&
-          rootKey(session.binding.taskRef.board) === rootKey(boardRoot)));
+      // A previous session bound to this task is NOT proof that the current
+      // Starting request spawned anything. Only this exact requestId prevents
+      // verified orphan recovery. Otherwise one old task session can block a
+      // priority task indefinitely, allowing lower-priority boards to launch.
+      const matches = sessionsForStartRequest(listed.sessions, item.reservationId!);
       if (matches.length !== 0) {
         // Only a bootstrapped, positively bound conversation becomes a worker.
         // A browser slot with an UNKNOWN first message keeps its reservation
@@ -1148,6 +1161,18 @@ export class TaskBoardWorkCoordinator {
       // is occupied by a ghost guest. But if there is free capacity and a
       // fresh queued task, admit it before doing slow recovery I/O.
       if (this.caffy.policyEnabled) {
+        // Recover stranded ! Priority requests even with spare capacity and
+        // other queued tasks. Otherwise routine work can bypass a high-priority
+        // task that was left Starting after a failed creation.
+        const urgentStranded = snapshots.some(board => board.dispatchEnabled &&
+          board.items.some(item => item.priority === "urgent" && item.state === "starting" &&
+            !!item.reservationId && item.readiness && !item.claimed &&
+            Date.now() - this.startingSince(board.boardRoot, item) >= UNSTARTED_GUEST_GRACE_MS));
+        if (urgentStranded) {
+          try { await this.recoverQuarantinedStarts(snapshots); }
+          catch (error) { this.lastError = `Priority Starting recovery: ${String(error)}`; }
+          snapshots = this.snapshots;
+        }
         const readyQueued = snapshots.some(board => board.dispatchEnabled &&
           board.items.some(item => item.state === "queued" && item.readiness &&
             !item.claimed && !item.legacyOpenRig && UUID.test(item.queueRequest)));
@@ -1160,9 +1185,11 @@ export class TaskBoardWorkCoordinator {
             this.lastError = `Unstarted guest recovery: ${String(error)}`;
           }
           snapshots = this.snapshots;
-          try { await this.recoverQuarantinedStarts(snapshots); }
-          catch (error) { this.lastError = `Starting recovery: ${String(error)}`; }
-          snapshots = this.snapshots;
+          if (!urgentStranded) {
+            try { await this.recoverQuarantinedStarts(snapshots); }
+            catch (error) { this.lastError = `Starting recovery: ${String(error)}`; }
+            snapshots = this.snapshots;
+          }
           try { await this.recoverReleasedWorkers(snapshots); }
           catch (error) { this.lastError = `Released worker recovery: ${String(error)}`; }
           snapshots = this.snapshots;

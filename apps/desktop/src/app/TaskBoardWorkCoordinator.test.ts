@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Path normalization is the behavior under test.
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { boardOwnersFromSessions, compareQueuedCandidates, completedQueueTask } from "./TaskBoardWorkCoordinator.ts";
+import { boardOwnersFromSessions, compareQueuedCandidates, completedQueueTask, sessionsForStartRequest } from "./TaskBoardWorkCoordinator.ts";
 
 const WT = "B:\\GDrive\\Test\\Wartribes\\Tasks";
 const T3 = "B:\\GDrive\\Test\\t3code\\Tasks";
@@ -14,6 +14,12 @@ const task = (boardRoot: string, taskId: string, created: string,
   });
 
 describe("TaskBoard Keep Busy selection", () => {
+  it("does not let an old task session strand a newer Starting reservation", () => {
+    const old = { spawnRequestId: "old-attempt", binding: { taskRef: { id: "WT-0237" } } };
+    const other = { spawnRequestId: "other-task", binding: { taskRef: { id: "REA-0031" } } };
+    expect(sessionsForStartRequest([old, other], "new-attempt")).toEqual([]);
+    expect(sessionsForStartRequest([old, other], "old-attempt")).toEqual([old]);
+  });
   it("counts Done queue tasks after the worker session closes, but never unrelated queue runs", () => {
     const at = "2026-11-14T05:40:40.060677200Z";
     const frontmatter = [
