@@ -21,6 +21,7 @@ export function aiInterfaceCloseDue(
   return isAIInterfaceSession(session) &&
     !isSelected &&
     session.autoCloseExempt !== true &&
+    !session.returnMarker &&
     session.snoozedUntil === undefined &&
     lastActivityAt !== null && Number.isFinite(lastActivityAt) &&
     lastActivityAt > 0 &&

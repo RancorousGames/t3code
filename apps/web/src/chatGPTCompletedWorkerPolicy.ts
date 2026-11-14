@@ -86,6 +86,7 @@ export function completedWorkerCandidate(
     sessions.some((entry) => entry.parentSessionId === session.id) ||
     session.hidden ||
     session.autoCloseExempt ||
+    !!session.returnMarker ||
     !!session.borderColor ||
     session.snoozedUntil !== undefined ||
     session.id === activeSessionId

@@ -61,6 +61,7 @@ function eligibleForAutoClose(
     !session.hidden &&
     !session.humanControlled &&
     !session.autoCloseExempt &&
+    !session.returnMarker &&
     !session.verificationPending &&
     session.snoozedUntil === undefined &&
     !session.borderColor &&

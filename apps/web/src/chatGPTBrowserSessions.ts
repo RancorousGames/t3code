@@ -1046,8 +1046,6 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             : {
                 ...session,
                 returnMarker: session.returnMarker ? undefined : ("armed" as const),
-                humanControlled: true,
-                autoCloseExempt: true,
                 snoozedUntil: undefined,
                 snoozedAt: undefined,
               },

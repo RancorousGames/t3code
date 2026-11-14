@@ -25,7 +25,7 @@ export function blankChatGPTSessionCandidate(input: {
         BLANK_CHATGPT_SESSION_GRACE_MS) return false;
   if (session.id === "chatgpt" || session.id === selectedId || session.hidden ||
       session.archive || session.completion || session.verificationPending ||
-      session.autoCloseExempt || session.borderColor || session.snoozedUntil ||
+      session.autoCloseExempt || session.returnMarker || session.borderColor || session.snoozedUntil ||
       session.binding?.role === "manager" ||
       session.bootstrapIdentity?.state === "registered" ||
       session.bootstrapIdentity?.state === "mismatch" ||
