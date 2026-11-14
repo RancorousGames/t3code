@@ -284,6 +284,39 @@ export async function openTaskSession(
       }
     }
 
+
+    // Manual Start-now tasks can retain an UNKNOWN spawn journal even after
+    // their blank browser was later closed. Re-arm only after a read-only T3
+    // registry lookup proves the *exact* old reservation was closed without
+    // creating a conversation or receiving a user turn. Missing registry
+    // records are not closure evidence.
+    if (priorAttempt?.kind === "chatgpt" && input.requireQueue !== true &&
+        !task.claimed_by && typeof control === "function") {
+      const listed = await control(
+        { action: "list", which: "all", includeHidden: true },
+        { home, exchange },
+      );
+      if (Array.isArray(listed.sessions) && !listed.hasMore && !listed.incomplete &&
+          (listed.total === undefined || listed.total === listed.sessions.length)) {
+        const matches = listed.sessions.filter(
+          (session) => session.spawnRequestId === priorAttempt.requestId,
+        );
+        const old = matches.length === 1 ? matches[0] : null;
+        if (old?.closedAt != null && !old.conversationId &&
+            old.bootstrapIdentity?.state === "awaiting_marker" &&
+            !old.bootstrapIdentity.conversationId &&
+            old.binding?.taskRef?.id === id &&
+            old.binding?.taskRef?.board &&
+            Path.normalize(old.binding.taskRef.board).toLowerCase() === board.toLowerCase() &&
+            !old.lastRole && (old.totalTurns == null || old.totalTurns === 0)) {
+          const saved = JSON.parse(await FSP.readFile(journal, "utf8"));
+          if (saved.requestId !== priorAttempt.requestId)
+            throw Error("Task spawn journal changed during closed-guest reconciliation.");
+          await FSP.rename(journal, `${journal}.retired-${priorAttempt.requestId}`);
+          priorAttempt = null;
+        }
+      }
+    }
     const claim = task.claimed_by;
     const taskRef = { board, id };
     const reopenKnownConversation = async (oldSessionId) => {

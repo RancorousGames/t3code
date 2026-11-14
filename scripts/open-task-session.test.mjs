@@ -144,6 +144,42 @@ test("unclaimed task creates once, claims exact session, then reopens", async ()
   assert.equal(ctx.task.claimed_by, "t3:session-1");
 });
 
+test("manual task retries only after exact prior blank guest is verifiably closed", async () => {
+  const ctx = await context();
+  let calls = 0;
+  let oldRequestId;
+  const input = { ...ctx.input, background: true };
+  const options = {
+    home: ctx.home, command: ctx.command,
+    control: async () => ({ sessions: [{
+      id: "closed-blank", spawnRequestId: oldRequestId,
+      closedAt: "2026-11-14T00:20:00Z", conversationId: null,
+      bootstrapIdentity: { state: "awaiting_marker" },
+      binding: { taskRef: { board: ctx.board, id: ctx.task.id } },
+      lastRole: null, totalTurns: 0,
+    }] }),
+    exchange: async (_address, request) => {
+      calls++;
+      if (calls === 1) {
+        oldRequestId = request.requestId;
+        return { ok: true, data: { action: "spawn", created: true,
+          sessionId: "closed-blank", promptDelivery: "unknown", messageSent: false } };
+      }
+      return { ok: true, messageSent: true, sessionId: "replacement" };
+    },
+  };
+  const first = await openTaskSession(input, options);
+  assert.equal(first.status, "prompt_unknown");
+  assert.equal(ctx.task.claimed_by, null);
+  const second = await openTaskSession(input, options);
+  assert.equal(second.status, "created");
+  assert.equal(ctx.task.claimed_by, "t3:replacement");
+  assert.equal(calls, 2);
+  const retired = (await FSP.readdir(Path.join(ctx.home, "userdata", "task-open-locks")))
+    .filter(name => name.endsWith(`.retired-${oldRequestId}`));
+  assert.equal(retired.length, 1);
+});
+
 test("unknown spawn stays durable and is not resubmitted", async () => {
   const ctx = await context();
   let spawnCalls = 0;
