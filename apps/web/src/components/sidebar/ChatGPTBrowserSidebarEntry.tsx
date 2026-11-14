@@ -1123,12 +1123,12 @@ export function ChatGPTBrowserSidebarEntry({
   const projectScopeNames = new Set(projectScopeTitles.map((title) =>
     title.toLocaleLowerCase().replace(/[\s_-]+/g, ""),
   ));
-  const visibleSessions = sessions.filter((session) =>
-    !session.hidden && (projectScopeNames.size === 0 || projectScopeNames.has(
+  const matchesProjectScope = (session: BrowserSession) =>
+    projectScopeNames.size === 0 || projectScopeNames.has(
       (projectTitles.get(session.id) ?? session.project ?? "")
         .toLocaleLowerCase().replace(/[\s_-]+/g, ""),
-    )),
-  );
+    );
+  const visibleSessions = sessions.filter((session) => !session.hidden && matchesProjectScope(session));
   const sidebarVisibleSessions = visibleSessions.filter(
     (session) =>
       !(workingHiddenIds.has(session.id) && activities[session.id]?.age === "working") &&
@@ -1141,7 +1141,7 @@ export function ChatGPTBrowserSidebarEntry({
         )),
       ),
   );
-  const hiddenSessions = sessions.filter((session) => session.hidden);
+  const hiddenSessions = sessions.filter((session) => session.hidden && matchesProjectScope(session));
   // The verified manager seat ledger, not a parent link or title, determines
   // which nested manager rows are exempt from the worker visibility toggle.
   const workerIds = useMemo(
