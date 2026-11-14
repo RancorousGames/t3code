@@ -30,6 +30,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { DesktopAppActivationBroker } from "./DesktopAppActivationBroker.ts";
+import { startDesktopReadOnlyBridge } from "./DesktopReadOnlyBridge.ts";
 import { ChatGPTDeliveryQueue } from "./ChatGPTDeliveryQueue.ts";
 import { CaffyScheduler } from "./CaffyScheduler.ts";
 import { TaskBoardWorkCoordinator } from "./TaskBoardWorkCoordinator.ts";
@@ -574,8 +575,8 @@ export const make = Effect.gen(function* () {
     capacityMessage: (request) => Effect.promise(() => caffy.capacityMessage(request)),
     start: Effect.acquireRelease(
       Effect.tryPromise({
-        try: () =>
-          startDesktopAppControlServer({
+        try: async () => {
+          const pipeServer = await startDesktopAppControlServer({
             ...address,
             userId,
             handle: handleRequest,
@@ -584,7 +585,27 @@ export const make = Effect.gen(function* () {
               void runPromise(
                 logWarning("failed to restore the desktop app control socket", { cause }),
               ),
-          }),
+          });
+          // The elevated desktop pipe stays unchanged. A separate authenticated,
+          // snapshot-only localhost endpoint serves lower-integrity same-user clients.
+          let readOnlyBridge: { close(): Promise<void> } | null = null;
+          try {
+            readOnlyBridge = await startDesktopReadOnlyBridge({
+              stateDir: path.resolve(desktopEnvironment.stateDir),
+              handle: handleRequest,
+            });
+          } catch (cause) {
+            // An ACL/loopback failure disables ONLY this optional fallback.
+            // Never take the user's desktop, sessions, or pipe offline for it.
+            void runPromise(logWarning("read-only cross-integrity bridge unavailable", { cause }));
+          }
+          return {
+            close: async () => {
+              await readOnlyBridge?.close();
+              await pipeServer.close();
+            },
+          };
+        },
         catch: (cause) => new DesktopAppActivationStartError({ address: address.address, cause }),
       }),
       (server) =>

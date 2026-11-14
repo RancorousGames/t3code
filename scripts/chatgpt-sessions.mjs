@@ -5,6 +5,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { controlAddress, sendAppControlRequest } from "./spawn-chatgpt-session.mjs";
+import { isPipeUnavailable, readSnapshotAcrossIntegrity } from "./desktop-readonly-snapshot.mjs";
 import { sanitizeRecoveryAggregate } from "./chatgpt-recovery-metrics.mjs";
 import { computeChatGPTCapacityStatus } from "./chatgpt-capacity-status.mjs";
 
@@ -431,7 +432,30 @@ export async function controlSessions(
       );
     }
   }
-  const response = await exchange(controlAddress(home), request, 95_000);
+  let response;
+  try {
+    response = await exchange(controlAddress(home), request, 95_000);
+  } catch (error) {
+    if (!isPipeUnavailable(error)) throw error; // post-connect UNKNOWN remains UNKNOWN
+    if (input.action !== "list") {
+      throw new Error(
+        `T3 desktop pipe is unavailable (${error.code}); no cross-integrity write fallback. ` +
+        "Restore equal-integrity T3 access before retrying; reconcile any uncertain send receipt first.",
+        { cause: error },
+      );
+    }
+    try {
+      response = await readSnapshotAcrossIntegrity(home, request);
+    } catch (fallbackError) {
+      throw new Error(
+        `T3 desktop pipe is unavailable (${error.code}), and authenticated read-only snapshot failed: ` +
+        `${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}. ` +
+        "No identity observation or seat change was made. Update T3 desktop to enable the " +
+        "read-only bridge; keep existing sessions open. Retrying this read is safe.",
+        { cause: fallbackError },
+      );
+    }
+  }
   if (!response.ok)
     throw new Error(`T3 Code rejected ${input.action}: ${response.code}: ${response.message}`);
   if (!Object.hasOwn(response, "data"))
