@@ -83,7 +83,7 @@ import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedSt
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { AgentAttentionToast } from "./AgentAttentionToast";
-import { requestAgentAttention, readAgentAttention, loadAgentAttention, changeAttention, openAgentAttention } from "../../chatGPTAgentAttention";
+import { requestAgentAttention, readAgentAttention, loadAgentAttention, changeAttention, openAgentAttention, cancelAgentAttention } from "../../chatGPTAgentAttention";
 import { queueAgentAttentionDismissal } from "../../chatGPTAttentionHandoff";
 import { readRemotePrepfileJobs, stageRemotePrepfileImageChunk, startRemotePrepfile, type RemotePrepfileRequest } from "../../prepfileRemote";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -2411,6 +2411,7 @@ export function DesktopAppActivationCoordinator() {
                     role: entry.binding?.role ?? (entry.markedAsWorkerAt ? "worker" : "personal"),
                     binding: entry.binding ?? null, verificationPending: !!entry.verificationPending,
                     borderColor: entry.borderColor ?? null,
+                    returnMarker: entry.returnMarker ?? null,
                     keepLoaded: useChatGPTWarmSessions.getState().keepLoadedIds.has(id),
                     caffy: caffyState,
                     scheduledSpawns,
@@ -2475,6 +2476,10 @@ export function DesktopAppActivationCoordinator() {
                     if (attention.status === "dismissed")
                       throw new Error("Attention request was already dismissed.");
                     if (attention.status !== "opened") changeAttention(attention.id, "opened");
+                    // Opening on the phone is the Ctrl+S acknowledgement for this exact session.
+                    updateChatGPTReturnMarker(environmentId, id, () => undefined);
+                    setSessionHidden(id, false);
+                    setSessionSnooze([id], null);
                   } else if (command === "attention_snooze") {
                     const minutes = number("minutes");
                     if (minutes !== 15 && minutes !== 60)
@@ -2489,6 +2494,23 @@ export function DesktopAppActivationCoordinator() {
                       changeAttention(attention.id, "dismissed");
                     }
                   } else throw new Error("Unknown attention action.");
+                } else if (command === "return_marker") {
+                  // Same state machine as Ctrl+D: working waits for this reply, idle
+                  // waits for a future reply, and only the idle transition shows yellow.
+                  const current = readChatGPTBrowserSessions(environmentId).find((s) => s.id === id);
+                  if (!current) throw new Error("Return marker: T3 session not found.");
+                  const ids = [id, publicChatGPTSessionId(current)];
+                  if (current.returnMarker) {
+                    updateChatGPTReturnMarker(environmentId, id, () => undefined);
+                    cancelAgentAttention(ids);
+                  } else {
+                    const activity = readChatGPTProviderActivity(environmentId, id);
+                    updateChatGPTReturnMarker(environmentId, id, () =>
+                      activity === "working" ? "working" : "armed");
+                    setSessionSnooze([id], null);
+                    requestAgentAttention(randomUUID(), publicChatGPTSessionId(current),
+                      "Return to " + current.title + " - its response is ready.", "manual");
+                  }
                 } else if (command === "verification") {
                   const value = bool("value");
                   if (value === null) throw new Error("Verification flag required.");
