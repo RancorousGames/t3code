@@ -1794,7 +1794,7 @@ export function DesktopAppActivationCoordinator() {
               sessionId: request.sessionId,
               priorConversationId: request.priorConversationId,
               prompt: request.prompt,
-              contextMode: request.contextMode,
+              contextMode: request.contextMode ?? (request.phase === "begin" ? "handoff" : undefined),
               phase: request.phase,
             });
           } finally {

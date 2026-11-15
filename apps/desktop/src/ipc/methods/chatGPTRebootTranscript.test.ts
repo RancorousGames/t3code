@@ -12,6 +12,8 @@ vi.mock("../DesktopIpc.ts", () => ({ makeIpcMethod: () => ({}) }));
 
 const SESSION = "f1a453af-fdc4-46ff-8a16-cae8cbe636ae";
 const OP = "bc4c0ccb-b1a4-4666-a92c-69b50dfc52d0";
+const OLD = "6af6d9a1-43a4-83ed-83d1-564a9fefe941";
+const NEW = "6af91b6a-8224-83eb-95e6-6ba24d11364f";
 const WAKE = "[T3-MSG:e39416df-1d75-49c7-9c16-ac47eae06b4f] Continue working on your current assignment. If everything is genuinely finished, stop Caffy.";
 
 describe("archived reboot transcript document", () => {
@@ -37,23 +39,36 @@ describe("archived reboot transcript document", () => {
     try {
       const db = new DatabaseSync(path.join(root, "index.sqlite"));
       db.exec("CREATE TABLE chatgpt_conversations (conversation_id TEXT, url TEXT, last_title TEXT, last_seen_at TEXT)");
-      db.exec("CREATE TABLE chatgpt_messages (conversation_id TEXT, session_id TEXT, last_seen_at TEXT, role TEXT, turn_index INT, ordinal INT, text TEXT, possibly_truncated INT)");
+      db.exec("CREATE TABLE chatgpt_messages (conversation_id TEXT, session_id TEXT, last_seen_at TEXT, role TEXT, turn_index INT, ordinal INT, text TEXT, possibly_truncated INT, first_seen_at TEXT GENERATED ALWAYS AS (last_seen_at) VIRTUAL, turn_key TEXT GENERATED ALWAYS AS ('key:' || text) VIRTUAL)");
       const addConversation = db.prepare("INSERT INTO chatgpt_conversations VALUES (?,?,?,?)");
-      const add = db.prepare("INSERT INTO chatgpt_messages VALUES (?,?,?,?,?,?,?,?)");
-      addConversation.run("old", "https://chatgpt.com/c/old", "Pose work", "2026-11-01");
-      addConversation.run("new", "https://chatgpt.com/c/new", "Pose work", "2026-11-02");
-      add.run("old", SESSION, "2026-11-01", "user", 0, 0, "Make grappling poses", 0);
-      add.run("old", SESSION, "2026-11-01", "assistant", 0, 1, "Pose requirements collected", 0);
-      add.run("new", SESSION, "2026-11-02", "user", 0, 0, WAKE, 0);
-      add.run("new", SESSION, "2026-11-02", "user", 1, 1, "Check latest pose image", 0);
+      const add = db.prepare("INSERT INTO chatgpt_messages (conversation_id, session_id, last_seen_at, role, turn_index, ordinal, text, possibly_truncated) VALUES (?,?,?,?,?,?,?,?)");
+      addConversation.run(OLD, `https://chatgpt.com/c/${OLD}`, "Pose work", "2026-11-01");
+      addConversation.run(NEW, `https://chatgpt.com/c/${NEW}`, "Pose work", "2026-11-02");
+      add.run(OLD, SESSION, "2026-11-01", "user", 0, 0, "Make grappling poses", 0);
+      add.run(OLD, SESSION, "2026-11-01", "assistant", 0, 1, "Pose requirements collected", 0);
+      add.run(NEW, SESSION, "2026-11-02", "user", 0, 0, WAKE, 0);
+      add.run(NEW, SESSION, "2026-11-02", "user", 1, 1, "Check latest pose image", 0);
+      add.run(NEW, SESSION, "2026-11-02", "user", 1, 2, "Check latest pose image", 0); // Same DOM key, changed ordinal.
       db.close();
 
       const options = { databasePath: path.join(root, "index.sqlite"), destinationRoot: root };
       const handoff = await prepareChatGPTRebootTranscript({sessionId: SESSION, operationId: OP, mode: "handoff"}, options);
       expect(handoff.generations).toBe(2);
+      expect(handoff.path).toMatch(/\.md$/);
       expect(handoff.originalUserRequest).toBe("Make grappling poses");
+      expect(handoff.messages).toBe(3); // Duplicate and automated wake ignored.
       expect(readFileSync(handoff.path!, "utf8")).toContain("Pose requirements collected");
       expect(readFileSync(handoff.path!, "utf8")).toContain("Check latest pose image");
+      // Bootstrap public ID need not equal the browser ID indexed by T3.
+      const mapped = await prepareChatGPTRebootTranscript({
+        sessionId: "86f56135-4815-4716-be46-1f705032fe09",
+        priorConversationId: NEW,
+        operationId: "2b3a01c4-1ea5-4437-903d-bca8a0c04c58",
+        mode: "handoff",
+      }, options);
+      expect(mapped.generations).toBe(2);
+      expect(mapped.messages).toBe(3);
+      expect(readFileSync(mapped.path!, "utf8")).toContain("Make grappling poses");
       const fresh = await prepareChatGPTRebootTranscript({
         sessionId: SESSION, operationId: "b7dac539-08c2-468f-864a-1a0b48a9a2b3", mode: "fresh",
       }, options);

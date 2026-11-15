@@ -64,6 +64,7 @@ describe("sidebar Agent Reboot exact-target receipt control", () => {
       sessionId,
       operationId,
       prompt: "Resume the task",
+      contextMode: "handoff",
       phase: "begin",
     });
     await beginSidebarReboot({

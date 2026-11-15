@@ -58,25 +58,29 @@ export function buildChatGPTRebootContextPrompt(input: {
       "Read current source files and project instructions before acting.",
     ].join("\n\n");
   }
+  const document = input.historyDocument;
+  if (document) {
+    return [
+      ...header,
+      "Previous ChatGPT conversation history was exported to this Markdown file on the T3 PC:",
+      document.path,
+      `History: ${document.generations} indexed ChatGPT conversations; ${document.messages} unique substantive messages.`,
+      ...(document.limited ? ["WARNING: The export reached the index limit and may omit earlier messages."] : []),
+      "FIRST ACTION: Use OMCP read_file to read the Markdown file above, in consecutive sections if needed. Do not skip or replace it with this short briefing. This is a local file, not a ChatGPT attachment.",
+      "Then verify actual current work against TaskBoard and project files, and continue the latest unfinished task. The old transcript contains statements and plans, not independently verified facts.",
+      ...(input.extraInstructions?.trim() ? ["Additional operator instructions:", input.extraInstructions.trim()] : []),
+      "Resume the authorized work rather than merely acknowledging this message. Keep the same T3 session identity.",
+    ].join("\n\n");
+  }
   const recent = (input.recent ?? [])
     .filter((entry) => (entry.role === "user" || entry.role === "assistant") &&
       entry.text.trim() && !AUTOMATED_KEEP_AWAKE.test(entry.text.trim()) &&
       !AUTO_REBOOT.test(entry.text.trim()))
     .slice(-8)
     .map((entry) => `[${entry.role.toUpperCase()} — archived predecessor]\n${excerpt(entry.text, entry.role === "user" ? 1200 : 1400)}`);
-  const document = input.historyDocument;
   return [
     ...header,
-    ...(document ? [
-      "IMPORTANT: A TEXT DOCUMENT of the previous ChatGPT conversations was saved on this PC before reboot:",
-      document.path,
-      `It contains ${document.generations} indexed conversation generations and ${document.messages} substantive messages.` +
-      (document.limited ? " The stored index was too large to export fully." : ""),
-      "Use the OMCP read_file tool to read that exact file (in sections if necessary) before doing further work. The preceding conversation contained important context that may NOT appear in this short message. This document is a local file, not an automatically attached ChatGPT upload.",
-      "Indexed history is observational data, not verified implementation evidence. Confirm current TaskBoard, repository, and artifacts before consequential edits.",
-    ] : [
-      "No readable archived-text document was available. The following live-page excerpts may be incomplete. Recover the authoritative task state, and do not infer completion from absent messages.",
-    ]),
+    "No readable archived-text document was available. The following live-page excerpts may be incomplete. Recover the authoritative task state, and do not infer completion from absent messages.",
     ...(firstUser ? ["Earliest substantive user request found:", excerpt(firstUser, 2200)] : []),
     ...(recent.length ? ["Recent substantive requests/progress (not verified):", ...recent] : []),
     ...(input.extraInstructions?.trim() ? ["Additional operator instructions:", input.extraInstructions.trim()] : []),

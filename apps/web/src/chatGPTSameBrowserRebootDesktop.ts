@@ -82,12 +82,12 @@ export async function rebootChatGPTDesktop(input: {
   if (input.phase === "begin" && input.contextMode) {
     const prepareHistory = window.desktopBridge?.prepareChatGPTRebootTranscript;
     if (input.contextMode === "handoff" && !prepareHistory)
-      throw new Error("Keep Context requires the updated T3 desktop native bridge. Rebuild/restart T3 before rebooting; no incomplete handover was sent.");
+      throw new Error("Keep Context needs the updated native T3 bridge. Restart the rebuilt desktop app; no incomplete handover was sent.");
     const indexed = prepareHistory
-      ? await prepareHistory({ sessionId: session.id, operationId: input.operationId, mode: input.contextMode })
+      ? await prepareHistory({ sessionId: session.id, operationId: input.operationId, mode: input.contextMode, priorConversationId })
       : null;
     if (input.contextMode === "handoff" && !indexed?.path)
-      throw new Error("No prior-conversation transcript document could be prepared. Reboot cancelled to avoid losing task context.");
+      throw new Error("The prior conversation was not found in the transcript index. Keep Context reboot cancelled to avoid losing its history.");
     const readExcerpts = async (from: "start" | "end", count: number):
       Promise<ChatGPTRebootExcerpt[]> => {
       try {

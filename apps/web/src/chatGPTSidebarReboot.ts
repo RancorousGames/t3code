@@ -57,7 +57,7 @@ export async function beginSidebarReboot(input: {
       ...input,
       operationId: randomUUID(),
       ...(input.prompt?.trim() ? { prompt: input.prompt.trim() } : {}),
-      ...(input.contextMode ? { contextMode: input.contextMode } : {}),
+      contextMode: input.contextMode ?? "handoff",
       phase: "begin",
     });
   } finally {

@@ -29,7 +29,9 @@ describe("reboot context isolation", () => {
     });
     expect(prompt).toContain("E:/_AgentScratch/Reboot/history.txt");
     expect(prompt).toContain("read_file");
-    expect(prompt).toContain("7 indexed conversation generations");
+    expect(prompt).toContain("7 indexed ChatGPT conversations");
+    expect(prompt).toContain("FIRST ACTION");
+    expect(prompt).not.toContain("Recent substantive requests/progress");
     expect(prompt).not.toContain("T3-MSG");
   });
 

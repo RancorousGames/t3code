@@ -2019,11 +2019,12 @@ export interface DesktopBridge {
   savePrivateChatGPTDraftSnapshot?: (
     input: DesktopChatGPTDraftSnapshotInput,
   ) => Promise<DesktopChatGPTDraftSnapshotReceipt>;
-  /** Prepare a local text document of indexed prior ChatGPT generations before replacing the browser. */
+  /** Write an indexed ChatGPT transcript Markdown file before Keep Context reboot. */
   prepareChatGPTRebootTranscript?: (input: {
     sessionId: string;
     operationId: string;
     mode: "handoff" | "fresh";
+    priorConversationId?: string;
   }) => Promise<{
     path: string | null;
     originalUserRequest: string | null;
