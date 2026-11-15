@@ -156,6 +156,10 @@ export async function controlSessions(
        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? "") ||
        typeof input.message !== "string" || !input.message.trim() || input.message.length > 1000))
     throw new Error("request_attention requires exact sessionId, attentionId and 1-1000 character message.");
+  if (input.spokenMessage !== undefined &&
+      (input.action !== "request_attention" || typeof input.spokenMessage !== "string" ||
+       !input.spokenMessage.trim() || input.spokenMessage.length > 1000))
+    throw new Error("spokenMessage is optional, but must be 1-1000 characters and used only with request_attention.");
   if (input.action === "attention_status" &&
       !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? ""))
     throw new Error("attention_status requires exact attentionId.");
@@ -390,7 +394,8 @@ export async function controlSessions(
     ...(input.action === "bootstrap_discover" && input.conversationUrl ? { conversationUrl: input.conversationUrl } : {}),
     ...(["request_attention", "attention_status"].includes(input.action)
       ? { attentionId: input.attentionId,
-          ...(input.action === "request_attention" ? { message: input.message } : {}) }
+          ...(input.action === "request_attention" ? { message: input.message,
+            ...(input.spokenMessage ? { spokenMessage: input.spokenMessage } : {}) } : {}) }
       : {}),
     ...(input.action === "ask_user" ? { questionId: input.questionId, question: input.question,
       ...(input.options ? { options: input.options } : {}),
