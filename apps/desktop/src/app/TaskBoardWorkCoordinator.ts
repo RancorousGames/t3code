@@ -4,11 +4,12 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeCP from "node:child_process";
 import type { CaffyScheduler } from "./CaffyScheduler.ts";
+import { decideQueueRecovery } from "./QueueRecoveryPolicy.ts";
 
 type ProjectPriority = "high" | "normal" | "low";
 interface Project { id: string; name: string; path: string; dispatchEnabled: boolean; priority?: ProjectPriority }
 interface Catalog { schema: 1; projects: Project[]; hiddenPaths?: string[] }
-type QueueState = "queued" | "reserved" | "starting" | "working" | "completed";
+type QueueState = "queued" | "reserved" | "starting" | "working" | "completed" | "recovery_required";
 interface QueueItem {
   taskId: string;
   title: string;
@@ -21,6 +22,7 @@ interface QueueItem {
   claimedBy?: string | null;
   queueRequest: string;
   state: QueueState;
+  stateSince?: string | null;
   reservationId?: string | null;
   reservationExpiresAt?: string | null;
   sessionId?: string | null;
@@ -201,6 +203,11 @@ export class TaskBoardWorkCoordinator {
   private readonly rejectedUnstartedGuests = new Map<string, number>();
   private lastAbandonedStartCheckAt = 0;
   private lastReleasedWorkerCheckAt = 0;
+  private lastRecoveryScanAt = 0;
+  private recoveryTickBusy = false;
+  private readonly recoveryClockFile: string;
+  private readonly phaseFirstObserved = new Map<string, number>();
+  private recoveryClockReady = true;
   private timer: ReturnType<typeof setInterval> | null = null;
   private followupTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
@@ -251,6 +258,31 @@ export class TaskBoardWorkCoordinator {
     // source-checkout run). Standalone CLI requests must use the same pipe.
     this.home = NodePath.resolve(stateDir, "..");
     this.retiredGuestDir = NodePath.join(stateDir, "task-retired-guests");
+    this.recoveryClockFile = NodePath.join(stateDir, "taskboard-recovery-clock.json");
+    try {
+      const clock = JSON.parse(NodeFS.readFileSync(this.recoveryClockFile, "utf8")) as {
+        version: number; rows: Array<[string, number]>;
+      };
+      if (clock.version !== 1 || !Array.isArray(clock.rows)) throw Error("Unsupported recovery clock");
+      for (const [key, since] of clock.rows) {
+        if (typeof key === "string" && Number.isFinite(since)) this.phaseFirstObserved.set(key, since);
+      }
+    } catch (error) {
+      if (NodeFS.existsSync(this.recoveryClockFile)) {
+        // Clock corruption must not freeze every TaskBoard indefinitely.
+        // It holds only observation timestamps, not ownership or send proofs.
+        // Preserve the corrupt evidence and start a fresh durable SLA clock.
+        try {
+          NodeFS.renameSync(this.recoveryClockFile,
+            this.recoveryClockFile + ".corrupt-" + Date.now());
+          this.phaseFirstObserved.clear();
+          this.lastError = `Recovery clock quarantined and rebuilt: ${String(error)}`;
+        } catch (backupError) {
+          this.recoveryClockReady = false;
+          this.lastError = `Recovery clock cannot be preserved: ${String(backupError)}`;
+        }
+      }
+    }
     this.workerWakeJournal = NodePath.join(stateDir, "taskboard-managed-worker-wakes.json");
     try {
       const saved = JSON.parse(NodeFS.readFileSync(this.workerWakeJournal, "utf8")) as {
@@ -332,6 +364,7 @@ export class TaskBoardWorkCoordinator {
         this.lastObservedAt = output.observedAt ?? new Date().toISOString();
       }
       this.snapshots = snapshots;
+      this.recordRecoveryPhaseClocks(snapshots);
       const startingIds = new Set(snapshots.flatMap(board => board.items
         .filter(item => item.state === "starting" && item.reservationId)
         .map(item => item.reservationId!)));
@@ -360,7 +393,53 @@ export class TaskBoardWorkCoordinator {
     }
   }
 
-/** Queue completion is not the same as Done: verify the actual task frontmatter. */
+  /** The recovery SLA survives app restarts, including legacy TaskBoard
+   * records written before queue_state_since existed. Keep one entry per
+   * exact phase/request, never one timer per task or process uptime. */
+  private recoveryPhaseKey(boardRoot: string, item: QueueItem): string {
+    return [rootKey(boardRoot), item.taskId, item.queueRequest,
+      item.state, item.reservationId ?? ""].join("\0");
+  }
+
+  private recordRecoveryPhaseClocks(snapshots: QueueSnapshot[]): void {
+    if (!this.recoveryClockReady) {
+      throw new Error("TaskBoard recovery clock is unreadable; admission paused until reconciled.");
+    }
+    const now = Date.now();
+    const active = new Set<string>();
+    let changed = false;
+    for (const board of snapshots) {
+      for (const item of board.items) {
+        const inFlight = ["reserved", "starting", "working"].includes(item.state);
+        const malformedQueued = item.state === "queued" && !UUID.test(item.queueRequest ?? "");
+        if ((!inFlight && !malformedQueued) || item.legacyOpenRig) continue;
+        const key = this.recoveryPhaseKey(board.boardRoot, item);
+        active.add(key);
+        if (!this.phaseFirstObserved.has(key)) {
+          this.phaseFirstObserved.set(key, now);
+          changed = true;
+        }
+      }
+    }
+    for (const key of this.phaseFirstObserved.keys()) {
+      if (!active.has(key)) {
+        this.phaseFirstObserved.delete(key);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    const tmp = this.recoveryClockFile + ".tmp";
+    try {
+      NodeFS.writeFileSync(tmp, JSON.stringify({
+        version: 1, rows: [...this.phaseFirstObserved],
+      }), { encoding: "utf8", flush: true });
+      NodeFS.renameSync(tmp, this.recoveryClockFile);
+    } finally {
+      if (NodeFS.existsSync(tmp)) NodeFS.rmSync(tmp, {force: true});
+    }
+  }
+
+  /** Queue completion is not the same as Done: verify the actual task frontmatter. */
   private scanCompletions(snapshots: QueueSnapshot[]) {
     const now = Date.now();
     if (now - this.lastCompletionScanAt < 60_000) return;
@@ -478,6 +557,13 @@ export class TaskBoardWorkCoordinator {
       })),
       lastError: this.lastError,
       lastIdleReason: this.lastIdleReason,
+      recoveryRequired: this.snapshots.flatMap(board => board.items
+        .filter(item => item.state === "recovery_required")
+        .map(item => ({ boardRoot: board.boardRoot, taskId: item.taskId,
+          priority: item.priority, reason: item.error, sessionId: item.sessionId,
+          requestId: item.reservationId, since: item.stateSince }))),
+      recoveryWatchdogAt: this.lastRecoveryScanAt > 0
+        ? new Date(this.lastRecoveryScanAt).toISOString() : null,
       managedWorkerWakes: [...this.managedWorkerWakes.values()].map(row => ({
         taskId: row.taskId, sessionId: row.sessionId, active: row.active,
         caffyStatus: (this.caffy.status(row.sessionId) as {paused?: boolean; lastError?: string | null} | null)
@@ -531,13 +617,32 @@ export class TaskBoardWorkCoordinator {
       const hadWake = status != null && "entries" in status &&
         status.entries.some(row => (row.lastWakeAt ?? 0) > lastTick);
       lastTick = Date.now();
-      if (!hadWake) void this.pump();
+      // An endless stream of Caffy wakes must never suppress TaskBoard
+      // admissions or liveness checks forever. An independent recovery tick
+      // also runs while a preceding pump is stalled on a lost async receipt.
+      if (!hadWake || Date.now() - (this.lastPumpCompletedAt ?? 0) >= 60_000)
+        void this.pump();
+      else void this.auditQueueLiveness();
     }, PUMP_INTERVAL_MS);
     this.timer.unref?.();
     // Refresh TaskBoard-owned reservations immediately for accurate capacity;
     // delay only admission until T3's working-session inventory has recovered.
     void this.readQueues().catch(error => { this.lastError = String(error); });
     setTimeout(() => { void this.pump(); }, 12_000).unref?.();
+  }
+
+  /** Independent of capacity, Keep Busy and any slow admission pump. */
+  private async auditQueueLiveness(): Promise<void> {
+    if (!this.running || this.recoveryTickBusy) return;
+    this.recoveryTickBusy = true;
+    try {
+      const snapshots = await this.readQueues();
+      await this.reconcileQueueLiveness(snapshots);
+    } catch (error) {
+      this.lastError = `Queue liveness audit: ${String(error)}`;
+    } finally {
+      this.recoveryTickBusy = false;
+    }
   }
 
   close() {
@@ -928,6 +1033,123 @@ export class TaskBoardWorkCoordinator {
     }
   }
 
+  /** Generic liveness reconciler for ALL in-flight queue phases. It runs
+   * independently of spare capacity and Keep Busy admissions. Automatic
+   * transitions require exact T3 evidence; ambiguous work becomes a durable
+   * Recovery Required incident instead of sitting in Starting indefinitely.
+   * One CAS mutation per pass prevents bulk mistakes or duplicate starts. */
+  private async reconcileQueueLiveness(snapshots: QueueSnapshot[]): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastRecoveryScanAt < 30_000) return;
+    this.lastRecoveryScanAt = now;
+    const active = snapshots.flatMap(board => board.items
+      .filter(item => (["reserved", "starting", "working"].includes(item.state) ||
+        (item.state === "queued" && !UUID.test(item.queueRequest ?? ""))) &&
+        !item.legacyOpenRig)
+      .map(item => ({boardRoot: board.boardRoot, projectPriority: board.projectPriority, item})))
+      .sort((a, b) => (a.item.priority === "urgent" ? 0 : 1) -
+          (b.item.priority === "urgent" ? 0 : 1) ||
+        (a.projectPriority === "high" ? 0 : a.projectPriority === "low" ? 2 : 1) -
+          (b.projectPriority === "high" ? 0 : b.projectPriority === "low" ? 2 : 1));
+    if (!active.length) return;
+
+    const listed = await cli("node.exe", [
+      NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+    ], JSON.stringify({
+      action: "list", which: "all", includeHidden: true, home: this.home,
+    }), 25_000) as { sessions?: Array<{
+      id: string; spawnRequestId?: string; conversationId?: string | null;
+      bootstrapIdentity?: {state?: string; conversationId?: string | null};
+      closedAt?: unknown; activity?: string; status?: string;
+      lastRole?: string | null; totalTurns?: number | null; lastWorkingAt?: number | null;
+      binding?: {taskRef?: {board?: string; id?: string}};
+    }>; total?: number; hasMore?: boolean; incomplete?: boolean };
+    if (!Array.isArray(listed.sessions) || listed.incomplete || listed.hasMore ||
+        (listed.total !== undefined && listed.total !== listed.sessions.length)) {
+      throw new Error("Recovery watchdog requires a complete T3 registry; no queue mutation made.");
+    }
+    // Caffy's remote capacity inventory can fail independently of TaskBoard;
+    // a bounded read is essential or the watchdog itself could wedge forever.
+    let capacityTimer: ReturnType<typeof setTimeout> | undefined;
+    const capacity = await Promise.race([
+      this.caffy.capacity(),
+      new Promise<never>((_, reject) => {
+        capacityTimer = setTimeout(() => reject(new Error("Capacity inspection timed out")), 15_000);
+        capacityTimer.unref?.();
+      }),
+    ]).finally(() => { if (capacityTimer) clearTimeout(capacityTimer); });
+    if (capacity.unknown > 0) throw new Error("Recovery watchdog cannot verify active workers.");
+    const workingIds = new Set(capacity.workingIds ?? []);
+    for (const {boardRoot, item} of active) {
+      const observed = this.phaseFirstObserved.get(this.recoveryPhaseKey(boardRoot, item)) ?? now;
+      const ageOrigin = item.state === "starting"
+        ? Math.min(observed, this.startingSince(boardRoot, item)) : observed;
+      const exact = item.reservationId
+        ? sessionsForStartRequest(listed.sessions, item.reservationId) : [];
+      const decision = decideQueueRecovery(item, exact, now, ageOrigin);
+      if (!decision) continue;
+
+      // An old manual or differently requested worker must not be silently
+      // displaced by automatic requeue; unresolved ownership is an incident.
+      const otherTaskWorkers = listed.sessions.filter(session =>
+        session.spawnRequestId !== item.reservationId &&
+        session.binding?.taskRef?.id === item.taskId &&
+        !!session.binding?.taskRef?.board &&
+        rootKey(session.binding.taskRef.board) === rootKey(boardRoot) &&
+        session.closedAt == null &&
+        (session.activity === "working" || workingIds.has(session.id)));
+      let action = decision.action;
+      let reason = decision.reason;
+      if ((action === "abandon" || action === "requeue-released") &&
+          otherTaskWorkers.length > 0) {
+        action = "incident";
+        reason = "Another active session is bound to this task; automatic retry unsafe.";
+      }
+      const matched = exact.length === 1 ? exact[0] : null;
+      if (action === "working" && (!matched ||
+          matched.id !== decision.sessionId ||
+          matched.binding?.taskRef?.id !== item.taskId ||
+          !matched.binding?.taskRef?.board ||
+          rootKey(matched.binding.taskRef.board) !== rootKey(boardRoot))) {
+        action = "incident";
+        reason = "Verified session identity does not match TaskBoard reservation owner.";
+      }
+      if (item.state === "working" && item.sessionId && workingIds.has(item.sessionId) &&
+          !(action === "incident" && reason.includes("no observable progress")))
+        continue; // Green workers own their task even if the browser view unloads.
+      const args = ["task", "queue"] as string[];
+      if (action === "expire") args.push("expire", item.taskId,
+        "--request-id", item.reservationId!);
+      else if (action === "abandon") args.push("abandon", item.taskId,
+        "--queue-request", item.queueRequest, "--request-id", item.reservationId!,
+        "--reason", reason, "--verified-no-live-session");
+      else if (action === "working") args.push("working", item.taskId,
+        "--queue-request", item.queueRequest, "--request-id", item.reservationId!,
+        "--session-id", decision.sessionId!);
+      else if (action === "requeue-released") args.push("requeue-released", item.taskId,
+        "--queue-request", item.queueRequest, "--request-id", item.reservationId!,
+        "--session-id", item.sessionId!, "--reason", reason,
+        "--verified-old-session-inactive");
+      else args.push("incident", item.taskId,
+        "--queue-request", item.queueRequest || "__missing__",
+        "--request-id", item.reservationId || "__missing__",
+        "--state", item.state, "--reason",
+        `Queue recovery requires inspection: ${reason}`);
+      try {
+        await this.taskCommand(boardRoot, args);
+        this.lastError = action === "incident"
+          ? `Task ${item.taskId} marked Recovery Required: ${reason}`
+          : null;
+        await this.readQueues();
+        return;
+      } catch (error) {
+        // One CAS failure does not block the rest of the sweep. The next tick
+        // re-reads the exact phase and session roster before any retry.
+        this.lastError = `Queue recovery ${item.taskId}: ${String(error)}`;
+      }
+    }
+  }
+
   /** A queued worker may answer once and leave its TaskBoard task unfinished.
    * Use existing Caffy queued-idle wakes, rather than allocating a duplicate
    * ChatGPT guest. Only exact, idle, assistant-responded queue-bound workers
@@ -1147,8 +1369,19 @@ export class TaskBoardWorkCoordinator {
     try {
       let snapshots = await this.readQueues();
       if (!this.running) return;
+      // Every pump, regardless of capacity/queue activity, reconciles ALL
+      // nonterminal phases against exact current ownership and durable age.
+      // An unreadable registry is not permission to guess or spawn duplicates.
+      try {
+        await this.reconcileQueueLiveness(snapshots);
+        snapshots = this.snapshots;
+      } catch (error) {
+        this.lastError = `Queue recovery inventory unavailable: ${String(error)}`;
+        return;
+      }
       try { this.cleanupManagedWorkerWakes(snapshots); }
       catch (error) { this.lastError = `Managed Caffy cleanup: ${String(error)}`; }
+      this.scheduleWorkerWakeMaintenance(snapshots);
       // Recover a durable Starting request even when admission is paused. It
       // may already have created a worker, so its exact request must reconcile.
       const starting = snapshots.flatMap(board => board.items
