@@ -20,7 +20,7 @@ const DRIVER_LEASE_MS = 15_000;
 const MAX_SNAPSHOT_TEXT = 2_000;
 const MAX_RECORD_BYTES = 48_000;
 const MAX_ACTION_BYTES = 16_000;
-const DRIVER_ACTIONS = new Set(["read", "send", "when_idle", "answer", "reload", "retry_recovery", "complete", "snooze", "unsnooze", "schedule_existing", "schedule_new", "schedule_list", "schedule_cancel", "schedule_cancel_existing"]);
+const DRIVER_ACTIONS = new Set(["read", "send", "when_idle", "answer", "reload", "retry_recovery", "complete", "snooze", "unsnooze", "schedule_existing", "schedule_new", "schedule_list", "schedule_cancel", "schedule_cancel_existing", "caffy_toggle", "caffy_stop", "caffy_once"]);
 
 export class ChatGPTDriverUnavailable extends Data.TaggedError("ChatGPTDriverUnavailable")<{
   readonly message: string;

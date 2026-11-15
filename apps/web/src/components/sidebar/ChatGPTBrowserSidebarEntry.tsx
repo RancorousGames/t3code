@@ -69,6 +69,8 @@ import {
 import { useChatGPTSessionSortPreference } from "../../chatGPTSessionSortPreference";
 import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { shortcutLabelForCommand } from "../../keybindings";
+import { registerCommands, registerMenuAction } from "../../shortcuts/dispatcher";
+import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { searchChatGPTSessionCatalog } from "../../chatGPTSessionSearch";
 import {
   freshManualSessionIds,
@@ -170,8 +172,7 @@ import { ChatGPTAIInterfaceCleanup } from "./ChatGPTAIInterfaceCleanup";
 import { isAIInterfaceSession } from "../../chatGPTAIInterfaceSessions";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import { useT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "../../hooks/useT3CaffyOverview";
-import { CaffyCoffeePotIcon } from "./CaffyCoffeePotIcon";
-import { caffyDiagnosticLines } from "./CaffyHoverDetails";
+import { CaffyStatusBadge } from "./CaffyStatusBadge";
 import { ChatGPTDelayedPromptDialog, type DelayedPromptTarget, type ScheduledChatGPTJob } from "./ChatGPTDelayedPromptDialog";
 import { ChatGPTAutoContinueDialog, type AutoContinueConfig, type AutoContinueRequest } from "./ChatGPTAutoContinueDialog";
 import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
@@ -486,6 +487,7 @@ export function ChatGPTBrowserSidebarEntry({
   const requiredForDelivery = useChatGPTDeliveryMountRequests((state) => state.required);
   const navigate = useNavigate();
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const splitLayout = useSplitLayout(usePrimaryEnvironmentId());
   const displayedSessionIds = new Set(activeSessionId ? splitSessionIds(splitLayout) : []);
   const erroredSessionsAtBottom = useOmniworkPreferences(
@@ -1606,7 +1608,7 @@ export function ChatGPTBrowserSidebarEntry({
   };
 
   // Both ChatGPT sidebar rows and native T3 thread rows use the same OS menu.
-  const showSessionContextMenu = async (sessionId: string, position: { x: number; y: number }) => {
+  const showSessionContextMenu = async (sessionId: string, position: { x: number; y: number }, caffyOnly = false) => {
     const api = readLocalApi();
     const session = sessions.find((entry) => entry.id === sessionId);
     if (!api || !session || !environmentId) return;
@@ -1709,23 +1711,33 @@ export function ChatGPTBrowserSidebarEntry({
     // Manual Stop requires the actual ChatGPT control. Deferred Caffy wakes
     // treat Stop as best-effort so missing controls cannot block scheduling.
     const stopGeneration = () => stopChatGPTGenerationForSchedule(environmentId, sessionId);
+    const sessionMenu = buildChatGPTSessionContextMenu({
+      session,
+      sessions,
+      managerIds,
+      projects,
+      snoozePresets: presets,
+      now: Date.now(),
+      working: liveActivity === "working",
+      hasTask: !!session.binding?.taskRef,
+      hasConversationUrl: !!savedUrl,
+      caffy: activeCaffy,
+      legacyCaffyIds: legacyMonitors.map((monitor) => monitor.id),
+    }).filter((item) => item.id !== "snooze:clear");
+    const caffyMenu = sessionMenu.find((item) => item.id === "caffy");
     const action = await api.contextMenu.show(
-      [
-        ...chatGPTNativeActionMenu(registryContext).filter((item) => item.id !== "registry:agent_reboot"),
-        ...buildChatGPTSessionContextMenu({
-          session,
-          sessions,
-          managerIds,
-          projects,
-          snoozePresets: presets,
-          now: Date.now(),
-          working: liveActivity === "working",
-          hasTask: !!session.binding?.taskRef,
-          hasConversationUrl: !!savedUrl,
-          caffy: activeCaffy,
-          legacyCaffyIds: legacyMonitors.map((monitor) => monitor.id),
-        }).filter((item) => item.id !== "snooze:clear"),
-      ],
+      caffyOnly
+        ? [
+            ...sessionMenu.filter((item) => item.id === "schedule:resume" || item.id === "schedule:prompt"),
+            ...(caffyMenu?.children ?? []).map((item, index) => ({
+              ...item,
+              ...(index === 0 ? { separatorBefore: true } : {}),
+            })),
+          ]
+        : [
+            ...chatGPTNativeActionMenu(registryContext).filter((item) => item.id !== "registry:agent_reboot"),
+            ...sessionMenu,
+          ],
       position,
     );
     if (!action) return;
@@ -2051,6 +2063,120 @@ export function ChatGPTBrowserSidebarEntry({
       ids.every(
         (id) => (sessions.find((entry) => entry.id === id)?.snoozedUntil ?? 0) > Date.now(),
       );
+  // Same app-wide keybinding dispatcher and guest-forwarded menu actions as
+  // ChatGPT New Session. Shortcuts target the selected ChatGPT browser session.
+  const openSelectedCaffy = useEffectEvent(() => {
+    if (!activeSessionId || isCommandPaletteOpen()) return;
+    const anchor = Array.from(document.querySelectorAll<HTMLElement>("[data-caffy-session-id]"))
+      .find((element) => element.dataset.caffySessionId === activeSessionId);
+    const rect = anchor?.getBoundingClientRect();
+    void showSessionContextMenu(
+      activeSessionId,
+      { x: rect?.left ?? 220, y: rect?.bottom ?? 120 },
+      true,
+    );
+  });
+
+  const toggleSelectedCaffy = useEffectEvent(async () => {
+    if (!activeSessionId || isCommandPaletteOpen()) return;
+    const control = window.desktopBridge?.caffyControl;
+    if (!control) {
+      setMenuFeedback("Caffy controls are unavailable in this desktop build.");
+      return;
+    }
+    try {
+      const current = await control({ action: "status", sessionId: activeSessionId });
+      if (!current || typeof current !== "object" || !("paused" in current) ||
+          typeof current.paused !== "boolean" || !("mode" in current)) {
+        setMenuFeedback("No active Caffy schedule for this session.");
+        return;
+      }
+      await control({ action: current.paused ? "resume" : "pause", sessionId: activeSessionId });
+      window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+      setMenuFeedback(current.paused ? "Caffy resumed." : "Caffy paused.");
+    } catch (error) {
+      setMenuFeedback(`Caffy toggle failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
+  const continueSelectedCaffyOnce = useEffectEvent(async () => {
+    if (!activeSessionId || isCommandPaletteOpen()) return;
+    const control = window.desktopBridge?.caffyControl;
+    if (!control) {
+      setMenuFeedback("Caffy controls are unavailable in this desktop build.");
+      return;
+    }
+    try {
+      const current = await control({ action: "status", sessionId: activeSessionId });
+      if (current && typeof current === "object" && "mode" in current &&
+          ["idle", "periodic", "startup"].includes(String(current.mode))) {
+        // Do not silently replace a running Caffy schedule with a one-shot.
+        setMenuFeedback("This session already has Caffy configured. Edit or stop that schedule first.");
+        return;
+      }
+      await configureCaffy(activeSessionId, "idle", undefined, true, 20, {
+        respectSlots: false,
+        repeatPrompt: "",
+        autoRebootMinutes: null,
+        autoRebootEveryRuns: null,
+      });
+    } catch (error) {
+      setMenuFeedback(`Caffy one-shot failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
+  useEffect(() => {
+    if (!isElectron || !environmentId) return;
+    const guard = (event: KeyboardEvent) => {
+      if (!activeSessionId || event.repeat || event.isComposing ||
+          isCommandPaletteOpen() ||
+          (event.target instanceof Element && event.target.closest("[data-keybinding-capture]")))
+        return false;
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    };
+    const unregister = registerCommands(
+      {
+        "chatgpt.caffyControls": (event) => {
+          if (!guard(event)) return false;
+          openSelectedCaffy();
+          return true;
+        },
+        "chatgpt.caffyToggle": (event) => {
+          if (!guard(event)) return false;
+          void toggleSelectedCaffy();
+          return true;
+        },
+        "chatgpt.caffyOnce": (event) => {
+          if (!guard(event)) return false;
+          void continueSelectedCaffyOnce();
+          return true;
+        },
+      },
+      {
+        capture: true,
+        keybindings: () => keybindings,
+        context: () => ({
+          chatgptBrowserRoute: true,
+        }),
+      },
+    );
+    const removeControls = registerMenuAction("chatgpt.caffyControls", openSelectedCaffy);
+    const removeToggle = registerMenuAction("chatgpt.caffyToggle", () => {
+      void toggleSelectedCaffy();
+    });
+    const removeOnce = registerMenuAction("chatgpt.caffyOnce", () => {
+      void continueSelectedCaffyOnce();
+    });
+    return () => {
+      unregister();
+      removeControls();
+      removeToggle();
+      removeOnce();
+    };
+  }, [activeSessionId, environmentId, keybindings]);
+
     const presets = environmentId ? resolveSnoozePresets(new Date(), timestampFormat, environmentId) : [];
     const action = await api.contextMenu.show(
       buildChatGPTProjectContextMenu({
@@ -3013,22 +3139,7 @@ export function ChatGPTBrowserSidebarEntry({
                               const needsAnswer = pendingQuestionIds.has(session.id);
                               const caffyMonitor = activeCaffyMonitors.get(session.id);
                               const caffyAgentStop = caffyMonitor ? undefined : agentStoppedCaffy.get(session.id);
-                              const caffyStoppedLabel = caffyAgentStop
-                                ? `Caffy stopped by agent at ${new Date(caffyAgentStop.stoppedAt).toLocaleString()} — no further wakes scheduled`
-                                : null;
-                              const caffyLabel = caffyMonitor
-                                ? `Caffy: ${caffyMonitor.mode === "queued" ? "Auto-continue on free slot" :
-                                    caffyMonitor.mode === "idle" ? "Auto-continue on idle" :
-                                    caffyMonitor.mode === "periodic" ? `Periodic every ${caffyMonitor.intervalMinutes} min` :
-                                    "Wake on startup"}${caffyMonitor.paused ? " (paused)" : ""}${caffyMonitor.onceOnly ? " (once)" : ""}${caffyMonitor.beginAt && caffyMonitor.beginAt > clockNow
-                                        ? ` — starts ${new Date(caffyMonitor.beginAt).toLocaleString()}` : ""}${
-                                          caffyMonitor.autoRebootMinutes
-                                            ? ` — auto-reboot every ${caffyMonitor.autoRebootMinutes}m when idle`
-                                            : ""}${caffyMonitor.rebootOperationId ? " — reboot pending reconciliation" : ""}`
-                                : null;
-                              const caffyDiagnostics = caffyMonitor
-                                ? caffyDiagnosticLines(caffyMonitor, clockNow)
-                                : [];
+
                               const isVerifiedManager = managerIds.has(session.id);
                               const displayRole = chatGPTSessionDisplayRole(
                                 session,
@@ -3059,17 +3170,7 @@ export function ChatGPTBrowserSidebarEntry({
                                     {pendingLoad && (
                                       <div className="text-foreground/75">{pendingLoad.title}</div>
                                     )}
-                                    {caffyLabel && (
-                                      <div className="grid gap-1 border-t border-sky-400/25 pt-2 text-[11px]">
-                                        <div className="font-medium text-sky-400">{caffyLabel}</div>
-                                        {caffyDiagnostics.map((line) => (
-                                          <div key={line} className="text-foreground/75 break-words">{line}</div>
-                                        ))}
-                                      </div>
-                                    )}
-                                    {caffyStoppedLabel && (
-                                      <div className="text-red-400/90">{caffyStoppedLabel}</div>
-                                    )}
+
                                     <div className="text-foreground/75">
                                       {isVerifiedManager ? "Manager · " : ""}
                                       {creationOrigin === "manual"
@@ -3181,7 +3282,7 @@ export function ChatGPTBrowserSidebarEntry({
                                       <BookmarkCheckIcon className="size-3.5" aria-hidden="true" />
                                     </span>
                                   )}
-                                  <div className="min-w-0 flex-1">
+                                  <div className="flex min-w-0 flex-1 items-center gap-1">
                                     {renamingId === session.id ? (
                                       <Input
                                         autoFocus
@@ -3338,23 +3439,6 @@ export function ChatGPTBrowserSidebarEntry({
                                                   ?
                                                 </span>
                                               )}
-                                              {caffyLabel && (
-                                                <CaffyCoffeePotIcon
-                                                  aria-label={[caffyLabel, ...caffyDiagnostics].join(". ")}
-                                                  className="size-3.5 shrink-0 text-sky-400"
-                                                >
-                                                  <title>{[caffyLabel, ...caffyDiagnostics].join("\n")}</title>
-                                                </CaffyCoffeePotIcon>
-                                              )}
-                                              {caffyStoppedLabel && (
-                                                <CaffyCoffeePotIcon
-                                                  stopped
-                                                  aria-label={caffyStoppedLabel}
-                                                  className="size-3.5 shrink-0 text-red-400"
-                                                >
-                                                  <title>{caffyStoppedLabel}</title>
-                                                </CaffyCoffeePotIcon>
-                                              )}
                                               {Number.isFinite(session.snoozedUntil) &&
                                                 session.snoozedUntil! <= clockNow && (
                                                   <AlarmClockCheckIcon
@@ -3388,6 +3472,23 @@ export function ChatGPTBrowserSidebarEntry({
                                         preserveSidebarScroll();
                                         setSessionSnooze([session.id], null);
                                       }}
+                                      {(caffyMonitor || caffyAgentStop) && (
+                                        <span data-caffy-session-id={session.id} className="inline-flex shrink-0">
+                                        <CaffyStatusBadge
+                                          monitor={caffyMonitor ?? null}
+                                          stoppedAt={caffyAgentStop?.stoppedAt}
+                                          now={clockNow}
+                                          shortcuts={{
+                                            controls: shortcutLabelForCommand(keybindings, "chatgpt.caffyControls") ?? "",
+                                            toggle: shortcutLabelForCommand(keybindings, "chatgpt.caffyToggle") ?? "",
+                                            once: shortcutLabelForCommand(keybindings, "chatgpt.caffyOnce") ?? "",
+                                          }}
+                                          onQuickMenu={(position) => {
+                                            void showSessionContextMenu(session.id, position, true);
+                                          }}
+                                        />
+                                        </span>
+                                      )}
                                     >
                                       <AlarmClockCheckIcon aria-hidden className="size-3.5" />
                                     </Button>

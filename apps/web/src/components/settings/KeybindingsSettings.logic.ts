@@ -384,6 +384,9 @@ export function commandLabel(command: KeybindingCommand): string {
   if (command === "view.reopenClosed") return "Reopen Closed Tab";
   if (command === "chatgpt.newSession") return "ChatGPT: New Session";
   if (command === "chatgpt.returnMarker") return "ChatGPT: Toggle Return Marker";
+  if (command === "chatgpt.caffyControls") return "ChatGPT: Caffy Controls";
+  if (command === "chatgpt.caffyToggle") return "ChatGPT: Pause/Resume Caffy";
+  if (command === "chatgpt.caffyOnce") return "ChatGPT: Continue Once When Idle";
   if (command === "prepfile.new") return "Prepfile: New Preparation";
   if (command === "chatgpt.openDashboard") return "ChatGPT: Open Sessions Dashboard";
   if (command === "chatgpt.reloadSession") return "ChatGPT: Reload Current Session";

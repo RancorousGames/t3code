@@ -15,6 +15,7 @@ export * from "./remoteAccess.ts";
 export * from "./ipc.ts";
 export * from "./omniHubKeepAwake.ts";
 export * from "./caffyManagedIdle.ts";
+export * from "./caffyStatusPresentation.ts";
 export * from "./chatGPTCapacityMessage.ts";
 export * from "./terminal.ts";
 export * from "./provider.ts";

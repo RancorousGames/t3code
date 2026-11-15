@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-/** Distinctive Caffy marker: a small lidded coffee pot, not an alarm or timer. */
+/** Distinctive Caffy coffee-cup marker; badge color describes its schedule mode. */
 export function CaffyCoffeePotIcon({ stopped = false, ...props }: SVGProps<SVGSVGElement> & { stopped?: boolean }) {
   return (
     <svg
@@ -15,12 +15,11 @@ export function CaffyCoffeePotIcon({ stopped = false, ...props }: SVGProps<SVGSV
       strokeLinejoin="round"
       {...props}
     >
-      <path d="M9.5 4h5" />
-      <path d="M8 6.5h8" />
-      <path d="M8 8h8l1.2 11H6.8L8 8Z" />
-      <path d="M8 10H5.2L3 13.5l3.8 1.2" />
-      <path d="M16.5 10h2a3 3 0 0 1 0 6h-1.6" />
-      <path d="M7 19h10" />
+      <path d="M4 8h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Z" />
+      <path d="M16 9h1.4a3 3 0 0 1 0 6H16" />
+      <path d="M2.8 20h16.8" />
+      <path d="M8 5c-.8-1 .7-1.5.1-2.4" />
+      <path d="M12 5c-.8-1 .7-1.5.1-2.4" />
       {stopped && <path d="M3 21L21 3" strokeWidth="2.6" />}
     </svg>
   );

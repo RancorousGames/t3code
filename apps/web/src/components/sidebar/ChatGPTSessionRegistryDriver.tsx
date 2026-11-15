@@ -2,6 +2,8 @@
 // changing between Session/Browser never changes which desktop owns the guest.
 import {
   AuthOrchestrationOperateScope,
+  readCaffyRecord,
+  type CaffyReadout,
   type ChatGPTRegistryAction,
   type ChatGPTRegistryRecord,
   type ChatGPTRegistrySnapshot,
@@ -183,6 +185,31 @@ export async function executeRegistryDriverAction(
   const sessions = readChatGPTBrowserSessions(environmentId);
   const target = sessions.find((entry) => entry.id === action.sessionId);
   if (!target) return { ok: false, reason: "ChatGPT session no longer exists on desktop." };
+  if (["caffy_toggle", "caffy_stop", "caffy_once"].includes(action.actionId)) {
+    if (!scheduler) return { ok: false, reason: "Desktop Caffy scheduler unavailable." };
+    try {
+      const state: unknown = await scheduler({ action: "status", sessionId: target.id });
+      const current = readCaffyRecord(state);
+      if (action.actionId === "caffy_once") {
+        if (current) {
+          return { ok: false, reason: "A Caffy schedule already exists. Edit or stop it first." };
+        }
+        await scheduler({ action: "set", sessionId: target.id, mode: "idle",
+          onceOnly: true, keepAwake: false, startup: false, respectSlots: false,
+          intervalMinutes: 20 });
+        return { ok: true, status: "Caffy will continue once when idle." };
+      }
+      if (!current) return { ok: false, reason: "No active Caffy schedule." };
+      if (action.actionId === "caffy_stop") {
+        await scheduler({ action: "stop", sessionId: target.id, stopInitiator: "user" });
+        return { ok: true, status: "Caffy stopped." };
+      }
+      await scheduler({ action: current.paused ? "resume" : "pause", sessionId: target.id });
+      return { ok: true, status: current.paused ? "Caffy resumed." : "Caffy paused." };
+    } catch (error) {
+      return { ok: false, reason: errorText(error) };
+    }
+  }
   if (action.actionId === "schedule_cancel_existing") {
     if (!scheduler) return { ok: false, reason: "Desktop scheduler unavailable." };
     try {
@@ -660,7 +687,60 @@ export function ChatGPTSessionRegistryDriver() {
           }
         }
 
-        const current = registryChangesFromStore(targetEnvironment, applied);
+        // The mobile AI screen receives a bounded, read-only Caffy projection.
+        // Do not serialize prompts or pending message bodies into the registry.
+        const caffyState: unknown = await window.desktopBridge?.caffyControl?.({ action: "list" })
+          .catch(() => null);
+        const monitorsById = new Map<string, CaffyReadout>();
+        const agentStopsById = new Map<string, number>();
+        if (caffyState && typeof caffyState === "object") {
+          const state = caffyState as {
+            entries?: readonly Record<string, unknown>[];
+            agentStops?: readonly Record<string, unknown>[];
+          };
+          for (const value of state.entries ?? []) {
+            const monitor = readCaffyRecord(value);
+            if (!monitor) continue;
+            const safe: CaffyReadout = {
+              mode: monitor.mode, paused: monitor.paused, onceOnly: monitor.onceOnly,
+              intervalMinutes: monitor.intervalMinutes, respectSlots: monitor.respectSlots,
+              startup: monitor.startup, beginAt: monitor.beginAt, expiresAt: monitor.expiresAt,
+              createdAt: monitor.createdAt, nextDueAt: monitor.nextDueAt,
+              lastWakeAt: monitor.lastWakeAt, lastCheckedAt: monitor.lastCheckedAt,
+              nextCheckAt: monitor.nextCheckAt, pendingWake: monitor.pendingWake,
+              lastCheckResult: monitor.lastCheckResult?.slice(0, 120),
+              lastDeliveryResult: monitor.lastDeliveryResult?.slice(0, 120),
+              lastError: monitor.lastError?.slice(0, 160),
+              deliveryStatus: monitor.deliveryStatus?.slice(0, 60),
+              autoRebootMinutes: monitor.autoRebootMinutes,
+              autoRebootEveryRuns: monitor.autoRebootEveryRuns,
+              rebootOperationId: monitor.rebootOperationId,
+              wakePhase: monitor.wakePhase,
+              admissionReason: monitor.admissionReason?.slice(0, 120),
+            };
+            for (const id of [value.sessionId, value.browserSessionId, value.publicSessionId]) {
+              if (typeof id === "string" && id) monitorsById.set(id, safe);
+            }
+          }
+          for (const value of state.agentStops ?? []) {
+            if (typeof value.stoppedAt !== "number" || !Number.isFinite(value.stoppedAt)) continue;
+            for (const id of [value.sessionId, value.browserSessionId, value.publicSessionId]) {
+              if (typeof id === "string" && id) agentStopsById.set(id, value.stoppedAt);
+            }
+          }
+        }
+        const current = registryChangesFromStore(targetEnvironment, applied).map((entry) => {
+          const monitor = monitorsById.get(entry.sessionId);
+          const stoppedAt = monitor ? undefined : agentStopsById.get(entry.sessionId);
+          return {
+            ...entry,
+            record: {
+              ...entry.record,
+              ...(monitor ? { caffyStatus: monitor } : {}),
+              ...(stoppedAt !== undefined ? { caffyStoppedAt: stoppedAt } : {}),
+            },
+          };
+        });
         const revisionHash = (entry: SyncRecord) =>
           JSON.stringify([
             entry.record,

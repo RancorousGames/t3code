@@ -1,12 +1,15 @@
 import {
   AuthOrchestrationOperateScope,
+  caffyBadge,
+  caffyStoppedBadge,
+  type CaffyColor,
   type ChatGPTRegistrySession,
   type ChatGPTRegistryMetadataPatch,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AppState, Pressable, RefreshControl, ScrollView, TextInput, View, type ScrollViewInstance,
+  Alert, AppState, Pressable, RefreshControl, ScrollView, TextInput, View, type ScrollViewInstance,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -21,6 +24,7 @@ import {
 } from "../../state/chatGPTRegistry";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { ChatGPTSchedulePanel, type MobileChatGPTSchedule, type MobileChatGPTScheduledJob, type MobileChatGPTScheduledEntry } from "./ChatGPTSchedulePanel";
+import { CaffyMobileBadge, CaffyMobileDetails, caffyMobileRecord } from "./CaffyMobileBadge";
 
 function elapsed(at: number | null, now: number): string {
   if (!at || !Number.isFinite(at)) return "never";
@@ -31,6 +35,14 @@ function elapsed(at: number | null, now: number): string {
   return `${Math.floor(minutes / 1440)}d ago`;
 }
 
+const caffyCardRail: Record<CaffyColor, string> = {
+  green: "border-l-2 border-l-emerald-400/65",
+  purple: "border-l-2 border-l-violet-400/65",
+  cyan: "border-l-2 border-l-cyan-300/65",
+  blue: "border-l-2 border-l-blue-400/65",
+  orange: "border-l-2 border-l-orange-400/65",
+  red: "border-l-2 border-l-rose-400/65",
+};
 type RegistryRead = {
   sessions: readonly ChatGPTRegistrySession[];
   driver: { online: boolean; lastSeenAt: number | null };
@@ -89,6 +101,7 @@ export function ChatGPTSessionsScreen() {
   const receipt = useAtomCommand(readChatGPTRegistryReceipt, { reportFailure: false });
   const [data, setData] = useState<RegistryRead | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [expandedCaffyId, setExpandedCaffyId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [scheduleFor, setScheduleFor] = useState<string | null | undefined>(undefined);
   const [scheduledJobs, setScheduledJobs] = useState<MobileChatGPTScheduledJob[]>([]);
@@ -257,6 +270,26 @@ export function ChatGPTSessionsScreen() {
       prompt: input.prompt, onIdle: input.onIdle, beginAt: input.beginAt,
     });
   };
+  const showCaffyActions = (row: ChatGPTRegistrySession) => {
+    if (!online || busy || !canOperate) {
+      setFeedback("Desktop offline or no permission. Caffy controls are unavailable.");
+      return;
+    }
+    const { monitor } = caffyMobileRecord(row.record);
+    const options: Parameters<typeof Alert.alert>[2] = [
+      { text: "Cancel", style: "cancel" },
+      ...(monitor ? [
+        { text: monitor.paused ? "Resume Caffy" : "Pause Caffy",
+          onPress: () => { void operate(row, "caffy_toggle", {}); } },
+        { text: "Stop Caffy", style: "destructive" as const,
+          onPress: () => { void operate(row, "caffy_stop", {}); } },
+      ] : [{
+        text: "Continue once when idle",
+        onPress: () => { void operate(row, "caffy_once", {}); },
+      }]),
+    ];
+    Alert.alert("Caffy · " + title(row), "Choose an action for this session.", options);
+  };
   const showScheduler = (id: string | null) => {
     setScheduleFor(id);
     requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
@@ -316,8 +349,11 @@ export function ChatGPTSessionsScreen() {
         <Text className="text-xs font-medium text-foreground-muted">
           {rows.length} sessions · Tap a session to view its last exchange
         </Text>
-        {rows.map((row) => (
-          <Pressable
+        {rows.map((row) => {
+          const caffy = caffyMobileRecord(row.record);
+          const caffyTone = caffy.monitor ? caffyBadge(caffy.monitor, now).color
+            : caffy.stoppedAt !== null ? caffyStoppedBadge().color : null;
+          return (<Pressable
             key={row.sessionId}
             accessibilityRole="button"
             onPress={() => {
@@ -327,12 +363,23 @@ export function ChatGPTSessionsScreen() {
               // even when there are dozens of sessions in the dashboard.
               requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
             }}
-            className={`rounded-xl border border-border bg-subtle p-3 ${!online ? "opacity-65" : ""}`}
+            className={`rounded-xl border border-border bg-subtle p-3 ${caffyTone ? caffyCardRail[caffyTone] : ""} ${!online ? "opacity-65" : ""}`}
           >
             <View className="flex-row items-center justify-between">
               <Text className="min-w-0 flex-1 text-sm font-semibold text-foreground" numberOfLines={1}>
                 {title(row)}
               </Text>
+              {(caffy.monitor || caffy.stoppedAt !== null) ? (
+                <CaffyMobileBadge
+                  monitor={caffy.monitor}
+                  stoppedAt={caffy.stoppedAt}
+                  now={now}
+                  expanded={expandedCaffyId === row.sessionId}
+                  stale={!online}
+                  onPress={() => setExpandedCaffyId((id) => id === row.sessionId ? null : row.sessionId)}
+                  onLongPress={() => showCaffyActions(row)}
+                />
+              ) : null}
               <Text className="ml-2 text-xs text-foreground-muted">{status(row, now)}</Text>
             </View>
             <Text className="mt-1 text-xs text-foreground-muted" numberOfLines={1}>
@@ -341,8 +388,16 @@ export function ChatGPTSessionsScreen() {
             {row.snapshot?.lastAssistantText ? <Text className="mt-2 text-sm text-foreground" numberOfLines={2}>
               {row.snapshot.lastAssistantText}
             </Text> : null}
-          </Pressable>
-        ))}
+            {expandedCaffyId === row.sessionId && (caffy.monitor || caffy.stoppedAt !== null) ? (
+              <CaffyMobileDetails
+                monitor={caffy.monitor}
+                stoppedAt={caffy.stoppedAt}
+                now={now}
+                stale={!online}
+              />
+            ) : null}
+          </Pressable>);
+        })}
         {selected ? (
           <View className="rounded-xl border border-border p-3">
             <Text className="text-lg font-semibold text-foreground">{title(selected)}</Text>
