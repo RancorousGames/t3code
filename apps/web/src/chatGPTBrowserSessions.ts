@@ -92,7 +92,7 @@ export const BrowserSession = Schema.Struct({
   snoozedAt: Schema.optional(Schema.Number),
   verificationPending: Schema.optional(Schema.Boolean),
   quickSnoozeStep: Schema.optional(Schema.Number),
-  // Only backend spawns that explicitly opt in use the one-hour idle lifetime.
+  // Automatically spawned workers close after two hours without work.
   autoClose: Schema.optional(Schema.Boolean),
   // Sticky exemptions: unsnooze or clearing a colored border never reenables auto-close.
   autoCloseExempt: Schema.optional(Schema.Boolean),

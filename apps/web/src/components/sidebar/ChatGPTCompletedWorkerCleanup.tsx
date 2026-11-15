@@ -10,17 +10,12 @@ import {
   readChatGPTBrowserSessions,
   useChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
-import {
-  completedWorkerCandidate,
-  type WorkerCreationEvidence,
-} from "../../chatGPTCompletedWorkerPolicy";
 import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
 import { auditBlankChatGPTWorkers } from "../../chatGPTWorkerStartupDiagnostics";
 import {
   clearSpawnAutoCloseIdleSince,
   readSpawnAutoCloseIdleSince,
   spawnAutoCloseCandidate,
-  spawnAutoCloseFinishedTaskCandidate,
 } from "../../chatGPTSpawnAutoClose";
 import { isChatGPTGuestHibernated } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
@@ -39,11 +34,6 @@ import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { closePreviewSession } from "../preview/closePreviewSession";
 
-function selectedBrowserSessionId(): string | undefined {
-  const match = /\/browser\/([^/?#]+)/.exec(window.location.pathname);
-  return match?.[1];
-}
-
 /** Cleanup reads ALL persisted sessions independent of Hide Workers/search.
  * It never mounts unloaded guests merely to decide whether to close them.
  */
@@ -60,33 +50,23 @@ export function ChatGPTCompletedWorkerCleanup({
   const close = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const scanning = useRef(false);
   const lastScan = useRef(0);
+  const generation = useRef(0);
+  useEffect(() => () => { generation.current++; }, [environmentId]);
 
   useEffect(() => {
-    const read = window.desktopBridge?.readTaskBoardWorkerClaims;
-    if (scanning.current || now - lastScan.current < 50_000) return;
-    const verifiedManagers = read ? managerIds : null;
+    if (scanning.current || now - lastScan.current < 20_000) return;
+    const verifiedManagers = managerIds;
     scanning.current = true;
     lastScan.current = now;
-    let unmounted = false;
+    const currentGeneration = generation.current;
+    const unmounted = () => generation.current !== currentGeneration;
     const scan = async () => {
-      let trustedManagers = verifiedManagers;
-      const readClaimsSafely = async () => {
-        if (!trustedManagers) return [];
-        try { return await read!(); }
-        catch {
-          // A TaskBoard outage cannot authorize legacy cleanup, but must not
-          // disable a separately opted-in worker idle lifetime.
-          trustedManagers = null;
-          return [];
-        }
-      };
-      const claims = await readClaimsSafely();
       const receiptCreatedAt = new Map(
         readChatGPTSpawnReceipts(environmentId).map((r) => [r.sessionId, r.createdAt]),
       );
       const initial = readChatGPTBrowserSessions(environmentId);
       auditBlankChatGPTWorkers(environmentId, initial, readChatGPTSpawnReceipts(environmentId), Date.now());
-      const creationEvidence = (id: string): WorkerCreationEvidence => {
+      const creationEvidence = (id: string) => {
         const spawnCreatedAt = receiptCreatedAt.get(id);
         const lastWorkingAt = getLocalStorageItem(
           chatGPTBrowserLastWorkingKey(environmentId, id),
@@ -101,33 +81,17 @@ export function ChatGPTCompletedWorkerCleanup({
       const candidateFor = (
         sessions: readonly (typeof initial)[number][],
         worker: (typeof initial)[number],
-        ownedClaims: typeof claims,
         at: number,
-      ) => trustedManagers?.has(worker.id) ? null : (
-        spawnAutoCloseCandidate(
-          sessions, worker, selectedBrowserSessionId(), at,
-          readSpawnAutoCloseIdleSince(environmentId, worker.id),
-        ) ?? completedWorkerCandidate(
-          sessions, worker, ownedClaims, trustedManagers, selectedBrowserSessionId(),
-          at, creationEvidence(worker.id),
-        )
+      ) => verifiedManagers?.has(worker.id) ? null : spawnAutoCloseCandidate(
+        sessions, worker, at,
+        readSpawnAutoCloseIdleSince(environmentId, worker.id),
+        creationEvidence(worker.id).lastWorkingAt ?? null,
+        creationEvidence(worker.id).spawnCreatedAt ?? null,
       );
-      const finishedTaskFallbackFor = (
-        sessions: readonly (typeof initial)[number][],
-        worker: (typeof initial)[number],
-        ownedClaims: typeof claims,
-        at: number,
-      ) => trustedManagers?.has(worker.id) ? null :
-        spawnAutoCloseFinishedTaskCandidate(
-          sessions, worker, ownedClaims, selectedBrowserSessionId(), at,
-          creationEvidence(worker.id).lastWorkingAt ?? null,
-        );
       for (const worker of initial) {
-        if (unmounted) return;
-        const originalCandidate = candidateFor(initial, worker, claims, Date.now());
-        const finishedFallback = finishedTaskFallbackFor(initial, worker, claims, Date.now());
-        if ((!originalCandidate && !finishedFallback) ||
-            hasUncertainChatGPTSend(environmentId, worker.id)) continue;
+        if (unmounted()) return;
+        const originalCandidate = candidateFor(initial, worker, Date.now());
+        if (!originalCandidate || hasUncertainChatGPTSend(environmentId, worker.id)) continue;
 
         const status = await inspectBrowserSession(environmentId, worker);
         // The host can report "unloaded" for a deferred guest. Its status
@@ -145,11 +109,10 @@ export function ChatGPTCompletedWorkerCleanup({
           if (!bridge ||
               await nativeChatGPTResidency(bridge, environmentId, worker.id) !== "resident")
             continue;
-          const refreshedClaims = await readClaimsSafely();
           const currentSessions = readChatGPTBrowserSessions(environmentId);
           const current = currentSessions.find((entry) => entry.id === worker.id);
-          if (unmounted || !current || JSON.stringify(current) !== JSON.stringify(worker) ||
-              !candidateFor(currentSessions, current, refreshedClaims, Date.now()) ||
+          if (unmounted() || !current || JSON.stringify(current) !== JSON.stringify(worker) ||
+              !candidateFor(currentSessions, current, Date.now()) ||
               hasUncertainChatGPTSend(environmentId, worker.id))
             continue;
           try {
@@ -158,7 +121,7 @@ export function ChatGPTCompletedWorkerCleanup({
               sessionId: worker.id, action: "change_state", state: "closed",
               neverWake: true,
             });
-            if (unmounted || selectedBrowserSessionId() === worker.id ||
+            if (unmounted() ||
                 hasUncertainChatGPTSend(environmentId, worker.id) ||
                 JSON.stringify(readChatGPTBrowserSessions(environmentId).find(
                   (entry) => entry.id === worker.id,
@@ -213,13 +176,8 @@ export function ChatGPTCompletedWorkerCleanup({
               snapshot.navStatus._tag === "Success" &&
               chatGPTConversationIdFromUrl(snapshot.navStatus.url) === conversationId);
 
-        // The legacy webview can disappear without being marked hibernated.
-        // In that case the idle clock never started, so use ONLY an explicitly
-        // opted-in worker's exact, completed TaskBoard assignment, never an
-        // arbitrary unavailable/error state. No guest, exact stable conversation
-        // identity and an expired grace period are all mandatory.
-        const finishedColdClose =
-          !!finishedFallback &&
+        // Inactive unmounted workers still need exact conversation identity.
+        const inactiveUnloadedClose =
           observedStatus === "unavailable" &&
           status.statusReason === "Embedded ChatGPT webview is not mounted." &&
           noMountedGuest &&
@@ -231,8 +189,8 @@ export function ChatGPTCompletedWorkerCleanup({
             (snapshot.navStatus._tag !== "Success" ||
               chatGPTConversationIdFromUrl(snapshot.navStatus.url) === registeredId)
           ));
-        const allowedColdClose = coldClose || finishedColdClose;
-        const closeCandidate = originalCandidate ?? (finishedColdClose ? finishedFallback : null);
+        const allowedColdClose = coldClose || inactiveUnloadedClose;
+        const closeCandidate = originalCandidate;
 
         const liveClose =
           !!originalCandidate &&
@@ -244,20 +202,16 @@ export function ChatGPTCompletedWorkerCleanup({
         if (!liveClose && !allowedColdClose) continue;
 
         try {
-          // Recheck the entire claim set, role, timers, exemptions and session
+          // Recheck role, inactivity clock, exemptions and session
           // identity after asynchronous host/UI operations. A sidebar click
           // does NOT make a session human-controlled.
-          const refreshedClaims = await readClaimsSafely();
           const currentSessions = readChatGPTBrowserSessions(environmentId);
           const current = currentSessions.find((entry) => entry.id === worker.id);
           if (
-            unmounted ||
+            unmounted() ||
             !current ||
             JSON.stringify(current) !== JSON.stringify(worker) ||
-            !(candidateFor(currentSessions, current, refreshedClaims, Date.now()) ??
-              (finishedColdClose
-                ? finishedTaskFallbackFor(currentSessions, current, refreshedClaims, Date.now())
-                : null))
+            !candidateFor(currentSessions, current, Date.now())
           ) continue;
 
           if (liveClose) {
@@ -286,9 +240,8 @@ export function ChatGPTCompletedWorkerCleanup({
 
           const latestPreview = readThreadPreviewState(thread);
           if (
-            unmounted ||
+            unmounted() ||
             hasUncertainChatGPTSend(environmentId, current.id) ||
-            selectedBrowserSessionId() === current.id ||
             JSON.stringify(readChatGPTBrowserSessions(environmentId).find(
               (entry) => entry.id === current.id,
             )) !== JSON.stringify(current) ||
@@ -333,14 +286,11 @@ export function ChatGPTCompletedWorkerCleanup({
     };
     void scan()
       .catch((error: unknown) => {
-        console.warn("[ChatGPT worker cleanup] TaskBoard unavailable; only explicitly flagged workers can close", error);
+        console.warn("[ChatGPT worker cleanup] Unable to inspect inactive worker", error);
       })
       .finally(() => {
         scanning.current = false;
       });
-    return () => {
-      unmounted = true;
-    };
   }, [environmentId, managerIds, now, close, removeSession]);
   return null;
 }

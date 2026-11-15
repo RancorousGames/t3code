@@ -134,7 +134,6 @@ const STARTING_RECHECK_MS = 45_000;
 const AUTOMATIC_WORKER_CAFFY_MINUTES = 120;
 // A guest stuck at the original prompt must not monopolize a queue item for hours.
 const UNSTARTED_GUEST_GRACE_MS = 2 * 60_000;
-const PUMP_INTERVAL_MS = 20_000;
 const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 10 * 60_000;
 const PUMP_STUCK_MS = 4 * 60_000;
@@ -196,7 +195,7 @@ export function completedQueueTask(
 export class TaskBoardWorkCoordinator {
   private readonly caffy: CaffyScheduler;
   private readonly home: string;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private releaseHeartbeat: (() => void) | null = null;
   private followupTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private busy = false;
@@ -524,8 +523,7 @@ export class TaskBoardWorkCoordinator {
   start() {
     if (this.running) return;
     this.running = true;
-    this.timer = setInterval(() => { void this.pump(); }, PUMP_INTERVAL_MS);
-    this.timer.unref?.();
+    this.releaseHeartbeat = this.caffy.subscribeHeartbeat(() => { void this.pump(); });
     // Refresh TaskBoard-owned reservations immediately for accurate capacity;
     // delay only admission until T3's working-session inventory has recovered.
     void this.readQueues().catch(error => { this.lastError = String(error); });
@@ -534,8 +532,8 @@ export class TaskBoardWorkCoordinator {
 
   close() {
     this.running = false;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.releaseHeartbeat?.();
+    this.releaseHeartbeat = null;
     if (this.followupTimer) clearTimeout(this.followupTimer);
     this.followupTimer = null;
     this.caffy.setTaskReservations([], false);

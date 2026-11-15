@@ -186,6 +186,7 @@ export class CaffyScheduler {
   private taskBoardInventoryReady = false;
   private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private readonly heartbeatSubscribers = new Set<() => void>();
   private pumping = false;
   private pumpRequested = false;
   private lastIdentityReconcileAt = 0;
@@ -377,6 +378,11 @@ export class CaffyScheduler {
     }
   }
 
+  subscribeHeartbeat(callback: () => void): () => void {
+    this.heartbeatSubscribers.add(callback);
+    return () => { this.heartbeatSubscribers.delete(callback); };
+  }
+
   start() {
     if (this.started) return;
     this.started = true;
@@ -398,7 +404,13 @@ export class CaffyScheduler {
     }
     if (changed) this.save();
     this.syncPower();
-    this.timer = setInterval(() => { this.expireTimedBusy(); this.throughput.heartbeat(); void this.pump(); void this.checkShutdown(); }, CLOCK);
+    this.timer = setInterval(() => {
+      this.expireTimedBusy();
+      this.throughput.heartbeat();
+      void this.pump();
+      void this.checkShutdown();
+      for (const callback of this.heartbeatSubscribers) callback();
+    }, CLOCK);
     this.timer.unref?.();
     void this.pump();
   }

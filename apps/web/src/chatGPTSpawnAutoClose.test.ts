@@ -5,7 +5,6 @@ import {
   observeSpawnAutoCloseActivity,
   readSpawnAutoCloseIdleSince,
   spawnAutoCloseCandidate,
-  spawnAutoCloseFinishedTaskCandidate,
 } from "./chatGPTSpawnAutoClose";
 
 const now = Date.parse("2026-11-05T06:00:00Z");
@@ -27,14 +26,14 @@ function storage() {
 }
 
 describe("explicit spawn auto-close", () => {
-  it("waits one hour of observed idle and restarts the clock after resumed work", () => {
+  it("waits two hours of inactivity and restarts the clock after resumed work", () => {
     const store = storage();
-    expect(SPAWN_AUTO_CLOSE_IDLE_MS).toBe(3_600_000);
+    expect(SPAWN_AUTO_CLOSE_IDLE_MS).toBe(7_200_000);
     observeSpawnAutoCloseActivity("pc", worker, "idle", now, store);
     observeSpawnAutoCloseActivity("pc", worker, "idle", now + 2_000, store);
     expect(readSpawnAutoCloseIdleSince("pc", worker.id, store)).toBe(now);
     const eligible = (at: number) => spawnAutoCloseCandidate(
-      [worker], worker, undefined, at, readSpawnAutoCloseIdleSince("pc", worker.id, store),
+      [worker], worker, at, readSpawnAutoCloseIdleSince("pc", worker.id, store),
     );
     expect(eligible(now + SPAWN_AUTO_CLOSE_IDLE_MS - 1)).toBeNull();
     expect(eligible(now + SPAWN_AUTO_CLOSE_IDLE_MS)).toMatchObject({
@@ -56,47 +55,36 @@ describe("explicit spawn auto-close", () => {
     observeSpawnAutoCloseActivity("pc", worker, "unknown", now + 1, store);
     expect(readSpawnAutoCloseIdleSince("pc", worker.id, store)).toBe(now);
     observeSpawnAutoCloseActivity("pc", worker, "interrupted", now + 2, store);
-    expect(readSpawnAutoCloseIdleSince("pc", worker.id, store)).toBeNull();
-    observeSpawnAutoCloseActivity("pc", { ...worker, autoClose: false }, "idle", now, store);
+    expect(readSpawnAutoCloseIdleSince("pc", worker.id, store)).toBe(now);
+    observeSpawnAutoCloseActivity("pc", worker, "working", now + 3, store);
+    observeSpawnAutoCloseActivity("pc", { ...worker, autoClose: false }, "idle", now + 4, store);
     expect(readSpawnAutoCloseIdleSince("pc", worker.id, store)).toBeNull();
   });
 
-  it("closes an unmounted finished TaskBoard worker even if its final idle observation was lost", () => {
-    const createdAt = now - 5 * SPAWN_AUTO_CLOSE_IDLE_MS;
-    const claimed = {
-      ...worker,
-      binding: {
-        seatId: null, role: "worker" as const, parentSessionId: null,
-        taskRef: { board: "B:\\GDrive\\jjj\\Tasks", id: "T3-0248" },
-        boundAt: new Date(createdAt).toISOString(), boundBy: "omcp_spawn" as const,
-      },
+  it("also expires unfinished or unmounted workers using persisted activity", () => {
+    const recent = now - SPAWN_AUTO_CLOSE_IDLE_MS + 1;
+    expect(spawnAutoCloseCandidate([worker], worker, now, null, recent)).toBeNull();
+    expect(spawnAutoCloseCandidate([worker], worker, now, null,
+      now - SPAWN_AUTO_CLOSE_IDLE_MS)?.reason).toBe("auto-close-idle");
+    expect(spawnAutoCloseCandidate([worker], worker, now, null, null,
+      now - SPAWN_AUTO_CLOSE_IDLE_MS)?.reason).toBe("auto-close-idle");
+    expect(spawnAutoCloseCandidate([worker], worker, now, null,
+      now - SPAWN_AUTO_CLOSE_IDLE_MS, recent)).toBeNull();
+    const unflaggedWorker = {
+      ...worker, autoClose: false,
+      binding: { seatId: null, role: "worker" as const, parentSessionId: null,
+        taskRef: null, boundAt: new Date(now - SPAWN_AUTO_CLOSE_IDLE_MS).toISOString(),
+        boundBy: "omcp_spawn" as const },
     };
-    const finished = {
-      taskId: "T3-0248", claimedBy: "", column: "done",
-      completedAt: now - SPAWN_AUTO_CLOSE_IDLE_MS, liveState: null,
-      boardRoot: "B:/GDrive/jjj/Tasks",
-    };
-    const candidate = (session: BrowserSession = claimed, tasks = [finished], lastWorkingAt: number | null = now - 2 * SPAWN_AUTO_CLOSE_IDLE_MS) =>
-      spawnAutoCloseFinishedTaskCandidate([session], session, tasks, undefined, now, lastWorkingAt);
-    expect(candidate()).toMatchObject({
-      taskIds: ["T3-0248"], reason: "auto-close-finished-task", dueAt: now,
-    });
-    expect(candidate(claimed, [{ ...finished, completedAt: now - SPAWN_AUTO_CLOSE_IDLE_MS + 1 }])).toBeNull();
-    expect(candidate(claimed, [{ ...finished, column: "in-progress" }])).toBeNull();
-    expect(candidate(claimed, [{ ...finished, boardRoot: "B:/Other/Tasks" }])).toBeNull();
-    expect(candidate(claimed, [finished], now - 5_000)).toBeNull();
-    expect(candidate({ ...claimed, humanControlled: true })).toBeNull();
-    expect(candidate({ ...claimed, autoClose: false })).toBeNull();
-    expect(candidate({ ...claimed, borderColor: "blue" })).toBeNull();
-    expect(candidate({ ...claimed, binding: undefined })).toBeNull();
+    expect(spawnAutoCloseCandidate([unflaggedWorker], unflaggedWorker,
+      now, null, now - SPAWN_AUTO_CLOSE_IDLE_MS)).not.toBeNull();
   });
 
-  it("protects selected, human-owned, highlighted, snoozed and parenting sessions", () => {
+  it("protects human-owned, highlighted, snoozed and parenting sessions", () => {
     const since = now - SPAWN_AUTO_CLOSE_IDLE_MS;
-    const due = (session: BrowserSession, sessions: BrowserSession[] = [session], selected?: string) =>
-      spawnAutoCloseCandidate(sessions, session, selected, now, since);
+    const due = (session: BrowserSession, sessions: BrowserSession[] = [session]) =>
+      spawnAutoCloseCandidate(sessions, session, now, since);
     expect(due(worker)?.reason).toBe("auto-close-idle");
-    expect(due(worker, [worker], worker.id)).toBeNull();
     expect(due({ ...worker, humanControlled: true })).toBeNull();
     expect(due({ ...worker, autoCloseExempt: true })).toBeNull();
     expect(due({ ...worker, borderColor: "blue" })).toBeNull();
@@ -109,6 +97,6 @@ describe("explicit spawn auto-close", () => {
     expect(due(worker, [worker, { id: "child", title: "Child", parentSessionId: worker.id }])).toBeNull();
     expect(due({ ...worker, spawnRequestId: undefined })).toBeNull();
     expect(due({ ...worker, autoClose: undefined })).toBeNull();
-    expect(due(worker, [worker], undefined)?.dueAt).toBe(now);
+    expect(due(worker, [worker])?.dueAt).toBe(now);
   });
 });

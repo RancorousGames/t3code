@@ -1,8 +1,7 @@
 import type { BrowserSession } from "./chatGPTBrowserSessions";
-import type { TaskBoardWorkerClaim } from "./chatGPTCompletedWorkerPolicy";
 import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity";
 
-export const SPAWN_AUTO_CLOSE_IDLE_MS = 60 * 60_000;
+export const SPAWN_AUTO_CLOSE_IDLE_MS = 2 * 60 * 60_000;
 const key = (environmentId: string, sessionId: string) =>
   `t3code:chatgpt-spawn-auto-close-idle:${environmentId}:${sessionId}`;
 
@@ -20,7 +19,7 @@ export function readSpawnAutoCloseIdleSince(
   }
 }
 
-/** Only confirmed idle observations start the clock; a new turn cancels it. */
+/** An observed idle transition is durable; actual work resets it. */
 export function observeSpawnAutoCloseActivity(
   environmentId: string,
   session: BrowserSession,
@@ -28,13 +27,13 @@ export function observeSpawnAutoCloseActivity(
   now = Date.now(),
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> = window.localStorage,
 ): void {
-  if (session.autoClose !== true || !session.spawnRequestId) return;
+  if (!isSpawnedWorker(session)) return;
   const name = key(environmentId, session.id);
   try {
     if (activity === "idle") {
       if (readSpawnAutoCloseIdleSince(environmentId, session.id, storage) === null)
         storage.setItem(name, String(now));
-    } else if (activity !== "unknown") {
+    } else if (activity === "working") {
       storage.removeItem(name);
     }
   } catch {
@@ -51,13 +50,16 @@ export function clearSpawnAutoCloseIdleSince(
 }
 
 /** Shared protection for explicit opt-in workers, including cold task-completion fallback. */
+export function isSpawnedWorker(session: BrowserSession): boolean {
+  return !!session.spawnRequestId && (session.autoClose === true ||
+    (session.creationOrigin === "backend" && session.binding?.role === "worker"));
+}
+
 function eligibleForAutoClose(
   sessions: readonly BrowserSession[],
   session: BrowserSession,
-  activeSessionId: string | undefined,
 ): boolean {
-  return session.autoClose === true &&
-    !!session.spawnRequestId &&
+  return isSpawnedWorker(session) &&
     !session.hidden &&
     !session.humanControlled &&
     !session.autoCloseExempt &&
@@ -66,70 +68,25 @@ function eligibleForAutoClose(
     session.snoozedUntil === undefined &&
     !session.borderColor &&
     session.binding?.role !== "manager" &&
-    session.id !== activeSessionId &&
     !sessions.some((child) => child.parentSessionId === session.id);
 }
 
 export function spawnAutoCloseCandidate(
   sessions: readonly BrowserSession[],
   session: BrowserSession,
-  activeSessionId: string | undefined,
   now: number,
   idleSince: number | null,
+  lastWorkingAt: number | null = null,
+  spawnCreatedAt: number | null = null,
 ): { taskIds: []; dueAt: number; reason: "auto-close-idle" } | null {
-  if (
-    !eligibleForAutoClose(sessions, session, activeSessionId) ||
-    idleSince === null ||
-    !Number.isFinite(idleSince) ||
-    idleSince <= 0 ||
-    idleSince > now ||
-    now - idleSince < SPAWN_AUTO_CLOSE_IDLE_MS
-  ) return null;
-  return { taskIds: [], dueAt: idleSince + SPAWN_AUTO_CLOSE_IDLE_MS, reason: "auto-close-idle" };
-}
-
-/**
- * A task-bound worker can become unmounted before the idle observer records
- * its final transition. Only the authoritative completion of the EXACT bound
- * TaskBoard task can substitute for that lost observation, and only when the
- * guest is independently confirmed absent by the cleanup owner.
- *
- * This is NOT a generic "unavailable means idle" rule. It is a fail-safe for
- * explicit auto-close workers with a finished, verified assignment.
- */
-export function spawnAutoCloseFinishedTaskCandidate(
-  sessions: readonly BrowserSession[],
-  session: BrowserSession,
-  claims: readonly (TaskBoardWorkerClaim & { boardRoot?: string })[],
-  activeSessionId: string | undefined,
-  now: number,
-  lastWorkingAt: number | null,
-): { taskIds: string[]; dueAt: number; reason: "auto-close-finished-task" } | null {
-  if (!eligibleForAutoClose(sessions, session, activeSessionId)) return null;
-  const binding = session.binding;
-  if (binding?.role !== "worker" || binding.boundBy !== "omcp_spawn" || !binding.taskRef)
-    return null;
-  const samePath = (path: string) => path.replaceAll("/", "\\").replace(/\\+$/, "").toLowerCase();
-  const task = claims.find((row) =>
-    row.taskId === binding.taskRef!.id &&
-    typeof row.boardRoot === "string" &&
-    samePath(row.boardRoot) === samePath(binding.taskRef!.board),
+  if (!eligibleForAutoClose(sessions, session)) return null;
+  // Last observed work wins over older idle observations; unmounted workers
+  // can still expire using durable work/spawn evidence.
+  const activityAt = Math.max(
+    idleSince ?? 0, lastWorkingAt ?? 0, spawnCreatedAt ?? 0,
+    session.createdAt ?? 0, session.lastDirectInteractionAt ?? 0,
   );
-  const completedAt = task?.completedAt;
-  const boundAt = Date.parse(binding.boundAt);
-  if (!task || task.column !== "done" || task.liveState ||
-      completedAt === null || completedAt === undefined ||
-      !Number.isFinite(completedAt) || !Number.isFinite(boundAt) ||
-      completedAt < boundAt || completedAt > now ||
-      (lastWorkingAt !== null && (!Number.isFinite(lastWorkingAt) || lastWorkingAt > now)) ||
-      // Do not close an agent that also owns an unfinished task on another board.
-      claims.some((row) => row.taskId !== task.taskId &&
-        row.claimedBy.toLowerCase().replace(/^t3(?:-browser)?:/, "") === session.id.toLowerCase() &&
-        row.column !== "done"))
-    return null;
-  const dueAt = Math.max(completedAt, lastWorkingAt ?? 0, session.lastDirectInteractionAt ?? 0) +
-    SPAWN_AUTO_CLOSE_IDLE_MS;
-  return dueAt <= now ? {
-    taskIds: [task.taskId], dueAt, reason: "auto-close-finished-task",
-  } : null;
+  if (!Number.isFinite(activityAt) || activityAt <= 0 || activityAt > now ||
+      now - activityAt < SPAWN_AUTO_CLOSE_IDLE_MS) return null;
+  return { taskIds: [], dueAt: activityAt + SPAWN_AUTO_CLOSE_IDLE_MS, reason: "auto-close-idle" };
 }
