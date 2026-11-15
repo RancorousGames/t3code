@@ -59,12 +59,12 @@ export function chatGPTVerificationTitleColorClass(
     : chatGPTActivityColorClass(age);
 }
 
-/** Hide Unloaded excludes only ordinary unloaded sessions, not recent activity evidence. */
+/** Hide Unloaded is about guest residency, not how recently it was active. */
 export function hideChatGPTSessionAsUnloaded(
   age: ChatGPTActivityAge | undefined,
   enabled: boolean,
 ): boolean {
-  return enabled && age === "unloaded";
+  return enabled && (age === "unloaded" || age === "unloaded-recent" || age === "unloaded-working");
 }
 
 /** An unloaded tab retains its previous color for the same two-hour activity window. */

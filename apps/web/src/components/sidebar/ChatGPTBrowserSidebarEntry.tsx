@@ -61,7 +61,6 @@ import {
   applyConfirmedChatGPTSessionMetadata,
   groupChatGPTSessions,
   layoutChatGPTSessions,
-  wasChatGPTSessionActiveWithinDay,
   type ChatGPTSessionSortActivity,
   type ChatGPTSessionSortMode,
   type ChatGPTPermanentProject,
@@ -1101,7 +1100,7 @@ export function ChatGPTBrowserSidebarEntry({
   const isSnoozed = (session: { readonly snoozedUntil?: number | undefined }) =>
     typeof session.snoozedUntil === "number" && session.snoozedUntil > clockNow;
   // Use durable timestamps even when browser guests have not been remounted
-  // after T3 starts. This feeds both activity ordering and Hide Unloaded.
+  // after T3 starts. This feeds activity ordering.
   const sortActivityById = useMemo(() => {
     const savedTimeline = environmentId
       ? getChatGPTSessionPersistedStore(environmentId).getState().timeline : null;
@@ -1140,17 +1139,14 @@ export function ChatGPTBrowserSidebarEntry({
         .toLocaleLowerCase().replace(/[\s_-]+/g, ""),
     );
   const visibleSessions = sessions.filter((session) => !session.hidden && matchesProjectScope(session));
-  const sidebarVisibleSessions = visibleSessions.filter(
-    (session) =>
-      // Activity sorting must still show sessions used yesterday even when every
-      // guest is currently unloaded and Hide Unloaded is enabled.
-      !hideChatGPTSessionAsUnloaded(
-        activities[session.id]?.age,
-        hideUnloaded && !(sortMode === "activity" && wasChatGPTSessionActiveWithinDay(
-          sortActivityById[session.id]?.lastActivityAt ?? 0, clockNow,
-        )),
-      ),
+  const sidebarVisibleSessions = visibleSessions.filter((session) =>
+    !hideChatGPTSessionAsUnloaded(activities[session.id]?.age, hideUnloaded),
   );
+  // Question priority can surface rows outside normal grouping; it must not
+  // reinsert an unloaded session that the user explicitly filtered out.
+  const questionPrioritySessions = hideUnloaded
+    ? sessions.filter((session) => !hideChatGPTSessionAsUnloaded(activities[session.id]?.age, true))
+    : sessions;
   const hiddenSessions = sessions.filter((session) => session.hidden && matchesProjectScope(session));
   // The verified manager seat ledger, not a parent link or title, determines
   // which nested manager rows are exempt from the worker visibility toggle.
@@ -1357,7 +1353,7 @@ export function ChatGPTBrowserSidebarEntry({
             rows: parked.map((session) => ({ session, depth: 0, childCount: 0 })),
           },
         ],
-        sessions,
+        questionPrioritySessions,
         pendingQuestionIds,
       );
     }
@@ -1410,7 +1406,7 @@ export function ChatGPTBrowserSidebarEntry({
       return prioritizeFreshManualSession(
         prioritizePendingChatGPTQuestions(
           [...regular, ...verificationGroup],
-          sessions,
+          questionPrioritySessions,
           pendingQuestionIds,
         ),
         freshPinnedIds,
@@ -1434,7 +1430,7 @@ export function ChatGPTBrowserSidebarEntry({
           { key: "ai-interface", title: "AI interface", rows: aiRows },
           ...verificationGroup,
         ],
-        sessions,
+        questionPrioritySessions,
         pendingQuestionIds,
       ),
       freshPinnedIds,
@@ -1445,6 +1441,7 @@ export function ChatGPTBrowserSidebarEntry({
     aiInterfaceSessions,
     showAIInterfaceSessions,
     sessions,
+    questionPrioritySessions,
     pendingQuestionIds,
     registeredProjects,
     showingHidden,

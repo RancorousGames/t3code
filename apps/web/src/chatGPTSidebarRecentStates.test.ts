@@ -27,12 +27,14 @@ describe("sidebar unloaded recency", () => {
     );
   });
 
-  it("Hide Unloaded never removes either recent colored state", () => {
-    expect(hideChatGPTSessionAsUnloaded("unloaded", true)).toBe(true);
-    for (const status of ["unloaded-working", "unloaded-recent", "recent", "working"] as const) {
+  it("Hide Unloaded hides every unloaded residency regardless of recent work", () => {
+    for (const status of ["unloaded", "unloaded-working", "unloaded-recent"] as const) {
+      expect(hideChatGPTSessionAsUnloaded(status, true)).toBe(true);
+      expect(hideChatGPTSessionAsUnloaded(status, false)).toBe(false);
+    }
+    for (const status of ["recent", "working", "inactive", "unknown"] as const) {
       expect(hideChatGPTSessionAsUnloaded(status, true)).toBe(false);
     }
-    expect(hideChatGPTSessionAsUnloaded("unloaded", false)).toBe(false);
   });
 
   it("sorts recently unloaded blue and green near the top of activity mode, not under project groups", () => {
