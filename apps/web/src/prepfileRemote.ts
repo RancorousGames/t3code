@@ -9,6 +9,8 @@ export interface RemotePrepfileRequest {
   projectId: string | null;
   autoHandoff: boolean;
   createTaskboardTask: boolean;
+  /** Optional existing TaskBoard scope; never implicitly creates another task. */
+  taskRef?: { board: string; id: string };
   generatorModel?: { instanceId: string; model: string };
   implementationModel?: { instanceId: string; model: string; effort?: string };
   images?: Array<{ mime: string; dataUrl: string }>;
@@ -19,6 +21,7 @@ export interface RemotePrepfileJob {
   id: string;
   request: string;
   outputPath: string | null;
+  taskRef?: { board: string; id: string };
   state: "reserved" | "starting" | "preparing" | "waiting_handoff" |
     "dispatching" | "completed" | "needs_review";
   createdAt: number;
@@ -155,14 +158,19 @@ export function startRemotePrepfile(request: RemotePrepfileRequest): RemotePrepf
   if (!["light", "medium", "heavy"].includes(request.depth) ||
     !["chatgpt", "luna", "haiku"].includes(request.generator))
     throw new Error("Unsupported prepfile depth or generator.");
+  if (request.taskRef &&
+      (!request.taskRef.board?.trim() || request.taskRef.board.length > 500 ||
+       !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(request.taskRef.id)))
+    throw new Error("Linked TaskBoard reference invalid.");
   if (request.images && (request.images.length > 8 || request.images.some((image) =>
     !/^image\/(png|jpeg|webp|gif)$/.test(image.mime) ||
     image.dataUrl.length > 11_200_000)))
     throw new Error("Up to 8 PNG/JPEG/WEBP/GIF images (8 MiB each) are supported.");
   const existing = readRemotePrepfileJobs().find((job) => job.id === request.id);
   if (existing) {
-    if (existing.request !== request.request.trim())
-      throw new Error("Prepfile ID is already reserved for a different request.");
+    if (existing.request !== request.request.trim() ||
+        JSON.stringify(existing.taskRef ?? null) !== JSON.stringify(request.taskRef ?? null))
+      throw new Error("Prepfile ID is already reserved for a different request or task.");
     return existing;
   }
   if (!starter) throw new Error("PC prepfile controller is unavailable; open T3 desktop.");
@@ -170,6 +178,7 @@ export function startRemotePrepfile(request: RemotePrepfileRequest): RemotePrepf
   const prepared: RemotePrepfileRequest = { ...request, images: preparedImages };
   const reserved: RemotePrepfileJob = {
     id: request.id, request: request.request.trim(), outputPath: null,
+    ...(request.taskRef ? {taskRef:request.taskRef} : {}),
     createdAt: Date.now(), state: "reserved",
   };
   localStorage.setItem(KEY, JSON.stringify([...readRemotePrepfileJobs(), reserved].slice(-MAX_JOBS)));

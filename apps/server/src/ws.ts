@@ -2599,15 +2599,27 @@ export const layerWsRpc = (
                 "highlight", "rename", "caffy_set", "caffy_stop", "caffy_pause",
                 "caffy_resume", "caffy_startup", "caffy_begin", "caffy_reboot",
                 "caffy_wake", "caffy_schedule_spawn", "caffy_cancel_spawn", "caffy_cancel_begin",
+                "caffy_configure", "attention_open", "attention_snooze", "attention_dismiss",
+                "prepfile_create", "prepfile_image_chunk",
               ]);
               const optionsValid = p.options === undefined ||
                 (!!p.options && typeof p.options === "object" && !Array.isArray(p.options) &&
                   Object.entries(p.options).length <= 16 &&
                   Object.entries(p.options).every(([key, value]) => {
-                    const stringLimit = key === "prompt" &&
+                    const stringLimit = key === "request" && command === "prepfile_create" ? 30_000
+                    : key === "repeatPrompt" && command === "caffy_configure" ? 29_800
+                    : key === "chunk" && command === "prepfile_image_chunk" ? 12_000
+                    : key === "prompt" &&
                       ["caffy_begin", "caffy_set", "caffy_schedule_spawn"].includes(command ?? "")
                         ? 8_000 : 500;
-                    return key.length <= 40 && (value === null || typeof value === "boolean" ||
+                    const taskRefValid = key === "taskRef" && command === "prepfile_create" &&
+                      !!value && typeof value === "object" && !Array.isArray(value) &&
+                      Object.keys(value).length === 2 &&
+                      typeof (value as {board?:unknown}).board === "string" &&
+                      (value as {board:string}).board.length <= 500 &&
+                      typeof (value as {id?:unknown}).id === "string" &&
+                      /^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test((value as {id:string}).id);
+                    return key.length <= 40 && (taskRefValid || value === null || typeof value === "boolean" ||
                       (typeof value === "number" && Number.isSafeInteger(value)) ||
                       (typeof value === "string" && value.length <= stringLimit));
                   }));

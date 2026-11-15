@@ -21,15 +21,20 @@ export async function controlSessions(
     return computeChatGPTCapacityStatus(inventory);
   }
   if (input?.action === "caffy") {
-    const actions = new Set(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks"]);
+    const actions = new Set(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "configure", "begin_in", "cancel_begin", "auto_reboot"]);
     if (!actions.has(input.op)) throw new Error("Unknown Caffy operation.");
     const fields = ["action", "op", "sessionId", "conversationId", "mode",
       "durationMinutes", "intervalMinutes", "onceOnly", "startup", "keepAwake",
-      "keepT3Busy", "maxWorking", "shutdownWhenIdle", "busyForMinutes"];
+      "keepT3Busy", "maxWorking", "shutdownWhenIdle", "busyForMinutes",
+      "respectSlots", "beginAt", "prompt", "repeatPrompt", "rebootMinutes", "rebootEveryRuns", "wakeNow", "requestId"];
     if (Object.keys(input).some(field => !fields.includes(field)))
       throw new Error("Unexpected Caffy fields.");
     if (input.op === "set" && (!input.sessionId || !input.mode))
       throw new Error("Caffy set requires sessionId and mode; T3 resolves the exact conversation.");
+    if (input.prompt !== undefined && (typeof input.prompt !== "string" || input.prompt.length > 8_000))
+      throw new Error("Caffy prompt must be at most 8000 characters.");
+    if (input.repeatPrompt !== undefined && (typeof input.repeatPrompt !== "string" || input.repeatPrompt.length > 29_800))
+      throw new Error("Repeated prompt must be at most 29800 characters.");
     if (!["list", "policy", "status", "capacity", "tasks"].includes(input.op) && typeof input.sessionId !== "string")
       throw new Error("Caffy action requires sessionId.");
     const { action: _action, op, ...args } = input;
@@ -75,6 +80,8 @@ export async function controlSessions(
     "ask_user",
     "request_attention",
     "attention_status",
+    "task_agent_status",
+    "task_agent_action",
     "send",
     "reconcile_send",
     "enqueue",
@@ -154,6 +161,18 @@ export async function controlSessions(
     throw new Error("attention_status requires exact attentionId.");
   if (!["request_attention", "attention_status"].includes(input.action) && input.attentionId !== undefined)
     throw new Error("attentionId requires request_attention or attention_status.");
+  if (["task_agent_status", "task_agent_action"].includes(input.action)) {
+    if (typeof input.taskBoardPath !== "string" || input.taskBoardPath.length < 3 || input.taskBoardPath.length > 500 ||
+        typeof input.taskId !== "string" || !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(input.taskId))
+      throw new Error("Task agent control requires an exact board and task ID.");
+    if (input.action === "task_agent_action" &&
+        (!["attention_open","attention_snooze","attention_dismiss","prepfile_create"].includes(input.taskCommand) ||
+        typeof input.taskOptionsJson !== "string" || input.taskOptionsJson.length > 30_000))
+      throw new Error("Unsupported task agent command/options.");
+  } else if (input.taskBoardPath !== undefined || input.taskId !== undefined ||
+             input.taskCommand !== undefined || input.taskOptionsJson !== undefined) {
+    throw new Error("Task agent fields require task_agent_status or task_agent_action.");
+  }
   if (input.action === "ask_user") {
     if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
         !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.questionId ?? "") ||
@@ -362,6 +381,10 @@ export async function controlSessions(
     type: "chatgpt.sessions",
     action: input.action,
     ...(input.action === "marker_probe" ? { marker: input.marker } : {}),
+    ...(["task_agent_status", "task_agent_action"].includes(input.action)
+      ? {taskBoardPath: input.taskBoardPath, taskId: input.taskId,
+        ...(input.action === "task_agent_action" ? {taskCommand:input.taskCommand,
+          taskOptionsJson:input.taskOptionsJson} : {})} : {}),
     ...(input.action === "experimental_evaluate" ? { expression: input.expression } : {}),
     ...(["bootstrap_title", "bootstrap_discover"].includes(input.action) ? { proposedTitle: input.proposedTitle } : {}),
     ...(input.action === "bootstrap_discover" && input.conversationUrl ? { conversationUrl: input.conversationUrl } : {}),

@@ -912,6 +912,90 @@ export function DesktopAppActivationCoordinator() {
           }
           const sessionSnapshot = readChatGPTBrowserSessions(environmentId);
           let resolvedSessionId = request.sessionId;
+          if (request.action === "task_agent_status" || request.action === "task_agent_action") {
+            const browserSession = sessionSnapshot.find((row) => row.id === request.sessionId);
+            const taskBoard = request.taskBoardPath?.trim();
+            const taskId = request.taskId?.trim();
+            if (!browserSession || !taskBoard || !taskId ||
+                !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(taskId))
+              throw new Error("Exact linked task/session unavailable; no guest was created.");
+            const linked = browserSession.binding?.taskRef;
+            const sameBoard = (a: string, b: string) =>
+              a.replaceAll("/", "\\").toLowerCase().replace(/\\+$/g, "") ===
+              b.replaceAll("/", "\\").toLowerCase().replace(/\\+$/g, "");
+            if (linked && (linked.id !== taskId || !sameBoard(linked.board, taskBoard)))
+              throw new Error("That session is bound to another TaskBoard task.");
+            const sid = browserSession.id;
+            const publicId = publicChatGPTSessionId(browserSession);
+            const ownAttention = (row: {sessionId: string}) =>
+              row.sessionId === sid || row.sessionId === publicId;
+            if (request.action === "task_agent_status") {
+              const control = window.desktopBridge?.caffyControl as
+                | ((value: {action:string;sessionId:string}) => Promise<unknown>) | undefined;
+              return {
+                version: 1, requestId: request.requestId, ok: true, data: {
+                  sessionId: sid, title: browserSession.title,
+                  activity: readChatGPTProviderActivity(environmentId, sid),
+                  caffy: control ? await control({action:"status",sessionId:sid}).catch(() => null) : null,
+                  attentions: loadAgentAttention().filter(ownAttention),
+                  prepfileJobs: readRemotePrepfileJobs().filter((job) =>
+                    job.taskRef?.id === taskId && sameBoard(job.taskRef.board,taskBoard)),
+                },
+              };
+            }
+            const command = request.taskCommand;
+            const raw = request.taskOptionsJson ?? "{}";
+            if (raw.length > 30_000) throw new Error("Task control options exceed limit.");
+            const options: unknown = JSON.parse(raw);
+            if (!options || typeof options !== "object" || Array.isArray(options))
+              throw new Error("Task control options must be an object.");
+            const o = options as Record<string,unknown>;
+            if (command === "prepfile_create") {
+              const requestText = o.request;
+              const depth = o.depth;
+              const generator = o.generator;
+              const operationId = o.id;
+              if (typeof operationId !== "string" ||
+                  !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(operationId) ||
+                  typeof requestText !== "string" || !requestText.trim() ||
+                  requestText.length > 30_000 ||
+                  !["light","medium","heavy"].includes(String(depth)) ||
+                  !["chatgpt","luna","haiku"].includes(String(generator)))
+                throw new Error("Prepfile ID, request, depth or generator invalid.");
+              const job = startRemotePrepfile({
+                id: operationId, request: requestText,
+                depth: depth as RemotePrepfileRequest["depth"],
+                generator: generator as RemotePrepfileRequest["generator"],
+                projectId: null, autoHandoff: false, createTaskboardTask: false,
+                taskRef: {board:taskBoard,id:taskId},
+              });
+              return {version:1,requestId:request.requestId,ok:true,
+                data:{state:job.state,jobId:job.id,taskRef:job.taskRef}};
+            }
+            if (!["attention_open","attention_snooze","attention_dismiss"].includes(command ?? ""))
+              throw new Error("Unsupported T3 agent control; nothing sent.");
+            const attentionId = o.requestId;
+            if (typeof attentionId !== "string")
+              throw new Error("Attention request ID required.");
+            const attention = readAgentAttention(attentionId);
+            if (!attention || !ownAttention(attention))
+              throw new Error("Attention request is not linked to this exact session.");
+            if (command === "attention_open") {
+              if (attention.status === "dismissed") throw new Error("Request already dismissed.");
+              if (attention.status !== "opened") changeAttention(attention.id,"opened");
+            } else if (command === "attention_snooze") {
+              if (o.minutes !== 15 && o.minutes !== 60 ||
+                  attention.status === "dismissed" || attention.status === "opened")
+                throw new Error("Snooze only pending request for 15 or 60 minutes.");
+              changeAttention(attention.id,"snoozed",Date.now() + Number(o.minutes) * 60_000);
+            } else if (attention.status !== "dismissed") {
+              if (!(await queueAgentAttentionDismissal(environmentId, attention)))
+                throw new Error("Could not queue durable agent notification; request remains active.");
+              changeAttention(attention.id,"dismissed");
+            }
+            return {version:1,requestId:request.requestId,ok:true,
+              data:{state:"Delivered",applied:command,requestId:attention.id}};
+          }
           let exactConversationId = request.expectedConversationId;
           if (
             request.action === "open" ||
@@ -2360,12 +2444,20 @@ export function DesktopAppActivationCoordinator() {
                   if (!id || !request || !depth || !generator)
                     throw new Error("Prepfile request, ID, depth, and generator are required.");
                   if (projectId !== null && (projectId.length > 256 || !/^[a-zA-Z0-9_-]+$/.test(projectId)))
+                  const taskRef = options.taskRef as RemotePrepfileRequest["taskRef"];
+                  if (taskRef && (!taskRef.board || taskRef.board.length > 500 ||
+                    !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(taskRef.id) ||
+                    (entry.binding?.taskRef && (entry.binding.taskRef.id !== taskRef.id ||
+                      entry.binding.taskRef.board.replaceAll("/", "\\").toLowerCase() !==
+                        taskRef.board.replaceAll("/", "\\").toLowerCase()))))
+                    throw new Error("Prepfile TaskBoard reference does not match the session.");
                     throw new Error("Invalid T3 project identifier.");
                   const job = startRemotePrepfile({
                     id, request, depth: depth as RemotePrepfileRequest["depth"],
                     generator: generator as RemotePrepfileRequest["generator"],
                     projectId, autoHandoff: bool("autoHandoff") === true,
-                    createTaskboardTask: bool("createTaskboardTask") === true,
+                    createTaskboardTask: taskRef ? false : bool("createTaskboardTask") === true,
+                    ...(taskRef ? {taskRef} : {}),
                     ...(generatorModel ? { generatorModel } : {}),
                     ...(implementationModel ? { implementationModel } : {}),
                     ...(images ? { images } : {}),
@@ -2376,8 +2468,9 @@ export function DesktopAppActivationCoordinator() {
                   const attentionId = str("requestId");
                   const attention = attentionId ? readAgentAttention(attentionId) : null;
                   if (!attention || !sessions.some((candidate) => candidate.id === attention.sessionId ||
-                    publicChatGPTSessionId(candidate) === attention.sessionId))
-                    throw new Error("Attention request not found in this T3 environment.");
+                    publicChatGPTSessionId(candidate) === attention.sessionId) ||
+                    (attention.sessionId !== id && attention.sessionId !== publicChatGPTSessionId(entry)))
+                    throw new Error("Attention request is not linked to this T3 session.");
                   if (command === "attention_open") {
                     if (attention.status === "dismissed")
                       throw new Error("Attention request was already dismissed.");
