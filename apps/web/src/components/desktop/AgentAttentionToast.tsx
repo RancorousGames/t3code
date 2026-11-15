@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import attentionSoundUrl from "../../assets/agent-attention.ogg?url";
 
 import {
   type AgentAttention,
@@ -44,16 +45,22 @@ export function AgentAttentionToast({ openSession, onDismiss }: {
     .sort((a, b) => a.createdAt - b.createdAt)[0];
   useEffect(() => {
     if (!visible) return;
-    const key = `t3.agent-attention-spoken.${visible.id}`;
+    const key = `t3.agent-attention-announced.${visible.id}`;
     const stamp = String(visible.nextAt);
-    // Keyed by scheduled appearance, so a snoozed request speaks again once it resurfaces.
+    // Keyed by scheduled appearance, so snoozed requests announce again when they resurface.
     if (localStorage.getItem(key) === stamp) return;
     localStorage.setItem(key, stamp);
-    void window.desktopBridge?.speakOpenRigPreview?.(
-      "An agent needs your attention. Please open T three to respond.",
-    ).catch((error: unknown) =>
-      console.warn("[Agent attention] Speech unavailable", error),
-    );
+    if (visible.spokenMessage?.trim()) {
+      void window.desktopBridge?.speakOpenRigPreview?.(visible.spokenMessage).catch((error: unknown) =>
+        console.warn("[Agent attention] Speech unavailable", error),
+      );
+    } else {
+      const audio = new Audio(attentionSoundUrl);
+      audio.volume = 0.55;
+      void audio.play().catch((error: unknown) =>
+        console.warn("[Agent attention] Sound unavailable", error),
+      );
+    }
   }, [visible?.id, visible?.nextAt]);
   if (!visible) return null;
   return (

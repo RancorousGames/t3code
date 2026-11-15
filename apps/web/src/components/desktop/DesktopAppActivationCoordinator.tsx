@@ -1124,7 +1124,7 @@ export function DesktopAppActivationCoordinator() {
                 !sessionSnapshot.some((s) => s.id === id || s.bootstrapIdentity?.publicId === id))
               throw new Error("Attention requires an existing exact T3 session, request ID and message.");
             const existing = readAgentAttention(attentionId);
-            const entry = requestAgentAttention(attentionId, id, request.message);
+            const entry = requestAgentAttention(attentionId, id, request.message, "agent", request.spokenMessage);
             if (!existing && environmentId) {
               const owner = sessionSnapshot.find((session) =>
                 session.id === id || session.bootstrapIdentity?.publicId === id);

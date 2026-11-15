@@ -217,6 +217,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     // Explicit local experiment in one exact ChatGPT guest; never used by delivery queue.
     expression: Schema.optional(Schema.String),
     attentionId: Schema.optional(NativeOperationId),
+    spokenMessage: Schema.optional(Schema.String),
     // Trusted local TaskBoard asks T3 to act only on its existing, exactly-linked guest.
     taskBoardPath: Schema.optional(Schema.String),
     taskId: Schema.optional(Schema.String),

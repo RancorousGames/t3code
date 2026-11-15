@@ -6,6 +6,7 @@ export type AgentAttention = {
   id: string;
   sessionId: string;
   message: string;
+  spokenMessage?: string;
   createdAt: number;
   activatedAt?: number;
   status: "waiting" | "pending" | "snoozed" | "opened" | "dismissed";
@@ -36,16 +37,20 @@ function save(items: AgentAttention[]) {
   window.dispatchEvent(new Event(AGENT_ATTENTION_CHANGE_EVENT));
 }
 
-export function requestAgentAttention(id: string, sessionId: string, message: string, source: "agent" | "manual" = "agent") {
+export function requestAgentAttention(
+  id: string, sessionId: string, message: string,
+  source: "agent" | "manual" = "agent", spokenMessage?: string,
+) {
   const items = loadAgentAttention();
   const previous = items.find((item) => item.id === id);
   if (previous) {
-    if (previous.sessionId !== sessionId || previous.message !== message)
+    if (previous.sessionId !== sessionId || previous.message !== message ||
+        previous.spokenMessage !== spokenMessage)
       throw new Error("Attention ID already belongs to a different request.");
     return previous;
   }
   const entry: AgentAttention = {
-    id, sessionId, message, source, createdAt: Date.now(), status: "waiting", nextAt: 0,
+    id, sessionId, message, source, spokenMessage, createdAt: Date.now(), status: "waiting", nextAt: 0,
   };
   save([...items, entry]);
   return entry;
