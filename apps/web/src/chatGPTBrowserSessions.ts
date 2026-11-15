@@ -127,6 +127,33 @@ export function advanceChatGPTReturnMarker(
   return marker;
 }
 
+/** A newly working session has resumed; verification and its automatic snooze are over. */
+export function clearChatGPTVerificationOnWorking(session: BrowserSession): BrowserSession {
+  return session.verificationPending
+    ? {
+        ...session,
+        verificationPending: undefined,
+        snoozedUntil: undefined,
+        snoozedAt: undefined,
+        quickSnoozeStep: undefined,
+      }
+    : session;
+}
+
+/** Persist the active-session transition to both session indexes. */
+export function clearChatGPTSessionVerificationOnWorking(
+  environmentId: string,
+  sessionId: string,
+): void {
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  const current = store.getState().sessions;
+  if (!current.some((session) => session.id === sessionId && session.verificationPending)) return;
+  const next = current.map((session) =>
+    session.id === sessionId ? clearChatGPTVerificationOnWorking(session) : session);
+  setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId as EnvironmentId), next, BrowserSessions);
+  store.setState({ sessions: next });
+}
+
 /** Shared by the Ctrl+D shortcut, OMCPT requests and provider activity.
  * Persist to both session stores so another renderer sees the same marker. */
 export function updateChatGPTReturnMarker(

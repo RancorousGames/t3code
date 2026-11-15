@@ -5,6 +5,7 @@ import {
   advanceChatGPTReturnMarker,
   BrowserSession,
   chatGPTSessionTitleFromPage,
+  clearChatGPTVerificationOnWorking,
   cleanChatGPTSessionTitle,
   updateChatGPTAutoTitle,
   CHATGPT_HIDDEN_EXPIRY_MS,
@@ -15,6 +16,24 @@ import {
   setChatGPTSessionArchived,
   setChatGPTSessionHidden,
 } from "./chatGPTBrowserSessions";
+
+describe("verification flag on resumed work", () => {
+  it("clears verification and its snooze without changing other session metadata", () => {
+    const pending = {
+      id: "resume", title: "Check this", verificationPending: true,
+      snoozedUntil: Date.now() + 3_600_000, snoozedAt: Date.now(), quickSnoozeStep: 0,
+      autoCloseExempt: true, returnMarker: "armed" as const,
+    };
+    const resumed = clearChatGPTVerificationOnWorking(pending);
+    expect(resumed).toMatchObject({ id: "resume", title: "Check this", autoCloseExempt: true, returnMarker: "armed" });
+    expect(resumed.verificationPending).toBeUndefined();
+    expect(resumed.snoozedUntil).toBeUndefined();
+    expect(resumed.snoozedAt).toBeUndefined();
+    expect(resumed.quickSnoozeStep).toBeUndefined();
+    expect(clearChatGPTVerificationOnWorking(resumed)).toBe(resumed);
+    expect(pending.verificationPending).toBe(true);
+  });
+});
 
 describe("Return marker across activity changes and T3 restarts", () => {
   it("arms on idle; repeated idle readings do not highlight until the next working -> idle", () => {

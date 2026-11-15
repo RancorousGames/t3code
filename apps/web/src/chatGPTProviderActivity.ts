@@ -1,5 +1,5 @@
 import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity";
-import { advanceChatGPTReturnMarker, updateChatGPTReturnMarker } from "./chatGPTBrowserSessions";
+import { advanceChatGPTReturnMarker, clearChatGPTSessionVerificationOnWorking, updateChatGPTReturnMarker } from "./chatGPTBrowserSessions";
 import { activateAgentAttention } from "./chatGPTAgentAttention";
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 import { observeSpawnAutoCloseActivity } from "./chatGPTSpawnAutoClose";
@@ -15,6 +15,7 @@ export function recordChatGPTProviderActivity(
   activity: ChatGPTActivityState,
 ): void {
   if (activity === "unknown") return;
+  if (activity === "working") clearChatGPTSessionVerificationOnWorking(environmentId, sessionId);
   const session = getChatGPTSessionPersistedStore(environmentId).getState().sessions.find(
     (entry) => entry.id === sessionId && entry.autoClose === true,
   );
