@@ -23,11 +23,23 @@ describe("archived reboot transcript document", () => {
         role: "user", turn_index: 0, ordinal: 0, text: WAKE, possibly_truncated: 0 },
       { conversation_id: "old", url: "https://chatgpt.com/c/old", title: null, first_seen: "2026-01-01",
         role: "user", turn_index: 1, ordinal: 1, text: "Make standing grapple poses", possibly_truncated: 0 },
+      { conversation_id: "old", url: "https://chatgpt.com/c/old", title: null, first_seen: "2026-01-01",
+        role: "user", turn_index: 2, ordinal: 2, text: "[T3-MSG:e39416df-1d75-49c7-9c16-ac47eae06b4f]\ncontinue working", possibly_truncated: 0 },
+      { conversation_id: "old", url: "https://chatgpt.com/c/old", title: null, first_seen: "2026-01-01",
+        role: "user", turn_index: 3, ordinal: 3, text: "[T3-MSG:e39416df-1d75-49c7-9c16-ac47eae06b4f]\n[Potential duplicate: acknowledgement was lost.]\n" + WAKE, possibly_truncated: 0 },
+      { conversation_id: "old", url: "https://chatgpt.com/c/old", title: null, first_seen: "2026-01-01",
+        role: "user", turn_index: 4, ordinal: 4, text: "[T3-MSG:e39416df-1d75-49c7-9c16-ac47eae06b4f]\nWorkflow change: new pose approval rules", possibly_truncated: 0 },
+      { conversation_id: "old", url: "https://chatgpt.com/c/old", title: null, first_seen: "2026-01-01",
+        role: "user", turn_index: 5, ordinal: 5, text: "Continue working on the baby image generation using higgsfield", possibly_truncated: 0 },
       { conversation_id: "new", url: "https://chatgpt.com/c/new", title: null, first_seen: "2026-01-02",
         role: "user", turn_index: 0, ordinal: 0, text: "Reboot mode: KEEP CONTEXT.\nmore text", possibly_truncated: 0 },
     ]);
     expect(selected.originalUserRequest).toBe("Make standing grapple poses");
     expect(selected.document).not.toContain(WAKE);
+    expect(selected.document).not.toContain("continue working\n");
+    expect(selected.document).toContain("Workflow change: new pose approval rules");
+    expect(selected.document).toContain("Continue working on the baby image generation using higgsfield");
+    expect(selected.messages).toBe(3);
     expect(selected.generations).toBe(2);
   });
 

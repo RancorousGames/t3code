@@ -11,7 +11,20 @@ import * as DesktopIpc from "../DesktopIpc.ts";
 import { CHATGPT_REBOOT_TRANSCRIPT_CHANNEL } from "../channels.ts";
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-const wake = /^(?:\[T3-MSG:[\da-f-]+\]\s*)?(?:Continue working on your current assignment\.|Keep working on your current assignment\.|Continue working on the baby image generation using higgsfield)/iu;
+// Caffy injects a fixed wake-up prompt; older runs sometimes sent only
+// "continue working" through the T3 message envelope. Never suppress a
+// substantive T3-MSG (e.g. a new assignment or workflow change).
+const t3MessageEnvelope = /^\[T3-MSG:[\da-f-]+\]\s*/iu;
+const duplicateDeliveryNotice = /^\[Potential duplicate: acknowledgement was lost\.[^\]\r\n]*\]\s*/iu;
+const caffyWake = /^(?:Continue|Keep) working on your current assignment\.(?:\s*If everything is genuinely finished, stop Caffy for this session using the caffy tool \(action=stop, sessionId=your T3_ID\)\.)?\s*$/iu;
+const caffyShortWake = /^(?:continue working|keep working)\.?$/iu;
+function isAutomatedCaffyWake(text: string): boolean {
+  const trimmed = text.trim();
+  const tagged = t3MessageEnvelope.test(trimmed);
+  const payload = (tagged ? trimmed.replace(t3MessageEnvelope, "") : trimmed)
+    .replace(duplicateDeliveryNotice, "").trim();
+  return caffyWake.test(payload) || (tagged && caffyShortWake.test(payload));
+}
 const reboot = /^Reboot mode:\s*(?:KEEP CONTEXT|FRESH START)\./iu;
 
 export interface RebootHistoryRow {
@@ -34,7 +47,7 @@ export function selectRebootHistory(rows: readonly RebootHistoryRow[]) {
   let skippedBootstrap = 0;
   for (const row of rows) {
     const text = row.text.trim();
-    if (!text || (row.role === "user" && wake.test(text))) {
+    if (!text || (row.role === "user" && isAutomatedCaffyWake(text))) {
       if (text) skippedWakes++;
       continue;
     }
