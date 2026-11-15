@@ -451,6 +451,7 @@ export const make = Effect.gen(function* () {
                 beginAt: request.beginAt,
                 delayedPrompt: request.prompt,
                 repeatPrompt: request.repeatPrompt,
+                auditRequestId: request.requestId,
                 autoRebootMinutes: request.rebootMinutes,
                 autoRebootEveryRuns: request.rebootEveryRuns,
               })
@@ -460,7 +461,7 @@ export const make = Effect.gen(function* () {
               ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking,
                   shutdownWhenIdle: request.shutdownWhenIdle, busyForMinutes: request.busyForMinutes })
             : action === "begin_in"
-              ? await caffy.beginAt(request.sessionId ?? "", conversationId ?? "", request.beginAt ?? null, request.prompt)
+              ? await caffy.beginAt(request.sessionId ?? "", conversationId ?? "", request.beginAt ?? null, request.prompt, request.requestId)
             : action === "schedule_spawn"
               ? caffy.scheduleSpawn({ id: request.jobId ?? "", title: request.title ?? "",
                   prompt: request.prompt ?? "", beginAt: request.beginAt ?? null,
@@ -485,7 +486,7 @@ export const make = Effect.gen(function* () {
             : action === "stop"
               ? caffy.stop(request.sessionId ?? "", request.stopInitiator ?? "agent")
             : action === "pause" || action === "resume"
-              ? caffy.pause(request.sessionId ?? "", action === "pause")
+              ? caffy.pause(request.sessionId ?? "", action === "pause", request.requestId)
             : action === "startup"
               ? caffy.startup(request.sessionId ?? "", request.startup === true)
             : caffy.wake(request.sessionId ?? "");

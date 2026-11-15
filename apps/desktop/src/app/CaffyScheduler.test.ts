@@ -170,6 +170,9 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       again.paused = true;
       const resumed = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
       expect(resumed).toMatchObject({ paused: false, pendingWake: true });
+      const audit = NodeFS.readFileSync(NodePath.join(f.directory, "caffy-state-transitions.ndjson"), "utf8")
+        .trim().split("\n").map(line => JSON.parse(line) as {event: string; cause: string});
+      expect(audit.at(-1)).toMatchObject({event: "resumed", cause: "set:identical-config"});
       resumed.pendingWake = false;
       resumed.mode = "periodic";
       f.setReadStatus("pending_or_stalled");

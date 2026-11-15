@@ -313,6 +313,25 @@ export class CaffyScheduler {
     } catch { /* Snapshot failure must not prevent live Caffy operations. */ }
   }
 
+  /** Log every pause/resume transition, especially implicit resumes from reconfiguration. */
+  private logPauseChange(row: CaffyConfig, wasPaused: boolean, cause: string, requestId?: string) {
+    if (wasPaused === row.paused) return;
+    try {
+      NodeFS.appendFileSync(NodePath.join(NodePath.dirname(this.file), "caffy-state-transitions.ndjson"),
+        JSON.stringify({
+          at: new Date().toISOString(),
+          event: row.paused ? "paused" : "resumed",
+          cause,
+          requestId: requestId ?? null, // Desktop IPC correlation; null for internal scheduling.
+          sessionId: row.sessionId,
+          publicSessionId: row.publicSessionId ?? null,
+          conversationId: row.conversationId,
+          mode: row.mode,
+          intervalMinutes: row.intervalMinutes,
+        }) + "\n");
+    } catch { /* Audit failures must not stop Caffy. */ }
+  }
+
   private save() {
     const tmp = this.file + "." + process.pid + ".tmp";
     try {
@@ -689,6 +708,7 @@ export class CaffyScheduler {
     beginAt?: number | null | undefined;
     delayedPrompt?: string | null | undefined;
     repeatPrompt?: string | undefined;
+    auditRequestId?: string | undefined;
     autoRebootMinutes?: number | null | undefined;
     autoRebootEveryRuns?: number | null | undefined;
   }) {
@@ -798,6 +818,7 @@ export class CaffyScheduler {
       }
       if (prior.paused) {
         prior.paused = false;
+        this.logPauseChange(prior, true, "set:identical-config", input.auditRequestId);
         prior.lastError = null;
         this.save();
         this.backupConfiguration();
@@ -851,6 +872,7 @@ export class CaffyScheduler {
     };
     if (prior && prior.sessionId !== row.sessionId) this.entries.delete(prior.sessionId);
     this.entries.set(row.sessionId, row);
+    if (prior) this.logPauseChange(row, prior.paused, "set:reconfigured", input.auditRequestId);
     this.save();
     this.backupConfiguration();
     void this.pump();
@@ -1031,7 +1053,7 @@ export class CaffyScheduler {
     return { cleared: true };
   }
 
-  async beginAt(sessionId: string, conversationId: string, at: number | null, prompt?: string) {
+  async beginAt(sessionId: string, conversationId: string, at: number | null, prompt?: string, auditRequestId?: string) {
     if (prompt !== undefined && (!prompt.trim() || prompt.length > 29_800))
       throw new Error("Delayed prompt must contain 1..29800 characters.");
     if (at !== null && (!Number.isSafeInteger(at) || at <= Date.now() ||
@@ -1041,7 +1063,7 @@ export class CaffyScheduler {
     if (!row) {
       if (at === null) return { cleared: true };
       row = await this.set({ sessionId, conversationId, mode: "queued",
-        onceOnly: true, keepAwake: false, beginAt: at, delayedPrompt: prompt ?? null });
+        onceOnly: true, keepAwake: false, beginAt: at, delayedPrompt: prompt ?? null, auditRequestId });
       row.runWithoutBusy = true;
       this.save();
       return row;
@@ -1079,7 +1101,9 @@ export class CaffyScheduler {
       // The renderer first pauses the live monitor while clicking Stop.
       // Persist the future deadline AND the resumed scheduler atomically, so
       // a lost follow-up IPC cannot leave Caffy permanently paused.
+      const wasPaused = row.paused;
       row.paused = false;
+      this.logPauseChange(row, wasPaused, "begin_in:scheduled-start", auditRequestId);
       row.lastError = null;
     }
     this.save();
@@ -1204,12 +1228,14 @@ export class CaffyScheduler {
     await this.reconcileReboot(row);
   }
 
-  pause(sessionId: string, paused: boolean) {
+  pause(sessionId: string, paused: boolean, auditRequestId?: string) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
     if (!paused && this.legacyConflict(row.sessionId, row.conversationId))
       throw new Error("Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.");
+    const wasPaused = row.paused;
     row.paused = paused;
+    this.logPauseChange(row, wasPaused, paused ? "pause:explicit" : "resume:explicit", auditRequestId);
     // Pausing relinquishes any automatic continuation lease unless a prompt
     // is already in-flight. On resume it must reacquire through the gate.
     if (paused && row.mode === "queued" && row.pendingMessageId === null)
