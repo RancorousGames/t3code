@@ -1133,6 +1133,30 @@ export class CaffyScheduler {
       if (row.pendingMessageId)
         throw new Error("An existing wake delivery must settle before changing the repeated prompt.");
     }
+    if (input.respectSlots !== undefined) {
+      // Older T3 schedulers used a distinct queued mode and do not have
+      // slot-admission policy. Fail closed rather than pretending it changed.
+      if (!("respectSlots" in row))
+        throw new Error("The running Caffy scheduler does not support in-place slot policy changes. Upgrade T3 first.");
+      row.respectSlots = input.respectSlots;
+    }
+    if (input.repeatPrompt !== undefined) row.repeatPrompt = input.repeatPrompt.trim() || null;
+    this.save();
+    this.backupConfiguration();
+    if (!row.paused) void this.pump();
+    return row;
+  }
+
+  /** Non-temporal edits never re-arm stopped monitors or resume paused ones. */
+  configure(sessionId: string, input: { respectSlots?: boolean; repeatPrompt?: string }) {
+    const row = this.lookup(sessionId);
+    if (!row) throw new Error("Caffy is not running for this session.");
+    if (input.repeatPrompt !== undefined) {
+      if (input.repeatPrompt.length > 29_800)
+        throw new Error("Repeated prompt exceeds 29800 characters.");
+      if (row.pendingMessageId)
+        throw new Error("An existing wake delivery must settle before changing the repeated prompt.");
+    }
     if (input.respectSlots !== undefined) row.respectSlots = input.respectSlots;
     if (input.repeatPrompt !== undefined) row.repeatPrompt = input.repeatPrompt.trim() || null;
     this.save();

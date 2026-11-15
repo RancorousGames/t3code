@@ -458,7 +458,7 @@ export const make = Effect.gen(function* () {
             : action === "list" || action === "status"
             : action === "configure"
               ? caffy.configure(request.sessionId ?? "", {
-                  ...(request.respectSlots === undefined ? {} : { respectSlots: request.respectSlots }),
+                  ...(!("respectSlots" in request) || request.respectSlots === undefined ? {} : { respectSlots: request.respectSlots }),
                   ...(request.repeatPrompt === undefined ? {} : { repeatPrompt: request.repeatPrompt }),
                 })
               ? caffy.status(action === "status" ? request.sessionId : undefined)
