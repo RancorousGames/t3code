@@ -7,7 +7,6 @@ import {
 import {
   inspectBrowserSession,
   runChatGPTSessionControl,
-  markChatGPTRebootGeneration,
 } from "./chatGPTSessionControl";
 import { beginChatGPTBootstrapReboot, readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
 import { recordChatGPTSessionRebootedAt } from "./chatGPTSessionTimestamps";
@@ -16,7 +15,6 @@ import { sendInitialChatGPTPrompt } from "./chatGPTBrowserAutomation";
 import {
   findRebootBrowserSlot,
   replaceRebootBrowserSlot,
-  archivePriorRebootUnknownSend,
   recordPriorRebootState,
   type RebootBrowserSlot,
 } from "./chatGPTRebootAnyState";
@@ -185,14 +183,6 @@ export async function rebootChatGPTDesktop(input: {
         if (!browserSlot) throw new Error("Reboot browser slot is unavailable.");
         if (url !== "https://chatgpt.com/")
           throw new Error("Reboot must start at the new ChatGPT conversation home.");
-        // Persist old-generation UNKNOWN evidence without replaying its message.
-        archivePriorRebootUnknownSend(
-          input.environmentId,
-          session.id,
-          priorConversationId,
-          input.operationId,
-        );
-        markChatGPTRebootGeneration(input.environmentId, session.id);
         await replaceRebootBrowserSlot(browserSlot);
         beginChatGPTBootstrapReboot(input.environmentId, session.id);
       },
