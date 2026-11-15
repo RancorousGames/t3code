@@ -55,6 +55,11 @@ import { Label } from "./ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
+import {
+  installRemotePrepfileStarter,
+  updateRemotePrepfileJob,
+  type RemotePrepfileRequest,
+} from "../prepfileRemote";
 
 type Generator = "chatgpt" | "luna" | "haiku";
 // Preparation is intentionally limited to low-cost models. The full native
@@ -259,6 +264,9 @@ export function NewPrepfileAction() {
         ...(job.targetThreadId ? { threadId: job.targetThreadId } : {}),
       });
       updatePrepfileHandoff(job.id, () => null);
+      updateRemotePrepfileJob(job.id, (record) => ({ ...record,
+        state: "completed", implementationThreadId: threadId,
+      }));
       refreshPending((value) => value + 1);
       toastManager.add({
         type: "success",
@@ -266,6 +274,10 @@ export function NewPrepfileAction() {
         description: `New implementation thread ${threadId} is running.`,
       });
     } catch (cause) {
+      updateRemotePrepfileJob(job.id, (record) => ({
+        ...record, state: "needs_review",
+        error: `${failedMessage(cause)}. Inspect the reserved implementation thread; automatic retry is disabled.`,
+      }));
       toastManager.add({
         type: "error",
         title: "Prepfile handoff needs review",
@@ -309,6 +321,11 @@ export function NewPrepfileAction() {
       if (window.location.pathname.endsWith(`/${job.sessionId}`)) void navigate({ to: "/" });
     }
     updatePrepfileGeneratorCleanupJob(job.id, () => null);
+    updateRemotePrepfileJob(job.id, (record) => ({
+      ...record, cleanup: "finished",
+      ...(record.state === "preparing" || record.state === "waiting_handoff"
+        ? { state: "completed" as const } : {}),
+    }));
   });
 
   useEffect(() => {
@@ -336,6 +353,8 @@ export function NewPrepfileAction() {
             observedFiles.current.set(job.id, fingerprint);
             continue;
           }
+          updateRemotePrepfileJob(job.id, (record) =>
+            record.state === "preparing" ? { ...record, state: "waiting_handoff" } : record);
           // The prepfile can be written before the preparer has created the
           // TaskBoard card. Wait for the originating agent to finish all work;
           // file stability alone is not a handoff receipt.
@@ -356,6 +375,9 @@ export function NewPrepfileAction() {
           if (cancelled) return;
           const targetThreadId = newThreadId();
           updatePrepfileHandoff(job.id, (entry) => ({ ...entry, state: "dispatching", targetThreadId }));
+          updateRemotePrepfileJob(job.id, (record) => ({
+            ...record, state: "dispatching", implementationThreadId: targetThreadId,
+          }));
           refreshPending((value) => value + 1);
           await dispatchHandoff({ ...job, state: "dispatching", targetThreadId });
         }
@@ -386,10 +408,14 @@ export function NewPrepfileAction() {
           }
           if (cancelled) return;
           updatePrepfileGeneratorCleanupJob(job.id, (entry) => ({ ...entry, state: "disposing" }));
+          updateRemotePrepfileJob(job.id, (record) => ({ ...record, cleanup: "disposing" }));
           try {
             await disposeGenerator({ ...job, state: "disposing" });
           } catch (cause) {
             // Do not replay an uncertain delete or close: this ID stays reserved.
+            updateRemotePrepfileJob(job.id, (record) => ({
+              ...record, cleanup: "needs_review", error: failedMessage(cause),
+            }));
             toastManager.add({
               type: "error", title: "Prepfile completed; session cleanup needs review",
               description: failedMessage(cause),
@@ -407,33 +433,26 @@ export function NewPrepfileAction() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [environmentId]);
 
-  const submit = () => {
-    if (submitting.current || !environmentId || !request.trim()) return;
-    const generatorSelection = generator === "chatgpt" ? null : resolveGenerator(generator);
-    if (generator !== "chatgpt" && !generatorSelection) {
-      setError("The selected preparation model is unavailable.");
-      return;
-    }
-    if (autoHandoff && !implementationSelection?.model) {
-      setError("Choose an available implementation model.");
-      return;
-    }
-    const captured = {
-      environmentId, request: request.trim(), depth, generator,
-      generatorSelection, project, autoHandoff, implementationSelection,
-      createTaskboardTask, images: [...attachedImages],
-    };
-    // Close on click. Session creation and prompt delivery can take minutes,
-    // and must not hold a user-facing dialog open.
-    submitting.current = true;
-    setOpen(false);
-    requestAnimationFrame(() => { submitting.current = false; });
-    setRequest("");
-    setAttachedImages([]);
-    setError(null);
-    void (async () => {
-      const id = randomUUID();
+  type CapturedPrepfile = {
+    environmentId: NonNullable<typeof environmentId>;
+    request: string;
+    depth: PrepfileDepth;
+    generator: Generator;
+    generatorSelection: ModelSelection | null;
+    project: typeof project;
+    autoHandoff: boolean;
+    implementationSelection: ModelSelection | null;
+    createTaskboardTask: boolean;
+    images: File[];
+  };
+  const launch = useEffectEvent(async (captured: CapturedPrepfile, id: string) => {
+    const generatorSelection = captured.generatorSelection;
+    if (captured.generator !== "chatgpt" && !generatorSelection)
+      throw new Error("The selected preparation model is unavailable.");
+    if (captured.autoHandoff && !captured.implementationSelection?.model)
+      throw new Error("Choose an available implementation model.");
       const outputPath = prepfileOutputPath(id, captured.request, captured.project?.title ?? null);
+      updateRemotePrepfileJob(id, (record) => ({ ...record, outputPath, state: "starting" }));
       let targetProject = captured.project;
       if (!targetProject && (captured.generator !== "chatgpt" || captured.autoHandoff)) {
         const scratch = await openScratchProject(captured.environmentId, "Could not open a no-project workspace");
@@ -494,6 +513,9 @@ export function NewPrepfileAction() {
           });
         }
         const generatorSessionId = outcome.data.sessionId;
+        updateRemotePrepfileJob(id, (record) => ({
+          ...record, state: "preparing", generatorSessionId,
+        }));
         updatePrepfileHandoff(id, (entry) => ({ ...entry, generatorSessionId }));
         setPrepfileGeneratorCleanupJobs([
           ...readPrepfileGeneratorCleanupJobs(),
@@ -504,10 +526,20 @@ export function NewPrepfileAction() {
           },
         ]);
       } else if (targetProject && captured.generatorSelection) {
+        // Preallocate and reserve a deterministic thread ID before the first write.
+        // A failed/unknown create must never generate a second native preparer.
+        const reservedThreadId = newThreadId();
+        updateRemotePrepfileJob(id, (record) => ({
+          ...record, state: "starting", generatorSessionId: reservedThreadId,
+        }));
         const threadId = await startNative({
           environmentId: captured.environmentId, projectId: targetProject.id,
           title: "Prepare context file", prompt, modelSelection: captured.generatorSelection,
+          threadId: reservedThreadId,
         });
+        updateRemotePrepfileJob(id, (record) => ({
+          ...record, state: "preparing", generatorSessionId: threadId,
+        }));
         updatePrepfileHandoff(id, (entry) => ({ ...entry, generatorSessionId: threadId }));
         setPrepfileGeneratorCleanupJobs([
           ...readPrepfileGeneratorCleanupJobs(),
@@ -523,10 +555,83 @@ export function NewPrepfileAction() {
         title: captured.autoHandoff ? "Prepfile started; automatic handoff armed" : "Prepfile started",
         description: "The preparation session is running independently of this dialog.",
       });
-    })().catch((cause) => {
-      toastManager.add({ type: "error", title: "Prepfile start needs attention", description: failedMessage(cause) });
+  });
+
+  const submit = () => {
+    if (submitting.current || !environmentId || !request.trim()) return;
+    const captured: CapturedPrepfile = {
+      environmentId, request: request.trim(), depth, generator,
+      generatorSelection: generator === "chatgpt" ? null : resolveGenerator(generator),
+      project, autoHandoff, implementationSelection,
+      createTaskboardTask, images: [...attachedImages],
+    };
+    submitting.current = true;
+    setOpen(false);
+    requestAnimationFrame(() => { submitting.current = false; });
+    setRequest("");
+    setAttachedImages([]);
+    setError(null);
+    void launch(captured, randomUUID()).catch((cause) => {
+      toastManager.add({ type: "error", title: "Prepfile start needs attention",
+        description: failedMessage(cause) });
     });
   };
+
+  const launchRemote = useEffectEvent(async (input: RemotePrepfileRequest) => {
+    if (!environmentId) throw new Error("T3 desktop environment is not ready.");
+    const chosenProject = input.projectId === null ? null :
+      (environmentProjects.find((candidate) => candidate.id === input.projectId) ?? null);
+    if (input.projectId && !chosenProject)
+      throw new Error("The selected project is not available on this PC.");
+    const entries = providerInstanceEntriesFor(providers, settings, chosenProject?.id ?? null)
+      .filter(isProviderInstancePickerReady);
+    const selectedModel = (selection: { instanceId: string; model: string } | undefined) => {
+      if (!selection) return null;
+      const entry = entries.find((candidate) => candidate.instanceId === selection.instanceId);
+      const model = entry?.models.find((candidate) => candidate.slug === selection.model);
+      return model && entry ? { entry, model } : null;
+    };
+    const generatorOption = input.generator === "chatgpt" ? null : selectedModel(input.generatorModel);
+    if (input.generator !== "chatgpt" &&
+        (!generatorOption || !GENERATORS.find((item) => item.id === input.generator)
+          ?.match.test(generatorOption.model.name + " " + generatorOption.model.slug)))
+      throw new Error("Selected low-cost preparation model is unavailable for this project.");
+    const handoffOption = input.autoHandoff ? selectedModel(input.implementationModel) : null;
+    if (input.autoHandoff && !handoffOption)
+      throw new Error("Selected implementation model is unavailable for this project.");
+    const reasoning = handoffOption?.model.capabilities?.optionDescriptors?.find(
+      (option) => option.type === "select" && isReasoningControl(option));
+    const effort = input.implementationModel?.effort;
+    if (effort && (!reasoning || reasoning.type !== "select" ||
+      !reasoning.options.some((choice) => choice.id === effort)))
+      throw new Error("Implementation effort is unsupported for the selected model.");
+    const images = (input.images ?? []).map((image, index) => {
+      const prefix = `data:${image.mime};base64,`;
+      if (!image.dataUrl.startsWith(prefix))
+        throw new Error("Invalid image payload.");
+      const raw = atob(image.dataUrl.slice(prefix.length));
+      if (raw.length === 0 || raw.length > 8 * 1024 * 1024)
+        throw new Error("Attached image must be 1 byte–8 MiB.");
+      const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+      return new File([bytes], `prepfile-image-${index + 1}`, { type: image.mime });
+    });
+    await launch({
+      environmentId, request: input.request.trim(), depth: input.depth,
+      generator: input.generator,
+      generatorSelection: generatorOption
+        ? { instanceId: generatorOption.entry.instanceId, model: generatorOption.model.slug }
+        : null,
+      project: chosenProject, autoHandoff: input.autoHandoff,
+      implementationSelection: handoffOption
+        ? { instanceId: handoffOption.entry.instanceId, model: handoffOption.model.slug,
+          ...(reasoning && effort ? { options: [{ id: reasoning.id, value: effort }] } : {}) }
+        : null,
+      createTaskboardTask: input.createTaskboardTask, images,
+    }, input.id);
+  });
+  useEffect(() => installRemotePrepfileStarter(async (input) => {
+    await launchRemote(input);
+  }), [environmentId]);
 
   const pending = open ? readPrepfileHandoffs().filter((job) => job.environmentId === environmentId) : [];
   return (

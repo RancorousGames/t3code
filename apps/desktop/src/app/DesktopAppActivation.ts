@@ -456,6 +456,11 @@ export const make = Effect.gen(function* () {
                 autoRebootEveryRuns: request.rebootEveryRuns,
               })
             : action === "list" || action === "status"
+            : action === "configure"
+              ? caffy.configure(request.sessionId ?? "", {
+                  ...(request.respectSlots === undefined ? {} : { respectSlots: request.respectSlots }),
+                  ...(request.repeatPrompt === undefined ? {} : { repeatPrompt: request.repeatPrompt }),
+                })
               ? caffy.status(action === "status" ? request.sessionId : undefined)
             : action === "policy"
               ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking,

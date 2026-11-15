@@ -603,6 +603,31 @@ export class CaffyScheduler {
       try { receipt = this.deliveries.status(row.pendingMessageId); } catch { /* pending journal commit */ }
     }
     const view = { ...row,
+  /** Bounded read of durable scheduler transition receipts; avoid whole-log scans on phones. */
+  private recentEvents(sessionId: string) {
+    const file = NodePath.join(NodePath.dirname(this.file), "caffy-state-transitions.ndjson");
+    try {
+      const stat = NodeFS.statSync(file);
+      const length = Math.min(stat.size, 96 * 1024);
+      if (!length) return [];
+      const buffer = Buffer.alloc(length);
+      const handle = NodeFS.openSync(file, "r");
+      try { NodeFS.readSync(handle, buffer, 0, length, stat.size - length); }
+      finally { NodeFS.closeSync(handle); }
+      const lines = buffer.toString("utf8").split("\n");
+      return (stat.size > length ? lines.slice(1) : lines).flatMap((line) => {
+        try {
+          const event = JSON.parse(line) as {
+            at?: string; event?: string; cause?: string; requestId?: string; sessionId?: string;
+          };
+          return event.sessionId === sessionId
+            ? [{ at: event.at, event: event.event, cause: event.cause,
+                requestId: event.requestId ?? null }] : [];
+        } catch { return []; }
+      }).slice(-10);
+    } catch { return []; }
+  }
+
       deliveryStatus: receipt?.status ?? row.deliveryStatus ?? null,
       deliveryUpdatedAt: receipt?.updatedAt ?? row.deliveryUpdatedAt ?? null,
       deliveryAwaitingGuest: receipt?.awaitingGuest ?? row.deliveryAwaitingGuest ?? false,
@@ -613,7 +638,10 @@ export class CaffyScheduler {
 
   status(sessionId?: string) {
     this.expireTimedBusy();
-    if (sessionId) { const row = this.lookup(sessionId); return row ? this.publicStatus(row) : null; }
+    if (sessionId) {
+      const row = this.lookup(sessionId);
+      return row ? { ...this.publicStatus(row), recentEvents: this.recentEvents(row.sessionId) } : null;
+    }
     return {
       entries: [...this.entries.values()].map(row => this.publicStatus(row)),
       scheduledSpawns: [...this.scheduledSpawns.values()].map(({ prompt: _prompt, ...job }) => job),
@@ -1095,6 +1123,24 @@ export class CaffyScheduler {
     row.beginAt = at;
     row.runWithoutBusy = at !== null;
     row.delayedPrompt = at === null ? null : prompt ?? null;
+  /** Non-temporal edits never re-arm stopped monitors or resume paused ones. */
+  configure(sessionId: string, input: { respectSlots?: boolean; repeatPrompt?: string }) {
+    const row = this.lookup(sessionId);
+    if (!row) throw new Error("Caffy is not running for this session.");
+    if (input.repeatPrompt !== undefined) {
+      if (input.repeatPrompt.length > 29_800)
+        throw new Error("Repeated prompt exceeds 29800 characters.");
+      if (row.pendingMessageId)
+        throw new Error("An existing wake delivery must settle before changing the repeated prompt.");
+    }
+    if (input.respectSlots !== undefined) row.respectSlots = input.respectSlots;
+    if (input.repeatPrompt !== undefined) row.repeatPrompt = input.repeatPrompt.trim() || null;
+    this.save();
+    this.backupConfiguration();
+    if (!row.paused) void this.pump();
+    return row;
+  }
+
     row.pendingWake = true;
     row.pendingReason = "manual";
     if (at !== null) {

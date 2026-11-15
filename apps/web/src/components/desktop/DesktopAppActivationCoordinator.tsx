@@ -83,7 +83,9 @@ import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedSt
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { AgentAttentionToast } from "./AgentAttentionToast";
-import { requestAgentAttention, readAgentAttention, openAgentAttention } from "../../chatGPTAgentAttention";
+import { requestAgentAttention, readAgentAttention, loadAgentAttention, changeAttention, openAgentAttention } from "../../chatGPTAgentAttention";
+import { queueAgentAttentionDismissal } from "../../chatGPTAttentionHandoff";
+import { readRemotePrepfileJobs, stageRemotePrepfileImageChunk, startRemotePrepfile, type RemotePrepfileRequest } from "../../prepfileRemote";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { chatGPTCloseStatus } from "../../chatGPTCloseStatus";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
@@ -2280,7 +2282,11 @@ export function DesktopAppActivationCoordinator() {
                 const bool = (name: string) => typeof options[name] === "boolean" ? options[name] as boolean : null;
                 const number = (name: string) => typeof options[name] === "number" &&
                   Number.isFinite(options[name]) ? options[name] as number : null;
-                const caffy = window.desktopBridge?.caffyControl;
+                // Main-process Caffy schema is ahead of the generated preload declaration
+                // in incremental builds; the protocol still validates all fields at IPC.
+                const caffy = window.desktopBridge?.caffyControl as
+                  | ((input: { action: string; sessionId?: string; [key: string]: unknown }) => Promise<unknown>)
+                  | undefined;
                 const command = work.command;
                 const stopPhoneGeneration = async () => {
                   const expression = `(() => {
@@ -2330,9 +2336,71 @@ export function DesktopAppActivationCoordinator() {
                     projects: [...new Set(sessions.map((s) => s.project).filter((p): p is string => !!p))],
                   }};
                 }
-                if (command === "verification") {
+                if (command === "prepfile_image_chunk") {
+                  const id = str("id");
+                  const index = number("index");
+                  const part = number("part");
+                  const total = number("total");
+                  const mime = str("mime");
+                  const chunk = str("chunk");
+                  if (!id || index === null || part === null || total === null ||
+                    !mime || !chunk) throw new Error("Missing prepfile image chunk fields.");
+                  const receipt = stageRemotePrepfileImageChunk({ id, index, part, total, mime, chunk });
+                  return { ok: true as const, data: receipt };
+                } else if (command === "prepfile_create") {
+                  const id = str("id");
+                  const request = str("request");
+                  const depth = str("depth");
+                  const generator = str("generator");
+                  const projectId = str("projectId");
+                  const generatorModel = options.generatorModel as RemotePrepfileRequest["generatorModel"];
+                  const implementationModel = options.implementationModel as RemotePrepfileRequest["implementationModel"];
+                  const images = options.images as RemotePrepfileRequest["images"];
+                  const imageRefs = options.imageRefs as RemotePrepfileRequest["imageRefs"];
+                  if (!id || !request || !depth || !generator)
+                    throw new Error("Prepfile request, ID, depth, and generator are required.");
+                  if (projectId !== null && (projectId.length > 256 || !/^[a-zA-Z0-9_-]+$/.test(projectId)))
+                    throw new Error("Invalid T3 project identifier.");
+                  const job = startRemotePrepfile({
+                    id, request, depth: depth as RemotePrepfileRequest["depth"],
+                    generator: generator as RemotePrepfileRequest["generator"],
+                    projectId, autoHandoff: bool("autoHandoff") === true,
+                    createTaskboardTask: bool("createTaskboardTask") === true,
+                    ...(generatorModel ? { generatorModel } : {}),
+                    ...(implementationModel ? { implementationModel } : {}),
+                    ...(images ? { images } : {}),
+                    ...(imageRefs ? { imageRefs } : {}),
+                  });
+                  return { ok: true as const, data: { jobId: job.id, state: job.state } };
+                } else if (command.startsWith("attention_")) {
+                  const attentionId = str("requestId");
+                  const attention = attentionId ? readAgentAttention(attentionId) : null;
+                  if (!attention || !sessions.some((candidate) => candidate.id === attention.sessionId ||
+                    publicChatGPTSessionId(candidate) === attention.sessionId))
+                    throw new Error("Attention request not found in this T3 environment.");
+                  if (command === "attention_open") {
+                    if (attention.status === "dismissed")
+                      throw new Error("Attention request was already dismissed.");
+                    if (attention.status !== "opened") changeAttention(attention.id, "opened");
+                  } else if (command === "attention_snooze") {
+                    const minutes = number("minutes");
+                    if (minutes !== 15 && minutes !== 60)
+                      throw new Error("Snooze must be 15 or 60 minutes.");
+                    if (attention.status === "dismissed" || attention.status === "opened")
+                      throw new Error("Attention request already resolved.");
+                    changeAttention(attention.id, "snoozed", Date.now() + minutes * 60_000);
+                  } else if (command === "attention_dismiss") {
+                    if (attention.status !== "dismissed") {
+                      if (!(await queueAgentAttentionDismissal(environmentId, attention)))
+                        throw new Error("Could not durably queue the agent follow-up; request remains actionable.");
+                      changeAttention(attention.id, "dismissed");
+                    }
+                  } else throw new Error("Unknown attention action.");
+                } else if (command === "verification") {
                   const value = bool("value");
                   if (value === null) throw new Error("Verification flag required.");
+                    attentions: loadAgentAttention(),
+                    prepfileJobs: readRemotePrepfileJobs(),
                   setSessionVerification(id, value);
                 } else if (command === "worker") {
                   const value = bool("value");
@@ -2478,10 +2546,11 @@ export function DesktopAppActivationCoordinator() {
                   if (!caffy) throw new Error("T3 Caffy controls unavailable.");
                   if (command === "caffy_set") {
                     const mode = str("mode");
-                    if (!mode || !["idle", "periodic", "queued", "startup"].includes(mode))
-                      throw new Error("Unknown Caffy mode.");
+                    if (!mode || !["idle", "queued", "periodic", "startup"].includes(mode))
+                      throw new Error("Unknown Caffy mode (idle = keep running, periodic = interval, startup).");
                     await caffy({ action: "set", sessionId: id,
-                      mode: mode as "idle" | "periodic" | "queued" | "startup",
+                      mode: (mode === "queued" ? "idle" : mode) as "idle" | "periodic" | "startup",
+                      ...(bool("respectSlots") === null && mode !== "queued" ? {} : {respectSlots: mode === "queued" ? true : bool("respectSlots")!}),
                       ...(number("durationMinutes") === null ? {} : {durationMinutes: number("durationMinutes")!}),
                       ...(number("intervalMinutes") === null ? {} : {intervalMinutes: number("intervalMinutes")!}),
                       ...(bool("onceOnly") === null ? {} : {onceOnly: bool("onceOnly")!}),
@@ -2495,8 +2564,20 @@ export function DesktopAppActivationCoordinator() {
                     const enabled = bool("value");
                     if (enabled === null) throw new Error("Startup setting required.");
                     await caffy({ action: "startup", sessionId: id, startup: enabled });
+                      ...(str("repeatPrompt") === null ? {} : { repeatPrompt: str("repeatPrompt")!.slice(0, 29_800) }),
+                      ...(number("beginAt") === null ? {} : { beginAt: number("beginAt")! }),
+                      ...(bool("wakeNow") === null ? {} : { wakeNow: bool("wakeNow")! }),
                   } else if (command === "caffy_schedule_spawn") {
                     const jobId = str("jobId");
+                  } else if (command === "caffy_configure") {
+                    if (str("repeatPrompt")?.length && str("repeatPrompt")!.length > 29_800)
+                      throw new Error("Repeated prompt exceeds 29800 characters.");
+                    if (bool("respectSlots") === null && str("repeatPrompt") === null)
+                      throw new Error("Provide a scheduler option to configure.");
+                    await caffy({ action: "configure", sessionId: id,
+                      ...(bool("respectSlots") === null ? {} : { respectSlots: bool("respectSlots")! }),
+                      ...(str("repeatPrompt") === null ? {} : { repeatPrompt: str("repeatPrompt")! }),
+                    });
                     const title = str("title")?.trim();
                     const prompt = str("prompt")?.trim();
                     const onIdle = bool("onIdle") === true;
@@ -2551,9 +2632,15 @@ export function DesktopAppActivationCoordinator() {
                     }
                   } else if (command === "caffy_reboot") {
                     const minutes = number("value");
-                    if (minutes !== null && ![30, 60, 120].includes(minutes))
-                      throw new Error("Unknown auto-reboot interval.");
-                    await caffy({ action: "auto_reboot", sessionId: id, rebootMinutes: minutes });
+                    const runs = number("runs");
+                    if (minutes !== null && (!Number.isInteger(minutes) || minutes < 1 || minutes > 525_600))
+                      throw new Error("Auto-reboot interval must be 1–525600 minutes.");
+                    if (runs !== null && (!Number.isInteger(runs) || runs < 1 || runs > 10_000))
+                      throw new Error("Auto-reboot run count must be 1–10000.");
+                    if (minutes !== null && runs !== null)
+                      throw new Error("Choose either time-based or run-based reboot.");
+                    await caffy({ action: "auto_reboot", sessionId: id,
+                      rebootMinutes: minutes, rebootEveryRuns: runs });
                   } else if (command === "caffy_wake") {
                     await caffy({ action: "wake", sessionId: id });
                   } else throw new Error("Unknown Caffy action.");
@@ -2787,35 +2874,9 @@ export function DesktopAppActivationCoordinator() {
     };
   }, [activation, ready, primaryEnvironment?.environmentId]);
 
-  return <AgentAttentionToast onDismiss={async (attention) => {
+  return <AgentAttentionToast onDismiss={(attention) => {
     const environmentId = primaryEnvironment?.environmentId;
-    if (!environmentId) return false;
-    const session = readChatGPTBrowserSessions(environmentId).find(
-      (entry) => entry.id === attention.sessionId ||
-        entry.bootstrapIdentity?.publicId === attention.sessionId,
-    );
-    if (!session) return false;
-    const conversationId = session.bootstrapIdentity?.conversationId ??
-      chatGPTConversationIdFromUrl(getLocalStorageItem(
-        chatGPTBrowserLastUrlKey(environmentId, session.id), Schema.String,
-      ));
-    const enqueue = window.desktopBridge?.appActivation?.enqueueChatGPT;
-    if (!conversationId || !enqueue) return false;
-    // A dismissed request remains actionable until the exact conversation's
-    // guarded one-off is durably persisted, even if the guest is currently cold.
-    try {
-      const receipt = await enqueue({
-        messageId: attention.id, sessionId: session.id, conversationId,
-        body: `[T3 attention request ${attention.id}] User dismissed the request for direct
-attention: "${attention.message}". Do not notify again. Put the unresolved question
-on the ORIGINAL TaskBoard task using task ask-user, or request verification in
-the Review Inbox if implementation is finished.`,
-      });
-      return receipt.status !== "cancelled" && receipt.status !== "needs_attention";
-    } catch (error) {
-      console.warn("[Agent attention] Could not queue dismissal notice", error);
-      return false;
-    }
+    return environmentId ? queueAgentAttentionDismissal(environmentId, attention) : Promise.resolve(false);
   }} openSession={(sessionId) => {
     const environmentId = primaryEnvironment?.environmentId;
     if (!environmentId) return false;
