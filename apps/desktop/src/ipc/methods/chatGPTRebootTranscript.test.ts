@@ -69,6 +69,12 @@ describe("archived reboot transcript document", () => {
       expect(mapped.generations).toBe(2);
       expect(mapped.messages).toBe(3);
       expect(readFileSync(mapped.path!, "utf8")).toContain("Make grappling poses");
+      const unrelated = await prepareChatGPTRebootTranscript({
+        sessionId: SESSION, priorConversationId: "0c4d1a55-8f9b-48c3-b34d-543a35659ca4",
+        operationId: "78ff6f2d-5491-4fc7-a8e8-204c7bbd5e7f", mode: "handoff",
+      }, options);
+      expect(unrelated.path).toBeNull(); // Never attach a different conversation's history.
+
       const fresh = await prepareChatGPTRebootTranscript({
         sessionId: SESSION, operationId: "b7dac539-08c2-468f-864a-1a0b48a9a2b3", mode: "fresh",
       }, options);

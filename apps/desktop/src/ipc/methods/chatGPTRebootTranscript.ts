@@ -137,7 +137,12 @@ export async function prepareChatGPTRebootTranscript(
           m.turn_index ASC, m.ordinal ASC, m.role DESC
         LIMIT 5001
       `).all(input.sessionId, input.priorConversationId ?? "", input.priorConversationId ?? "") as unknown as RebootHistoryRow[];
-      if (candidate.length) {
+      // A stale T3 session ID can match unrelated archived conversations.
+      // When the browser supplied a verified predecessor, only accept an
+      // index containing that exact conversation; otherwise try the next DB.
+      if (candidate.length &&
+          (!input.priorConversationId ||
+           candidate.some((row) => row.conversation_id === input.priorConversationId))) {
         rows = candidate;
         break;
       }
