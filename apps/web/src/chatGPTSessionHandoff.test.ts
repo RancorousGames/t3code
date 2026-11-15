@@ -67,7 +67,7 @@ describe("T3 ChatGPT spawn handoff", () => {
       { resumeWorkAfterReboot: true },
     );
     expect(result).toContain("Parent T3 session ID: driver-1.");
-    expect(result).toContain("Do not print T3_ID or T3_TITLE");
+    expect(result).toContain("Print [T3_ID:worker-1] in your first response");
     expect(result.trimEnd().endsWith("Begin doing actual work now!")).toBe(true);
     expect(result.indexOf("Parent T3 session ID")).toBeLessThan(
       result.lastIndexOf("Begin doing actual work now!"),
@@ -77,7 +77,7 @@ describe("T3 ChatGPT spawn handoff", () => {
   it("reboots a named root without redundant markers, title or parent", () => {
     const result = buildChatGPTSessionHandoffPrompt("Start root", "root-1", null);
     expect(result).toContain('Bootstrap(role="personal", given_id="root-1")');
-    expect(result).not.toContain("[T3_ID:root-1]");
+    expect(result).toContain("Print [T3_ID:root-1] in your first response");
     expect(result).not.toContain("[T3_TITLE:");
     expect(result).not.toContain("Parent T3 session ID:");
     expect(result).not.toContain("title=");
@@ -89,7 +89,7 @@ describe("T3 ChatGPT spawn handoff", () => {
     expect(result.startsWith(original + "\n\n")).toBe(true);
     expect(result).toContain('Bootstrap(role="worker", given_id="worker-2")');
     expect(result).toContain("Parent T3 session ID: root-1.");
-    expect(result).not.toContain("[T3_ID:worker-2]");
+    expect(result).toContain("Print [T3_ID:worker-2] in your first response");
   });
 
   it("keeps a visible ID marker for newly created top-level sessions only", () => {

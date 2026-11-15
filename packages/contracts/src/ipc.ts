@@ -1915,7 +1915,8 @@ export interface DesktopBridge {
     action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "throughput" | "working_snapshot" | "retire" | "begin_in" | "auto_reboot" | "schedule_spawn" | "read_spawn" | "edit_spawn" | "cancel_spawn" | "cancel_begin";
     sessionId?: string;
     conversationId?: string;
-    mode?: "idle" | "periodic" | "queued" | "startup";
+    mode?: "idle" | "periodic" | "startup";
+    respectSlots?: boolean;
     durationMinutes?: number;
     intervalMinutes?: number;
     onceOnly?: boolean;
@@ -2018,6 +2019,19 @@ export interface DesktopBridge {
   savePrivateChatGPTDraftSnapshot?: (
     input: DesktopChatGPTDraftSnapshotInput,
   ) => Promise<DesktopChatGPTDraftSnapshotReceipt>;
+  /** Prepare a local text document of indexed prior ChatGPT generations before replacing the browser. */
+  prepareChatGPTRebootTranscript?: (input: {
+    sessionId: string;
+    operationId: string;
+    mode: "handoff" | "fresh";
+  }) => Promise<{
+    path: string | null;
+    originalUserRequest: string | null;
+    recent: Array<{ role: string; text: string }>;
+    generations: number;
+    messages: number;
+    limited: boolean;
+  }>;
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled: () => boolean;
   getPathForFile: (file: File) => string;

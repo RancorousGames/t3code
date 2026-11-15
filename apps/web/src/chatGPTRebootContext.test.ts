@@ -16,8 +16,21 @@ describe("reboot context isolation", () => {
     });
     expect(prompt).toContain("Please measure actual contact height");
     expect(prompt).toContain("I wrongly assumed this is solved");
-    expect(prompt).toContain("NOT verified facts");
+    expect(prompt).toContain("not verified");
     expect(prompt).toContain("Wartribes");
+  });
+
+  it("requires the actual indexed document path for multi-generation handover", () => {
+    const prompt = buildChatGPTRebootContextPrompt({
+      mode: "handoff", title: "Pose work",
+      originalRequest: "Create pose reference images",
+      historyDocument: { path: "E:/_AgentScratch/Reboot/history.txt", generations: 7, messages: 143, limited: false },
+      recent: [{ role: "user", text: "[T3-MSG:e39416df-1d75-49c7-9c16-ac47eae06b4f] Continue working on your current assignment." }],
+    });
+    expect(prompt).toContain("E:/_AgentScratch/Reboot/history.txt");
+    expect(prompt).toContain("read_file");
+    expect(prompt).toContain("7 indexed conversation generations");
+    expect(prompt).not.toContain("T3-MSG");
   });
 
   it("discards predecessor reasoning but preserves original assignment on fresh start", () => {

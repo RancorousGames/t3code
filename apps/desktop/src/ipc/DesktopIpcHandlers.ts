@@ -69,6 +69,7 @@ import {
 import * as PreviewIpc from "./methods/preview.ts";
 import { installOpenRigIpcHandlers } from "./installOpenRigIpcHandlers.ts";
 import { savePrivateChatGPTDraftSnapshotIpc } from "./methods/chatGPTDraftSnapshot.ts";
+import { prepareChatGPTRebootTranscriptIpc } from "./methods/chatGPTRebootTranscript.ts";
 import { persistentChatGPTRequestIpc } from "./methods/persistentChatGPTBrowser.ts";
 import { stableChatGPTViewRequestIpc } from "./methods/stableChatGPTView.ts";
 import { readChatGPTBootstrapTitleIpc } from "./methods/chatGPTBootstrapTitle.ts";
@@ -138,6 +139,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(savePrivateChatGPTDraftSnapshotIpc);
+  yield* ipc.handle(prepareChatGPTRebootTranscriptIpc);
   yield* ipc.handle(readChatGPTBootstrapTitleIpc);
   yield* ipc.handle(persistentChatGPTRequestIpc);
   yield* ipc.handle(stableChatGPTViewRequestIpc);

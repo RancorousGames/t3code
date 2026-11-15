@@ -53,6 +53,7 @@ export const SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:set-local-environm
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL = "desktop:private-chatgpt-draft-snapshot";
+export const CHATGPT_REBOOT_TRANSCRIPT_CHANNEL = "desktop:chatgpt-reboot-transcript";
 export const TASKBOARD_WORKER_CLAIMS_CHANNEL = "desktop:taskboard-worker-claims";
 export const TASKBOARD_PROJECTS_CHANNEL = "desktop:taskboard-projects";
 export const PREPFILE_STATUS_CHANNEL = "desktop:prepfile-status";

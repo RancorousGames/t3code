@@ -80,6 +80,14 @@ export async function rebootChatGPTDesktop(input: {
   // operation's hash and must never invent a different handover.
   let prompt = input.prompt;
   if (input.phase === "begin" && input.contextMode) {
+    const prepareHistory = window.desktopBridge?.prepareChatGPTRebootTranscript;
+    if (input.contextMode === "handoff" && !prepareHistory)
+      throw new Error("Keep Context requires the updated T3 desktop native bridge. Rebuild/restart T3 before rebooting; no incomplete handover was sent.");
+    const indexed = prepareHistory
+      ? await prepareHistory({ sessionId: session.id, operationId: input.operationId, mode: input.contextMode })
+      : null;
+    if (input.contextMode === "handoff" && !indexed?.path)
+      throw new Error("No prior-conversation transcript document could be prepared. Reboot cancelled to avoid losing task context.");
     const readExcerpts = async (from: "start" | "end", count: number):
       Promise<ChatGPTRebootExcerpt[]> => {
       try {
@@ -99,10 +107,16 @@ export async function rebootChatGPTDesktop(input: {
         return [];
       }
     };
-    const opening = session.binding?.taskRef ? [] : await readExcerpts("start", 2);
-    const recent = input.contextMode === "handoff" ? await readExcerpts("end", 12) : [];
+    const opening = session.binding?.taskRef || indexed?.originalUserRequest ? [] : await readExcerpts("start", 2);
+    const recent = indexed?.recent.length ? indexed.recent
+      : input.contextMode === "handoff" ? await readExcerpts("end", 12) : [];
     prompt = buildChatGPTRebootContextPrompt({
       mode: input.contextMode,
+      ...(indexed?.originalUserRequest ? { originalRequest: indexed.originalUserRequest } : {}),
+      ...(indexed?.path ? { historyDocument: {
+        path: indexed.path, generations: indexed.generations,
+        messages: indexed.messages, limited: indexed.limited,
+      } } : {}),
       title: session.title,
       ...(session.project ? { project: session.project } : {}),
       ...(session.binding ? { role: session.binding.role, taskRef: session.binding.taskRef } : {}),

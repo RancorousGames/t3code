@@ -166,6 +166,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
   savePrivateChatGPTDraftSnapshot: (input) =>
     ipcRenderer.invoke(IpcChannels.PRIVATE_CHATGPT_DRAFT_SNAPSHOT_CHANNEL, input),
+  prepareChatGPTRebootTranscript: (input) =>
+    ipcRenderer.invoke(IpcChannels.CHATGPT_REBOOT_TRANSCRIPT_CHANNEL, input),
   readTaskBoardWorkerClaims: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_WORKER_CLAIMS_CHANNEL),
   readTaskBoardProjects: () => ipcRenderer.invoke(IpcChannels.TASKBOARD_PROJECTS_CHANNEL),
   readPrepfileStatus: (path) => ipcRenderer.invoke(IpcChannels.PREPFILE_STATUS_CHANNEL, { path }),
