@@ -1,7 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Path normalization is the behavior under test.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { boardOwnersFromSessions, compareQueuedCandidates, completedQueueTask, sessionsForStartRequest } from "./TaskBoardWorkCoordinator.ts";
+import { boardOwnersFromSessions, compareQueuedCandidates, completedQueueTask, sessionsForStartRequest, TaskBoardWorkCoordinator } from "./TaskBoardWorkCoordinator.ts";
 
 const WT = "B:\\GDrive\\Test\\Wartribes\\Tasks";
 const T3 = "B:\\GDrive\\Test\\t3code\\Tasks";
@@ -14,6 +16,41 @@ const task = (boardRoot: string, taskId: string, created: string,
   });
 
 describe("TaskBoard Keep Busy selection", () => {
+  it("retires the exact automatic idle Caffy on task cleanup, but not a manually replaced monitor", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-worker-wake-"));
+    try {
+      const stopped: string[] = [];
+      let monitor = { conversationId: "conversation", mode: "idle", respectSlots: true, createdAt: 100 };
+      const coordinator = new TaskBoardWorkCoordinator(dir, {
+        status: () => monitor,
+        stop: (id: string) => { stopped.push(id); return { stopped: true }; },
+      } as unknown as ConstructorParameters<typeof TaskBoardWorkCoordinator>[1]);
+      const internal = coordinator as unknown as {
+        managedWorkerWakes: Map<string, {
+          boardRoot: string; taskId: string; requestId: string; sessionId: string;
+          conversationId: string; beginAt: number; lastAttemptAt: number;
+          active: boolean; monitorCreatedAt?: number;
+        }>;
+        cleanupManagedWorkerWakes: (snapshots: []) => void;
+      };
+      const wake = {
+        boardRoot: WT, taskId: "WT-0100", requestId: "request", sessionId: "session",
+        conversationId: "conversation", beginAt: 0, lastAttemptAt: 0,
+        active: true, monitorCreatedAt: 100,
+      };
+      internal.managedWorkerWakes.set("session", wake);
+      internal.cleanupManagedWorkerWakes([]);
+      expect(stopped).toEqual(["session"]);
+      expect(internal.managedWorkerWakes.size).toBe(0);
+
+      monitor = { ...monitor, createdAt: 200 }; // A manually replaced Caffy is not ours to stop.
+      internal.managedWorkerWakes.set("session", wake);
+      internal.cleanupManagedWorkerWakes([]);
+      expect(stopped).toEqual(["session"]);
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("does not let an old task session strand a newer Starting reservation", () => {
     const old = { spawnRequestId: "old-attempt", binding: { taskRef: { id: "WT-0237" } } };
     const other = { spawnRequestId: "other-task", binding: { taskRef: { id: "REA-0031" } } };

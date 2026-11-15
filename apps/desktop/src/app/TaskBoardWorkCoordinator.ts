@@ -103,6 +103,8 @@ interface ManagedWorkerWake {
   boardRoot: string; taskId: string; requestId: string;
   sessionId: string; conversationId: string;
   beginAt: number; lastAttemptAt: number; active: boolean;
+  /** Identifies the exact automatic schedule, even if the user later replaces it manually. */
+  monitorCreatedAt?: number;
 }
 const ROOT_CANDIDATES = [
   process.env.T3CODE_REPO_ROOT,
@@ -129,6 +131,7 @@ const TASKBOARD_CATALOG = () => NodePath.join(
 const RESERVATION_LEASE_SECONDS = 180;
 const STARTING_HOLD_MS = 5 * 60_000;
 const STARTING_RECHECK_MS = 45_000;
+const AUTOMATIC_WORKER_CAFFY_MINUTES = 120;
 // A guest stuck at the original prompt must not monopolize a queue item for hours.
 const UNSTARTED_GUEST_GRACE_MS = 2 * 60_000;
 const PUMP_INTERVAL_MS = 20_000;
@@ -633,9 +636,12 @@ export class TaskBoardWorkCoordinator {
           item.sessionId === id && item.claimed && item.claimedBy === `t3:${id}`));
       if (stillOwned) continue;
       const monitor = this.caffy.status(id) as {
-        conversationId?: string; mode?: string;
+        conversationId?: string; mode?: string; respectSlots?: boolean;
+        createdAt?: number;
       } | null;
-      if (monitor?.conversationId === wake.conversationId && monitor.mode === "queued")
+      if (monitor?.conversationId === wake.conversationId &&
+          (monitor.mode === "queued" || (monitor.mode === "idle" && monitor.respectSlots === true)) &&
+          (wake.monitorCreatedAt === undefined || monitor.createdAt === wake.monitorCreatedAt))
         this.caffy.stop(id, "agent");
       this.managedWorkerWakes.delete(id);
       this.saveWorkerWakes();
@@ -699,7 +705,7 @@ export class TaskBoardWorkCoordinator {
       if (!journal && stopped.some(row =>
         row.sessionId === id || row.browserSessionId === id || row.publicSessionId === id)) continue;
       const existing = this.caffy.status(id) as {
-        mode?: string; conversationId?: string;
+        mode?: string; conversationId?: string; createdAt?: number;
       } | null;
       if (existing && (!journal || existing.mode !== "queued" ||
           existing.conversationId !== session.conversationId)) continue;
@@ -714,11 +720,15 @@ export class TaskBoardWorkCoordinator {
       try {
         if (!this.running) return;
         if (!existing) {
-          await this.caffy.set({
+          const created = await this.caffy.set({
             sessionId: id, conversationId: wake.conversationId,
             mode: "queued", onceOnly: false, keepAwake: true,
+            durationMinutes: AUTOMATIC_WORKER_CAFFY_MINUTES,
             beginAt: Math.max(wake.beginAt, Date.now() + 30_000),
           });
+          wake.monitorCreatedAt = created.createdAt;
+        } else {
+          wake.monitorCreatedAt ??= existing.createdAt;
         }
         const taskStillClaimed = this.snapshots.some(board =>
           rootKey(board.boardRoot) === rootKey(boardRoot) &&
