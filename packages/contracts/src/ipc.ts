@@ -1915,8 +1915,7 @@ export interface DesktopBridge {
     action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "throughput" | "working_snapshot" | "retire" | "begin_in" | "auto_reboot" | "schedule_spawn" | "read_spawn" | "edit_spawn" | "cancel_spawn" | "cancel_begin";
     sessionId?: string;
     conversationId?: string;
-    mode?: "idle" | "periodic" | "startup";
-    respectSlots?: boolean;
+    mode?: "idle" | "periodic" | "queued" | "startup";
     durationMinutes?: number;
     intervalMinutes?: number;
     onceOnly?: boolean;
@@ -2269,6 +2268,11 @@ export interface DesktopBridge {
       observedAt: number;
       turnCount: number;
       kind?: "completed" | "stopped" | "quiescent";
+    }) => Promise<boolean>;
+    publishAgentAttention: (input: {
+      requestId: string;
+      sessionId: string;
+      message: string;
     }) => Promise<boolean>;
     enqueueChatGPT: (input: {
       messageId: string;

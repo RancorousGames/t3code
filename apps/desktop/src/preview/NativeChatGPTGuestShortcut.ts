@@ -10,6 +10,18 @@ import {
 
 export const FIND_CHATGPT_MENU_ACTION = "chatgpt.find";
 export const RETURN_CHATGPT_SESSION_MENU_ACTION = "chatgpt.return-marker";
+export const OPEN_LAST_CHATGPT_ATTENTION_MENU_ACTION = "chatgpt.open-last-attention";
+
+export function chatGPTAttentionShortcutAction(
+  input: Pick<Electron.Input, "type" | "key" | "meta" | "control" | "alt" | "shift">,
+): string | null {
+  if (isChatGPTReturnMarkerShortcut(input)) return RETURN_CHATGPT_SESSION_MENU_ACTION;
+  if (input.type === "keyDown" && input.control && !input.meta &&
+      !input.alt && !input.shift && input.key.toLowerCase() === "s")
+    return OPEN_LAST_CHATGPT_ATTENTION_MENU_ACTION;
+  return null;
+}
+
 
 /** Ctrl+D is a direct desktop command while a ChatGPT session owns focus. */
 export function isChatGPTReturnMarkerShortcut(
@@ -36,7 +48,8 @@ export function nativeChatGPTGuestShortcut(
   if (activeChatGPTBrowserSessionId(ownerUrl) !== guestSessionId) return null;
   if (isChatGPTCloseShortcut(input, platform)) return CLOSE_CHATGPT_SESSION_MENU_ACTION;
   if (isChatGPTRenameShortcut(input)) return RENAME_CHATGPT_SESSION_MENU_ACTION;
-  if (isChatGPTReturnMarkerShortcut(input)) return RETURN_CHATGPT_SESSION_MENU_ACTION;
+  const attentionAction = chatGPTAttentionShortcutAction(input);
+  if (attentionAction) return attentionAction;
   const modifier =
     platform === "darwin" ? input.meta && !input.control : input.control && !input.meta;
   if (

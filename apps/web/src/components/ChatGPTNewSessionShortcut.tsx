@@ -4,9 +4,11 @@ import { useEffect, useEffectEvent } from "react";
 
 import { readChatGPTBrowserSessions, useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
 import { readChatGPTProviderActivity } from "../chatGPTProviderActivity";
+import { requestAgentAttention, cancelAgentAttention, latestAgentAttention, openAgentAttention } from "../chatGPTAgentAttention";
 import { toastManager } from "./ui/toast";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
+import { randomUUID } from "../lib/utils";
 import { registerCommands, registerMenuAction } from "../shortcuts/dispatcher";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -17,7 +19,7 @@ export function ChatGPTNewSessionShortcut() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const environmentId = usePrimaryEnvironmentId();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { createSession, toggleSessionReturnMarker } = useChatGPTBrowserSessions(environmentId);
+  const { createSession, toggleSessionReturnMarker, clearSessionReturnMarker, setSessionHidden, setSessionSnooze } = useChatGPTBrowserSessions(environmentId);
 
   const createNewSession = useEffectEvent(() => {
     if (!isElectron || !environmentId) return;
@@ -40,6 +42,11 @@ export function ChatGPTNewSessionShortcut() {
     const observed = readChatGPTProviderActivity(environmentId, sessionId);
     const activity = observed === "working" || observed === "idle" ? observed : "unknown";
     toggleSessionReturnMarker(sessionId, activity);
+    const ids = [session.id, ...(session.bootstrapIdentity?.publicId
+      ? [session.bootstrapIdentity.publicId] : [])];
+    if (session.returnMarker) cancelAgentAttention(ids);
+    else requestAgentAttention(randomUUID(), session.bootstrapIdentity?.publicId ?? session.id,
+      "Return to " + session.title + " - its response is ready.", "manual");
     toastManager.add(
       session.returnMarker
         ? { type: "success", title: "Return marker removed", description: session.title }
@@ -53,12 +60,43 @@ export function ChatGPTNewSessionShortcut() {
     );
   });
 
+  const openLastAttentionSession = useEffectEvent(() => {
+    if (!isElectron || !environmentId || isCommandPaletteOpen()) return;
+    const latest = latestAgentAttention();
+    if (!latest) {
+      toastManager.add({ type: "info", title: "No attention requests yet" });
+      return;
+    }
+    const session = readChatGPTBrowserSessions(environmentId).find((entry) =>
+      entry.id === latest.sessionId || entry.bootstrapIdentity?.publicId === latest.sessionId);
+    if (!session) {
+      toastManager.add({ type: "error", title: "Attention session not found" });
+      return;
+    }
+    const ids = [session.id, ...(session.bootstrapIdentity?.publicId
+      ? [session.bootstrapIdentity.publicId] : [])];
+    openAgentAttention(ids);
+    clearSessionReturnMarker(session.id);
+    setSessionHidden(session.id, false);
+    setSessionSnooze([session.id], null);
+    void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: session.id } });
+  });
+
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the desktop shortcut and guest menu action while the app shell is mounted
   useEffect(() => {
     if (!isElectron || !environmentId) return;
 
     const unregisterKeydown = registerCommands(
       {
+        "chatgpt.openLastAttention": (event) => {
+          if (event.repeat || event.isComposing || isCommandPaletteOpen() ||
+              (event.target instanceof Element && event.target.closest("[data-keybinding-capture]")))
+            return false;
+          event.preventDefault();
+          event.stopPropagation();
+          openLastAttentionSession();
+          return true;
+        },
         "chatgpt.returnMarker": (event) => {
           const sessionId = pathname.match(/^\/browser\/([^/]+)\/?$/)?.[1];
           if (!sessionId || !environmentId || event.repeat || event.isComposing ||
@@ -98,10 +136,13 @@ export function ChatGPTNewSessionShortcut() {
     const unregisterReturnMarkerAction = registerMenuAction("chatgpt.return-marker", () => {
       toggleSelectedReturnMarker();
     });
+    const unregisterOpenLastAttentionAction = registerMenuAction("chatgpt.open-last-attention",
+      () => { openLastAttentionSession(); });
     return () => {
       unregisterKeydown();
       unregisterMenuAction();
       unregisterReturnMarkerAction();
+      unregisterOpenLastAttentionAction();
     };
   }, [environmentId, keybindings, pathname, toggleSessionReturnMarker]);
 

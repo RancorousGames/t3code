@@ -430,6 +430,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_COMPLETE_CHANNEL, response),
     enqueueChatGPT: (input) =>
       ipcRenderer.invoke(IpcChannels.DESKTOP_CHATGPT_DELIVERY_ENQUEUE_CHANNEL, input),
+    publishAgentAttention: (input) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_AGENT_ATTENTION_PUBLISH_CHANNEL, input),
     reportChatGPTIdleTransition: (event) =>
       ipcRenderer.invoke(IpcChannels.DESKTOP_CHATGPT_IDLE_TRANSITION_CHANNEL, event),
     reportChatGPTRecipientMounted: (event) =>

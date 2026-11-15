@@ -120,10 +120,29 @@ export type BrowserSession = typeof BrowserSession.Type;
  * so reopening T3 cannot falsely complete a marker armed while idle. */
 export function advanceChatGPTReturnMarker(
   marker: NonNullable<BrowserSession["returnMarker"]>,
-  age: "working" | "recent" | "inactive" | "unknown",
+  age: "working" | "idle" | "recent" | "inactive" | "unknown",
 ): NonNullable<BrowserSession["returnMarker"]> {
-  if (marker === "armed" && age === "working") return "working";
-  if (marker === "working" && (age === "recent" || age === "inactive")) return "ready";
+  if (age === "working" && (marker === "armed" || marker === "ready")) return "working";
+  if (marker === "working" && age === "idle") return "ready";
+  return marker;
+}
+
+/** Shared by the Ctrl+D shortcut, OMCPT requests and provider activity.
+ * Persist to both session stores so another renderer sees the same marker. */
+export function updateChatGPTReturnMarker(
+  environmentId: string, id: string,
+  update: (marker: BrowserSession["returnMarker"]) => BrowserSession["returnMarker"],
+): BrowserSession["returnMarker"] {
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  const current = store.getState().sessions;
+  const entry = current.find((session) => session.id === id);
+  if (!entry) return undefined;
+  const marker = update(entry.returnMarker);
+  if (marker === entry.returnMarker) return marker;
+  const next = current.map((session) =>
+    session.id === id ? { ...session, returnMarker: marker } : session);
+  setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId as EnvironmentId), next, BrowserSessions);
+  store.setState({ sessions: next });
   return marker;
 }
 

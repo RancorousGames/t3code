@@ -38,6 +38,15 @@ describe("native ChatGPT guest accelerator routing", () => {
     expect(nativeChatGPTGuestShortcut({ ...ctrlD, alt: true }, "win32", ownerUrl, selected)).toBeNull();
     expect(nativeChatGPTGuestShortcut({ ...ctrlD, type: "keyUp" }, "win32", ownerUrl, selected)).toBeNull();
   });
+  it("routes Ctrl+S to the last attention session, but only from the selected guest", () => {
+    const ctrlS = { ...ctrlW, key: "s" };
+    expect(nativeChatGPTGuestShortcut(ctrlS, "win32", ownerUrl, selected)).toBe(
+      "chatgpt.open-last-attention",
+    );
+    expect(nativeChatGPTGuestShortcut(ctrlS, "win32", ownerUrl, other)).toBeNull();
+    expect(nativeChatGPTGuestShortcut({ ...ctrlS, alt: true }, "win32", ownerUrl, selected)).toBeNull();
+    expect(nativeChatGPTGuestShortcut({ ...ctrlS, type: "keyUp" }, "win32", ownerUrl, selected)).toBeNull();
+  });
   it("routes F2 rename only from the selected ChatGPT guest", () => {
     const f2 = { ...ctrlW, key: "F2", control: false };
     expect(nativeChatGPTGuestShortcut(f2, "win32", ownerUrl, selected)).toBe(

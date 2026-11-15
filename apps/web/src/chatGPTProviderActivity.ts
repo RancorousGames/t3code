@@ -1,4 +1,6 @@
 import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity";
+import { advanceChatGPTReturnMarker, updateChatGPTReturnMarker } from "./chatGPTBrowserSessions";
+import { activateAgentAttention } from "./chatGPTAgentAttention";
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 import { observeSpawnAutoCloseActivity } from "./chatGPTSpawnAutoClose";
 
@@ -20,6 +22,16 @@ export function recordChatGPTProviderActivity(
   const identity = key(environmentId, sessionId);
   const previous = observations.get(identity);
   observations.set(identity, { activity, observedAt: Date.now() });
+  if (activity === "working" || (activity === "idle" && previous?.activity === "working")) {
+    const next = updateChatGPTReturnMarker(environmentId, sessionId, (marker) =>
+      marker ? advanceChatGPTReturnMarker(marker, activity) : undefined);
+    if (activity === "idle" && next === "ready") {
+      const entry = getChatGPTSessionPersistedStore(environmentId).getState().sessions.find(
+        (session) => session.id === sessionId);
+      activateAgentAttention([sessionId, ...(entry?.bootstrapIdentity?.publicId
+        ? [entry.bootstrapIdentity.publicId] : [])]);
+    }
+  }
   if (previous?.activity !== activity)
     window.dispatchEvent(new CustomEvent("t3:agent-provider-refresh"));
 }

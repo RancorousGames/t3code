@@ -32,7 +32,8 @@ describe("Return marker across activity changes and T3 restarts", () => {
 
     const working = advanceChatGPTReturnMarker(restored.returnMarker!, "working");
     expect(working).toBe("working");
-    expect(advanceChatGPTReturnMarker(working, "recent")).toBe("ready");
+    expect(advanceChatGPTReturnMarker(working, "recent")).toBe("working");
+    expect(advanceChatGPTReturnMarker(working, "idle")).toBe("ready");
   });
 
   it("keeps an already-working marker pending over restart until idle, then stays ready", () => {
@@ -40,8 +41,9 @@ describe("Return marker across activity changes and T3 restarts", () => {
       JSON.parse(JSON.stringify({ id: "return-test", title: "Return test", returnMarker: "working" })),
     );
     expect(advanceChatGPTReturnMarker(restored.returnMarker!, "unknown")).toBe("working");
-    expect(advanceChatGPTReturnMarker(restored.returnMarker!, "inactive")).toBe("ready");
-    expect(advanceChatGPTReturnMarker("ready", "working")).toBe("ready");
+    expect(advanceChatGPTReturnMarker(restored.returnMarker!, "inactive")).toBe("working");
+    expect(advanceChatGPTReturnMarker(restored.returnMarker!, "idle")).toBe("ready");
+    expect(advanceChatGPTReturnMarker("ready", "working")).toBe("working");
   });
 });
 

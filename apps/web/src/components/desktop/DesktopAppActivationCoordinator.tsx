@@ -40,6 +40,7 @@ import {
   chatGPTBrowserRemovalAuditKey,
   chatGPTBrowserThreadRef,
   findExistingChatGPTConversation,
+  updateChatGPTReturnMarker,
 } from "../../chatGPTBrowserSessions";
 import {
   setLocalStorageItem,
@@ -81,7 +82,8 @@ import {
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
-import { AgentAttentionToast, requestAgentAttention, readAgentAttention } from "./AgentAttentionToast";
+import { AgentAttentionToast } from "./AgentAttentionToast";
+import { requestAgentAttention, readAgentAttention, openAgentAttention } from "../../chatGPTAgentAttention";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { chatGPTCloseStatus } from "../../chatGPTCloseStatus";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
@@ -1035,7 +1037,17 @@ export function DesktopAppActivationCoordinator() {
             if (!id || !attentionId || !request.message ||
                 !sessionSnapshot.some((s) => s.id === id || s.bootstrapIdentity?.publicId === id))
               throw new Error("Attention requires an existing exact T3 session, request ID and message.");
+            const existing = readAgentAttention(attentionId);
             const entry = requestAgentAttention(attentionId, id, request.message);
+            if (!existing && environmentId) {
+              const owner = sessionSnapshot.find((session) =>
+                session.id === id || session.bootstrapIdentity?.publicId === id);
+              if (owner) {
+                const activity = readChatGPTProviderActivity(environmentId, owner.id);
+                updateChatGPTReturnMarker(environmentId, owner.id,
+                  () => activity === "working" ? "working" : "armed");
+              }
+            }
             return {
               version: 1, requestId: request.requestId, ok: true,
               data: { action: "request_attention", attentionId: entry.id, status: entry.status },
@@ -2813,6 +2825,9 @@ the Review Inbox if implementation is finished.`,
     if (entry) {
       setSessionHidden(entry.id, false);
       setSessionSnooze([entry.id], null);
+      updateChatGPTReturnMarker(environmentId, entry.id, () => undefined);
+      openAgentAttention([entry.id, ...(entry.bootstrapIdentity?.publicId
+        ? [entry.bootstrapIdentity.publicId] : [])]);
       void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: entry.id } });
       return true;
     }

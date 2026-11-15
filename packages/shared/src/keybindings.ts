@@ -203,6 +203,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+n", command: "chat.newWithoutProject", when: "!terminalFocus" },
   { key: "ctrl+shift+t", command: "chatgpt.newSession", when: "isDesktop && !terminalFocus" },
   { key: "ctrl+d", command: "chatgpt.returnMarker", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },
+  { key: "ctrl+s", command: "chatgpt.openLastAttention", when: "isDesktop && !terminalFocus" },
   { key: "ctrl+alt+c", command: "chatgpt.caffyControls", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },
   { key: "ctrl+alt+shift+c", command: "chatgpt.caffyToggle", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },
   { key: "ctrl+alt+shift+y", command: "chatgpt.caffyOnce", when: "isDesktop && chatgptBrowserRoute && !terminalFocus" },

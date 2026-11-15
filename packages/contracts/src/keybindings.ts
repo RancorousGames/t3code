@@ -104,6 +104,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "chat.newWithoutProject",
   "chatgpt.newSession",
   "chatgpt.returnMarker",
+  "chatgpt.openLastAttention",
   "chatgpt.caffyControls",
   "chatgpt.caffyToggle",
   "chatgpt.caffyOnce",

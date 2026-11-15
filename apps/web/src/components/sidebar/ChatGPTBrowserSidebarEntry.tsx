@@ -1,4 +1,5 @@
 // @effect-diagnostics cryptoRandomUUID:off -- Ephemeral browser-window reporter ID for multi-window activity telemetry.
+import { openAgentAttention } from "../../chatGPTAgentAttention";
 import { useAtomValue } from "@effect/atom-react";
 import { publicChatGPTParentId, publicChatGPTSessionId } from "../../chatGPTBootstrapIdentity";
 import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
@@ -525,7 +526,6 @@ export function ChatGPTBrowserSidebarEntry({
     resetQuickSnooze,
     setSessionBorderColor,
     clearSessionReturnMarker,
-    observeSessionReturnMarker,
     setSessionWorker,
     markDirectInteraction,
     syncInferredMetadata,
@@ -980,15 +980,6 @@ export function ChatGPTBrowserSidebarEntry({
     },
     [],
   );
-  useEffect(() => {
-    for (const session of sessions) {
-      if (session.returnMarker) {
-        const age = activities[session.id]?.age;
-        if (age === "working" || age === "recent" || age === "inactive")
-          observeSessionReturnMarker(session.id, age);
-      }
-    }
-  }, [activities, sessions, observeSessionReturnMarker]);
   const registeredProjects = useMemo(
     () =>
       projects
@@ -3210,12 +3201,15 @@ export function ChatGPTBrowserSidebarEntry({
                               const highlightAccent = chatGPTSessionHighlightAccentClass(
                                 session.borderColor,
                               );
+                              const idleAttentionReady = session.returnMarker === "ready" &&
+                                ["recent", "inactive", "unloaded-recent", "unloaded", "snoozed"]
+                                  .includes(activities[session.id]?.age ?? "unknown");
                               return (
                                 <div
                                   data-chatgpt-selected-session={activeSessionId === session.id}
                                   data-chatgpt-visible-pane={displayedSessionIds.has(session.id)}
-                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${session.returnMarker === "ready" ? "ring-4 ring-inset ring-yellow-400/90" : activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
-                                  title={session.returnMarker === "ready" ? "Return marker: answer ready — click to clear" : session.returnMarker ? "Return marker armed — waiting for the next answer" : undefined}
+                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${idleAttentionReady ? "ring-4 ring-inset ring-yellow-400/90" : activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
+                                  title={idleAttentionReady ? "Attention ready — click to clear" : session.returnMarker ? "Return marker armed — waiting for the next answer" : undefined}
                                   onContextMenu={(event) => {
                                     event.preventDefault();
                                     void showSessionContextMenu(session.id, {
@@ -3275,9 +3269,9 @@ export function ChatGPTBrowserSidebarEntry({
                                   </Tooltip>
                                   {session.returnMarker && (
                                     <span
-                                      aria-label={session.returnMarker === "ready" ? "Return marker ready" : "Return marker armed"}
-                                      title={session.returnMarker === "ready" ? "Return marker ready" : "Return marker armed"}
-                                      className="flex shrink-0 items-center text-yellow-400"
+                                      aria-label={idleAttentionReady ? "Attention ready" : "Attention armed"}
+                                      title={idleAttentionReady ? "Attention ready" : "Attention armed"}
+                                      className={`flex shrink-0 items-center ${idleAttentionReady ? "text-yellow-400" : "text-muted-foreground"}`}
                                     >
                                       <BookmarkCheckIcon className="size-3.5" aria-hidden="true" />
                                     </span>
@@ -3321,6 +3315,8 @@ export function ChatGPTBrowserSidebarEntry({
                                                 }
                                                 event.currentTarget.blur();
                                                 clearSessionReturnMarker(session.id);
+                                                openAgentAttention([session.id, ...(session.bootstrapIdentity?.publicId
+                                                  ? [session.bootstrapIdentity.publicId] : [])]);
                                                 setClickedForSort(session.id);
                                                 setSelectionRecoveryClick((value) => value + 1);
                                                 recordSessionClick(

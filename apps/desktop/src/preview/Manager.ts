@@ -69,7 +69,7 @@ import {
   isChatGPTSessionPreviewTab,
   RENAME_CHATGPT_SESSION_MENU_ACTION,
 } from "../window/ChatGPTCloseShortcut.ts";
-import { isChatGPTReturnMarkerShortcut, RETURN_CHATGPT_SESSION_MENU_ACTION } from "./NativeChatGPTGuestShortcut.ts";
+import { chatGPTAttentionShortcutAction } from "./NativeChatGPTGuestShortcut.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -1597,10 +1597,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }
         return;
       }
-      if (selectedChatGPTGuest && isChatGPTReturnMarkerShortcut(input)) {
+      const attentionShortcut = selectedChatGPTGuest
+        ? chatGPTAttentionShortcutAction(input) : null;
+      if (attentionShortcut) {
         event.preventDefault();
         if (!input.isAutoRepeat)
-          main?.webContents.send(MENU_ACTION_CHANNEL, RETURN_CHATGPT_SESSION_MENU_ACTION);
+          main?.webContents.send(MENU_ACTION_CHANNEL, attentionShortcut);
         return;
       }
       if (selectedChatGPTGuest && isChatGPTRenameShortcut(input)) {

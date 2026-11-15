@@ -1,4 +1,5 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Caffy IPC request identity uses Node crypto in Electron main.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off -- Electron main forwards
+// best-effort phone notifications to the already configured local OmniHub endpoint.
 import { DesktopAppActivationResponse } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
@@ -25,12 +26,14 @@ export const caffyControl = DesktopIpc.makeIpcMethod({
     action: Schema.Literals(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "throughput", "working_snapshot", "retire", "begin_in", "auto_reboot", "schedule_spawn", "read_spawn", "edit_spawn", "cancel_spawn", "cancel_begin"]),
     sessionId: Schema.optional(Schema.String),
     conversationId: Schema.optional(Schema.String),
-    mode: Schema.optional(Schema.Literals(["idle", "periodic", "queued", "startup"])),
+    mode: Schema.optional(Schema.Literals(["idle", "periodic", "startup"])),
+    respectSlots: Schema.optional(Schema.Boolean),
     durationMinutes: Schema.optional(Schema.Number),
     intervalMinutes: Schema.optional(Schema.Number),
     onceOnly: Schema.optional(Schema.Boolean),
     startup: Schema.optional(Schema.Boolean),
     keepAwake: Schema.optional(Schema.Boolean),
+    wakeNow: Schema.optional(Schema.Boolean),
     keepT3Busy: Schema.optional(Schema.Boolean),
     busyForMinutes: Schema.optional(Schema.Number),
     maxWorking: Schema.optional(Schema.Number),
@@ -57,6 +60,37 @@ export const caffyControl = DesktopIpc.makeIpcMethod({
       type: "caffy", ...input,
     });
   }),
+});
+
+/** Phone alerts are published only after the unified attention lifecycle becomes ready. */
+async function publishAttentionPhone(input: {
+  requestId: string;
+  sessionId: string;
+  message: string;
+}): Promise<boolean> {
+  try {
+    const response = await fetch("http://127.0.0.1:5000/api/internal/agent-attention", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(3_000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export const publishAgentAttention = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.DESKTOP_AGENT_ATTENTION_PUBLISH_CHANNEL,
+  payload: Schema.Struct({
+    requestId: Schema.String,
+    sessionId: Schema.String,
+    message: Schema.String,
+  }),
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.appActivation.publishAgentAttention")((input) =>
+    Effect.tryPromise(() => publishAttentionPhone(input))),
 });
 
 export const enqueueChatGPT = DesktopIpc.makeIpcMethod({
