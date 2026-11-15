@@ -7,6 +7,7 @@ export type AgentAttention = {
   sessionId: string;
   message: string;
   createdAt: number;
+  activatedAt?: number;
   status: "waiting" | "pending" | "snoozed" | "opened" | "dismissed";
   source?: "agent" | "manual";
   notifiedAt?: number;
@@ -67,8 +68,9 @@ export function activateAgentAttention(sessionIds: readonly string[]): void {
   const ids = new Set(sessionIds);
   const items = loadAgentAttention();
   if (!items.some((item) => ids.has(item.sessionId) && item.status === "waiting")) return;
+  const activatedAt = Date.now();
   save(items.map((item) => ids.has(item.sessionId) && item.status === "waiting"
-    ? { ...item, status: "pending" as const, nextAt: Date.now() } : item));
+    ? { ...item, status: "pending" as const, activatedAt, nextAt: activatedAt } : item));
 }
 
 export function cancelAgentAttention(sessionIds: readonly string[]): void {
@@ -92,7 +94,12 @@ export function openAgentAttention(sessionIds: readonly string[]): void {
 }
 
 export function latestAgentAttention(): AgentAttention | undefined {
-  return loadAgentAttention().sort((a, b) => b.createdAt - a.createdAt)[0];
+  const firedAt = (entry: AgentAttention) => entry.activatedAt ??
+    (entry.status === "pending" && entry.nextAt > 0 ? entry.nextAt : undefined) ??
+    entry.notifiedAt ?? entry.createdAt;
+  return loadAgentAttention()
+    .filter((entry) => entry.status !== "waiting")
+    .sort((a, b) => firedAt(b) - firedAt(a) || b.createdAt - a.createdAt)[0];
 }
 
 export function markAgentAttentionNotified(id: string): void {
