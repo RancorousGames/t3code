@@ -4,6 +4,7 @@ import { wakeChatGPTBrowserSession } from "../../chatGPTBrowserSessions";
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { readChatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
+import { recordChatGPTWakeAudit } from "../../chatGPTWakeAudit";
 import { inspectChatGPTPageSnapshot, saveChatGPTPageSnapshot, type ChatGPTPageSnapshot } from "../../chatGPTPageSnapshot";
 import { observeChatGPTIdleSnapshot } from "../../chatGPTIdleTransitions";
 
@@ -201,6 +202,18 @@ export function usePersistentChatGPTSidebarActivity(
       );
       const changed = previousActivity !== observed.activity ||
         previousResidency !== observed.resident;
+      if (observed.resident === true && observed.activity === "working" &&
+          previousActivity !== "working") {
+        const session = getChatGPTSessionPersistedStore(environmentId)
+          .getState().sessions.find((entry) => entry.id === sessionId);
+        recordChatGPTWakeAudit(environmentId, sessionId,
+          "activity:native:" + previousActivity + "->working", {
+            profileId: session?.profileId,
+            previousUntil: session?.snoozedUntil,
+            snoozedAt: session?.snoozedAt,
+            quickSnoozeStep: session?.quickSnoozeStep,
+          });
+      }
       if (changed && observed.resident === true) {
         recordWarmActivityObservation(environmentId, sessionId, observed.activity);
       }

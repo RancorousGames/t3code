@@ -39,6 +39,7 @@ import {
 } from "../../chatGPTBrowserSessions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { readVerifiedT3CaffyOverview } from "../../hooks/useT3CaffyOverview";
+import { recordChatGPTWakeAudit } from "../../chatGPTWakeAudit";
 import { imminentCaffySessionIds } from "../../omniwork/chatGPTCaffyWarmPolicy";
 import { readThreadPreviewState, useThreadPreviewState } from "../../previewStateStore";
 import {
@@ -388,9 +389,11 @@ export function useChatGPTBrowserSessionActivity(
               sessions.some((entry) => entry.parentSessionId === sessionId) ||
               !session.parentSessionId)));
       const touchedAt = chatGPTGuestTouchedAt(runtimeTabId);
-      const caffyImminent = !!session && imminentCaffySessionIds(
-        [session], readVerifiedT3CaffyOverview(), observedAt,
-      ).has(sessionId);
+      const caffyImminent =
+        !!session &&
+        imminentCaffySessionIds([session], readVerifiedT3CaffyOverview(), observedAt).has(
+          sessionId,
+        );
       if (visible) touchChatGPTGuest(runtimeTabId, observedAt);
       else if (
         !hibernated &&
@@ -445,7 +448,9 @@ export function useChatGPTBrowserSessionActivity(
           stillIdle &&
           !hasUncertainChatGPTSend(environmentId, sessionId) &&
           !imminentCaffySessionIds(
-            session ? [session] : [], readVerifiedT3CaffyOverview(), Date.now(),
+            session ? [session] : [],
+            readVerifiedT3CaffyOverview(),
+            Date.now(),
           ).has(sessionId) &&
           !isChatGPTSessionBeingViewed(environmentId, sessionId)
         ) {
@@ -478,6 +483,17 @@ export function useChatGPTBrowserSessionActivity(
       const sincePushMs = lastPushAt ? observedAt - lastPushAt : -1;
       const detail = `source=${source} nav=${navTag} health=${healthTag} probeMs=${probeMs} sincePushMs=${sincePushMs}`;
       if (previous !== next) {
+        if (next === "working") {
+          const session = readChatGPTBrowserSessions(environmentId).find(
+            (entry) => entry.id === sessionId,
+          );
+          recordChatGPTWakeAudit(environmentId, sessionId, `activity:legacy:${previous}->working`, {
+            profileId: session?.profileId,
+            previousUntil: session?.snoozedUntil,
+            snoozedAt: session?.snoozedAt,
+            quickSnoozeStep: session?.quickSnoozeStep,
+          });
+        }
         if (snoozed && !hibernated && previous !== "unknown" && next !== "unknown") {
           wakeChatGPTBrowserSession(environmentId, sessionId, "activity");
         }

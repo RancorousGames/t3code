@@ -27,6 +27,42 @@ function storage(entries: Record<string, string> = {}): Storage {
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe("persistent ChatGPT wake audit", () => {
+  it("records a premature snooze clear regardless of which session-store writer caused it", () => {
+    const environmentId = "wake-audit-test";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const until = Date.now() + 3_600_000;
+    const local = storage({
+      [`t3code:chatgpt-browser:sessions:${environmentId}`]: JSON.stringify([
+        { id: sessionId, title: "Sleep", snoozedUntil: until },
+      ]),
+    });
+    const audit = vi.fn().mockResolvedValue({ recorded: true });
+    vi.stubGlobal("window", {
+      localStorage: local,
+      sessionStorage: storage(),
+      desktopBridge: { stableChatGPTViewRequest: audit },
+      addEventListener: vi.fn(),
+    });
+    const store = getChatGPTSessionPersistedStore(environmentId);
+    store.setState({
+      sessions: store
+        .getState()
+        .sessions.map((session) =>
+          session.id === sessionId ? { ...session, snoozedUntil: undefined } : session,
+        ),
+    });
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "recovery_event",
+        identity: expect.objectContaining({ environmentId, sessionId }),
+        kind: "wake",
+        detail: expect.stringContaining("reason=store:unsnoozed-early"),
+      }),
+    );
+  });
+});
+
 describe("closed ChatGPT session restoration", () => {
   it("excludes explicitly closed IDs when an older renderer still has them in its session list", () => {
     const env = "closed-across-renderers";

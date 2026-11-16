@@ -24,6 +24,7 @@ import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPT
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { readVerifiedT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "./hooks/useT3CaffyOverview";
 import { randomUUID } from "./lib/utils";
+import { recordChatGPTWakeAudit } from "./chatGPTWakeAudit";
 import {
   PRIMARY_CHATGPT_PROFILE_ID,
   readNewChatGPTProfileId,
@@ -221,14 +222,21 @@ export function wakeChatGPTBrowserSession(
   const store = getChatGPTSessionPersistedStore(environmentId);
   const current = store.getState().sessions;
   const now = Date.now();
-  if (!current.some((session) =>
+  const waking = current.find((session) =>
     session.id === sessionId &&
     (session.snoozedUntil ?? 0) > now &&
     // Loading the guest alone is never proof of a new message. A quick snooze
     // also ignores incidental activity that follows the first click.
     source !== "mount" &&
     (source !== "activity" || session.quickSnoozeStep === undefined)
-  )) return;
+  );
+  if (!waking) return;
+  recordChatGPTWakeAudit(environmentId, sessionId, `direct:${source}`, {
+    profileId: waking.profileId,
+    previousUntil: waking.snoozedUntil,
+    snoozedAt: waking.snoozedAt,
+    quickSnoozeStep: waking.quickSnoozeStep,
+  });
   const next = current.map((session) =>
     session.id === sessionId
       ? { ...session, snoozedUntil: undefined, snoozedAt: undefined, quickSnoozeStep: undefined }
@@ -1071,6 +1079,20 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       const targets = new Set(ids);
       const caffyIds = until === null ? new Set<string>() : new Set(ids.filter(activeCaffySnooze));
       const snoozedAt = Date.now();
+      if (environmentId) {
+        for (const session of readChatGPTBrowserSessions(environmentId)) {
+          if (!targets.has(session.id)) continue;
+          recordChatGPTWakeAudit(environmentId, session.id,
+            until === null ? "setSessionSnooze:clear" : "setSessionSnooze:set", {
+              profileId: session.profileId,
+              previousUntil: session.snoozedUntil,
+              nextUntil: until === null ? undefined :
+                caffyIds.has(session.id) ? CHATGPT_CAFFY_SNOOZE_UNTIL : until,
+              snoozedAt: session.snoozedAt,
+              quickSnoozeStep: session.quickSnoozeStep,
+            });
+        }
+      }
       if (until !== null) {
         for (const id of ids) {
           if (environmentId) clearChatGPTGuestUserOpened(JSON.stringify([
@@ -1124,6 +1146,16 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
     (id: string, until: number, step: number) => {
       const snoozedAt = Date.now();
       const caffySnooze = activeCaffySnooze(id);
+      if (environmentId) {
+        const previous = readChatGPTBrowserSessions(environmentId).find((session) => session.id === id);
+        if (previous) recordChatGPTWakeAudit(environmentId, id, "quickSnooze:set", {
+          profileId: previous.profileId,
+          previousUntil: previous.snoozedUntil,
+          nextUntil: caffySnooze ? CHATGPT_CAFFY_SNOOZE_UNTIL : until,
+          snoozedAt: previous.snoozedAt,
+          quickSnoozeStep: previous.quickSnoozeStep,
+        });
+      }
       if (environmentId) clearChatGPTGuestUserOpened(JSON.stringify([
         environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId,
       ]));

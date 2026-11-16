@@ -2,6 +2,7 @@ import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { BrowserSession } from "./chatGPTBrowserSessions";
+import { recordChatGPTWakeAudit } from "./chatGPTWakeAudit";
 import type { ChatGPTRecoveryEvent } from "./chatGPTRecoveryDiagnostics";
 import type { RecoveryQueueState } from "./components/sidebar/chatGPTRecoveryQueue";
 
@@ -268,6 +269,65 @@ export function getChatGPTSessionPersistedStore(
     }),
   );
   stores.set(environmentId, store);
+  // PERSISTENT TEMPORARY WAKE AUDIT: remove on/after 2026-12-01.
+  // Observe every writer to this store, including out-of-band renderer updates:
+  // a generic transition is useful evidence even when the caller is unknown.
+  const expiredLogged = new Map<string, number>();
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  const auditExpirations = () => {
+    if (expiryTimer !== undefined) clearTimeout(expiryTimer);
+    expiryTimer = undefined;
+    const now = Date.now();
+    let nextExpiry = Number.POSITIVE_INFINITY;
+    for (const row of store.getState().sessions) {
+      const until = row.snoozedUntil;
+      if (until === undefined || !Number.isFinite(until)) continue;
+      if (until > now) {
+        nextExpiry = Math.min(nextExpiry, until);
+      } else if (expiredLogged.get(row.id) !== until) {
+        expiredLogged.set(row.id, until);
+        recordChatGPTWakeAudit(environmentId, row.id, "timer:snooze-expired-eligible", {
+          profileId: row.profileId,
+          previousUntil: until,
+          snoozedAt: row.snoozedAt,
+          quickSnoozeStep: row.quickSnoozeStep,
+        });
+      }
+    }
+    if (Number.isFinite(nextExpiry))
+      expiryTimer = setTimeout(
+        auditExpirations,
+        Math.max(1, Math.min(2_147_483_647, nextExpiry - now)),
+      );
+  };
+  store.subscribe((next, previous) => {
+    if (next.sessions === previous.sessions) return;
+    auditExpirations();
+    const before = new Map(previous.sessions.map((row) => [row.id, row]));
+    for (const row of next.sessions) {
+      const prior = before.get(row.id);
+      if (!prior || prior.snoozedUntil === row.snoozedUntil) continue;
+      const oldUntil = prior.snoozedUntil;
+      const newUntil = row.snoozedUntil;
+      const now = Date.now();
+      const reason =
+        (oldUntil ?? 0) > now && (newUntil ?? 0) <= now
+          ? "store:unsnoozed-early"
+          : (oldUntil ?? 0) > now && (newUntil ?? 0) < (oldUntil ?? 0)
+            ? "store:snooze-shortened"
+            : newUntil === undefined
+              ? "store:snooze-cleared"
+              : "store:snooze-set";
+      recordChatGPTWakeAudit(environmentId, row.id, reason, {
+        profileId: row.profileId,
+        previousUntil: oldUntil,
+        nextUntil: newUntil,
+        snoozedAt: prior.snoozedAt,
+        quickSnoozeStep: prior.quickSnoozeStep,
+      });
+    }
+  });
+  auditExpirations();
   // A close recorded in another renderer invalidates this window's stale list.
   if (typeof window.addEventListener === "function") {
     window.addEventListener("storage", (event) => {

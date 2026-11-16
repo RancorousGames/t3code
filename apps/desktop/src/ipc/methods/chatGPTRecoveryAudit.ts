@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off
 /** Renderer recovery telemetry persisted outside Chromium localStorage for operator inspection.
  * Only T3's trusted app renderer can invoke this through stableChatGPTViewRequest.
- * No prompts, draft text, transcript, or guest document data is accepted. */
+ * No prompts, draft text, transcript, or guest document data is accepted.
+ *
+ * PERSISTENT incident diagnostics: wake events are durably logged to disk,
+ * including across app restarts. REMOVE this temporary "wake" logging if
+ * encountered on or after 2026-12-01; retain normal recovery logging. */
 import { app } from "electron";
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -19,15 +23,29 @@ export function appendChatGPTRecoveryAudit(input: {
 }): { recorded: boolean; path: string } {
   if (!UUID.test(input.environmentId) || !UUID.test(input.sessionId))
     throw new Error("Recovery audit requires exact environment and session UUIDs.");
-  if (!["deferred", "attempt", "outcome", "health", "retry", "backoff", "startup", "click"].includes(input.kind))
+  if (
+    ![
+      "deferred",
+      "attempt",
+      "outcome",
+      "health",
+      "retry",
+      "backoff",
+      "startup",
+      "click",
+      "wake",
+    ].includes(input.kind)
+  )
     throw new Error("Unsupported recovery audit kind.");
-  if (input.detail.length > MAX_DETAILS)
-    throw new Error("Recovery audit detail is too long.");
+  if (input.detail.length > MAX_DETAILS) throw new Error("Recovery audit detail is too long.");
   // Source launches use T3CODE_HOME. Packaged builds use the Electron data directory.
   const directory = process.env.T3CODE_HOME
     ? join(process.env.T3CODE_HOME, "userdata", "logs")
     : join(app.getPath("userData"), "logs");
-  const path = join(directory, "chatgpt-recovery-audit.ndjson");
+  const path = join(
+    directory,
+    input.kind === "wake" ? "chatgpt-session-wake-audit.ndjson" : "chatgpt-recovery-audit.ndjson",
+  );
   mkdirSync(directory, { recursive: true });
   if (existsSync(path) && statSync(path).size >= MAX_FILE_BYTES) {
     const prior = path + ".1";
@@ -40,7 +58,9 @@ export function appendChatGPTRecoveryAudit(input: {
     sessionId: input.sessionId,
     kind: input.kind,
     detail: input.detail,
-    ...(Number.isSafeInteger(input.attempt) && input.attempt! >= 0 ? { attempt: input.attempt } : {}),
+    ...(Number.isSafeInteger(input.attempt) && input.attempt! >= 0
+      ? { attempt: input.attempt }
+      : {}),
   };
   appendFileSync(path, JSON.stringify(record) + "\n", "utf8");
   return { recorded: true, path };
