@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { activateAgentAttention, activeAgentAttentionStack, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, openAgentAttention, openAgentAttentionRequest, rearmManualAgentAttention, requestAgentAttention } from "./chatGPTAgentAttention";
+import { activateAgentAttention, activeAgentAttentionStack, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, nextRecentAgentAttentionSessionId, openAgentAttention, openAgentAttentionRequest, recentAgentAttentionSessionIds, rearmManualAgentAttention, requestAgentAttention } from "./chatGPTAgentAttention";
 
 const saved = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -124,6 +124,54 @@ describe("Ctrl+S attention target", () => {
     cancelManualAgentAttention(["session"]);
     expect(loadAgentAttention().filter((item) => item.status === "pending")).toHaveLength(0);
     expect(loadAgentAttention().find((item) => item.id === "agent")?.status).toBe("opened");
+  });
+
+  it("cycles recent resolved attention sessions when the actionable stack is empty", () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(100);
+    requestAgentAttention("old-a", "session-a", "First");
+    requestAgentAttention("never-shown", "unused", "Unactivated");
+    now.mockReturnValue(200);
+    activateAgentAttention(["session-a"]);
+    now.mockReturnValue(300);
+    requestAgentAttention("b", "session-b", "Second");
+    now.mockReturnValue(400);
+    activateAgentAttention(["session-b"]);
+    now.mockReturnValue(500);
+    requestAgentAttention("new-a", "session-a", "Third");
+    now.mockReturnValue(600);
+    activateAgentAttention(["session-a"]);
+    now.mockReturnValue(650);
+    requestAgentAttention("old-c", "session-c", "Old alert");
+    activateAgentAttention(["session-c"]);
+    now.mockReturnValue(700);
+    requestAgentAttention("snoozed", "session-c", "Snoozed");
+    activateAgentAttention(["session-c"]);
+
+    changeAttention("old-c", "opened");
+    changeAttention("old-a", "opened");
+    changeAttention("b", "dismissed");
+    changeAttention("new-a", "opened");
+    changeAttention("never-shown", "dismissed");
+    changeAttention("snoozed", "snoozed", 10_000);
+    expect(latestAgentAttention()).toBeUndefined();
+
+    const available = new Set(["session-a", "session-b", "session-c", "unused"]);
+    const before = loadAgentAttention();
+    expect(recentAgentAttentionSessionIds(before, available))
+      .toEqual(["session-a", "session-b"]);
+    expect(nextRecentAgentAttentionSessionId(before, available, []))
+      .toBe("session-a");
+    expect(nextRecentAgentAttentionSessionId(before, available, ["session-a"]))
+      .toBe("session-b");
+    expect(nextRecentAgentAttentionSessionId(before, available, ["session-b"]))
+      .toBe("session-a");
+    expect(nextRecentAgentAttentionSessionId(before, new Set(["session-b"]), []))
+      .toBe("session-b");
+    expect(nextRecentAgentAttentionSessionId(before, new Set(), []))
+      .toBeUndefined();
+    // Cycling history is navigation only; no item is rearmed or cleared.
+    expect(loadAgentAttention()).toEqual(before);
   });
 
   it("turning Ctrl+D off does not cancel an agent's pending attention", () => {

@@ -174,6 +174,45 @@ export function latestAgentAttention(
   return activeAgentAttentionStack(loadAgentAttention(), availableSessionIds)[0];
 }
 
+/** History fallback for Ctrl+S, after all actionable notifications are handled.
+ * Only previously activated and resolved requests count as recent attention.
+ * Deduplicate by session: visiting the same session twice is not a useful cycle.
+ * Snoozed/waiting requests remain untouched. */
+export function recentAgentAttentionSessionIds(
+  items: readonly AgentAttention[],
+  availableSessionIds: ReadonlySet<string>,
+  limit = 10,
+): string[] {
+  const seen = new Set<string>();
+  // Explicit snooze must not be bypassed through an older resolved receipt.
+  const snoozed = new Set(items.filter((item) => item.status === "snoozed")
+    .map((item) => item.sessionId));
+  const result: string[] = [];
+  for (const item of [...items]
+    .filter((entry) => (entry.status === "opened" || entry.status === "dismissed") &&
+      entry.activatedAt !== undefined && availableSessionIds.has(entry.sessionId) &&
+      !snoozed.has(entry.sessionId))
+    .sort((a, b) => (b.activatedAt ?? 0) - (a.activatedAt ?? 0) ||
+      b.createdAt - a.createdAt)) {
+    if (seen.has(item.sessionId)) continue;
+    seen.add(item.sessionId);
+    result.push(item.sessionId);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+/** Next historical session after the currently displayed one, wrapping at the end. */
+export function nextRecentAgentAttentionSessionId(
+  items: readonly AgentAttention[],
+  availableSessionIds: ReadonlySet<string>,
+  selectedSessionIds: readonly string[],
+): string | undefined {
+  const recent = recentAgentAttentionSessionIds(items, availableSessionIds);
+  const currentIndex = recent.findIndex((id) => selectedSessionIds.includes(id));
+  return recent[(currentIndex + 1) % recent.length];
+}
+
 export function markAgentAttentionNotified(id: string): void {
   const items = loadAgentAttention();
   if (!items.some((item) => item.id === id && !item.notifiedAt)) return;
