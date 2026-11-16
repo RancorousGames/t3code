@@ -165,6 +165,10 @@ export function ChatGPTCaffyScheduleDialog({
       ? target.legacyMonitors.filter((item) => !cancelledLegacy.has(item.id))
       : [];
   const recurring = frequency !== "once";
+  // An existing session's Keep running mode starts immediately. Caffy itself
+  // determines whether the agent is already idle and arms the first wake.
+  const resumeOnIdle = isSession && frequency === "idle";
+  const effectiveStart = resumeOnIdle ? "now" : start;
   // Creating a session immediately still requires a prompt; use the second
   // textbox for its first message as well as subsequent Caffy continuations.
   const initialPrompt = !isSession && start === "now" ? recurringPrompt : prompt;
@@ -188,7 +192,7 @@ export function ChatGPTCaffyScheduleDialog({
     (isSession || initialPrompt.trim().length > 0) &&
     prompt.length <= 29_800 &&
     recurringPrompt.length <= 29_800 &&
-    (start !== "later" || validTime) &&
+    (effectiveStart !== "later" || validTime) &&
     (frequency !== "periodic" ||
       (Number.isInteger(intervalMinutes) && intervalMinutes >= 1 && intervalMinutes <= 525_600)) &&
     (!recurring ||
@@ -212,8 +216,8 @@ export function ChatGPTCaffyScheduleDialog({
     try {
       await submit({
         frequency,
-        start,
-        beginAt: start === "later" ? timestamp : null,
+        start: effectiveStart,
+        beginAt: effectiveStart === "later" ? timestamp : null,
         respectSlots,
         intervalMinutes: frequency === "periodic" ? intervalMinutes : 20,
         ...(recurring && durationMinutes !== undefined ? { durationMinutes } : {}),
@@ -308,26 +312,32 @@ export function ChatGPTCaffyScheduleDialog({
             </div>
             <div className="space-y-2">
               <span className="text-sm font-medium">Start</span>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={start === "now" ? "default" : "outline"}
-                  aria-pressed={start === "now"}
-                  onClick={() => setStart("now")}
-                >
-                  Now / when ready
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={start === "later" ? "default" : "outline"}
-                  aria-pressed={start === "later"}
-                  onClick={() => setStart("later")}
-                >
-                  At a later time
-                </Button>
-              </div>
+              {resumeOnIdle ? (
+                <p className="flex min-h-8 items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-muted-foreground">
+                  Immediately: wakes now if idle, otherwise on the next idle.
+                </p>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={start === "now" ? "default" : "outline"}
+                    aria-pressed={start === "now"}
+                    onClick={() => setStart("now")}
+                  >
+                    Now / when ready
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={start === "later" ? "default" : "outline"}
+                    aria-pressed={start === "later"}
+                    onClick={() => setStart("later")}
+                  >
+                    At a later time
+                  </Button>
+                </div>
+              )}
             </div>
             <label className="flex min-h-8 items-center gap-2 text-sm">
               <Switch
@@ -386,7 +396,7 @@ export function ChatGPTCaffyScheduleDialog({
                 ))}
               </div>
             )}
-            {start === "later" && (
+            {effectiveStart === "later" && (
               <div className="space-y-2 rounded-lg border border-border p-3">
                 <div className="flex flex-wrap gap-1.5">
                   {[

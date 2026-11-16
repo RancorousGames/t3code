@@ -198,7 +198,11 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       expect(ready).toMatchObject({ pendingWake: true, pendingReason: "manual" });
       ready.pendingWake = false;
       const again = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
-      expect(again.pendingWake).toBe(false); // same configuration does not keep re-waking
+      expect(again.pendingWake).toBe(true); // repair an old never-woken idle schedule
+      again.pendingWake = false;
+      again.lastWakeAt = Date.now();
+      const stable = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
+      expect(stable.pendingWake).toBe(false); // already delivered: do not re-wake on identical set
       again.paused = true;
       const resumed = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
       expect(resumed).toMatchObject({ paused: false, pendingWake: true });
@@ -209,7 +213,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       resumed.mode = "periodic";
       f.setReadStatus("pending_or_stalled");
       const unfinished = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
-      expect(unfinished.pendingWake).toBe(false);
+      expect(unfinished.pendingWake).toBe(true); // newly enabled idle Caffy queues a guarded continuation
     } finally { c.close(); f.dispose(); }
   });
 
@@ -411,7 +415,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
     } finally { c.close(); f.dispose(); }
   });
 
-  it("does not replay a historical idle edge when the user explicitly disables Wake now", async () => {
+  it("always arms a new resume-on-idle schedule even when an API caller supplies wakeNow=false", async () => {
     const f = fixture();
     const c = f.open();
     try {
@@ -431,9 +435,62 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       });
       const scheduled = await c.set({sessionId: SESSION, conversationId: ORIGINAL,
         mode: "idle", wakeNow: false});
-      expect(scheduled).toMatchObject({pendingWake: false, lastIdleSequence: 3});
+      expect(scheduled).toMatchObject({pendingWake: true, pendingReason: "manual", lastIdleSequence: 3});
       await c.reconcileIdentityAliases(true);
-      expect(scheduled.pendingWake).toBe(false);
+      expect(scheduled.pendingWake).toBe(true);
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("arms an idle Caffy even when the last observed turn was user-only", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.mode = "periodic";
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.beginAt = null;
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+        activity: "idle", status: "done_or_idle", lastRole: "user",
+      }]);
+      const scheduled = await c.set({
+        sessionId: SESSION, conversationId: ORIGINAL, mode: "idle", wakeNow: false,
+      });
+      expect(scheduled).toMatchObject({pendingWake: true, pendingReason: "manual"});
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("repairs a never-woken resume-on-idle monitor on the next T3 startup", () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.mode = "idle";
+      row.beginAt = null;
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.lastWakeAt = null;
+      // The test targets startup policy, not the asynchronous delivery pump.
+      (c as unknown as {pump: () => Promise<void>}).pump = async () => {};
+      c.start();
+      expect(row).toMatchObject({pendingWake: true, pendingReason: "manual"});
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("re-arms resume-on-idle when a paused monitor is resumed by command", () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const row = monitor(c)!;
+      row.mode = "idle";
+      row.paused = true;
+      row.pendingMessageId = null;
+      row.pendingWake = false;
+      row.beginAt = null;
+      c.pause(SESSION, false);
+      expect(row).toMatchObject({paused: false, pendingWake: true, pendingReason: "manual"});
     } finally { c.close(); f.dispose(); }
   });
 

@@ -417,6 +417,17 @@ export class CaffyScheduler {
         row.pendingReason = "startup";
         changed = true;
       }
+      // Upgrade never-woken resume-on-idle monitors created by older builds
+      // with wakeNow=false. Requeue once on startup, even without a new idle
+      // transition; the guarded outbox will wait until sending is safe.
+      if (row.mode === "idle" && !row.onceOnly && !row.paused &&
+          !row.pendingWake && !row.pendingMessageId && row.lastWakeAt === null &&
+          (row.beginAt === null || row.beginAt === undefined || row.beginAt <= Date.now()) &&
+          (row.expiresAt === null || row.expiresAt > Date.now())) {
+        row.pendingWake = true;
+        row.pendingReason = "manual";
+        changed = true;
+      }
     }
     if (changed) this.save();
     this.syncPower();
@@ -808,24 +819,36 @@ export class CaffyScheduler {
           input.beginAt > now + 90 * 24 * 60 * 60_000))
       throw new Error("Scheduled start must be in the next 90 days.");
     const prior = this.lookup(input.sessionId);
-    // Turning on idle mode while the agent is already idle must not require
-    // another completed turn. Verify the guest rather than trusting a stale
-    // roster's non-working flag; the guarded outbox still checks the composer.
-    const newIdleSchedule = input.mode === "idle" && input.wakeNow === undefined &&
+    // "Resume on idle" means start continuing immediately, including when
+    // the agent was already idle BEFORE Caffy was enabled. A caller's
+    // wakeNow=false must not disable this invariant. Arm the durable wake
+    // without requiring a fresh assistant-completed edge: the scheduler and
+    // guarded delivery still verify the exact recipient and wait for idle.
+    // Re-arming a previously never-woken idle schedule also repairs old
+    // configurations created with wakeNow=false.
+    const resumeOnIdle = input.mode === "idle" && input.onceOnly !== true;
+    const initialIdleWake = resumeOnIdle &&
+      (!prior || prior.paused || prior.mode !== "idle" || prior.onceOnly ||
+        prior.conversationId !== input.conversationId ||
+        (!prior.pendingWake && !prior.pendingMessageId && prior.lastWakeAt === null));
+    // One-time schedules retain their existing explicit "now vs later" policy.
+    const inspectOnceOnly = input.mode === "idle" && input.onceOnly === true &&
+      input.wakeNow === undefined &&
       (!prior || prior.paused || prior.mode !== "idle" ||
         prior.conversationId !== input.conversationId);
-    const observed = newIdleSchedule
+    const observed = inspectOnceOnly
       ? await this.read(canonicalId, input.conversationId).catch(() => null) : null;
     const observedSession = observed?.session as {
       conversationId?: string; activity?: string; status?: string; lastRole?: string;
     } | undefined;
-    const initialIdleWake = newIdleSchedule &&
+    const initialOnceWake = inspectOnceOnly &&
       observed?.conversationGuardValidated === true &&
       observed.verifiedConversationId === input.conversationId &&
       observedSession?.conversationId === input.conversationId &&
       observedSession?.activity === "idle" &&
       (observedSession.status === "done_or_idle" || observedSession.status === "waiting_for_input") &&
       observedSession.lastRole === "assistant";
+    const armWake = input.wakeNow === true || initialIdleWake || initialOnceWake;
     // A fresh manual Caffy setup supersedes any earlier "agent stopped" marker.
     for (const [key, mark] of this.agentStops) {
       if ([mark.sessionId, mark.browserSessionId, mark.publicSessionId].some(id =>
@@ -859,7 +882,7 @@ export class CaffyScheduler {
         this.save();
         this.backupConfiguration();
       }
-      if ((input.wakeNow === true || initialIdleWake) && !prior.pendingWake && !prior.pendingMessageId) {
+      if (armWake && !prior.pendingWake && !prior.pendingMessageId) {
         prior.pendingWake = true;
         prior.pendingReason = "manual";
         this.save();
@@ -893,8 +916,8 @@ export class CaffyScheduler {
       expiresAt: input.durationMinutes === undefined ? null :
         Math.max(now, input.beginAt ?? prior?.beginAt ?? now) + input.durationMinutes * 60_000,
       nextDueAt: mode === "periodic" ? input.beginAt ?? now + intervalMinutes * 60_000 : null,
-      pendingWake: input.wakeNow ?? initialIdleWake,
-      pendingReason: (input.wakeNow ?? initialIdleWake) ? "manual" : null,
+      pendingWake: armWake,
+      pendingReason: armWake ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
       lastIdleSequence: Math.max(
         continuingSameMonitor ? (prior?.lastIdleSequence ?? 0) : initialIdleSequence,
@@ -1366,6 +1389,13 @@ export class CaffyScheduler {
       throw new Error("Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.");
     const wasPaused = row.paused;
     row.paused = paused;
+    // A command-driven resume must not leave an already-idle recurring
+    // monitor waiting indefinitely for a brand-new idle transition.
+    if (wasPaused && !paused && row.mode === "idle" && !row.onceOnly &&
+        !row.pendingWake && !row.pendingMessageId) {
+      row.pendingWake = true;
+      row.pendingReason = "manual";
+    }
     this.logPauseChange(row, wasPaused, paused ? "pause:explicit" : "resume:explicit", auditRequestId);
     this.save();
     this.backupConfiguration();
