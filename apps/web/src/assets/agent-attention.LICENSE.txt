@@ -1,21 +1,16 @@
-	
+Source: Sonniss.com #GameAudioGDC Bundle 2026 (Part 9)
+Sound: "Ting Coins.wav"
+Contributor: Cinematic Sound Design
+Original location: Cinematic Sound Design - UI Interaction Elements/Ting Coins.wav
 
-	Retro sound pack
+License: Sonniss #GameAudioGDC Bundle Licensing Agreement (royalty-free;
+not Creative Commons / CC0).
+The agreement allows use and modification in personal and commercial
+projects without attribution, including games and interactive projects.
+Copyright remains with the respective rights holder. Restrictions include
+selling the sound effect as-is and using it for AI training/development.
 
-	by  Kenney Vleugels (Kenney.nl)
-
-			------------------------------
-
-	License (Creative Commons Zero, CC0)
-	http://creativecommons.org/publicdomain/zero/1.0/
-
-	You may use these assets in personal and commercial projects.
-	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
-
-			------------------------------
-
-	Donate:   http://support.kenney.nl
-	Request:  http://request.kenney.nl
-
-	Follow on Twitter for updates:
-	@KenneyWings
+The file agent-attention.ogg is a 48 kHz stereo Vorbis conversion of that
+licensed recording. The full license is shipped with the original bundle as
+"License - GDC Game Audio.pdf". Do not treat this sound as covered by the
+repository's general open-source license.
