@@ -165,6 +165,9 @@ export function ChatGPTCaffyScheduleDialog({
       ? target.legacyMonitors.filter((item) => !cancelledLegacy.has(item.id))
       : [];
   const recurring = frequency !== "once";
+  // Creating a session immediately still requires a prompt; use the second
+  // textbox for its first message as well as subsequent Caffy continuations.
+  const initialPrompt = !isSession && start === "now" ? recurringPrompt : prompt;
   const timestamp = new Date(when).getTime();
   const validTime =
     (Number.isSafeInteger(timestamp) &&
@@ -182,7 +185,7 @@ export function ChatGPTCaffyScheduleDialog({
     rebootRule === "time" && recurring ? Number(rebootEvery) * unitMinutes[rebootEveryUnit] : null;
   const rebootRuns = rebootRule === "runs" && recurring ? Number(rebootEvery) : null;
   const valid =
-    (isSession || prompt.trim().length > 0) &&
+    (isSession || initialPrompt.trim().length > 0) &&
     prompt.length <= 29_800 &&
     recurringPrompt.length <= 29_800 &&
     (start !== "later" || validTime) &&
@@ -214,7 +217,7 @@ export function ChatGPTCaffyScheduleDialog({
         respectSlots,
         intervalMinutes: frequency === "periodic" ? intervalMinutes : 20,
         ...(recurring && durationMinutes !== undefined ? { durationMinutes } : {}),
-        prompt: prompt.trim(),
+        prompt: initialPrompt.trim(),
         recurringPrompt: recurringPrompt.trim(),
         autoRebootMinutes: rebootMinutes,
         autoRebootEveryRuns: rebootRuns,
@@ -339,25 +342,27 @@ export function ChatGPTCaffyScheduleDialog({
                 </span>
               )}
             </label>
-            <label className="block text-sm font-medium">
-              {isSession ? "Message (optional)" : "Initial prompt for new session (required)"}
-              <textarea
-                className={`${inputClass} h-28 resize-none text-sm font-normal`}
-                rows={4}
-                maxLength={29_800}
-                value={prompt}
-                aria-label="Message to send"
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder={
-                  isSession
-                    ? "Leave empty to continue the current assignment."
-                    : "Describe what the new ChatGPT session should do."
-                }
-              />
-              <span className="block text-right text-xs font-normal text-muted-foreground">
-                {prompt.length.toLocaleString()} / 29,800
-              </span>
-            </label>
+            {(isSession || start === "later") && (
+              <label className="block text-sm font-medium">
+                {isSession ? "Message (optional)" : "Initial prompt for new session (required)"}
+                <textarea
+                  className={`${inputClass} h-28 resize-none text-sm font-normal`}
+                  rows={4}
+                  maxLength={29_800}
+                  value={prompt}
+                  aria-label="Message to send"
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder={
+                    isSession
+                      ? "Leave empty to continue the current assignment."
+                      : "Describe what the new ChatGPT session should do."
+                  }
+                />
+                <span className="block text-right text-xs font-normal text-muted-foreground">
+                  {prompt.length.toLocaleString()} / 29,800
+                </span>
+              </label>
+            )}
             {legacy.length > 0 && (
               <div
                 role="alert"
@@ -446,16 +451,22 @@ export function ChatGPTCaffyScheduleDialog({
                 </label>
               </div>
             )}
-            {recurring && !isSession && (
+            {!isSession && (recurring || start === "now") && (
               <label className="block text-sm font-medium">
-                Recurring message (optional)
+                {start === "now"
+                  ? "Prompt for new session (required)"
+                  : "Recurring message (optional)"}
                 <textarea
                   className={`${inputClass} h-20 resize-none text-sm font-normal`}
                   rows={2}
                   maxLength={29_800}
                   value={recurringPrompt}
                   onChange={(event) => setRecurringPrompt(event.target.value)}
-                  placeholder="Leave empty to continue the new session's assignment."
+                  placeholder={
+                    start === "now"
+                      ? "Describe what the new ChatGPT session should do."
+                      : "Leave empty to continue the new session's assignment."
+                  }
                 />
               </label>
             )}
