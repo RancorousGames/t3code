@@ -41,6 +41,7 @@ import {
   chatGPTBrowserThreadRef,
   findExistingChatGPTConversation,
   updateChatGPTReturnMarker,
+  wakeChatGPTBrowserSession,
 } from "../../chatGPTBrowserSessions";
 import {
   setLocalStorageItem,
@@ -1805,7 +1806,11 @@ export function DesktopAppActivationCoordinator() {
             }
           } else if (request.action === "send") {
             const confirmation = data as { sessionId: string; messageSent: boolean };
-            if (confirmation.messageSent) setSessionCompletion(confirmation.sessionId, undefined);
+            if (confirmation.messageSent) {
+              setSessionCompletion(confirmation.sessionId, undefined);
+              // A verified composer submission, not a guest mount, wakes a snoozed session.
+              wakeChatGPTBrowserSession(environmentId, confirmation.sessionId, "message");
+            }
           }
           if (request.action === "list") {
             const list = data as { sessions: Array<{ id: string }> };

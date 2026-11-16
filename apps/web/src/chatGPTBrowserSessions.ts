@@ -212,11 +212,11 @@ export function readChatGPTBrowserSessions(
 }
 const INITIAL_SESSIONS: readonly BrowserSession[] = [{ id: "chatgpt", title: "ChatGPT 1" }];
 
-/** Wake an existing snoozed slot for a real message or externally observed state change. */
+/** Wake a snoozed slot only for a real message or qualifying activity, not a mere guest mount. */
 export function wakeChatGPTBrowserSession(
   environmentId: string,
   sessionId: string,
-  source: "message" | "activity" = "message",
+  source: "message" | "activity" | "mount" = "message",
 ): void {
   const store = getChatGPTSessionPersistedStore(environmentId);
   const current = store.getState().sessions;
@@ -224,7 +224,9 @@ export function wakeChatGPTBrowserSession(
   if (!current.some((session) =>
     session.id === sessionId &&
     (session.snoozedUntil ?? 0) > now &&
-    // An observed status transition is not a user action or message during a double-click snooze.
+    // Loading the guest alone is never proof of a new message. A quick snooze
+    // also ignores incidental activity that follows the first click.
+    source !== "mount" &&
     (source !== "activity" || session.quickSnoozeStep === undefined)
   )) return;
   const next = current.map((session) =>

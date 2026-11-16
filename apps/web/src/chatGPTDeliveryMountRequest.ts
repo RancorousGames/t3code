@@ -10,7 +10,9 @@ export const useChatGPTDeliveryMountRequests = create<{
 const mountUsers = new Map<string, number>();
 
 export function requestChatGPTDeliveryMount(environmentId: string, sessionId: string): void {
-  wakeChatGPTBrowserSession(environmentId, sessionId);
+  // Mounting for inspection, recovery, or an old queued delivery must not
+  // unsnooze the session. A newly enqueued real message performs the wake.
+  wakeChatGPTBrowserSession(environmentId, sessionId, "mount");
   const key = environmentId + ":" + sessionId;
   mountUsers.set(key, (mountUsers.get(key) ?? 0) + 1);
   const required = useChatGPTDeliveryMountRequests.getState().required;

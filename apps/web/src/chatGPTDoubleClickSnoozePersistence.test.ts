@@ -38,6 +38,8 @@ describe("24-hour ChatGPT quick snooze persistence", () => {
     const until = chatGPTDoubleClickSnoozeUntil(now);
     wakeChatGPTBrowserSession(env, id, "activity");
     expect(store.getState().sessions[0]?.snoozedUntil).toBe(until);
+    wakeChatGPTBrowserSession(env, id, "mount");
+    expect(store.getState().sessions[0]?.snoozedUntil).toBe(until);
 
     wakeChatGPTBrowserSession(env, id, "message");
     expect(store.getState().sessions[0]?.snoozedUntil).toBeUndefined();
@@ -48,6 +50,8 @@ describe("24-hour ChatGPT quick snooze persistence", () => {
     store.setState({ sessions: [{ id, title: "Worker", quickSnoozeStep: 0,
       snoozedUntil: CHATGPT_CAFFY_SNOOZE_UNTIL, snoozedAt: now }] });
     wakeChatGPTBrowserSession(env, id, "activity");
+    expect(store.getState().sessions[0]?.snoozedUntil).toBe(CHATGPT_CAFFY_SNOOZE_UNTIL);
+    wakeChatGPTBrowserSession(env, id, "mount");
     expect(store.getState().sessions[0]?.snoozedUntil).toBe(CHATGPT_CAFFY_SNOOZE_UNTIL);
     wakeChatGPTBrowserSession(env, id, "message");
     expect(store.getState().sessions[0]?.snoozedUntil).toBeUndefined();
