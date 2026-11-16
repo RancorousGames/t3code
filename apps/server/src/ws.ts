@@ -2594,7 +2594,7 @@ export const layerWsRpc = (
               const read = request.method === "sessions.controls";
               const command = read ? "status" : p.command;
               const allowed = new Set([
-                "status", "close", "unload", "reload", "keep_loaded", "reboot", "stop", "restore_url",
+                "status", "close", "unload", "reload", "keep_loaded", "reboot", "reboot_reconcile", "stop", "restore_url",
                 "verification", "worker", "binding_clear", "binding_update", "project", "parent",
                 "highlight", "rename", "caffy_set", "caffy_stop", "caffy_pause",
                 "caffy_resume", "caffy_startup", "caffy_begin", "caffy_reboot",
@@ -2607,6 +2607,7 @@ export const layerWsRpc = (
                   Object.entries(p.options).length <= 16 &&
                   Object.entries(p.options).every(([key, value]) => {
                     const stringLimit = key === "request" && command === "prepfile_create" ? 30_000
+                    : key === "prompt" && command === "reboot" ? 8_000
                     : key === "repeatPrompt" && command === "caffy_configure" ? 29_800
                     : key === "chunk" && command === "prepfile_image_chunk" ? 12_000
                     : key === "prompt" &&
@@ -2688,15 +2689,19 @@ export const layerWsRpc = (
               const observedAt = DateTime.formatIso(yield* DateTime.now);
               const items: AgentProviderV1Session[] = native.success.threads.map(
                 (thread): AgentProviderV1Session => {
-                  const active = thread.activeRunId !== null;
+                  // Terminal statuses (completed/interrupted/cancelled) are idle, not
+                  // Unknown: remote Stop buttons key off Working vs Idle.
+                  const active = thread.activeRunId !== null ||
+                    ["preparing", "queued", "starting", "running"].includes(thread.status);
                   const activity =
-                    thread.pendingRuntimeRequest !== null
+                    thread.pendingRuntimeRequest !== null || thread.status === "waiting"
                       ? "WaitingOnUser"
                       : active
                         ? "Working"
-                        : thread.status === "idle"
-                          ? "Idle"
-                          : "Unknown";
+                        : thread.status === "failed"
+                          ? "Errored"
+                          : "Idle";
+                  const runStartedAt = thread.activityRunStartedAt ?? thread.latestRunStartedAt;
                   const threadRef = (id: string) => ({
                     provider: "t3" as const,
                     id: `thread:${encodeURIComponent(id)}`,
@@ -2714,12 +2719,32 @@ export const layerWsRpc = (
                     state: {
                       reachability: "Reachable",
                       activity,
-                      confidence: activity === "Unknown" ? "Unknown" : "Confirmed",
+                      confidence: "Confirmed",
                       elsewhere: null,
                       observedAt,
+                      turnStartedAt: active && runStartedAt
+                        ? DateTime.formatIso(runStartedAt) : null,
+                      activityAt: DateTime.formatIso(thread.updatedAt),
+                      activityText: activity === "WaitingOnUser"
+                        ? "Waiting for your approval or input"
+                        : active ? (thread.activityRunStatus ?? thread.status)
+                        : activity === "Errored" ? (thread.lastError ?? "Failed").slice(0, 200)
+                        : null,
                     },
                     // The native command queue already exists. No CreateSession,
                     // browser send, or management capabilities are implied.
+                    // Sidebar placement, so remote clients can hide settled/snoozed rows and
+                    // order the rest like the desktop ("updated_at": latest user message).
+                    visibility: {
+                      hidden: false,
+                      settled: thread.settledOverride === "settled" && !active &&
+                        activity !== "WaitingOnUser",
+                      ...(thread.snoozedUntil && activity !== "WaitingOnUser"
+                        ? { snoozedUntil: DateTime.toEpochMillis(thread.snoozedUntil) } : {}),
+                      pinned: thread.pinnedAt != null,
+                      sortAt: DateTime.toEpochMillis(
+                        thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt),
+                    },
                     capabilities: [
                       "ReadHistory",
                       "Submit",
@@ -3087,7 +3112,7 @@ export const layerWsRpc = (
                     !["WhenIdle", "WaitForSlot", "Steer"].includes(submit.delivery) ||
                     text === null ||
                     (submit.delivery === "WaitForSlot" &&
-                      submit.maxActiveWorkers !== undefined &&
+                      submit.maxActiveWorkers != null &&
                       (!Number.isSafeInteger(submit.maxActiveWorkers) ||
                         submit.maxActiveWorkers < 1 ||
                         submit.maxActiveWorkers > 100))
@@ -3110,8 +3135,8 @@ export const layerWsRpc = (
                       clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
                       expectedConversation: expected ?? null,
                       delivery: (input as typeof AgentProviderV1Submit.Type).delivery,
-                      ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers !==
-                      undefined
+                      ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers !=
+                      null
                         ? {
                             maxActiveWorkers: (input as typeof AgentProviderV1Submit.Type)
                               .maxActiveWorkers!,
@@ -3146,8 +3171,8 @@ export const layerWsRpc = (
                             | "Steer",
                           clientRequestId: (input as typeof AgentProviderV1Submit.Type)
                             .clientRequestId,
-                          ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers !==
-                          undefined
+                          ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers !=
+                          null
                             ? {
                                 maxActiveWorkers: (input as typeof AgentProviderV1Submit.Type)
                                   .maxActiveWorkers!,

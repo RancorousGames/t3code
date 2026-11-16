@@ -61,7 +61,7 @@ import {
   runChatGPTSessionControl,
 } from "../../chatGPTSessionControl";
 import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
-import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
+import { beginSidebarReboot, pendingSidebarReboot, reconcileSidebarReboot } from "../../chatGPTSidebarReboot";
 import { restoreChatGPTSessionUrl } from "../../chatGPTSessionUrlRestore";
 import { publicChatGPTSessionId, publicChatGPTParentId } from "../../chatGPTBootstrapIdentity";
 import { inspectPersistentChatGPTPage } from "../../browser/inspectPersistentChatGPTPage";
@@ -70,7 +70,10 @@ import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import { isChatGPTGuestHibernated, hibernateChatGPTGuest } from "../../browser/chatGPTGuestHibernation";
 import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import { useChatGPTWarmSessions, toggleKeepLoadedChatGPTSession } from "../../omniwork/chatGPTWarmSessionPolicy";
-import { readChatGPTProviderActivity } from "../../chatGPTProviderActivity";
+import {
+  readChatGPTProviderActivity,
+  readChatGPTProviderActivityDetail,
+} from "../../chatGPTProviderActivity";
 import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
 import {
   resolveExistingChatGPTSessionAddress,
@@ -84,6 +87,7 @@ import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedSt
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { AgentAttentionToast } from "./AgentAttentionToast";
+import { resolveSnoozePresets } from "../Sidebar.snooze";
 import { requestAgentAttention, readAgentAttention, loadAgentAttention, changeAttention, cancelManualAgentAttention } from "../../chatGPTAgentAttention";
 import { acknowledgeChatGPTSessionAttention, rearmPersistentSessionAttention } from "../../chatGPTPersistentAttention";
 import { queueAgentAttentionDismissal } from "../../chatGPTAttentionHandoff";
@@ -296,7 +300,8 @@ export function DesktopAppActivationCoordinator() {
         const sessions = readChatGPTBrowserSessions(idleEnvironmentId);
         const desired = new Set<string>();
         for (const item of snapshot.messages) {
-          if (item.status !== "queued" || item.reason !== "guest_unmounted") continue;
+          if ((item.status !== "queued" && item.status !== "uncertain") ||
+              item.reason !== "guest_unmounted") continue;
           // The durable outbox may retain the original browser UUID even
           // after Bootstrap promotes the session to a public T3_ID. Resolve
           // the former through an exact verified idle event or, when none is
@@ -913,7 +918,6 @@ export function DesktopAppActivationCoordinator() {
               };
           }
           const sessionSnapshot = readChatGPTBrowserSessions(environmentId);
-          let resolvedSessionId = request.sessionId;
           if (request.action === "task_agent_status" || request.action === "task_agent_action") {
             const browserSession = sessionSnapshot.find((row) => row.id === request.sessionId);
             const taskBoard = request.taskBoardPath?.trim();
@@ -983,15 +987,19 @@ export function DesktopAppActivationCoordinator() {
             if (!attention || !ownAttention(attention))
               throw new Error("Attention request is not linked to this exact session.");
             if (command === "attention_open") {
-              if (attention.status === "dismissed") throw new Error("Request already dismissed.");
+              if (attention.status === "dismissed" || attention.status === "waiting" ||
+                  (attention.status === "snoozed" && attention.nextAt > Date.now()))
+                throw new Error("Attention request is not yet actionable.");
               if (attention.status !== "opened") changeAttention(attention.id,"opened");
               rearmPersistentSessionAttention(environmentId, browserSession,
                 readChatGPTProviderActivity(environmentId, browserSession.id));
             } else if (command === "attention_snooze") {
-              if (o.minutes !== 15 && o.minutes !== 60 ||
+              const nextAt = Number.isSafeInteger(o.until) ? Number(o.until) :
+                Number.isSafeInteger(o.minutes) ? Date.now() + Number(o.minutes) * 60_000 : 0;
+              if (nextAt <= Date.now() || nextAt > Date.now() + 30 * 86_400_000 ||
                   attention.status === "dismissed" || attention.status === "opened")
-                throw new Error("Snooze only pending request for 15 or 60 minutes.");
-              changeAttention(attention.id,"snoozed",Date.now() + Number(o.minutes) * 60_000);
+                throw new Error("Attention snooze time is invalid or request already resolved.");
+              changeAttention(attention.id,"snoozed",nextAt);
             } else if (attention.status !== "dismissed") {
               if (!(await queueAgentAttentionDismissal(environmentId, attention)))
                 throw new Error("Could not queue durable agent notification; request remains active.");
@@ -1000,6 +1008,7 @@ export function DesktopAppActivationCoordinator() {
             return {version:1,requestId:request.requestId,ok:true,
               data:{state:"Delivered",applied:command,requestId:attention.id}};
           }
+          let resolvedSessionId = request.sessionId;
           let exactConversationId = request.expectedConversationId;
           if (
             request.action === "open" ||
@@ -2244,7 +2253,11 @@ export function DesktopAppActivationCoordinator() {
                 const loaded = isPersistentChatGPTSessionOptedIn(entry.id)
                   ? nativeUrl !== null
                   : !!conversationId && isLoadedChatGPTBrowserGuest(environmentId, entry);
-                const activity = loaded ? readChatGPTProviderActivity(environmentId, entry.id) : "unknown";
+                const detail = loaded
+                  ? readChatGPTProviderActivityDetail(environmentId, entry.id)
+                  : { activity: "unknown" as const, since: null };
+                const activity = detail.activity;
+                const sinceIso = detail.since === null ? null : new Date(detail.since).toISOString();
                 return {
                   ref: { provider: "t3", id: entry.id },
                   kind: "t3/chatgpt",
@@ -2279,6 +2292,8 @@ export function DesktopAppActivationCoordinator() {
                     confidence: activity === "unknown" ? "Unknown" : "Confirmed",
                     elsewhere: null,
                     observedAt,
+                    turnStartedAt: activity === "working" ? sinceIso : null,
+                    activityAt: sinceIso,
                   },
                   // A WaitForSlot message is merely queued; a hibernated or blank
                   // guest must not be awakened until the global capacity gate admits.
@@ -2422,6 +2437,10 @@ export function DesktopAppActivationCoordinator() {
                     returnMarker: entry.returnMarker ?? null,
                     keepLoaded: useChatGPTWarmSessions.getState().keepLoadedIds.has(id),
                     caffy: caffyState,
+                    attentions: loadAgentAttention(),
+                    attentionSnoozePresets: resolveSnoozePresets(new Date(), "24-hour", environmentId),
+                    pendingReboot: pendingSidebarReboot(environmentId, id),
+                    prepfileJobs: readRemotePrepfileJobs(),
                     scheduledSpawns,
                     otherSessions: sessions.filter((s) => s.id !== id).map((s) => ({
                       id: publicChatGPTSessionId(s), title: s.title,
@@ -2450,9 +2469,6 @@ export function DesktopAppActivationCoordinator() {
                   const implementationModel = options.implementationModel as RemotePrepfileRequest["implementationModel"];
                   const images = options.images as RemotePrepfileRequest["images"];
                   const imageRefs = options.imageRefs as RemotePrepfileRequest["imageRefs"];
-                  if (!id || !request || !depth || !generator)
-                    throw new Error("Prepfile request, ID, depth, and generator are required.");
-                  if (projectId !== null && (projectId.length > 256 || !/^[a-zA-Z0-9_-]+$/.test(projectId)))
                   const taskRef = options.taskRef as RemotePrepfileRequest["taskRef"];
                   if (taskRef && (!taskRef.board || taskRef.board.length > 500 ||
                     !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(taskRef.id) ||
@@ -2460,6 +2476,9 @@ export function DesktopAppActivationCoordinator() {
                       entry.binding.taskRef.board.replaceAll("/", "\\").toLowerCase() !==
                         taskRef.board.replaceAll("/", "\\").toLowerCase()))))
                     throw new Error("Prepfile TaskBoard reference does not match the session.");
+                  if (!id || !request || !depth || !generator)
+                    throw new Error("Prepfile request, ID, depth, and generator are required.");
+                  if (projectId !== null && (projectId.length > 256 || !/^[a-zA-Z0-9_-]+$/.test(projectId)))
                     throw new Error("Invalid T3 project identifier.");
                   const job = startRemotePrepfile({
                     id, request, depth: depth as RemotePrepfileRequest["depth"],
@@ -2481,8 +2500,9 @@ export function DesktopAppActivationCoordinator() {
                     (attention.sessionId !== id && attention.sessionId !== publicChatGPTSessionId(entry)))
                     throw new Error("Attention request is not linked to this T3 session.");
                   if (command === "attention_open") {
-                    if (attention.status === "dismissed")
-                      throw new Error("Attention request was already dismissed.");
+                    if (attention.status === "dismissed" || attention.status === "waiting" ||
+                        (attention.status === "snoozed" && attention.nextAt > Date.now()))
+                      throw new Error("Attention request is not yet actionable.");
                     if (attention.status !== "opened") changeAttention(attention.id, "opened");
                     // Opening on the phone acknowledges the current alert, not the Ctrl+D toggle.
                     rearmPersistentSessionAttention(environmentId, entry,
@@ -2491,11 +2511,14 @@ export function DesktopAppActivationCoordinator() {
                     setSessionSnooze([id], null);
                   } else if (command === "attention_snooze") {
                     const minutes = number("minutes");
-                    if (minutes !== 15 && minutes !== 60)
-                      throw new Error("Snooze must be 15 or 60 minutes.");
+                    const until = number("until");
+                    const nextAt = until ?? (minutes === null ? 0 : Date.now() + minutes * 60_000);
+                    if ((until === null && (minutes === null || !Number.isInteger(minutes) || minutes < 1 || minutes > 10080)) ||
+                        !Number.isSafeInteger(nextAt) || nextAt <= Date.now() || nextAt > Date.now() + 30 * 86_400_000)
+                      throw new Error("Attention snooze time invalid or already passed.");
                     if (attention.status === "dismissed" || attention.status === "opened")
                       throw new Error("Attention request already resolved.");
-                    changeAttention(attention.id, "snoozed", Date.now() + minutes * 60_000);
+                    changeAttention(attention.id, "snoozed", nextAt);
                   } else if (command === "attention_dismiss") {
                     if (attention.status !== "dismissed") {
                       if (!(await queueAgentAttentionDismissal(environmentId, attention)))
@@ -2523,8 +2546,6 @@ export function DesktopAppActivationCoordinator() {
                 } else if (command === "verification") {
                   const value = bool("value");
                   if (value === null) throw new Error("Verification flag required.");
-                    attentions: loadAgentAttention(),
-                    prepfileJobs: readRemotePrepfileJobs(),
                   setSessionVerification(id, value);
                 } else if (command === "worker") {
                   const value = bool("value");
@@ -2591,11 +2612,18 @@ export function DesktopAppActivationCoordinator() {
                   return { ok: true as const, data: { url: result.url, source: result.source } };
                 } else if (command === "reboot") {
                   const requested = str("contextMode") ?? "handoff";
+                  const prompt = str("prompt")?.trim();
                   if (requested !== "handoff" && requested !== "fresh")
                     throw new Error("Reboot context mode must be handoff or fresh.");
+                  if (prompt && prompt.length > 8_000)
+                    throw new Error("Phone custom handover is limited to 8000 characters.");
                   const receipt = await beginSidebarReboot({
                     environmentId, sessionId: id, contextMode: requested,
+                    ...(prompt ? { prompt } : {}),
                   });
+                  return { ok: true as const, data: { status: receipt.status, requestId: receipt.operationId } };
+                } else if (command === "reboot_reconcile") {
+                  const receipt = await reconcileSidebarReboot(environmentId, id);
                   return { ok: true as const, data: { status: receipt.status, requestId: receipt.operationId } };
                 } else if (command === "keep_loaded") {
                   const desired = bool("value");
@@ -2678,21 +2706,11 @@ export function DesktopAppActivationCoordinator() {
                       ...(number("durationMinutes") === null ? {} : {durationMinutes: number("durationMinutes")!}),
                       ...(number("intervalMinutes") === null ? {} : {intervalMinutes: number("intervalMinutes")!}),
                       ...(bool("onceOnly") === null ? {} : {onceOnly: bool("onceOnly")!}),
-                      startup: bool("startup") ?? mode === "startup", keepAwake: true,
-                    });
-                  } else if (command === "caffy_stop") {
-                    await caffy({ action: "stop", sessionId: id, stopInitiator: "user" });
-                  } else if (command === "caffy_pause" || command === "caffy_resume") {
-                    await caffy({ action: command === "caffy_pause" ? "pause" : "resume", sessionId: id });
-                  } else if (command === "caffy_startup") {
-                    const enabled = bool("value");
-                    if (enabled === null) throw new Error("Startup setting required.");
-                    await caffy({ action: "startup", sessionId: id, startup: enabled });
                       ...(str("repeatPrompt") === null ? {} : { repeatPrompt: str("repeatPrompt")!.slice(0, 29_800) }),
                       ...(number("beginAt") === null ? {} : { beginAt: number("beginAt")! }),
                       ...(bool("wakeNow") === null ? {} : { wakeNow: bool("wakeNow")! }),
-                  } else if (command === "caffy_schedule_spawn") {
-                    const jobId = str("jobId");
+                      startup: bool("startup") ?? mode === "startup", keepAwake: true,
+                    });
                   } else if (command === "caffy_configure") {
                     if (str("repeatPrompt")?.length && str("repeatPrompt")!.length > 29_800)
                       throw new Error("Repeated prompt exceeds 29800 characters.");
@@ -2702,6 +2720,16 @@ export function DesktopAppActivationCoordinator() {
                       ...(bool("respectSlots") === null ? {} : { respectSlots: bool("respectSlots")! }),
                       ...(str("repeatPrompt") === null ? {} : { repeatPrompt: str("repeatPrompt")! }),
                     });
+                  } else if (command === "caffy_stop") {
+                    await caffy({ action: "stop", sessionId: id, stopInitiator: "user" });
+                  } else if (command === "caffy_pause" || command === "caffy_resume") {
+                    await caffy({ action: command === "caffy_pause" ? "pause" : "resume", sessionId: id });
+                  } else if (command === "caffy_startup") {
+                    const enabled = bool("value");
+                    if (enabled === null) throw new Error("Startup setting required.");
+                    await caffy({ action: "startup", sessionId: id, startup: enabled });
+                  } else if (command === "caffy_schedule_spawn") {
+                    const jobId = str("jobId");
                     const title = str("title")?.trim();
                     const prompt = str("prompt")?.trim();
                     const onIdle = bool("onIdle") === true;
@@ -2728,7 +2756,8 @@ export function DesktopAppActivationCoordinator() {
                       throw new Error("Scheduled prompt must not exceed 8000 characters.");
                     if (onIdle) {
                       if (!prompt) throw new Error("Begin on idle requires a prompt.");
-                      await caffy({ action: "set", sessionId: id, mode: "queued", onceOnly: true,
+                      await caffy({ action: "set", sessionId: id, mode: "idle", onceOnly: true,
+                        respectSlots: bool("respectSlots") === true,
                         startup: false, keepAwake: false, beginAt: null, prompt });
                     } else {
                     if (beginAt !== null && (beginAt <= Date.now() || beginAt > Date.now() + 90 * 86_400_000))
