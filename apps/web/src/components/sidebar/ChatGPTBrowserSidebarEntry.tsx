@@ -47,6 +47,7 @@ import {
   type ChatGPTSessionRemovalSource,
 } from "../../chatGPTBrowserSessions";
 import { isElectron } from "../../env";
+import { rememberClosedChatGPTSession } from "../../chatGPTClosedSessionUndo";
 import { readChatGPTSpawnReceipts } from "../../chatGPTSpawnReceipts";
 import { executeProviderBrowserCreate } from "../../agentProviderBrowserCreate";
 import { randomUUID } from "../../lib/utils";
@@ -1540,7 +1541,28 @@ export function ChatGPTBrowserSidebarEntry({
       );
       if (results.some((result) => result._tag === "Failure")) return;
       preserveSidebarScroll();
+      const removed = sessions.find((entry) => entry.id === sessionId);
+      let cachedUrl: string | null = null;
+      try {
+        cachedUrl = getLocalStorageItem(
+          chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String,
+        );
+      } catch {
+        // Invalid cached URL must not block the close operation.
+      }
+      const lastUrl = cachedUrl ?? removed?.archive?.conversationUrl ??
+        (removed?.bootstrapIdentity?.conversationId
+          ? `https://chatgpt.com/c/${removed.bootstrapIdentity.conversationId}` : null);
+      const children = sessions.filter((entry) => entry.parentSessionId === sessionId)
+        .map((entry) => entry.id);
       removeSession(sessionId, source);
+      if (removed) {
+        try {
+          rememberClosedChatGPTSession(environmentId, removed, lastUrl, children, source);
+        } catch {
+          console.warn("Could not save ChatGPT session close undo history.");
+        }
+      }
       removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId));
       removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, sessionId));
       if (activeSessionId === sessionId) {

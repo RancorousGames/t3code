@@ -13,6 +13,7 @@ import {
 import { useEffect, useRef } from "react";
 
 import { isElectron } from "../../env";
+import { CHATGPT_CLOSE_UNDO_MS } from "../../chatGPTClosedSessionUndo";
 import { randomUUID } from "../../lib/utils";
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import type { ChatGPTPageSnapshot } from "../../chatGPTPageSnapshotInspection";
@@ -500,6 +501,11 @@ function registryCloseReceipts(
           !Number.isFinite(Date.parse(entry.removedAt))
         )
           return [];
+        // Give human closes a bounded local undo window before finalizing server-side.
+        if (
+          (entry.source === "desktop-menu-action" || entry.source === "sidebar-user-action") &&
+          Date.now() - Date.parse(entry.removedAt) < CHATGPT_CLOSE_UNDO_MS
+        ) return [];
         return [{ sessionId: entry.sessionId, removedAt: entry.removedAt }];
       })
       .slice(-128);

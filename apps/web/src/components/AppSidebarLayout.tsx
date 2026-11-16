@@ -12,6 +12,7 @@ import { useLocation, useParams, useRouter, type AnyRouter } from "@tanstack/rea
 import { moveWorkspaceFocus, workspaceAreaProps } from "../lib/workspaceFocus";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
+import { canUndoClosedChatGPTSession, undoClosedChatGPTSession } from "../chatGPTClosedSessionUndo";
 import {
   releaseThreadUndoShortcut,
   threadUndoClaimsShortcut,
@@ -31,6 +32,7 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { readPrimaryEnvironmentId } from "../state/environments";
 import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
 import {
   PanelAnimationSuppressionProvider,
@@ -236,6 +238,23 @@ function registerThreadUndoCommands(
   readSidebarVisible: () => boolean,
 ): () => void {
   const threadSidebarShown = () => !isAppModalPage(router.state.location.pathname);
+  const undoChatGPTClose = () => {
+    if (!isElectron) return false;
+    try {
+      const environmentId = readPrimaryEnvironmentId();
+      if (!environmentId || !canUndoClosedChatGPTSession(environmentId)) return false;
+      const restoredId = undoClosedChatGPTSession(environmentId);
+      if (!restoredId) return false;
+      void router.navigate({
+        to: "/browser/$browserSessionId",
+        params: { browserSessionId: restoredId },
+      });
+      return true;
+    } catch (error) {
+      console.warn("Could not undo ChatGPT session close.", error);
+      return false;
+    }
+  };
   const unregister = registerCommands(
     {},
     {
@@ -273,7 +292,10 @@ function registerThreadUndoCommands(
           return false;
         }
         if (isCommandPaletteOpen() || isModelPickerOpen()) return false;
-        if (!undoLatestThreadAction()) return false;
+        // Existing thread undo gets priority; otherwise Ctrl+Z reopens the last
+        // human-closed ChatGPT session. Editable fields retain native text undo.
+        if (!undoLatestThreadAction() && (isEditableFocused(event.target) || !undoChatGPTClose()))
+          return false;
         heldUndoKey = event.code;
         event.preventDefault();
         event.stopPropagation();
