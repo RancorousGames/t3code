@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { ChevronUpIcon } from "lucide-react";
 import attentionSoundUrl from "../../assets/agent-attention.ogg?url";
+import { watchPersistentChatGPTSessionSnoozes } from "../../chatGPTPersistentSnoozeAttention";
 import { useClientSettings } from "../../hooks/useSettings";
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
@@ -42,6 +43,12 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
       window.clearInterval(timer);
     };
   }, []);
+  // Subscribe to the toast's attention events before processing overdue session
+  // snoozes, so an alert restored on mount appears immediately.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns one real snooze-expiry timer and store subscription for the desktop alert system
+  useEffect(() => environmentId
+    ? watchPersistentChatGPTSessionSnoozes(environmentId)
+    : undefined, [environmentId]);
   const toPublish = items.find((item) => item.status === "pending" && !item.notifiedAt);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publish the ready request to the existing phone transport
   useEffect(() => {

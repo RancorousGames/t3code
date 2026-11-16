@@ -150,6 +150,71 @@ export function rearmManualAgentAttention(sessionIds: readonly string[], message
   save([...items, nextRequest]);
 }
 
+/** Temporarily hide a persistent Ctrl+D notification while its session is snoozed.
+ * Waiting requests remain waiting and will be activated when the session wakes. */
+export function snoozePersistentManualAttention(
+  sessionIds: readonly string[],
+  until: number,
+): void {
+  const ids = new Set(sessionIds);
+  const items = loadAgentAttention();
+  if (!items.some((item) => ids.has(item.sessionId) && item.source === "manual" &&
+    (item.status === "pending" || item.status === "snoozed") &&
+    (item.status !== "snoozed" || item.nextAt !== until))) return;
+  save(items.map((item) => ids.has(item.sessionId) && item.source === "manual" &&
+    (item.status === "pending" || item.status === "snoozed")
+    ? { ...item, status: "snoozed" as const, nextAt: until } : item));
+}
+
+/** A wake into active work is not a completed answer. Hold its Ctrl+D notice
+ * for the existing working -> idle completion path. */
+export function deferPersistentManualAttention(sessionIds: readonly string[]): void {
+  const ids = new Set(sessionIds);
+  const items = loadAgentAttention();
+  if (!items.some((item) => ids.has(item.sessionId) && item.source === "manual" &&
+    (item.status === "pending" || item.status === "snoozed"))) return;
+  save(items.map((item) => {
+    if (!ids.has(item.sessionId) || item.source !== "manual" ||
+        (item.status !== "pending" && item.status !== "snoozed")) return item;
+    const held: AgentAttention = { ...item, status: "waiting", nextAt: 0 };
+    delete held.notifiedAt;
+    delete held.activatedAt;
+    return held;
+  }));
+}
+
+/** Session-snooze wake is a fresh attention event, even without new agent work.
+ * Reuse the unresolved Ctrl+D request so the stack contains no duplicate item,
+ * and reset its delivery/sound stamp so it announces again. */
+export function reactivatePersistentManualAttention(
+  sessionIds: readonly string[],
+  title: string,
+): void {
+  const ids = new Set(sessionIds);
+  const items = loadAgentAttention();
+  const previous = [...items].reverse().find((item) =>
+    ids.has(item.sessionId) && item.source === "manual" &&
+    (item.status === "waiting" || item.status === "pending" || item.status === "snoozed"));
+  const now = Date.now();
+  if (previous) {
+    save(items.map((item) => {
+      if (item.id !== previous.id) return item;
+      const ready: AgentAttention = {
+        ...item, message: title, status: "pending", activatedAt: now, nextAt: now,
+      };
+      delete ready.notifiedAt;
+      delete ready.resolvedAt;
+      return ready;
+    }));
+  } else {
+    save([...items, {
+      id: randomUUID(), sessionId: sessionIds[0] ?? "", message: title,
+      source: "manual", createdAt: now, activatedAt: now,
+      status: "pending", nextAt: now,
+    }]);
+  }
+}
+
 /** One shared, newest-first notification stack for the toast and Ctrl+S.
  * Resolved, waiting, and not-yet-due snoozed entries do not occupy the stack. */
 export function activeAgentAttentionStack(

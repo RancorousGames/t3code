@@ -3299,9 +3299,12 @@ export function ChatGPTBrowserSidebarEntry({
                               const highlightAccent = chatGPTSessionHighlightAccentClass(
                                 session.borderColor,
                               );
+                              // A persisted ready marker remains yellow even when an
+                              // unloaded session's activity probe is unknown. Hide it
+                              // only while genuinely working or still snoozed.
                               const idleAttentionReady = session.returnMarker === "ready" &&
-                                ["recent", "inactive", "unloaded-recent", "unloaded", "snoozed"]
-                                  .includes(activities[session.id]?.age ?? "unknown");
+                                !isSnoozed(session) &&
+                                activities[session.id]?.age !== "working";
                               const attentionMarked = attentionPriorityIds.has(session.id);
                               return (
                                 <div
