@@ -100,13 +100,15 @@ export function ChatGPTCaffyScheduleDialog({
         ? (target.beginAt ?? (target.intent === "recurring" ? config?.beginAt : null))
         : null;
   const [start, setStart] = useState<"now" | "later">(
-    target.kind === "scheduled"
-      ? target.job.onIdle
-        ? "now"
-        : "later"
-      : scheduledAt && scheduledAt > openedAt
-        ? "later"
-        : "now",
+    target.kind === "new"
+      ? "later"
+      : target.kind === "scheduled"
+        ? target.job.onIdle
+          ? "now"
+          : "later"
+        : scheduledAt && scheduledAt > openedAt
+          ? "later"
+          : "now",
   );
   const [when, setWhen] = useState(() =>
     dateTimeLocal(
