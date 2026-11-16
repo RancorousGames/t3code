@@ -164,7 +164,7 @@ import {
   type ChatGPTRecoveryPhase,
 } from "./ChatGPTBrowserRecoveryCoordinator";
 import { recordSessionClick } from "./chatGPTConversationRecovery";
-import { chatGPTDoubleClickSnoozeUntil } from "./chatGPTDoubleClickSnooze";
+import { chatGPTDoubleClickSnoozeUntil, cancelChatGPTSessionSingleClick, scheduleChatGPTSessionSingleClick } from "./chatGPTDoubleClickSnooze";
 import { readChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { prioritizePendingChatGPTQuestions } from "./chatGPTSessionQuestionPriority";
 import { chatGPTRecoveryHoverDetails } from "./chatGPTRecoveryHoverDetails";
@@ -929,6 +929,8 @@ export function ChatGPTBrowserSidebarEntry({
     clockNow,
   );
   const singleClickResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- release a queued single-click timeout when the sidebar unmounts
+  useEffect(() => () => cancelChatGPTSessionSingleClick(singleClickResetRef), []);
   const firstSessionClick = useRef<{
     id: string; previousId: string | null;
   } | null>(null);
@@ -3398,68 +3400,75 @@ export function ChatGPTBrowserSidebarEntry({
                                               }
                                               onClick={(event) => {
                                                 if (event.detail > 1) return;
-                                                if (event.detail === 1) {
+                                                // The first click in a double-click must not open,
+                                                // reorder, or unsnooze the session before snoozing.
+                                                event.currentTarget.blur();
+                                                const handleSingleClick = () => {
+                                                  firstSessionClick.current = null;
+                                                  acknowledgeChatGPTSessionAttention(
+                                                    environmentId, session,
+                                                    readChatGPTProviderActivity(environmentId, session.id),
+                                                  );
+                                                  setClickedForSort(session.id);
+                                                  setSelectionRecoveryClick((value) => value + 1);
+                                                  recordSessionClick(
+                                                    environmentId,
+                                                    session.id,
+                                                    sessions.map((item) => item.id),
+                                                  );
+                                                  recordChatGPTSessionActiveAt(
+                                                    environmentId,
+                                                    session.id,
+                                                  );
+                                                  // After single-click confirmation, open without waiting for warming.
+                                                  openChatGPTGuestByUser(
+                                                    JSON.stringify([
+                                                      environmentId,
+                                                      chatGPTBrowserThreadRef(
+                                                        environmentId,
+                                                        session.id,
+                                                      ).threadId,
+                                                    ]),
+                                                  );
+                                                  markDirectInteraction(session.id);
+                                                  if (isSnoozed(session)) {
+                                                    preserveSidebarScroll();
+                                                    setSessionSnooze([session.id], null);
+                                                    setShowSnoozed(false);
+                                                  }
+                                                  resetQuickSnooze(session.id);
+                                                  if (session.hidden) {
+                                                    setSessionHidden(session.id, false);
+                                                    setShowHidden(false);
+                                                  }
+                                                  void navigate({
+                                                    to: "/browser/$browserSessionId",
+                                                    params: { browserSessionId: session.id },
+                                                  }).then(() =>
+                                                    window.dispatchEvent(
+                                                      new CustomEvent("t3:focus-chatgpt-composer", {
+                                                        detail: session.id,
+                                                      }),
+                                                    ),
+                                                  );
+                                                };
+                                                if (event.detail === 0) {
+                                                  // Keyboard activation has no double-click sequence.
+                                                  handleSingleClick();
+                                                } else {
                                                   firstSessionClick.current = {
                                                     id: session.id,
                                                     previousId: activeSessionId ?? null,
                                                   };
+                                                  scheduleChatGPTSessionSingleClick(singleClickResetRef, () => {
+                                                    if (firstSessionClick.current?.id !== session.id) return;
+                                                    handleSingleClick();
+                                                  });
                                                 }
-                                                event.currentTarget.blur();
-                                                acknowledgeChatGPTSessionAttention(environmentId, session,
-                                                  readChatGPTProviderActivity(environmentId, session.id));
-                                                setClickedForSort(session.id);
-                                                setSelectionRecoveryClick((value) => value + 1);
-                                                recordSessionClick(
-                                                  environmentId,
-                                                  session.id,
-                                                  sessions.map((item) => item.id),
-                                                );
-                                                recordChatGPTSessionActiveAt(
-                                                  environmentId,
-                                                  session.id,
-                                                );
-                                                // Selection is urgent regardless of Session/Browser view.
-                                                // Do not await navigation or the background warm queue.
-                                                openChatGPTGuestByUser(
-                                                  JSON.stringify([
-                                                    environmentId,
-                                                    chatGPTBrowserThreadRef(
-                                                      environmentId,
-                                                      session.id,
-                                                    ).threadId,
-                                                  ]),
-                                                );
-                                                markDirectInteraction(session.id);
-                                                if (isSnoozed(session)) {
-                                                  preserveSidebarScroll();
-                                                  setSessionSnooze([session.id], null);
-                                                  setShowSnoozed(false);
-                                                }
-                                                if (singleClickResetRef.current)
-                                                  clearTimeout(singleClickResetRef.current);
-                                                singleClickResetRef.current = setTimeout(
-                                                  () => resetQuickSnooze(session.id),
-                                                  300,
-                                                );
-                                                if (session.hidden) {
-                                                  setSessionHidden(session.id, false);
-                                                  setShowHidden(false);
-                                                }
-                                                void navigate({
-                                                  to: "/browser/$browserSessionId",
-                                                  params: { browserSessionId: session.id },
-                                                }).then(() =>
-                                                  window.dispatchEvent(
-                                                    new CustomEvent("t3:focus-chatgpt-composer", {
-                                                      detail: session.id,
-                                                    }),
-                                                  ),
-                                                );
                                               }}
                                               onDoubleClick={(event) => {
                                                 event.preventDefault();
-                                                if (singleClickResetRef.current)
-                                                  clearTimeout(singleClickResetRef.current);
+                                                cancelChatGPTSessionSingleClick(singleClickResetRef);
                                                 const first = firstSessionClick.current;
                                                 firstSessionClick.current = null;
                                                 const previousId = first?.id === session.id
