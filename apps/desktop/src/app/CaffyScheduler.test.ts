@@ -572,6 +572,9 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       expect(shutdowns).toBe(0);
       internal.shutdownIdleSince = Date.now() - 31_000;
       await internal.checkShutdown();
+      expect(shutdowns).toBe(0);
+      internal.shutdownIdleSince = Date.now() - 5 * 60_000 - 1;
+      await internal.checkShutdown();
       expect(shutdowns).toBe(1);
       expect(c.status()).toMatchObject({ keepT3Busy: false, shutdownWhenIdle: false, busyUntil: null });
     } finally { c.close(); f.dispose(); }

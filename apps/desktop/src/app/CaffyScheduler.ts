@@ -1568,7 +1568,7 @@ export class CaffyScheduler {
         this.shutdownIdleSince = now;
         return;
       }
-      if (now - this.shutdownIdleSince < 30_000) return;
+      if (now - this.shutdownIdleSince < 5 * 60_000) return;
       // Disarm durably BEFORE initiating /f. A failed OS call will remain off
       // rather than unexpectedly retry and terminate the user's later work.
       this.shutdownWhenIdle = false;
