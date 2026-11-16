@@ -76,7 +76,8 @@ export function ChatGPTNewSessionShortcut() {
     const session = sessions.find((entry) =>
       entry.id === latest.sessionId || entry.bootstrapIdentity?.publicId === latest.sessionId);
     if (!session) return;
-    acknowledgeChatGPTSessionAttention(environmentId, session);
+    acknowledgeChatGPTSessionAttention(environmentId, session,
+      readChatGPTProviderActivity(environmentId, session.id));
     setSessionHidden(session.id, false);
     setSessionSnooze([session.id], null);
     void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: session.id } });

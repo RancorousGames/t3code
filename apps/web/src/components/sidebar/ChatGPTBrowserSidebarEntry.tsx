@@ -1,5 +1,6 @@
 // @effect-diagnostics cryptoRandomUUID:off -- Ephemeral browser-window reporter ID for multi-window activity telemetry.
 import { acknowledgeChatGPTSessionAttention } from "../../chatGPTPersistentAttention";
+import { readChatGPTProviderActivity } from "../../chatGPTProviderActivity";
 import { useAtomValue } from "@effect/atom-react";
 import { publicChatGPTParentId, publicChatGPTSessionId } from "../../chatGPTBootstrapIdentity";
 import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
@@ -3365,7 +3366,8 @@ export function ChatGPTBrowserSidebarEntry({
                                                   };
                                                 }
                                                 event.currentTarget.blur();
-                                                acknowledgeChatGPTSessionAttention(environmentId, session);
+                                                acknowledgeChatGPTSessionAttention(environmentId, session,
+                                                  readChatGPTProviderActivity(environmentId, session.id));
                                                 setClickedForSort(session.id);
                                                 setSelectionRecoveryClick((value) => value + 1);
                                                 recordSessionClick(

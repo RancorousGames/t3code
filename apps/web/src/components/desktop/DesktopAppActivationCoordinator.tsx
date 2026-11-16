@@ -984,7 +984,8 @@ export function DesktopAppActivationCoordinator() {
             if (command === "attention_open") {
               if (attention.status === "dismissed") throw new Error("Request already dismissed.");
               if (attention.status !== "opened") changeAttention(attention.id,"opened");
-              rearmPersistentSessionAttention(environmentId, browserSession);
+              rearmPersistentSessionAttention(environmentId, browserSession,
+                readChatGPTProviderActivity(environmentId, browserSession.id));
             } else if (command === "attention_snooze") {
               if (o.minutes !== 15 && o.minutes !== 60 ||
                   attention.status === "dismissed" || attention.status === "opened")
@@ -2479,7 +2480,8 @@ export function DesktopAppActivationCoordinator() {
                       throw new Error("Attention request was already dismissed.");
                     if (attention.status !== "opened") changeAttention(attention.id, "opened");
                     // Opening on the phone acknowledges the current alert, not the Ctrl+D toggle.
-                    rearmPersistentSessionAttention(environmentId, entry);
+                    rearmPersistentSessionAttention(environmentId, entry,
+                      readChatGPTProviderActivity(environmentId, entry.id));
                     setSessionHidden(id, false);
                     setSessionSnooze([id], null);
                   } else if (command === "attention_snooze") {
@@ -3003,7 +3005,8 @@ export function DesktopAppActivationCoordinator() {
     if (entry) {
       setSessionHidden(entry.id, false);
       setSessionSnooze([entry.id], null);
-      acknowledgeChatGPTSessionAttention(environmentId, entry);
+      acknowledgeChatGPTSessionAttention(environmentId, entry,
+        readChatGPTProviderActivity(environmentId, entry.id));
       void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: entry.id } });
       return true;
     }
