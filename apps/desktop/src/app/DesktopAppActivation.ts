@@ -442,6 +442,7 @@ export const make = Effect.gen(function* () {
                 sessionId: request.sessionId ?? "",
                 conversationId: conversationId ?? "",
                 mode: request.mode ?? "idle",
+                respectSlots: request.respectSlots,
                 durationMinutes: request.durationMinutes,
                 intervalMinutes: request.intervalMinutes,
                 onceOnly: request.onceOnly,
@@ -449,24 +450,24 @@ export const make = Effect.gen(function* () {
                 keepAwake: request.keepAwake,
                 wakeNow: request.wakeNow,
                 beginAt: request.beginAt,
-                delayedPrompt: request.prompt,
+                delayedPrompt: request.prompt === "" ? null : request.prompt,
                 repeatPrompt: request.repeatPrompt,
                 auditRequestId: request.requestId,
                 autoRebootMinutes: request.rebootMinutes,
                 autoRebootEveryRuns: request.rebootEveryRuns,
               })
-            : action === "list" || action === "status"
             : action === "configure"
               ? caffy.configure(request.sessionId ?? "", {
                   ...(!("respectSlots" in request) || typeof request.respectSlots !== "boolean" ? {} : { respectSlots: request.respectSlots }),
                   ...(request.repeatPrompt === undefined ? {} : { repeatPrompt: request.repeatPrompt }),
                 })
+            : action === "list" || action === "status"
               ? caffy.status(action === "status" ? request.sessionId : undefined)
             : action === "policy"
               ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking,
                   shutdownWhenIdle: request.shutdownWhenIdle, busyForMinutes: request.busyForMinutes })
             : action === "begin_in"
-              ? await caffy.beginAt(request.sessionId ?? "", conversationId ?? "", request.beginAt ?? null, request.prompt, request.requestId)
+              ? await caffy.beginAt(request.sessionId ?? "", conversationId ?? "", request.beginAt ?? null, request.prompt, request.respectSlots, request.requestId)
             : action === "schedule_spawn"
               ? caffy.scheduleSpawn({ id: request.jobId ?? "", title: request.title ?? "",
                   prompt: request.prompt ?? "", beginAt: request.beginAt ?? null,

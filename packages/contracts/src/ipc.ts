@@ -1915,7 +1915,8 @@ export interface DesktopBridge {
     action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "throughput" | "working_snapshot" | "retire" | "begin_in" | "auto_reboot" | "schedule_spawn" | "read_spawn" | "edit_spawn" | "cancel_spawn" | "cancel_begin";
     sessionId?: string;
     conversationId?: string;
-    mode?: "idle" | "periodic" | "queued" | "startup";
+    mode?: "idle" | "periodic" | "startup";
+    respectSlots?: boolean;
     durationMinutes?: number;
     intervalMinutes?: number;
     onceOnly?: boolean;

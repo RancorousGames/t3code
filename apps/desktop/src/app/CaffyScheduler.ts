@@ -14,8 +14,9 @@ import { AutoworkThroughput } from "./AutoworkThroughput.ts";
 import { AutomaticAdmissionJournal } from "./AutomaticAdmissionJournal.ts";
 import { caffyWakePhase, reduceCaffyWake } from "./CaffyWakeMachine.ts";
 
-type Mode = "idle" | "periodic" | "queued" | "startup";
-type Trigger = "idle" | "periodic" | "queued" | "startup" | "manual";
+/** "idle" = Keep running (wake on every idle), "periodic" = Interval wake. */
+type Mode = "idle" | "periodic" | "startup";
+type Trigger = "idle" | "periodic" | "startup" | "manual";
 type Request = (request: DesktopAppActivationRequest) => Promise<DesktopAppActivationResponse>;
 export interface CaffyConfig {
   sessionId: string;
@@ -24,6 +25,8 @@ export interface CaffyConfig {
   publicSessionId?: string | undefined;
   conversationId: string;
   mode: Mode;
+  /** Wait for a free Keep T3 Busy working slot before waking. Default: ignore slots. */
+  respectSlots: boolean;
   intervalMinutes: number;
   startup: boolean;
   onceOnly: boolean;
@@ -70,10 +73,6 @@ export interface CaffyConfig {
   autoRebootEveryRuns?: number | null;
   wakesSinceReboot?: number;
   lastCountedWakeAt?: number | null;
-  /** An admitted queued monitor retains one automatic slot until stopped. */
-  capacityHeld?: boolean;
-  /** One-time clock-based prompt can run even when automatic TaskBoard work is disabled. */
-  runWithoutBusy?: boolean;
   /** First verified working observation or completed Caffy wake. */
   lastActivatedAt?: number | null;
   lastRebootAt?: number | null;
@@ -156,7 +155,7 @@ const WAKE_TEXT = "Continue working on your current assignment. If everything is
 const CLOCK = 20_000;
 const valid = (row: CaffyConfig): boolean =>
   !!row && UUID.test(row.sessionId) && UUID.test(row.conversationId) &&
-  ["idle", "periodic", "queued", "startup"].includes(row.mode) &&
+  ["idle", "periodic", "startup"].includes(row.mode) &&
   Number.isFinite(row.createdAt) && Number.isInteger(row.intervalMinutes) &&
   row.intervalMinutes >= 1 && row.intervalMinutes <= 525_600 &&
   (row.expiresAt === null || Number.isFinite(row.expiresAt)) &&
@@ -224,12 +223,19 @@ export class CaffyScheduler {
     try {
       const saved = JSON.parse(NodeFS.readFileSync(this.file, "utf8")) as CaffyStore;
       if (saved.version === 2 && Array.isArray(saved.entries)) {
-        for (const row of saved.entries) if (valid(row)) {
-          // Older periodic stores can lack a deadline; restore the original
-          // cadence, never an arbitrary "20 minutes from every restart" timer.
-          if (row.mode === "periodic" && !Number.isFinite(row.nextDueAt))
-            row.nextDueAt = row.createdAt + row.intervalMinutes * 60_000;
-          if (row.mode === "idle") row.nextDueAt = null;
+        for (const row of saved.entries) {
+          // Older stores: "queued" was Keep running that respected slots. All
+          // rows now default to ignoring slots unless explicitly set.
+          if ((row.mode as string) === "queued") row.mode = "idle";
+          row.respectSlots = row.respectSlots === true;
+          delete (row as { capacityHeld?: unknown }).capacityHeld;
+          delete (row as { runWithoutBusy?: unknown }).runWithoutBusy;
+          if (!valid(row)) continue;
+          // An interval with no deadline and no wake in flight restarts now.
+          if (row.mode === "periodic" && !Number.isFinite(row.nextDueAt) &&
+              !row.pendingWake && !row.pendingMessageId)
+            row.nextDueAt = Date.now() + row.intervalMinutes * 60_000;
+          if (row.mode !== "periodic") row.nextDueAt = null;
           this.entries.set(row.sessionId, row);
         }
         for (const job of saved.scheduledSpawns ?? []) {
@@ -269,11 +275,8 @@ export class CaffyScheduler {
     this.deliveries.subscribeTransitions(record => this.onDelivery(record));
     this.deliveries.setDispatchPermission(record => {
       const row = this.lookup(record.sessionId);
-      if (!row || row.pendingMessageId !== record.messageId) return true;
-      // Keep T3 Busy controls only TaskBoard autofill. User-created Caffy
-      // schedules remain eligible even when TaskBoard autofill is off.
-      const state = this.deliveries.status(record.messageId).status;
-      return state === "uncertain" || state === "sending" || !row.paused;
+      // Pausing a schedule also holds its pending wake (it gives up after an hour).
+      return !row || row.pendingMessageId !== record.messageId || !row.paused;
     });
     this.deliveries.setDispatchAdmission(async record => {
       const row = this.lookup(record.sessionId);
@@ -281,7 +284,7 @@ export class CaffyScheduler {
       const state = this.deliveries.status(record.messageId).status;
       if (state === "uncertain" || state === "sending") return true;
       if (row.paused) return false;
-      if (row.mode === "idle") return true;
+      if (!row.respectSlots) return true;
       const snapshot = await this.capacity().catch(() => null);
       // An already admitted wake may finish its exact pending send, but a
       // preexisting oversubscription must not authorize additional Caffy
@@ -510,7 +513,7 @@ export class CaffyScheduler {
       else if (row.mode === "idle")
         checked("Waiting for a newer verified idle edge or a new guarded assistant reply.");
       else if (row.mode === "periodic")
-        checked(`Periodic deadline ${row.nextDueAt == null ? "not scheduled" : new Date(row.nextDueAt).toISOString()}.`);
+        checked(`Next interval wake ${row.nextDueAt == null ? "not scheduled" : new Date(row.nextDueAt).toISOString()}.`);
       else checked(`${row.mode} monitor awaiting its activation conditions.`);
       if (binding.working && !row.lastActivatedAt) {
         row.lastActivatedAt = now;
@@ -570,27 +573,16 @@ export class CaffyScheduler {
           continue;
         }
         if (row.pendingMessageId) {
-          // A pinned receipt wins over a new browser binding. Only a proven
-          // unsent queued record can be cancelled and retargeted safely.
-          let receipt: Omit<DeliveryRecord, "body"> | null = null;
-          try { receipt = this.deliveries.status(row.pendingMessageId); } catch { /* absent journal is ambiguous */ }
-          if (!receipt || receipt.status !== "queued" || receipt.lastSubmissionAt || receipt.uncertainSince) {
-            if (receipt) this.onDelivery(receipt);
-            if (row.pendingMessageId) {
-              row.lastError = "Session binding changed with an unresolved delivery; retaining the original receipt, no retarget or resend.";
-              this.save();
-              continue;
-            }
-          } else {
-            // Persist intent with the old receipt still pinned before cancel.
-            // Either side of a crash can then finish the same migration.
-            const oldMessageId = row.pendingMessageId;
-            row.delayedPrompt = row.pendingMessageBody ?? row.delayedPrompt ?? null;
-            row.pendingWake = true;
-            row.pendingReason = "manual";
-            this.save();
-            this.deliveries.cancel(oldMessageId);
-          }
+          // Retarget the pending wake to the new conversation. Duplicates are
+          // fine, so the old message is simply cancelled and the wake re-armed.
+          const oldMessageId = row.pendingMessageId;
+          row.delayedPrompt = row.pendingMessageBody ?? row.delayedPrompt ?? null;
+          row.pendingWake = true;
+          row.pendingReason = "manual";
+          row.pendingMessageId = null;
+          row.pendingMessageBody = null;
+          this.save();
+          try { this.deliveries.cancel(oldMessageId); } catch { /* already gone */ }
         }
         row.conversationId = nextId;
         // Keep the owner cursor. Do not consume the new conversation's first
@@ -615,6 +607,14 @@ export class CaffyScheduler {
       try { receipt = this.deliveries.status(row.pendingMessageId); } catch { /* pending journal commit */ }
     }
     const view = { ...row,
+      deliveryStatus: receipt?.status ?? row.deliveryStatus ?? null,
+      deliveryUpdatedAt: receipt?.updatedAt ?? row.deliveryUpdatedAt ?? null,
+      deliveryAwaitingGuest: receipt?.awaitingGuest ?? row.deliveryAwaitingGuest ?? false,
+      lastDeliveryResult: receipt?.lastError ?? row.lastDeliveryResult ?? null,
+    };
+    return { ...view, wakePhase: caffyWakePhase(view, Date.now(), view.deliveryStatus) };
+  }
+
   /** Bounded read of durable scheduler transition receipts; avoid whole-log scans on phones. */
   private recentEvents(sessionId: string) {
     const file = NodePath.join(NodePath.dirname(this.file), "caffy-state-transitions.ndjson");
@@ -638,14 +638,6 @@ export class CaffyScheduler {
         } catch { return []; }
       }).slice(-10);
     } catch { return []; }
-  }
-
-      deliveryStatus: receipt?.status ?? row.deliveryStatus ?? null,
-      deliveryUpdatedAt: receipt?.updatedAt ?? row.deliveryUpdatedAt ?? null,
-      deliveryAwaitingGuest: receipt?.awaitingGuest ?? row.deliveryAwaitingGuest ?? false,
-      lastDeliveryResult: receipt?.lastError ?? row.lastDeliveryResult ?? null,
-    };
-    return { ...view, wakePhase: caffyWakePhase(view, Date.now(), view.deliveryStatus) };
   }
 
   status(sessionId?: string) {
@@ -742,6 +734,7 @@ export class CaffyScheduler {
 
   async set(input: {
     sessionId: string; conversationId: string; mode: Mode;
+    respectSlots?: boolean | undefined;
     durationMinutes?: number | undefined; onceOnly?: boolean | undefined; startup?: boolean | undefined;
     intervalMinutes?: number | undefined; keepAwake?: boolean | undefined;
     wakeNow?: boolean | undefined;
@@ -754,8 +747,8 @@ export class CaffyScheduler {
   }) {
     if (!UUID.test(input.sessionId) || !UUID.test(input.conversationId))
       throw new Error("Exact sessionId and conversationId UUIDs required.");
-    if (!["idle", "periodic", "queued", "startup"].includes(input.mode))
-      throw new Error("Caffy mode must be idle, periodic, queued or startup.");
+    if (!["idle", "periodic", "startup"].includes(input.mode))
+      throw new Error("Caffy mode must be idle (keep running), periodic (interval) or startup.");
     if (input.durationMinutes !== undefined &&
         (!Number.isInteger(input.durationMinutes) || input.durationMinutes < 1 || input.durationMinutes > 525_600))
       throw new Error("Duration must be 1..525600 minutes or omitted for infinite.");
@@ -830,8 +823,9 @@ export class CaffyScheduler {
         (prior.conversationId !== input.conversationId || prior.sessionId !== canonicalId))
       throw new Error("Existing wake delivery needs reconciliation before changing its recipient identity.");
     const mode = input.mode;
+    const respectSlots = input.respectSlots ?? prior?.respectSlots ?? false;
     const same = !!prior && prior.conversationId === input.conversationId &&
-      prior.mode === mode && prior.expiresAt ===
+      prior.mode === mode && prior.respectSlots === respectSlots && prior.expiresAt ===
         (input.durationMinutes === undefined ? null : prior.createdAt + input.durationMinutes * 60_000) &&
       prior.onceOnly === (input.onceOnly ?? false) &&
       prior.startup === (input.startup ?? (input.mode === "startup")) &&
@@ -864,6 +858,9 @@ export class CaffyScheduler {
         this.backupConfiguration();
         void this.pump();
       }
+      // A revised one-off message/start can re-arm a matching policy.
+      // Dispatch immediately rather than waiting for the next scheduler tick.
+      if (prior.pendingWake && !prior.paused) void this.pump();
       return prior;
     }
     const journalIdle = this.latestIdle(browserSessionId);
@@ -875,14 +872,14 @@ export class CaffyScheduler {
       sessionId: canonicalId, browserSessionId,
       publicSessionId: identity?.id ?? prior?.publicSessionId,
       conversationId: input.conversationId,
-      mode, intervalMinutes,
+      mode, respectSlots, intervalMinutes,
       startup: mode === "startup" ? true : input.startup ?? false, onceOnly: input.onceOnly ?? false,
       keepAwake: input.keepAwake ?? true, paused: false, createdAt: now,
       expiresAt: input.durationMinutes === undefined ? null :
         Math.max(now, input.beginAt ?? prior?.beginAt ?? now) + input.durationMinutes * 60_000,
       nextDueAt: mode === "periodic" ? input.beginAt ?? now + intervalMinutes * 60_000 : null,
-      pendingWake: input.wakeNow ?? (mode === "queued" || initialIdleWake),
-      pendingReason: (input.wakeNow ?? (mode === "queued" || initialIdleWake)) ? "manual" : null,
+      pendingWake: input.wakeNow ?? initialIdleWake,
+      pendingReason: (input.wakeNow ?? initialIdleWake) ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
       lastIdleSequence: Math.max(
         continuingSameMonitor ? (prior?.lastIdleSequence ?? 0) : initialIdleSequence,
@@ -903,8 +900,6 @@ export class CaffyScheduler {
       autoRebootEveryRuns: input.autoRebootEveryRuns !== undefined ? input.autoRebootEveryRuns : prior?.autoRebootEveryRuns ?? null,
       wakesSinceReboot: prior?.wakesSinceReboot ?? 0,
       lastCountedWakeAt: prior?.lastCountedWakeAt ?? null,
-      capacityHeld: mode === "queued" ? (prior?.capacityHeld ?? false) : false,
-      runWithoutBusy: input.mode === "idle" && input.onceOnly === true && input.beginAt != null,
       lastActivatedAt: prior?.lastActivatedAt ?? null,
       lastRebootAt: prior?.lastRebootAt ?? null,
       rebootOperationId: prior?.rebootOperationId ?? null,
@@ -1074,14 +1069,11 @@ export class CaffyScheduler {
     if (!row) return { cleared: true };
     if (row.pendingMessageId) {
       const messageId = row.pendingMessageId;
-      const delivery = this.deliveries.status(messageId);
-      if (delivery.status !== "queued")
-        throw new Error("Prompt may already have been sent; inspect delivery before cancelling.");
       row.pendingMessageId = null;
       row.pendingMessageBody = null;
-      this.deliveries.cancel(messageId);
+      try { this.deliveries.cancel(messageId); } catch { /* already gone */ }
     }
-    if (row.onceOnly && (row.mode === "queued" || row.mode === "idle")) {
+    if (row.onceOnly && row.mode === "idle") {
       return { cleared: true, stopped: this.stop(sessionId, "user").stopped };
     }
     row.delayedPrompt = null;
@@ -1093,7 +1085,8 @@ export class CaffyScheduler {
     return { cleared: true };
   }
 
-  async beginAt(sessionId: string, conversationId: string, at: number | null, prompt?: string, auditRequestId?: string) {
+  /** One-off prompt at a time; `respectSlots` applies only when this creates the row. */
+  async beginAt(sessionId: string, conversationId: string, at: number | null, prompt?: string, respectSlots = false, auditRequestId?: string) {
     if (prompt !== undefined && (!prompt.trim() || prompt.length > 29_800))
       throw new Error("Delayed prompt must contain 1..29800 characters.");
     if (at !== null && (!Number.isSafeInteger(at) || at <= Date.now() ||
@@ -1102,11 +1095,8 @@ export class CaffyScheduler {
     let row = this.lookup(sessionId);
     if (!row) {
       if (at === null) return { cleared: true };
-      row = await this.set({ sessionId, conversationId, mode: "queued",
+      return await this.set({ sessionId, conversationId, mode: "idle", respectSlots,
         onceOnly: true, keepAwake: false, beginAt: at, delayedPrompt: prompt ?? null, auditRequestId });
-      row.runWithoutBusy = true;
-      this.save();
-      return row;
     }
     if (row.conversationId !== conversationId)
       throw new Error("Delayed start requires the same registered conversation.");
@@ -1118,14 +1108,11 @@ export class CaffyScheduler {
       return { cleared: true, stopped: this.stop(sessionId).stopped };
     }
     if (row.pendingMessageId) {
-      // Delay cannot retract an UNKNOWN or already submitted wake.
-      const previous = this.deliveries.status(row.pendingMessageId);
-      if (previous.status !== "queued")
-        throw new Error("Cannot delay a wake that has already been attempted.");
+      // Delaying replaces any pending wake (it may already have landed; that's fine).
       const messageId = row.pendingMessageId;
       row.pendingMessageId = null;
       row.pendingMessageBody = null;
-      this.deliveries.cancel(messageId);
+      try { this.deliveries.cancel(messageId); } catch { /* already gone */ }
     }
     if (row.expiresAt !== null) {
       const base = row.beginAt ?? row.createdAt;
@@ -1133,8 +1120,24 @@ export class CaffyScheduler {
       row.expiresAt = (at ?? Date.now()) + duration;
     }
     row.beginAt = at;
-    row.runWithoutBusy = at !== null;
     row.delayedPrompt = at === null ? null : prompt ?? null;
+    row.pendingWake = true;
+    row.pendingReason = "manual";
+    if (at !== null) {
+      // The renderer first pauses the live monitor while clicking Stop.
+      // Persist the future deadline AND the resumed scheduler atomically, so
+      // a lost follow-up IPC cannot leave Caffy permanently paused.
+      const wasPaused = row.paused;
+      row.paused = false;
+      this.logPauseChange(row, wasPaused, "begin_in:scheduled-start", auditRequestId);
+      row.lastError = null;
+    }
+    this.save();
+    this.backupConfiguration();
+    if (at === null) void this.pump();
+    return row;
+  }
+
   /** Non-temporal edits never re-arm stopped monitors or resume paused ones. */
   configure(sessionId: string, input: { respectSlots?: boolean; repeatPrompt?: string }) {
     const row = this.lookup(sessionId);
@@ -1156,41 +1159,6 @@ export class CaffyScheduler {
     this.save();
     this.backupConfiguration();
     if (!row.paused) void this.pump();
-    return row;
-  }
-
-  /** Non-temporal edits never re-arm stopped monitors or resume paused ones. */
-  configure(sessionId: string, input: { respectSlots?: boolean; repeatPrompt?: string }) {
-    const row = this.lookup(sessionId);
-    if (!row) throw new Error("Caffy is not running for this session.");
-    if (input.repeatPrompt !== undefined) {
-      if (input.repeatPrompt.length > 29_800)
-        throw new Error("Repeated prompt exceeds 29800 characters.");
-      if (row.pendingMessageId)
-        throw new Error("An existing wake delivery must settle before changing the repeated prompt.");
-    }
-    if (input.respectSlots !== undefined) row.respectSlots = input.respectSlots;
-    if (input.repeatPrompt !== undefined) row.repeatPrompt = input.repeatPrompt.trim() || null;
-    this.save();
-    this.backupConfiguration();
-    if (!row.paused) void this.pump();
-    return row;
-  }
-
-    row.pendingWake = true;
-    row.pendingReason = "manual";
-    if (at !== null) {
-      // The renderer first pauses the live monitor while clicking Stop.
-      // Persist the future deadline AND the resumed scheduler atomically, so
-      // a lost follow-up IPC cannot leave Caffy permanently paused.
-      const wasPaused = row.paused;
-      row.paused = false;
-      this.logPauseChange(row, wasPaused, "begin_in:scheduled-start", auditRequestId);
-      row.lastError = null;
-    }
-    this.save();
-    this.backupConfiguration();
-    if (at === null) void this.pump();
     return row;
   }
 
@@ -1318,10 +1286,6 @@ export class CaffyScheduler {
     const wasPaused = row.paused;
     row.paused = paused;
     this.logPauseChange(row, wasPaused, paused ? "pause:explicit" : "resume:explicit", auditRequestId);
-    // Pausing relinquishes any automatic continuation lease unless a prompt
-    // is already in-flight. On resume it must reacquire through the gate.
-    if (paused && row.mode === "queued" && row.pendingMessageId === null)
-      row.capacityHeld = false;
     this.save();
     this.backupConfiguration();
     if (!paused) { this.deliveries.resumeAllowed(); void this.pump(); }
@@ -1511,7 +1475,7 @@ export class CaffyScheduler {
         try {
           const status = this.deliveries.status(row.pendingMessageId).status;
           return status === "sending" || status === "uncertain" || status === "queued";
-        } catch { return true; } // UNKNOWN outbox outcome: fail closed.
+        } catch { return false; }
       });
       if (snapshot.unknown > 0 || snapshot.working > 0 || sending ||
           this.taskReservations.length > 0 || !this.taskBoardInventoryReady) {
@@ -1694,7 +1658,7 @@ export class CaffyScheduler {
   throughputStatus() { this.expireTimedBusy(); return this.throughput.snapshot(); }
 
   /**
-   * TaskBoard yields to waiting queued Caffy recipients, including unloaded
+   * TaskBoard yields to waiting slot-respecting Caffy recipients, including unloaded
    * ChatGPT pages, before it can claim another automatic worker slot.
    * Invalid bindings are excluded once their reconciliation error is known.
    */
@@ -1705,7 +1669,7 @@ export class CaffyScheduler {
       [...this.scheduledSpawns.values()].some(job => job.status === "scheduled" &&
         (job.onIdle === true || (job.beginAt !== null && job.beginAt <= now))) ||
       [...this.entries.values()].some(row =>
-        (row.mode === "queued" || row.mode === "periodic") && row.pendingWake && !row.paused &&
+        row.respectSlots && row.pendingWake && !row.paused &&
         !row.pendingMessageId && row.lastError === null &&
         // A queued wake intentionally delayed by the user does not reserve
         // priority/capacity until its activation deadline.
@@ -1725,8 +1689,8 @@ export class CaffyScheduler {
       const now = Date.now();
       await this.dispatchScheduledSpawn(now);
       const rows = [...this.entries.values()].sort((a,b) =>
-        Number(b.mode === "queued" && b.pendingWake && !b.paused) -
-        Number(a.mode === "queued" && a.pendingWake && !a.paused));
+        Number(b.respectSlots && b.pendingWake && !b.paused) -
+        Number(a.respectSlots && a.pendingWake && !a.paused));
       for (const row of rows) {
         if (this.entries.get(row.sessionId) !== row) continue;
         if (row.rebootOperationId) {
@@ -1774,7 +1738,7 @@ export class CaffyScheduler {
           continue;
         }
         const wakeTicket = `wake:${row.sessionId}:${row.conversationId}`;
-        const bypassCapacity = row.mode === "idle";
+        const bypassCapacity = !row.respectSlots;
         if (!bypassCapacity && !(await this.acquireAutomaticAdmission(
           wakeTicket, row.sessionId, true,
         ))) {
@@ -1821,7 +1785,6 @@ export class CaffyScheduler {
         });
         if (!Object.keys(claimed.patch).length) continue;
         this.applyWakeTransition(row, claimed.patch);
-        if (row.mode === "queued") row.capacityHeld = true;
         this.save();
         try {
           this.deliveries.enqueue({
