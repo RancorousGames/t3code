@@ -29,6 +29,7 @@ function MenuPopup({
   anchor,
   keepMounted = false,
   width = "default",
+  positionerClassName,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -39,6 +40,8 @@ function MenuPopup({
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
   keepMounted?: boolean;
   width?: "default" | "content";
+  /** Allow menus on high-z floating overlays to stack above their trigger. */
+  positionerClassName?: string;
 }) {
   return (
     <MenuPrimitive.Portal keepMounted={keepMounted}>
@@ -47,7 +50,7 @@ function MenuPopup({
         alignOffset={alignOffset}
         anchor={anchor}
         collisionAvoidance={collisionAvoidance}
-        className="z-[130]"
+        className={cn("z-[130]", positionerClassName)}
         data-slot="menu-positioner"
         render={renderClosingPositioner}
         side={side}

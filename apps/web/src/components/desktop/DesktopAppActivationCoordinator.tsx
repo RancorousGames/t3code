@@ -2993,7 +2993,8 @@ export function DesktopAppActivationCoordinator() {
     };
   }, [activation, ready, primaryEnvironment?.environmentId]);
 
-  return <AgentAttentionToast onDismiss={(attention) => {
+  return <AgentAttentionToast environmentId={primaryEnvironment?.environmentId}
+    onDismiss={(attention) => {
     const environmentId = primaryEnvironment?.environmentId;
     return environmentId ? queueAgentAttentionDismissal(environmentId, attention) : Promise.resolve(false);
   }} sessionTitle={(sessionId) => {
