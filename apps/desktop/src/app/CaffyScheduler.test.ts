@@ -149,6 +149,37 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       });
     } finally { scheduler.close(); g.dispose(); }
   });
+  it("attaches Caffy to a scheduled new session after its conversation is verified", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      c.reportWorkingSnapshot([], "sidebar");
+      c.setTaskReservations([], true);
+      const jobId = "55555555-5555-4555-8555-555555555555";
+      c.scheduleSpawn({
+        id: jobId, title: "New recurring worker", prompt: "Start the assignment",
+        beginAt: null, onIdle: true,
+        caffy: { mode: "idle", intervalMinutes: 20, respectSlots: false,
+          repeatPrompt: "Continue the assignment" },
+      });
+      await (c as unknown as {dispatchScheduledSpawn(now: number): Promise<void>})
+        .dispatchScheduledSpawn(Date.now());
+      expect(c.status(REPLACEMENT)).toBeNull();
+      f.setRoster([{
+        id: REPLACEMENT, conversationId: SESSION,
+        bootstrapIdentity: {state: "registered", publicId: REPLACEMENT, conversationId: SESSION},
+      }]);
+      await (c as unknown as {activateCreatedSpawnCaffy(): Promise<void>})
+        .activateCreatedSpawnCaffy();
+      expect(c.status(REPLACEMENT)).toMatchObject({
+        mode: "idle", repeatPrompt: "Continue the assignment",
+        pendingWake: true, onceOnly: false,
+      });
+      const status = c.status() as { scheduledSpawns: Array<{caffyAppliedAt?: number}> };
+      expect(status.scheduledSpawns[0]?.caffyAppliedAt).toBeTypeOf("number");
+    } finally { c.close(); f.dispose(); }
+  });
+
   it("starts an idle-mode monitor immediately only with a verified idle guest", async () => {
     const f = fixture();
     const c = f.open();

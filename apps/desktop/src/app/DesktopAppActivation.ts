@@ -471,7 +471,7 @@ export const make = Effect.gen(function* () {
             : action === "schedule_spawn"
               ? caffy.scheduleSpawn({ id: request.jobId ?? "", title: request.title ?? "",
                   prompt: request.prompt ?? "", beginAt: request.beginAt ?? null,
-                  onIdle: request.onIdle === true,
+                  onIdle: request.onIdle === true, caffy: request.spawnCaffy ?? null,
                   ...(request.project ? { project: request.project } : {}) })
             : action === "read_spawn"
               ? caffy.readScheduledSpawn(request.jobId ?? "")
@@ -479,7 +479,7 @@ export const make = Effect.gen(function* () {
               ? caffy.updateScheduledSpawn({
                   id: request.jobId ?? "", title: request.title ?? "",
                   prompt: request.prompt ?? "", beginAt: request.beginAt ?? null,
-                  onIdle: request.onIdle === true,
+                  onIdle: request.onIdle === true, caffy: request.spawnCaffy ?? null,
                 })
             : action === "cancel_spawn"
               ? caffy.cancelScheduledSpawn(request.jobId ?? "")

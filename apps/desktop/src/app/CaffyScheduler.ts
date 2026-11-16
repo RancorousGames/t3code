@@ -91,6 +91,15 @@ interface LocalCapacityClaim {
   state: "waiting" | "admitted" | "submitted" | "uncertain";
   createdAt: number; submittedAt: number | null;
 }
+export interface ScheduledSpawnCaffy {
+  mode: "idle" | "periodic";
+  intervalMinutes: number;
+  respectSlots: boolean;
+  durationMinutes?: number | undefined;
+  repeatPrompt?: string | undefined;
+  autoRebootMinutes?: number | null | undefined;
+  autoRebootEveryRuns?: number | null | undefined;
+}
 interface ScheduledChatGPTSpawn {
   id: string;
   title: string;
@@ -99,6 +108,10 @@ interface ScheduledChatGPTSpawn {
   /** Wait for Keep T3 Busy to have a free agent slot, ahead of TaskBoard. */
   onIdle?: boolean;
   project?: string;
+  /** Optional Caffy continuation to attach after the new session has a verified conversation. */
+  caffy?: ScheduledSpawnCaffy | null;
+  caffyAppliedAt?: number;
+  caffyError?: string;
   status: "scheduled" | "dispatching" | "created" | "uncertain";
   /** Short reservation while the newly spawned session mounts and starts. */
   holdUntil?: number;
@@ -958,7 +971,24 @@ export class CaffyScheduler {
     return { stopped };
   }
 
-  scheduleSpawn(input: { id: string; title: string; prompt: string; beginAt: number | null; onIdle?: boolean; project?: string }) {
+  private validateScheduledSpawnCaffy(value: ScheduledSpawnCaffy | null | undefined) {
+    if (!value) return;
+    if (!["idle", "periodic"].includes(value.mode) ||
+        typeof value.respectSlots !== "boolean" ||
+        !Number.isInteger(value.intervalMinutes) || value.intervalMinutes < 1 ||
+        value.intervalMinutes > 525_600 ||
+        (value.durationMinutes !== undefined && (!Number.isInteger(value.durationMinutes) ||
+          value.durationMinutes < 1 || value.durationMinutes > 525_600)) ||
+        (value.repeatPrompt !== undefined && value.repeatPrompt.length > 29_800) ||
+        (value.autoRebootMinutes != null && (!Number.isInteger(value.autoRebootMinutes) ||
+          value.autoRebootMinutes < 1 || value.autoRebootMinutes > 525_600)) ||
+        (value.autoRebootEveryRuns != null && (!Number.isInteger(value.autoRebootEveryRuns) ||
+          value.autoRebootEveryRuns < 1 || value.autoRebootEveryRuns > 10_000)) ||
+        (value.autoRebootMinutes != null && value.autoRebootEveryRuns != null))
+      throw new Error("Invalid Caffy continuation settings for scheduled session.");
+  }
+
+  scheduleSpawn(input: { id: string; title: string; prompt: string; beginAt: number | null; onIdle?: boolean; project?: string; caffy?: ScheduledSpawnCaffy | null }) {
     if (!UUID.test(input.id)) throw new Error("Scheduled job requires a stable UUID.");
     if (!input.title.trim() || input.title.length > 120 ||
         !input.prompt.trim() || input.prompt.length > 29_800)
@@ -967,12 +997,14 @@ export class CaffyScheduler {
         input.beginAt === null || !Number.isSafeInteger(input.beginAt) ||
         input.beginAt <= Date.now() || input.beginAt > Date.now() + 90 * 24 * 60 * 60_000)
       throw new Error("Choose either the next available agent slot or a future time within 90 days.");
+    this.validateScheduledSpawnCaffy(input.caffy);
     const existing = this.scheduledSpawns.get(input.id);
     if (existing) {
       if (existing.title !== input.title || existing.prompt !== input.prompt ||
           existing.beginAt !== input.beginAt ||
           (existing.onIdle === true) !== (input.onIdle === true) ||
-          existing.project !== input.project)
+          existing.project !== input.project ||
+          JSON.stringify(existing.caffy ?? null) !== JSON.stringify(input.caffy ?? null))
         throw new Error("Scheduled job ID belongs to a different request.");
       return { id: existing.id, status: existing.status, beginAt: existing.beginAt };
     }
@@ -992,11 +1024,12 @@ export class CaffyScheduler {
   }
 
   /** Replace rather than mutate: a concurrently admitted dispatch must recheck identity. */
-  updateScheduledSpawn(input: { id: string; title: string; prompt: string; beginAt: number | null; onIdle?: boolean }) {
+  updateScheduledSpawn(input: { id: string; title: string; prompt: string; beginAt: number | null; onIdle?: boolean; caffy?: ScheduledSpawnCaffy | null }) {
     const job = this.readScheduledSpawn(input.id);
     if (!input.title.trim() || input.title.length > 120 ||
         !input.prompt.trim() || input.prompt.length > 29_800)
       throw new Error("Provide a prompt (maximum 29800 characters).");
+    this.validateScheduledSpawnCaffy(input.caffy);
     const now = Date.now();
     if (input.onIdle === true ? input.beginAt !== null :
         input.beginAt === null || !Number.isSafeInteger(input.beginAt) ||
@@ -1006,6 +1039,7 @@ export class CaffyScheduler {
     this.scheduledSpawns.set(job.id, {
       ...job, title: input.title.trim(), prompt: input.prompt.trim(),
       beginAt: input.beginAt, onIdle: input.onIdle === true,
+      caffy: input.caffy ?? null,
     });
     this.save();
     void this.pump();
@@ -1020,6 +1054,51 @@ export class CaffyScheduler {
     this.scheduledSpawns.delete(id);
     this.save();
     return { cancelled: true, id };
+  }
+
+  /** Attach continuation only once the new session's real conversation binding is visible. */
+  private async activateCreatedSpawnCaffy(): Promise<void> {
+    const pending = [...this.scheduledSpawns.values()].filter(job =>
+      job.status === "created" && job.caffy && !job.caffyAppliedAt && job.sessionId);
+    if (!pending.length) return;
+    const roster = await this.loadRoster().catch(() => null);
+    if (!roster || roster.hasMore || roster.incomplete) return;
+    for (const job of pending) {
+      if (this.scheduledSpawns.get(job.id) !== job || !job.sessionId || !job.caffy) continue;
+      const matching = roster.sessions.filter(entry =>
+        entry.id === job.sessionId || entry.browserSessionId === job.sessionId);
+      if (matching.length !== 1) continue;
+      const owner = matching[0]!;
+      if (owner.closedAt != null || owner.hidden) continue;
+      const conversationId = owner.conversationId ?? owner.bootstrapIdentity?.conversationId;
+      if (!conversationId || !UUID.test(conversationId)) continue;
+      const bound = this.bindingInRoster(roster, job.sessionId, conversationId);
+      if (!bound) continue;
+      try {
+        await this.set({
+          sessionId: bound.browserSessionId, conversationId,
+          mode: job.caffy.mode, respectSlots: job.caffy.respectSlots,
+          intervalMinutes: job.caffy.intervalMinutes,
+          durationMinutes: job.caffy.durationMinutes,
+          onceOnly: false, keepAwake: false,
+          // Idle mode waits for the initial prompt to finish; periodic mode
+          // starts its interval from the verified session attachment.
+          wakeNow: job.caffy.mode === "idle",
+          beginAt: null, repeatPrompt: job.caffy.repeatPrompt ?? "",
+          autoRebootMinutes: job.caffy.autoRebootMinutes ?? null,
+          autoRebootEveryRuns: job.caffy.autoRebootEveryRuns ?? null,
+        });
+        job.caffyAppliedAt = Date.now();
+        delete job.caffyError;
+        this.save();
+      } catch (error) {
+        const message = String(error);
+        if (job.caffyError !== message) {
+          job.caffyError = message;
+          this.save();
+        }
+      }
+    }
   }
 
   private async dispatchScheduledSpawn(now: number) {
@@ -1690,6 +1769,7 @@ export class CaffyScheduler {
       await this.reconcileIdentityAliases().catch(() => {});
       const now = Date.now();
       await this.dispatchScheduledSpawn(now);
+      await this.activateCreatedSpawnCaffy();
       const rows = [...this.entries.values()].sort((a,b) =>
         Number(b.respectSlots && b.pendingWake && !b.paused) -
         Number(a.respectSlots && a.pendingWake && !a.paused));

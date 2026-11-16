@@ -55,6 +55,7 @@ export interface CaffyScheduleRequest {
   intervalMinutes: number;
   durationMinutes?: number;
   prompt: string;
+  recurringPrompt: string;
   autoRebootMinutes: number | null;
   autoRebootEveryRuns: number | null;
 }
@@ -76,13 +77,20 @@ export function ChatGPTCaffyScheduleDialog({
 }) {
   const isSession = target.kind === "session";
   const config = isSession ? target.config : null;
+  const priorSpawn = target.kind === "scheduled" ? target.job.caffy : null;
   const initialFrequency: CaffyScheduleRequest["frequency"] = config?.onceOnly
     ? "once"
-    : target.kind === "session" && target.intent === "recurring"
-      ? config?.mode === "periodic"
+    : config && target.kind === "session" && target.intent === "recurring"
+      ? config.mode === "periodic"
         ? "periodic"
         : "idle"
-      : "once";
+      : priorSpawn
+        ? priorSpawn.mode === "periodic"
+          ? "periodic"
+          : "idle"
+        : target.kind === "session" && target.intent === "recurring"
+          ? "idle"
+          : "once";
   const [frequency, setFrequency] = useState(initialFrequency);
   const [openedAt] = useState(Date.now);
   const scheduledAt =
@@ -105,7 +113,9 @@ export function ChatGPTCaffyScheduleDialog({
       new Date(scheduledAt && scheduledAt > openedAt ? scheduledAt : openedAt + 60 * 60_000),
     ),
   );
-  const [respectSlots, setRespectSlots] = useState(config?.respectSlots === true);
+  const [respectSlots, setRespectSlots] = useState(
+    config?.respectSlots ?? priorSpawn?.respectSlots ?? target.kind !== "session",
+  );
   const [prompt, setPrompt] = useState(
     target.kind === "scheduled"
       ? target.prompt
@@ -115,15 +125,20 @@ export function ChatGPTCaffyScheduleDialog({
           ? (config?.delayedPrompt ?? (config?.onceOnly ? (config?.repeatPrompt ?? "") : ""))
           : "",
   );
+  const [recurringPrompt, setRecurringPrompt] = useState(priorSpawn?.repeatPrompt ?? "");
   const [intervalAmount, intervalUnit] = timeScale(
-    config?.mode === "periodic" ? config.intervalMinutes : 60,
+    config?.mode === "periodic" ? config.intervalMinutes : (priorSpawn?.intervalMinutes ?? 60),
   );
   const [every, setEvery] = useState(String(intervalAmount));
   const [everyUnit, setEveryUnit] = useState<TimeUnit>(intervalUnit);
   const priorDuration =
-    config?.expiresAt == null
+    priorSpawn?.durationMinutes ??
+    (config?.expiresAt == null
       ? null
-      : Math.max(1, Math.round((config.expiresAt - (config.beginAt ?? config.createdAt)) / 60_000));
+      : Math.max(
+          1,
+          Math.round((config.expiresAt - (config.beginAt ?? config.createdAt)) / 60_000),
+        ));
   const [duration, setDuration] = useState(
     priorDuration === null
       ? "forever"
@@ -132,13 +147,13 @@ export function ChatGPTCaffyScheduleDialog({
         : "custom",
   );
   const [customHours, setCustomHours] = useState(String((priorDuration ?? 180) / 60));
+  const initialRebootRuns = config?.autoRebootEveryRuns ?? priorSpawn?.autoRebootEveryRuns;
+  const initialRebootMinutes = config?.autoRebootMinutes ?? priorSpawn?.autoRebootMinutes;
   const [rebootRule, setRebootRule] = useState(
-    config?.autoRebootEveryRuns ? "runs" : config?.autoRebootMinutes ? "time" : "off",
+    initialRebootRuns ? "runs" : initialRebootMinutes ? "time" : "off",
   );
-  const [rebootValue, rebootUnit] = timeScale(config?.autoRebootMinutes ?? 1440);
-  const [rebootEvery, setRebootEvery] = useState(
-    String(config?.autoRebootEveryRuns ?? rebootValue),
-  );
+  const [rebootValue, rebootUnit] = timeScale(initialRebootMinutes ?? 1440);
+  const [rebootEvery, setRebootEvery] = useState(String(initialRebootRuns ?? rebootValue));
   const [rebootEveryUnit, setRebootEveryUnit] = useState<TimeUnit>(rebootUnit);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -147,7 +162,7 @@ export function ChatGPTCaffyScheduleDialog({
     target.kind === "session"
       ? target.legacyMonitors.filter((item) => !cancelledLegacy.has(item.id))
       : [];
-  const recurring = frequency !== "once" && isSession;
+  const recurring = frequency !== "once";
   const timestamp = new Date(when).getTime();
   const validTime =
     (Number.isSafeInteger(timestamp) &&
@@ -167,6 +182,7 @@ export function ChatGPTCaffyScheduleDialog({
   const valid =
     (isSession || prompt.trim().length > 0) &&
     prompt.length <= 29_800 &&
+    recurringPrompt.length <= 29_800 &&
     (start !== "later" || validTime) &&
     (frequency !== "periodic" ||
       (Number.isInteger(intervalMinutes) && intervalMinutes >= 1 && intervalMinutes <= 525_600)) &&
@@ -190,13 +206,14 @@ export function ChatGPTCaffyScheduleDialog({
     setError(null);
     try {
       await submit({
-        frequency: recurring ? frequency : "once",
+        frequency,
         start,
         beginAt: start === "later" ? timestamp : null,
-        respectSlots: isSession ? respectSlots : true,
-        intervalMinutes: frequency === "periodic" && recurring ? intervalMinutes : 20,
+        respectSlots,
+        intervalMinutes: frequency === "periodic" ? intervalMinutes : 20,
         ...(recurring && durationMinutes !== undefined ? { durationMinutes } : {}),
         prompt: prompt.trim(),
+        recurringPrompt: recurringPrompt.trim(),
         autoRebootMinutes: rebootMinutes,
         autoRebootEveryRuns: rebootRuns,
       });
@@ -219,12 +236,13 @@ export function ChatGPTCaffyScheduleDialog({
       setBusy(false);
     }
   };
-  const title =
-    target.kind === "new"
-      ? "Schedule new ChatGPT session"
+  const title = "Caffy schedule";
+  const subtitle =
+    target.kind === "session"
+      ? `Existing: ${target.title}`
       : target.kind === "scheduled"
-        ? "Edit scheduled session"
-        : "Schedule Caffy";
+        ? "Edit scheduled new session"
+        : "Create a new ChatGPT session";
   return (
     <Dialog
       open
@@ -232,8 +250,8 @@ export function ChatGPTCaffyScheduleDialog({
         if (!open && !busy) close();
       }}
     >
-      <DialogPopup className="sm:max-w-xl">
-        <DialogHeader>
+      <DialogPopup className="flex h-[min(760px,calc(100dvh-32px))] w-full flex-col overflow-hidden sm:max-w-xl">
+        <DialogHeader className="shrink-0">
           <div className="flex items-center gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
               {target.kind === "new" ? (
@@ -244,16 +262,100 @@ export function ChatGPTCaffyScheduleDialog({
             </div>
             <div className="min-w-0">
               <DialogTitle>{title}</DialogTitle>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {isSession
-                  ? `In ${target.title}. Messages are only sent while the agent is idle.`
-                  : "Create a new session with this prompt when capacity is available."}
-              </p>
+              <p className="mt-1 truncate text-xs text-muted-foreground">{subtitle}</p>
             </div>
           </div>
         </DialogHeader>
-        <form onSubmit={(event) => void onSubmit(event)}>
-          <div className="max-h-[70vh] space-y-4 overflow-y-auto px-6 pb-4">
+        <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => void onSubmit(event)}>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-4">
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium">Run</span>
+              <div className="grid grid-cols-3 gap-1 rounded-md border border-input p-1">
+                {(
+                  [
+                    ["once", "Once"],
+                    ["idle", "Keep running"],
+                    ["periodic", "At intervals"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={frequency === value}
+                    className={`rounded px-2 py-2 text-sm ${
+                      frequency === value
+                        ? "bg-accent font-medium text-accent-foreground"
+                        : "text-muted-foreground hover:bg-accent/50"
+                    }`}
+                    onClick={() => setFrequency(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="min-h-8 text-xs text-muted-foreground">
+                {frequency === "once"
+                  ? "Send one message, then stop."
+                  : frequency === "idle"
+                    ? "Continue after each completed reply until stopped."
+                    : "Continue on a repeating timer; wait for idle if still working."}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <span className="text-sm font-medium">Start</span>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={start === "now" ? "default" : "outline"}
+                  aria-pressed={start === "now"}
+                  onClick={() => setStart("now")}
+                >
+                  Now / when ready
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={start === "later" ? "default" : "outline"}
+                  aria-pressed={start === "later"}
+                  onClick={() => setStart("later")}
+                >
+                  At a later time
+                </Button>
+              </div>
+            </div>
+            <label className="flex min-h-8 items-center gap-2 text-sm">
+              <Switch
+                checked={respectSlots}
+                disabled={!isSession && !recurring}
+                onCheckedChange={setRespectSlots}
+              />
+              Respect T3 working slots
+              {!isSession && (
+                <span className="text-xs text-muted-foreground">
+                  (new sessions always wait for capacity)
+                </span>
+              )}
+            </label>
+            <label className="block text-sm font-medium">
+              {isSession ? "Message (optional)" : "Initial prompt for new session (required)"}
+              <textarea
+                className={`${inputClass} h-28 resize-none text-sm font-normal`}
+                rows={4}
+                maxLength={29_800}
+                value={prompt}
+                aria-label="Message to send"
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder={
+                  isSession
+                    ? "Leave empty to continue the current assignment."
+                    : "Describe what the new ChatGPT session should do."
+                }
+              />
+              <span className="block text-right text-xs font-normal text-muted-foreground">
+                {prompt.length.toLocaleString()} / 29,800
+              </span>
+            </label>
             {legacy.length > 0 && (
               <div
                 role="alert"
@@ -277,101 +379,41 @@ export function ChatGPTCaffyScheduleDialog({
                 ))}
               </div>
             )}
-            {isSession && (
-              <div className="space-y-1.5">
-                <span className="text-sm font-medium">Run</span>
-                <div className="grid grid-cols-3 gap-1 rounded-md border border-input p-1">
-                  {(
-                    [
-                      ["once", "Once"],
-                      ["idle", "Keep running"],
-                      ["periodic", "At intervals"],
-                    ] as const
-                  ).map(([value, label]) => (
-                    <button
-                      key={value}
+            {start === "later" && (
+              <div className="space-y-2 rounded-lg border border-border p-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    [30, "30 min"],
+                    [60, "1 hour"],
+                    [120, "2 hours"],
+                    [240, "4 hours"],
+                    [1440, "Tomorrow"],
+                  ].map(([minutes, label]) => (
+                    <Button
+                      key={minutes}
                       type="button"
-                      aria-pressed={frequency === value}
-                      className={`rounded px-2 py-2 text-sm ${
-                        frequency === value
-                          ? "bg-accent font-medium text-accent-foreground"
-                          : "text-muted-foreground hover:bg-accent/50"
-                      }`}
-                      onClick={() => setFrequency(value)}
+                      size="xs"
+                      variant="outline"
+                      onClick={() => preset(minutes as number)}
                     >
                       {label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
+                <Input
+                  aria-label="Scheduled local date and time"
+                  type="datetime-local"
+                  value={when}
+                  onChange={(event) => setWhen(event.target.value)}
+                />
                 <p className="text-xs text-muted-foreground">
-                  {frequency === "once"
-                    ? "Send one message, then stop."
-                    : frequency === "idle"
-                      ? "Continue after each completed reply until stopped."
-                      : "Continue on a repeating timer; wait for idle if still working."}
+                  {validTime
+                    ? `Starts ${new Date(timestamp).toLocaleString()} (local time).`
+                    : "Choose a future time within 90 days."}{" "}
+                  T3 must be running.
                 </p>
               </div>
             )}
-            <div className="space-y-2">
-              <span className="text-sm font-medium">
-                {target.kind === "new" ? "Create session" : "Start"}
-              </span>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={start === "now" ? "default" : "outline"}
-                  aria-pressed={start === "now"}
-                  onClick={() => setStart("now")}
-                >
-                  {isSession ? "Now / when idle" : "When capacity is free"}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={start === "later" ? "default" : "outline"}
-                  aria-pressed={start === "later"}
-                  onClick={() => setStart("later")}
-                >
-                  At a later time
-                </Button>
-              </div>
-              {start === "later" && (
-                <div className="space-y-2 rounded-lg border border-border p-3">
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      [30, "30 min"],
-                      [60, "1 hour"],
-                      [120, "2 hours"],
-                      [240, "4 hours"],
-                      [1440, "Tomorrow"],
-                    ].map(([minutes, label]) => (
-                      <Button
-                        key={minutes}
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        onClick={() => preset(minutes as number)}
-                      >
-                        {label}
-                      </Button>
-                    ))}
-                  </div>
-                  <Input
-                    aria-label="Scheduled local date and time"
-                    type="datetime-local"
-                    value={when}
-                    onChange={(event) => setWhen(event.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {validTime
-                      ? `Starts ${new Date(timestamp).toLocaleString()} (local time).`
-                      : "Choose a future time within 90 days."}{" "}
-                    T3 must be running.
-                  </p>
-                </div>
-              )}
-            </div>
             {frequency === "periodic" && recurring && (
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-sm">
@@ -402,36 +444,19 @@ export function ChatGPTCaffyScheduleDialog({
                 </label>
               </div>
             )}
-            {isSession && (
-              <label className="flex items-center gap-2 text-sm">
-                <Switch checked={respectSlots} onCheckedChange={setRespectSlots} />
-                Respect T3 working slots
-                <span className="text-xs text-muted-foreground">(off by default)</span>
+            {recurring && !isSession && (
+              <label className="block text-sm font-medium">
+                Recurring message (optional)
+                <textarea
+                  className={`${inputClass} h-20 resize-none text-sm font-normal`}
+                  rows={2}
+                  maxLength={29_800}
+                  value={recurringPrompt}
+                  onChange={(event) => setRecurringPrompt(event.target.value)}
+                  placeholder="Leave empty to continue the new session's assignment."
+                />
               </label>
             )}
-            <label className="block text-sm font-medium">
-              {recurring
-                ? "Recurring message (optional)"
-                : isSession
-                  ? "Message (optional)"
-                  : "Prompt for new session"}
-              <textarea
-                className={`${inputClass} resize-y text-sm font-normal`}
-                rows={isSession ? 3 : 5}
-                maxLength={29_800}
-                value={prompt}
-                aria-label="Message to send"
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder={
-                  isSession
-                    ? "Leave empty to continue the current assignment."
-                    : "Describe what the new ChatGPT session should do."
-                }
-              />
-              <span className="block text-right text-xs font-normal text-muted-foreground">
-                {prompt.length.toLocaleString()} / 29,800
-              </span>
-            </label>
             {recurring && (
               <>
                 <label className="block text-sm">
@@ -562,7 +587,7 @@ export function ChatGPTCaffyScheduleDialog({
               </p>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             {target.kind === "scheduled" && (
               <Button
                 type="button"

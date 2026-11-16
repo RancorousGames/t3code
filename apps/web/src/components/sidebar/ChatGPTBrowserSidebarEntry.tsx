@@ -749,7 +749,11 @@ export function ChatGPTBrowserSidebarEntry({
     legacyMonitors: Array<{ id: string; targetId: string; status: string }>;
   } | null>(null);
   const [keepAwakeFeedback, setKeepAwakeFeedback] = useState<string | null>(null);
-  const scheduleDelayedPrompt = async (input: { title: string; prompt: string; beginAt: number | null; onIdle: boolean; respectSlots: boolean }) => {
+  const scheduleDelayedPrompt = async (input: {
+    title: string; prompt: string; beginAt: number | null;
+    onIdle: boolean; respectSlots: boolean;
+    spawnCaffy?: ScheduledChatGPTJob["caffy"];
+  }) => {
     if (!environmentId || !delayedPromptTarget) return;
     const control = window.desktopBridge?.caffyControl;
     if (!control) throw new Error("T3 desktop scheduler is unavailable.");
@@ -759,6 +763,7 @@ export function ChatGPTBrowserSidebarEntry({
         action: editing ? "edit_spawn" : "schedule_spawn",
         jobId: editing ? delayedPromptTarget.job.id : randomUUID(),
         title: input.title, prompt: input.prompt, beginAt: input.beginAt, onIdle: input.onIdle,
+        spawnCaffy: input.spawnCaffy ?? null,
       });
       setKeepAwakeFeedback(editing ? "Scheduled ChatGPT session updated." :
         input.onIdle ? "New ChatGPT task queued ahead of TaskBoard work." :
@@ -2397,6 +2402,15 @@ export function ChatGPTBrowserSidebarEntry({
       await scheduleDelayedPrompt({
         title, prompt: input.prompt, beginAt: input.beginAt,
         onIdle: input.start === "now", respectSlots: true,
+        spawnCaffy: input.frequency === "once" ? null : {
+          mode: input.frequency === "periodic" ? "periodic" : "idle",
+          intervalMinutes: input.intervalMinutes,
+          respectSlots: input.respectSlots,
+          ...(input.durationMinutes !== undefined ? { durationMinutes: input.durationMinutes } : {}),
+          repeatPrompt: input.recurringPrompt,
+          autoRebootMinutes: input.autoRebootMinutes,
+          autoRebootEveryRuns: input.autoRebootEveryRuns,
+        },
       });
       return;
     }
@@ -2520,9 +2534,12 @@ export function ChatGPTBrowserSidebarEntry({
             <Button
               size="icon-xs"
               variant="ghost-muted"
-              aria-label="Schedule a new ChatGPT task"
-              title="Schedule new work for later"
-              onClick={() => setDelayedPromptTarget({ kind: "new" })}
+              aria-label="Open Caffy schedule for new ChatGPT work"
+              title="Schedule new work in Caffy"
+              onClick={() => {
+                setAutoContinueTarget(null);
+                setDelayedPromptTarget({ kind: "new" });
+              }}
             >
               <CalendarClockIcon aria-hidden />
             </Button>

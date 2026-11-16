@@ -1934,6 +1934,16 @@ export interface DesktopBridge {
     beginAt?: number | null;
     jobId?: string;
     onIdle?: boolean;
+    /** Configure recurring Caffy after a newly created session is registered. */
+    spawnCaffy?: {
+      mode: "idle" | "periodic";
+      intervalMinutes: number;
+      respectSlots: boolean;
+      durationMinutes?: number;
+      repeatPrompt?: string;
+      autoRebootMinutes?: number | null;
+      autoRebootEveryRuns?: number | null;
+    } | null;
     title?: string;
     prompt?: string;
     project?: string;
