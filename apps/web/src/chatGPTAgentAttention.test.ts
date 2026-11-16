@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { activateAgentAttention, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, openAgentAttention, rearmManualAgentAttention, requestAgentAttention } from "./chatGPTAgentAttention";
+import { activateAgentAttention, activeAgentAttentionStack, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, openAgentAttention, openAgentAttentionRequest, rearmManualAgentAttention, requestAgentAttention } from "./chatGPTAgentAttention";
 
 const saved = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -72,6 +72,32 @@ describe("Ctrl+S attention target", () => {
 
     changeAttention("one", "opened");
     expect(latestAgentAttention(new Set(["session-a"]))).toBeUndefined();
+  });
+
+  it("uses a newest-first stack and opens exactly one request even for the same session", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    requestAgentAttention("manual", "session", "Return to Old - its response is ready.", "manual");
+    now.mockReturnValue(2_000);
+    requestAgentAttention("agent", "session", "Agent question", "agent");
+    now.mockReturnValue(3_000);
+    activateAgentAttention(["session"]);
+    expect(activeAgentAttentionStack(loadAgentAttention()).map((item) => item.id))
+      .toEqual(["agent", "manual"]);
+    expect(latestAgentAttention()?.id).toBe("agent");
+
+    expect(openAgentAttentionRequest("agent", ["another-session"])).toBeUndefined();
+    expect(openAgentAttentionRequest("agent", ["session"])?.id).toBe("agent");
+    expect(activeAgentAttentionStack(loadAgentAttention()).map((item) => item.id))
+      .toEqual(["manual"]);
+    expect(latestAgentAttention()?.id).toBe("manual");
+    expect(openAgentAttentionRequest("agent", ["session"])).toBeUndefined();
+
+    expect(openAgentAttentionRequest("manual", ["session"])?.source).toBe("manual");
+    now.mockReturnValue(4_000);
+    rearmManualAgentAttention(["session"], "Current session");
+    expect(loadAgentAttention().find((item) => item.status === "waiting")?.message)
+      .toBe("Current session");
+    expect(activeAgentAttentionStack(loadAgentAttention())).toHaveLength(0);
   });
 
   it("rearms Ctrl+D after each acknowledgement without resetting agent one-time requests", () => {

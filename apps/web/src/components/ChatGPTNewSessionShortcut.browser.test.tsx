@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   requestAttention: vi.fn(),
   cancelAttention: vi.fn(),
-  acknowledgeAttention: vi.fn(),
+  acknowledgeAttention: vi.fn(() => true),
   latestAttention: vi.fn((_availableSessionIds?: ReadonlySet<string>) =>
     undefined as { id: string; sessionId: string } | undefined),
   openAttention: vi.fn(),
@@ -141,11 +141,44 @@ describe("Open last GMA session shortcut", () => {
     await act(() => dispatchMenuAction("chatgpt.open-last-attention"));
     expect(state.latestAttention).toHaveBeenCalledWith(new Set(["selected-session"]));
     expect(state.acknowledgeAttention).toHaveBeenCalledWith("remote",
-      expect.objectContaining({ id: "selected-session" }));
+      expect.objectContaining({ id: "selected-session" }), "idle", "request");
     expect(state.navigate).toHaveBeenCalledWith({
       to: "/browser/$browserSessionId", params: { browserSessionId: "selected-session" },
     });
     state.latestAttention.mockReturnValue(undefined);
+  });
+
+  it("Ctrl+S opens exactly the visible notification, even from its focused controls", async () => {
+    state.pathname = "/browser/selected-session";
+    state.paletteOpen = false;
+    state.latestAttention.mockReturnValue({ id: "top-alert", sessionId: "selected-session" });
+    state.acknowledgeAttention.mockClear();
+    state.navigate.mockClear();
+    const toast = document.createElement("section");
+    toast.setAttribute("data-agent-attention-toast", "");
+    const button = document.createElement("button");
+    toast.append(button);
+    document.body.append(toast);
+    try {
+      await using _view = await render(<ChatGPTNewSessionShortcut />);
+      await act(() => {
+        const event = new KeyboardEvent("keydown", {
+          key: "s", ctrlKey: true, bubbles: true, cancelable: true,
+        });
+        button.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      });
+      expect(state.acknowledgeAttention).toHaveBeenCalledTimes(1);
+      expect(state.acknowledgeAttention).toHaveBeenCalledWith(
+        "remote", expect.objectContaining({ id: "selected-session" }), "idle", "top-alert",
+      );
+      expect(state.navigate).toHaveBeenCalledWith({
+        to: "/browser/$browserSessionId", params: { browserSessionId: "selected-session" },
+      });
+    } finally {
+      toast.remove();
+      state.latestAttention.mockReturnValue(undefined);
+    }
   });
 });
 

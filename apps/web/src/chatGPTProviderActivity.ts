@@ -61,11 +61,13 @@ export function recordChatGPTProviderActivity(
         ? [entry.bootstrapIdentity.publicId] : [])];
       // An agent's one-time attention request is independent of Ctrl+D.
       // It must activate even when the user never armed a return marker.
-      activateAgentAttention(ids);
+      const newlyActivated = activateAgentAttention(ids);
       if (entry && isSelectedChatGPTAttentionSession(sessionId, window.location.hash)) {
-        // A selected session has already been seen. Do not leave it yellow or
-        // play an attention sound; retain only its next persistent Ctrl+D cycle.
-        acknowledgeChatGPTSessionAttention(environmentId, entry, activity);
+        // Auto-acknowledge only requests activated by this transition.
+        // Existing stack entries must not disappear when a selected page
+        // finishes another response.
+        for (const requestId of newlyActivated)
+          acknowledgeChatGPTSessionAttention(environmentId, entry, activity, requestId);
       }
     }
   }

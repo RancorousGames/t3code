@@ -2996,20 +2996,23 @@ export function DesktopAppActivationCoordinator() {
   return <AgentAttentionToast onDismiss={(attention) => {
     const environmentId = primaryEnvironment?.environmentId;
     return environmentId ? queueAgentAttentionDismissal(environmentId, attention) : Promise.resolve(false);
-  }} openSession={(sessionId) => {
+  }} sessionTitle={(sessionId) => {
+    const environmentId = primaryEnvironment?.environmentId;
+    return environmentId ? readChatGPTBrowserSessions(environmentId).find(
+      (session) => session.id === sessionId || session.bootstrapIdentity?.publicId === sessionId,
+    )?.title : undefined;
+  }} openSession={(attention) => {
     const environmentId = primaryEnvironment?.environmentId;
     if (!environmentId) return false;
     const entry = readChatGPTBrowserSessions(environmentId).find(
-      (session) => session.id === sessionId || session.bootstrapIdentity?.publicId === sessionId,
+      (session) => session.id === attention.sessionId ||
+        session.bootstrapIdentity?.publicId === attention.sessionId,
     );
-    if (entry) {
-      setSessionHidden(entry.id, false);
-      setSessionSnooze([entry.id], null);
-      acknowledgeChatGPTSessionAttention(environmentId, entry,
-        readChatGPTProviderActivity(environmentId, entry.id));
-      void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: entry.id } });
-      return true;
-    }
-    return false;
+    if (!entry || !acknowledgeChatGPTSessionAttention(environmentId, entry,
+      readChatGPTProviderActivity(environmentId, entry.id), attention.id)) return false;
+    setSessionHidden(entry.id, false);
+    setSessionSnooze([entry.id], null);
+    void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: entry.id } });
+    return true;
   }} />;
 }

@@ -73,14 +73,17 @@ export function changeAttention(id: string, status: AgentAttention["status"], ne
 }
 
 
-/** One observed working -> idle transition activates all waiting requests for this session. */
-export function activateAgentAttention(sessionIds: readonly string[]): void {
+/** A verified work/error -> idle transition activates the waiting requests for this session. */
+export function activateAgentAttention(sessionIds: readonly string[]): string[] {
   const ids = new Set(sessionIds);
   const items = loadAgentAttention();
-  if (!items.some((item) => ids.has(item.sessionId) && item.status === "waiting")) return;
+  const activated = items.filter((item) => ids.has(item.sessionId) && item.status === "waiting")
+    .map((item) => item.id);
+  if (activated.length === 0) return [];
   const activatedAt = Date.now();
   save(items.map((item) => ids.has(item.sessionId) && item.status === "waiting"
     ? { ...item, status: "pending" as const, activatedAt, nextAt: activatedAt } : item));
+  return activated;
 }
 
 export function cancelAgentAttention(sessionIds: readonly string[]): void {
@@ -91,6 +94,18 @@ export function cancelAgentAttention(sessionIds: readonly string[]): void {
   save(items.map((item) => ids.has(item.sessionId) &&
     (item.status === "waiting" || item.status === "pending" || item.status === "snoozed")
     ? { ...item, status: "dismissed" as const, nextAt: 0, resolvedAt: Date.now() } : item));
+}
+
+/** A notification button/shortcut consumes one request, never its siblings. */
+export function openAgentAttentionRequest(
+  id: string, sessionIds: readonly string[],
+): AgentAttention | undefined {
+  const request = readAgentAttention(id);
+  if (!request || !sessionIds.includes(request.sessionId) ||
+      (request.status !== "pending" && request.status !== "snoozed") ||
+      request.nextAt > Date.now()) return undefined;
+  changeAttention(id, "opened");
+  return request;
 }
 
 export function openAgentAttention(sessionIds: readonly string[]): void {
@@ -117,38 +132,46 @@ export function cancelManualAgentAttention(sessionIds: readonly string[]): void 
 
 /** A user acknowledgement starts a NEW one-shot manual request, preserving
  * the Ctrl+D toggle. A fresh ID is required for phone-notification delivery. */
-export function rearmManualAgentAttention(sessionIds: readonly string[]): void {
+export function rearmManualAgentAttention(sessionIds: readonly string[], message?: string): void {
   const ids = new Set(sessionIds);
   const items = loadAgentAttention();
   const previous = items.filter((item) => ids.has(item.sessionId) && item.source === "manual").at(-1);
   if (!previous || previous.status === "waiting") return;
   const now = Date.now();
   const nextRequest: AgentAttention = {
-    ...previous, id: randomUUID(), createdAt: now, status: "waiting", nextAt: 0,
+    ...previous, ...(message === undefined ? {} : { message }),
+    id: randomUUID(), createdAt: now, status: "waiting", nextAt: 0,
   };
   delete nextRequest.activatedAt;
   delete nextRequest.notifiedAt;
   delete nextRequest.resolvedAt;
-  save([...items.map((item) => ids.has(item.sessionId) && item.source === "manual" &&
-    (item.status === "pending" || item.status === "snoozed")
-    ? { ...item, status: "opened" as const, nextAt: 0, resolvedAt: now } : item), nextRequest]);
+  // Do not silently consume other outstanding requests for this session.
+  // The user removes precisely one entry from the notification stack.
+  save([...items, nextRequest]);
 }
 
-/** Ctrl+S jumps to the most recently activated *outstanding* alert.
- * Resolved requests are retained as receipts, not keyboard navigation targets.
- * Snoozed alerts become eligible only after their snooze expires. */
-export function latestAgentAttention(
+/** One shared, newest-first notification stack for the toast and Ctrl+S.
+ * Resolved, waiting, and not-yet-due snoozed entries do not occupy the stack. */
+export function activeAgentAttentionStack(
+  items: readonly AgentAttention[],
   availableSessionIds?: ReadonlySet<string>,
-): AgentAttention | undefined {
-  const now = Date.now();
+  now = Date.now(),
+): AgentAttention[] {
   const firedAt = (entry: AgentAttention) => entry.activatedAt ??
     (entry.nextAt > 0 ? entry.nextAt : undefined) ?? entry.notifiedAt ?? entry.createdAt;
-  return loadAgentAttention()
+  return items
     .filter((entry) =>
       (entry.status === "pending" || entry.status === "snoozed") &&
       entry.nextAt <= now &&
       (availableSessionIds === undefined || availableSessionIds.has(entry.sessionId)))
-    .sort((a, b) => firedAt(b) - firedAt(a) || b.createdAt - a.createdAt)[0];
+    .sort((a, b) => firedAt(b) - firedAt(a) || b.createdAt - a.createdAt);
+}
+
+/** Ctrl+S must target precisely the same visible entry as the Open session button. */
+export function latestAgentAttention(
+  availableSessionIds?: ReadonlySet<string>,
+): AgentAttention | undefined {
+  return activeAgentAttentionStack(loadAgentAttention(), availableSessionIds)[0];
 }
 
 export function markAgentAttentionNotified(id: string): void {

@@ -47,7 +47,7 @@ export function ChatGPTNewSessionShortcut() {
       ? [session.bootstrapIdentity.publicId] : [])];
     if (session.returnMarker) cancelManualAgentAttention(ids);
     else requestAgentAttention(randomUUID(), session.bootstrapIdentity?.publicId ?? session.id,
-      "Return to " + session.title + " - its response is ready.", "manual");
+      session.title, "manual");
     toastManager.add(
       session.returnMarker
         ? { type: "success", title: "Persistent attention disabled", description: session.title }
@@ -76,8 +76,8 @@ export function ChatGPTNewSessionShortcut() {
     const session = sessions.find((entry) =>
       entry.id === latest.sessionId || entry.bootstrapIdentity?.publicId === latest.sessionId);
     if (!session) return;
-    acknowledgeChatGPTSessionAttention(environmentId, session,
-      readChatGPTProviderActivity(environmentId, session.id));
+    if (!acknowledgeChatGPTSessionAttention(environmentId, session,
+      readChatGPTProviderActivity(environmentId, session.id), latest.id)) return;
     setSessionHidden(session.id, false);
     setSessionSnooze([session.id], null);
     void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: session.id } });
@@ -125,6 +125,19 @@ export function ChatGPTNewSessionShortcut() {
       },
       {
         capture: true,
+        // While a notification is visible, Ctrl+S is its Open session button,
+        // even when another shortcut scope or the focused field owns Mod+S.
+        onKeyDown: (event) => {
+          if (event.key.toLowerCase() !== "s" || !event.ctrlKey || event.metaKey ||
+              event.altKey || event.shiftKey || event.repeat || event.isComposing ||
+              isCommandPaletteOpen() ||
+              (event.target instanceof Element && event.target.closest("[data-keybinding-capture]")) ||
+              !document.querySelector("[data-agent-attention-toast]")) return false;
+          event.preventDefault();
+          event.stopPropagation();
+          openLastAttentionSession();
+          return true;
+        },
         keybindings: () => keybindings,
         context: () => ({
           chatgptBrowserRoute: pathname === "/browser" || pathname.startsWith("/browser/"),

@@ -4,15 +4,18 @@ import attentionSoundUrl from "../../assets/agent-attention.ogg?url";
 import {
   type AgentAttention,
   AGENT_ATTENTION_CHANGE_EVENT,
+  activeAgentAttentionStack,
   changeAttention,
   loadAgentAttention,
   markAgentAttentionNotified,
 } from "../../chatGPTAgentAttention";
 
-/** Single actionable in-app alert. Snoozing never counts as a dismissal. */
-export function AgentAttentionToast({ openSession, onDismiss }: {
-  openSession: (sessionId: string) => boolean;
+/** The top of a one-entry-at-a-time stack shared with the Ctrl+S shortcut.
+ * Snoozing hides one entry until its scheduled return. */
+export function AgentAttentionToast({ openSession, onDismiss, sessionTitle }: {
+  openSession: (request: AgentAttention) => boolean;
   onDismiss: (request: AgentAttention) => Promise<boolean>;
+  sessionTitle: (sessionId: string) => string | undefined;
 }) {
   const [items, setItems] = useState(loadAgentAttention);
   const [now, setNow] = useState(Date.now);
@@ -39,9 +42,11 @@ export function AgentAttentionToast({ openSession, onDismiss }: {
       .then((success) => { if (success) markAgentAttentionNotified(toPublish.id); })
       .catch((error: unknown) => console.warn("[Agent attention] Phone notification failed", error));
   }, [toPublish?.id, toPublish?.status, toPublish?.notifiedAt, now]);
-  const visible = items
-    .filter((item) => (item.status === "pending" || item.status === "snoozed") && item.nextAt <= now)
-    .sort((a, b) => a.createdAt - b.createdAt)[0];
+  const availableIds = new Set(items
+    .filter((item) => sessionTitle(item.sessionId) !== undefined)
+    .map((item) => item.sessionId));
+  const stack = activeAgentAttentionStack(items, availableIds, now);
+  const visible = stack[0];
   useEffect(() => {
     if (!visible) return;
     const key = `t3.agent-attention-announced.${visible.id}`;
@@ -64,12 +69,17 @@ export function AgentAttentionToast({ openSession, onDismiss }: {
   if (!visible) return null;
   return (
     <section role="alertdialog" aria-label="Agent needs your attention"
+      data-agent-attention-toast
       className="fixed bottom-5 right-5 z-[9999] w-[350px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-background p-4 shadow-2xl">
-      <div className="mb-2 text-sm font-semibold">Agent requests your attention</div>
-      <p className="mb-3 whitespace-pre-wrap break-words text-sm">{visible.message}</p>
+      <div className="mb-2 text-sm font-semibold">
+        Agent requests your attention{stack.length > 1 ? ` (${stack.length})` : ""}
+      </div>
+      <p className="mb-3 whitespace-pre-wrap break-words text-sm">
+        {visible.source === "manual" ? (sessionTitle(visible.sessionId) ?? visible.message) : visible.message}
+      </p>
       <div className="flex flex-wrap gap-2 text-xs">
         <button className="rounded-md bg-primary px-3 py-2 text-primary-foreground" onClick={() => {
-          openSession(visible.sessionId);
+          openSession(visible);
         }}>Open session</button>
         <button className="rounded-md border px-2 py-2" onClick={() =>
           changeAttention(visible.id, "snoozed", Date.now() + 15 * 60_000)}>15 min</button>
