@@ -16,6 +16,7 @@ const makeConfig = (): CaffyConfig => ({
   publicSessionId: SESSION,
   conversationId: ORIGINAL,
   mode: "idle",
+  respectSlots: false,
   intervalMinutes: 20,
   startup: false,
   onceOnly: false,
@@ -43,7 +44,7 @@ function fixture() {
   let roster: Array<{
     id: string; conversationId: string; bootstrapIdentity: {
       state: string; publicId: string; conversationId: string;
-    }; hidden?: boolean; status?: string; activity?: string; statusObservedAt?: string;
+    }; hidden?: boolean; snoozedUntil?: number; status?: string; activity?: string; statusObservedAt?: string;
     lastRole?: string; binding?: {boundAt?: string};
     lastIdleTransition?: {conversationId: string; sequence: number};
   }> = [];
@@ -451,6 +452,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
     try {
       const row = monitor(c)!;
       row.mode = "periodic";
+      row.respectSlots = true;
       row.intervalMinutes = 10080;
       row.beginAt = null;
       row.nextDueAt = Date.now() + 10080 * 60_000;
@@ -764,6 +766,25 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
         const snapshots = NodeFS.readdirSync(NodePath.join(f.directory, "caffy-snapshots"));
         expect(snapshots.length).toBeGreaterThan(0);
       } finally { restarted.close(); }
+    } finally { c.close(); f.dispose(); }
+  });
+
+  it("keeps Caffy through snooze, but retires a paused monitor", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      f.setRoster([{
+        id: SESSION, conversationId: ORIGINAL, snoozedUntil: Date.UTC(9999, 0, 1),
+        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
+      }]);
+      await c.reconcileLifecycle();
+      expect(monitor(c)).not.toBeNull();
+      expect(f.retired()).toBe(0);
+
+      monitor(c)!.paused = true;
+      await c.reconcileLifecycle();
+      expect(monitor(c)).toBeNull();
+      expect(f.retired()).toBe(1);
     } finally { c.close(); f.dispose(); }
   });
 

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { wakeChatGPTBrowserSession } from "./chatGPTBrowserSessions";
+import { CHATGPT_CAFFY_SNOOZE_UNTIL, wakeChatGPTBrowserSession } from "./chatGPTBrowserSessions";
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 import { chatGPTDoubleClickSnoozeUntil } from "./components/sidebar/chatGPTDoubleClickSnooze";
 
@@ -42,6 +42,15 @@ describe("24-hour ChatGPT quick snooze persistence", () => {
     wakeChatGPTBrowserSession(env, id, "message");
     expect(store.getState().sessions[0]?.snoozedUntil).toBeUndefined();
     expect(store.getState().sessions[0]?.quickSnoozeStep).toBeUndefined();
+  });
+
+  it("keeps a Caffy snooze indefinitely until a real message wakes it", () => {
+    store.setState({ sessions: [{ id, title: "Worker", quickSnoozeStep: 0,
+      snoozedUntil: CHATGPT_CAFFY_SNOOZE_UNTIL, snoozedAt: now }] });
+    wakeChatGPTBrowserSession(env, id, "activity");
+    expect(store.getState().sessions[0]?.snoozedUntil).toBe(CHATGPT_CAFFY_SNOOZE_UNTIL);
+    wakeChatGPTBrowserSession(env, id, "message");
+    expect(store.getState().sessions[0]?.snoozedUntil).toBeUndefined();
   });
 
   it("preserves the previous ambient wake behavior for an ordinary snooze", () => {

@@ -22,6 +22,7 @@ import {
 } from "./chatGPTConversationIdentity";
 import { chatGPTPrewarmKey, isChatGPTHomeUrl, takeChatGPTSpare } from "./chatGPTBrowserPrewarm";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
+import { readVerifiedT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "./hooks/useT3CaffyOverview";
 import { randomUUID } from "./lib/utils";
 import {
   PRIMARY_CHATGPT_PROFILE_ID,
@@ -234,13 +235,73 @@ export function wakeChatGPTBrowserSession(
   setLocalStorageItem(`t3code:chatgpt-browser:sessions:${environmentId}`, next, BrowserSessions);
   store.setState({ sessions: next });
 }
-/** Inform the desktop-owned scheduler after durable local lifecycle changes. */
-function retireChatGPTCaffy(sessionId: string, lifecycleReason: "closed" | "hidden" | "snoozed") {
+// A running Caffy keeps the session snoozed until its next actual message delivery.
+export const CHATGPT_CAFFY_SNOOZE_UNTIL = Date.UTC(9999, 0, 1);
+
+function activeCaffySnooze(sessionId: string): boolean {
+  const overview = readVerifiedT3CaffyOverview();
+  return overview?.entries.some((entry) =>
+    (entry.sessionId === sessionId ||
+      entry.browserSessionId === sessionId ||
+      entry.publicSessionId === sessionId) &&
+    !entry.paused &&
+    (entry.expiresAt === null || entry.expiresAt > Date.now() || !!entry.pendingMessageId),
+  ) ?? false;
+}
+
+/** Confirm the live scheduler state, rather than relying on a possibly stale sidebar snapshot. */
+function reconcileCaffySnooze(
+  environmentId: EnvironmentId,
+  sessionId: string,
+  originalUntil: number,
+  originalStep: number | undefined,
+  snoozedAt: number,
+): void {
+  const control = typeof window === "undefined" ? null : window.desktopBridge?.caffyControl;
+  if (!control) return;
+  void control({ action: "status", sessionId }).then((readout) => {
+    const caffy = readout && typeof readout === "object" &&
+      "paused" in readout && typeof readout.paused === "boolean" &&
+      "mode" in readout && ["idle", "periodic", "startup"].includes(String(readout.mode))
+      ? readout : null;
+    const running = caffy && !caffy.paused &&
+      (!("expiresAt" in caffy) || caffy.expiresAt === null ||
+        (typeof caffy.expiresAt === "number" && caffy.expiresAt > Date.now()) ||
+        ("pendingMessageId" in caffy && !!caffy.pendingMessageId));
+    const until = running ? CHATGPT_CAFFY_SNOOZE_UNTIL : originalUntil;
+    const quickSnoozeStep = running ? 0 : originalStep;
+    const store = getChatGPTSessionPersistedStore(environmentId);
+    const current = store.getState().sessions;
+    const stillSnoozed = current.some((entry) =>
+      entry.id === sessionId && entry.snoozedAt === snoozedAt &&
+      (entry.snoozedUntil ?? 0) > Date.now() && !entry.hidden);
+    if (!stillSnoozed) return;
+    if (current.some((entry) =>
+      entry.id === sessionId &&
+      (entry.snoozedUntil !== until || entry.quickSnoozeStep !== quickSnoozeStep))) {
+      const next = current.map((entry) => entry.id === sessionId
+        ? { ...entry, snoozedUntil: until, quickSnoozeStep } : entry);
+      setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), next, BrowserSessions);
+      store.setState({ sessions: next });
+    }
+    if (caffy?.paused) {
+      // Paused monitors cannot wake their snoozed owner; explicitly discard them.
+      void control({ action: "retire", sessionId, lifecycleReason: "snoozed" })
+        .then(() => window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT)))
+        .catch(() => {});
+    }
+  }).catch(() => {
+    // Scheduler reconciliation handles paused monitors if IPC is briefly unavailable.
+  });
+}
+
+/** Inform the desktop-owned scheduler after terminal local lifecycle changes. */
+function retireChatGPTCaffy(sessionId: string, lifecycleReason: "closed" | "hidden") {
   const control = typeof window === "undefined" ? null : window.desktopBridge?.caffyControl;
   if (!control) return;
   void control({ action: "retire", sessionId, lifecycleReason }).catch(() => {
     // The desktop scheduler independently reconciles complete inventories.
-    // Local close/hide/snooze must not be rolled back by an IPC outage.
+    // Local close/hide must not be rolled back by an IPC outage.
   });
 }
 const DEFAULT_SESSION_TITLE = /^ChatGPT \d+$/;
@@ -1006,6 +1067,8 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   const setSessionSnooze = useCallback(
     (ids: readonly string[], until: number | null) => {
       const targets = new Set(ids);
+      const caffyIds = until === null ? new Set<string>() : new Set(ids.filter(activeCaffySnooze));
+      const snoozedAt = Date.now();
       if (until !== null) {
         for (const id of ids) {
           if (environmentId) clearChatGPTGuestUserOpened(JSON.stringify([
@@ -1019,16 +1082,17 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           targets.has(session.id)
             ? {
                 ...session,
-                snoozedUntil: until ?? undefined,
-                snoozedAt: until === null ? undefined : Date.now(),
-                quickSnoozeStep: undefined,
+                snoozedUntil: until === null ? undefined :
+                  caffyIds.has(session.id) ? CHATGPT_CAFFY_SNOOZE_UNTIL : until,
+                snoozedAt: until === null ? undefined : snoozedAt,
+                quickSnoozeStep: caffyIds.has(session.id) ? 0 : undefined,
                 autoCloseExempt: session.autoCloseExempt === true || until !== null,
               }
             : session,
         ),
       );
-      if (until !== null && until > Date.now())
-        for (const id of ids) retireChatGPTCaffy(id, "snoozed");
+      if (environmentId && until !== null && until > snoozedAt)
+        for (const id of ids) reconcileCaffySnooze(environmentId, id, until, undefined, snoozedAt);
     },
     [environmentId, setSessions],
   );
@@ -1051,12 +1115,13 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             : session,
         ),
       );
-      if (pending) retireChatGPTCaffy(id, "snoozed");
     },
     [setSessions],
   );
   const quickSnoozeSession = useCallback(
     (id: string, until: number, step: number) => {
+      const snoozedAt = Date.now();
+      const caffySnooze = activeCaffySnooze(id);
       if (environmentId) clearChatGPTGuestUserOpened(JSON.stringify([
         environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId,
       ]));
@@ -1066,15 +1131,16 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
           session.id === id
             ? {
                 ...session,
-                snoozedUntil: until,
-                snoozedAt: Date.now(),
+                snoozedUntil: caffySnooze ? CHATGPT_CAFFY_SNOOZE_UNTIL : until,
+                snoozedAt,
                 quickSnoozeStep: step,
                 autoCloseExempt: true,
               }
             : session,
         ),
       );
-      if (until > Date.now()) retireChatGPTCaffy(id, "snoozed");
+      if (environmentId && until > snoozedAt)
+        reconcileCaffySnooze(environmentId, id, until, step, snoozedAt);
     },
     [environmentId, setSessions],
   );

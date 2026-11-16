@@ -545,8 +545,10 @@ export class CaffyScheduler {
       if (matches.length > 1) continue;
       const found = matches[0];
       if (found) {
+        // A running Caffy owns its snooze and will unsnooze on real delivery.
+        // Paused Caffy cannot deliver, so user snooze removes that schedule.
         if (found.closedAt != null || found.hidden ||
-            (typeof found.snoozedUntil === "number" && found.snoozedUntil > now)) {
+            (row.paused && typeof found.snoozedUntil === "number" && found.snoozedUntil > now)) {
           this.retire(row.sessionId,
             found.closedAt != null ? "closed" : found.hidden ? "hidden" : "snoozed");
           continue;
