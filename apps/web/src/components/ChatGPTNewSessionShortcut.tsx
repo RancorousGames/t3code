@@ -63,17 +63,19 @@ export function ChatGPTNewSessionShortcut() {
 
   const openLastAttentionSession = useEffectEvent(() => {
     if (!isElectron || !environmentId || isCommandPaletteOpen()) return;
-    const latest = latestAgentAttention();
+    const sessions = readChatGPTBrowserSessions(environmentId);
+    const availableIds = new Set(sessions.flatMap((entry) => [
+      entry.id,
+      ...(entry.bootstrapIdentity?.publicId ? [entry.bootstrapIdentity.publicId] : []),
+    ]));
+    const latest = latestAgentAttention(availableIds);
     if (!latest) {
-      toastManager.add({ type: "info", title: "No attention requests yet" });
+      toastManager.add({ type: "info", title: "No sessions currently need attention" });
       return;
     }
-    const session = readChatGPTBrowserSessions(environmentId).find((entry) =>
+    const session = sessions.find((entry) =>
       entry.id === latest.sessionId || entry.bootstrapIdentity?.publicId === latest.sessionId);
-    if (!session) {
-      toastManager.add({ type: "error", title: "Attention session not found" });
-      return;
-    }
+    if (!session) return;
     acknowledgeChatGPTSessionAttention(environmentId, session);
     setSessionHidden(session.id, false);
     setSessionSnooze([session.id], null);

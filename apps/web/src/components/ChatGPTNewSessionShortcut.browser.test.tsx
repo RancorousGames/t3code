@@ -16,7 +16,8 @@ const state = vi.hoisted(() => ({
   requestAttention: vi.fn(),
   cancelAttention: vi.fn(),
   acknowledgeAttention: vi.fn(),
-  latestAttention: vi.fn(() => undefined as { id: string; sessionId: string } | undefined),
+  latestAttention: vi.fn((_availableSessionIds?: ReadonlySet<string>) =>
+    undefined as { id: string; sessionId: string } | undefined),
   openAttention: vi.fn(),
   clearReturnMarker: vi.fn(),
   setSessionHidden: vi.fn(),
@@ -133,10 +134,12 @@ describe("Open last GMA session shortcut", () => {
   it("opens and acknowledges the most recently requesting session", async () => {
     state.pathname = "/browser/selected-session";
     state.latestAttention.mockReturnValue({ id: "request", sessionId: "selected-session" });
+    state.latestAttention.mockClear();
     state.acknowledgeAttention.mockClear();
     state.navigate.mockClear();
     await using _view = await render(<ChatGPTNewSessionShortcut />);
     await act(() => dispatchMenuAction("chatgpt.open-last-attention"));
+    expect(state.latestAttention).toHaveBeenCalledWith(new Set(["selected-session"]));
     expect(state.acknowledgeAttention).toHaveBeenCalledWith("remote",
       expect.objectContaining({ id: "selected-session" }));
     expect(state.navigate).toHaveBeenCalledWith({

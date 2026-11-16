@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { activateAgentAttention, cancelManualAgentAttention, latestAgentAttention, loadAgentAttention, openAgentAttention, rearmManualAgentAttention, requestAgentAttention } from "./chatGPTAgentAttention";
+import { activateAgentAttention, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, openAgentAttention, rearmManualAgentAttention, requestAgentAttention } from "./chatGPTAgentAttention";
 
 const saved = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -28,6 +28,50 @@ describe("Ctrl+S attention target", () => {
     now.mockReturnValue(500);
     requestAgentAttention("c", "session-c", "C");
     expect(latestAgentAttention()?.sessionId).toBe("session-a");
+  });
+
+  it("jumps only to outstanding alerts, cycling to the next after Ctrl+S", () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(100);
+    requestAgentAttention("first", "session-a", "First");
+    now.mockReturnValue(200);
+    activateAgentAttention(["session-a"]);
+    now.mockReturnValue(300);
+    requestAgentAttention("second", "session-b", "Second");
+    now.mockReturnValue(400);
+    activateAgentAttention(["session-b"]);
+
+    expect(latestAgentAttention()?.id).toBe("second");
+    openAgentAttention(["session-b"]);
+    expect(latestAgentAttention()?.id).toBe("first");
+    changeAttention("first", "dismissed");
+    expect(latestAgentAttention()).toBeUndefined();
+
+    now.mockReturnValue(500);
+    requestAgentAttention("third", "session-c", "Not ready yet");
+    expect(latestAgentAttention()).toBeUndefined();
+  });
+
+  it("skips snoozed and missing sessions, and avoids navigating to historical receipts", () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(100);
+    requestAgentAttention("one", "session-a", "Alert A");
+    now.mockReturnValue(200);
+    activateAgentAttention(["session-a"]);
+    now.mockReturnValue(300);
+    requestAgentAttention("two", "deleted-session", "Alert B");
+    now.mockReturnValue(400);
+    activateAgentAttention(["deleted-session"]);
+    expect(latestAgentAttention()?.id).toBe("two");
+    expect(latestAgentAttention(new Set(["session-a"]))?.id).toBe("one");
+
+    changeAttention("one", "snoozed", 10_000);
+    expect(latestAgentAttention(new Set(["session-a"]))).toBeUndefined();
+    now.mockReturnValue(10_000);
+    expect(latestAgentAttention(new Set(["session-a"]))?.id).toBe("one");
+
+    changeAttention("one", "opened");
+    expect(latestAgentAttention(new Set(["session-a"]))).toBeUndefined();
   });
 
   it("rearms Ctrl+D after each acknowledgement without resetting agent one-time requests", () => {

@@ -134,12 +134,20 @@ export function rearmManualAgentAttention(sessionIds: readonly string[]): void {
     ? { ...item, status: "opened" as const, nextAt: 0, resolvedAt: now } : item), nextRequest]);
 }
 
-export function latestAgentAttention(): AgentAttention | undefined {
+/** Ctrl+S jumps to the most recently activated *outstanding* alert.
+ * Resolved requests are retained as receipts, not keyboard navigation targets.
+ * Snoozed alerts become eligible only after their snooze expires. */
+export function latestAgentAttention(
+  availableSessionIds?: ReadonlySet<string>,
+): AgentAttention | undefined {
+  const now = Date.now();
   const firedAt = (entry: AgentAttention) => entry.activatedAt ??
-    (entry.status === "pending" && entry.nextAt > 0 ? entry.nextAt : undefined) ??
-    entry.notifiedAt ?? entry.createdAt;
+    (entry.nextAt > 0 ? entry.nextAt : undefined) ?? entry.notifiedAt ?? entry.createdAt;
   return loadAgentAttention()
-    .filter((entry) => entry.status !== "waiting")
+    .filter((entry) =>
+      (entry.status === "pending" || entry.status === "snoozed") &&
+      entry.nextAt <= now &&
+      (availableSessionIds === undefined || availableSessionIds.has(entry.sessionId)))
     .sort((a, b) => firedAt(b) - firedAt(a) || b.createdAt - a.createdAt)[0];
 }
 
