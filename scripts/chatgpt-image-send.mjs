@@ -85,7 +85,17 @@ function imagePreflight(id) {
     if(!p)return {ok:false,reason:"callback_unavailable"};
     if(p.isSubmitting||p.isWaitingForFileUploads||p.attachments?.length)
       return {ok:false,reason:"composer_busy_or_attachments_present"};
-    window.__t3ChatGPTImageSend={id:${JSON.stringify(id)},chunks:[],phase:"transfer",findProps};
+    // The upload is temporary T3-owned state. Keep the attachment preview
+    // out of the human composer while React completes the authenticated upload.
+    // This does not replace ChatGPT's upload protocol with an undocumented API.
+    const style=document.createElement("style");
+    style.textContent='[data-composer-body] [class*="ComposerLayoutAttachments"] {display:none !important;}';
+    document.head.appendChild(style);
+    const styleTimeout=setTimeout(()=>style.remove(),180000);
+    window.__t3ChatGPTImageSend={
+      id:${JSON.stringify(id)},chunks:[],phase:"transfer",findProps,
+      style,styleTimeout,uploadId:null,
+    };
     return {ok:true};
   `);
 }
@@ -98,8 +108,10 @@ function attachmentStatus(id) {
     if(!p)return {ok:false,reason:"callback_lost"};
     const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
     const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
+    const attachments=Array.isArray(p.attachments)?p.attachments:[];
+    if(attachments.length===1&&attachments[0]?.uploadId)s.uploadId=attachments[0].uploadId;
     return {ok:true,draft:!!draft.trim(),uploads:document.querySelectorAll('[aria-label^="Uploading "]').length,
-      attachments:Array.isArray(p.attachments)?p.attachments.length:0,
+      attachments:attachments.length,
       pending:!!p.isWaitingForFileUploads,submitting:!!p.isSubmitting};
   `);
 }
@@ -219,10 +231,21 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
         ||document.querySelector('input[type="file"][aria-label="Attach photos"]')
         ||document.querySelector('input[type="file"][aria-label="Attach files"]');
       if(!input||input.disabled)return {ok:false,reason:"file_input_missing"};
-      const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;
       s.phase="uploading";
+      // Call the mounted React file-selection handler with a File object.
+      // Unlike assigning input.files and dispatching a DOM change event,
+      // this never inserts the image into the physical file input.
+      const key=Object.keys(input).find(k=>k.startsWith("__reactProps"));
+      const onChange=key&&input[key]?.onChange;
+      if(typeof onChange==="function"){
+        const selected={id:input.id,files:[file],value:""};
+        onChange({currentTarget:selected,target:selected});
+        return {ok:true,route:"react_handler",fileInputCount:input.files?.length||0};
+      }
+      // Compatibility fallback for ChatGPT versions with no exposed handler.
+      const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;
       input.dispatchEvent(new Event("change",{bubbles:true}));
-      return {ok:true};
+      return {ok:true,route:"dom_file_input"};
     `));
     if (!stage?.ok) throw new Error("Image attachment failed: " + JSON.stringify(stage));
     record.status = "uploading";
@@ -272,7 +295,17 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     try {
       await guardedEval(control, expectedConversationId, sessionId, expression(`
         const s=window.__t3ChatGPTImageSend;
-        if(s?.id===${JSON.stringify(requestId)}) {s.chunks=[];s.phase="finished";}
+        if(s?.id===${JSON.stringify(requestId)}){
+          // A refused/failed send must not strand our image in the human draft.
+          // The callback's user-facing removal API takes uploadId, not file id.
+          if(${record.sendAttempted === false}&&s.phase==="uploading"&&s.uploadId){
+            const p=s.findProps();
+            if(p?.attachments?.some(a=>a.uploadId===s.uploadId))
+              p.onAttachmentRemove(s.uploadId,"user");
+          }
+          s.chunks=[];s.phase="finished";
+          clearTimeout(s.styleTimeout);s.style?.remove();
+        }
         return true;
       `));
     } catch { /* The guest may have navigated after submission. */ }
