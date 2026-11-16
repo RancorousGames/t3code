@@ -6,6 +6,21 @@ import type {
 } from "./chatGPTSessionGrouping";
 import { chatGPTSessionHighlightAccentClass } from "./components/sidebar/chatGPTSidebarVisuals";
 
+/** Verification is a first-in-first-out queue, independent of work recency and
+ * priority colors. Old entries lack a dedicated timestamp: use their snooze
+ * timestamp as the best available proxy, then original creation order. */
+export function sortChatGPTVerificationRows(
+  rows: readonly ChatGPTSidebarSession[],
+): ChatGPTSidebarSession[] {
+  const markedAt = (session: BrowserSession) =>
+    session.verificationMarkedAt ?? session.snoozedAt ?? 0;
+  return [...rows].sort((a, b) =>
+    markedAt(a.session) - markedAt(b.session) ||
+    (a.session.createdAt ?? 0) - (b.session.createdAt ?? 0) ||
+    a.session.id.localeCompare(b.session.id),
+  );
+}
+
 /** Restore the last selection when it survives; otherwise use actual activity history, not row order. */
 export function selectChatGPTSidebarReplacement(
   sessions: readonly BrowserSession[],

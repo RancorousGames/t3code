@@ -3,6 +3,7 @@ import {
   preserveSelectedChatGPTSessionPosition,
   prioritizeChatGPTSessionHighlights,
   selectChatGPTSidebarReplacement,
+  sortChatGPTVerificationRows,
 } from "./chatGPTSidebarPriority";
 import type { ChatGPTSidebarGroup, ChatGPTSessionSortActivity } from "./chatGPTSessionGrouping";
 
@@ -103,6 +104,28 @@ describe("T3 sidebar selection and highlight priority", () => {
       "recent",
       "old",
     ]);
+  });
+});
+
+describe("verification queue ordering", () => {
+  it("sorts by when marked, oldest first, even when activity puts newer work first", () => {
+    const entries = [
+      { ...row("newer"), session: { id: "newer", title: "Newer", verificationMarkedAt: 500 } },
+      { ...row("old"), session: { id: "old", title: "Old", verificationMarkedAt: 100 } },
+      { ...row("middle"), session: { id: "middle", title: "Middle", verificationMarkedAt: 250 } },
+    ];
+    expect(sortChatGPTVerificationRows(entries).map(({ session }) => session.id))
+      .toEqual(["old", "middle", "newer"]);
+  });
+
+  it("places legacy verification requests by their available timestamps before newer requests", () => {
+    const entries = [
+      { ...row("new"), session: { id: "new", title: "New", verificationMarkedAt: 500 } },
+      { ...row("old-legacy"), session: { id: "old-legacy", title: "Old legacy", snoozedAt: 100 } },
+      { ...row("unknown-legacy"), session: { id: "unknown-legacy", title: "Unknown legacy", createdAt: 50 } },
+    ];
+    expect(sortChatGPTVerificationRows(entries).map(({ session }) => session.id))
+      .toEqual(["unknown-legacy", "old-legacy", "new"]);
   });
 });
 

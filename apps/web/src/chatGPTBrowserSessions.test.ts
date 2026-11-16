@@ -21,12 +21,14 @@ describe("verification flag on resumed work", () => {
   it("clears verification and its snooze without changing other session metadata", () => {
     const pending = {
       id: "resume", title: "Check this", verificationPending: true,
+      verificationMarkedAt: 1234,
       snoozedUntil: Date.now() + 3_600_000, snoozedAt: Date.now(), quickSnoozeStep: 0,
       autoCloseExempt: true, returnMarker: "armed" as const,
     };
     const resumed = clearChatGPTVerificationOnWorking(pending);
     expect(resumed).toMatchObject({ id: "resume", title: "Check this", autoCloseExempt: true, returnMarker: "armed" });
     expect(resumed.verificationPending).toBeUndefined();
+    expect(resumed.verificationMarkedAt).toBeUndefined();
     expect(resumed.snoozedUntil).toBeUndefined();
     expect(resumed.snoozedAt).toBeUndefined();
     expect(resumed.quickSnoozeStep).toBeUndefined();

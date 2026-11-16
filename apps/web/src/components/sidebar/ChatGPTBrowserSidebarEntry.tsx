@@ -55,6 +55,7 @@ import {
   preserveSelectedChatGPTSessionPosition,
   prioritizeChatGPTSessionHighlights,
   selectChatGPTSidebarReplacement,
+  sortChatGPTVerificationRows,
 } from "../../chatGPTSidebarPriority";
 import {
   formatChatGPTSessionDateTime,
@@ -1390,7 +1391,9 @@ export function ChatGPTBrowserSidebarEntry({
     // Appending the Started-mode placeholder creates a second Other header.
     const verificationRows =
       sortMode === "activity" && !showingHidden
-        ? groups.flatMap((group) => group.rows.filter(({ session }) => session.verificationPending))
+        ? sortChatGPTVerificationRows(
+            groups.flatMap((group) => group.rows.filter(({ session }) => session.verificationPending)),
+          )
         : [];
     const normalGroups = verificationRows.length
       ? filtered.map((group) => ({

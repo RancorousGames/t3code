@@ -93,6 +93,8 @@ export const BrowserSession = Schema.Struct({
   snoozedUntil: Schema.optional(Schema.Number),
   snoozedAt: Schema.optional(Schema.Number),
   verificationPending: Schema.optional(Schema.Boolean),
+  /** When the current verification request entered the FIFO review queue. */
+  verificationMarkedAt: Schema.optional(Schema.Number),
   quickSnoozeStep: Schema.optional(Schema.Number),
   // Automatically spawned workers close after two hours without work.
   autoClose: Schema.optional(Schema.Boolean),
@@ -135,6 +137,7 @@ export function clearChatGPTVerificationOnWorking(session: BrowserSession): Brow
     ? {
         ...session,
         verificationPending: undefined,
+        verificationMarkedAt: undefined,
         snoozedUntil: undefined,
         snoozedAt: undefined,
         quickSnoozeStep: undefined,
@@ -1123,16 +1126,21 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
 
   const setSessionVerification = useCallback(
     (id: string, pending: boolean) => {
+      const markedAt = Date.now();
       setSessions((current) =>
         current.map((session) =>
           session.id === id
             ? {
                 ...session,
                 verificationPending: pending || undefined,
+                // Repeated Mark calls must not move an already queued item.
+                verificationMarkedAt: pending
+                  ? session.verificationPending ? session.verificationMarkedAt : markedAt
+                  : undefined,
                 snoozedUntil: pending
-                  ? Math.max(session.snoozedUntil ?? 0, Date.now() + 60 * 60_000)
+                  ? Math.max(session.snoozedUntil ?? 0, markedAt + 60 * 60_000)
                   : session.snoozedUntil,
-                snoozedAt: pending ? (session.snoozedAt ?? Date.now()) : session.snoozedAt,
+                snoozedAt: pending ? (session.snoozedAt ?? markedAt) : session.snoozedAt,
                 quickSnoozeStep: pending ? (session.quickSnoozeStep ?? 0) : session.quickSnoozeStep,
                 autoCloseExempt: true,
               }
