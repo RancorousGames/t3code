@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { isChatGPTSessionBeingViewed } from "../../browser/chatGPTViewingProtection";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useAttentionPrioritySessionIds } from "../../chatGPTAttentionPriority";
 import { readChatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import type { BrowserSession } from "../../chatGPTBrowserSessions";
 import {
@@ -59,11 +60,13 @@ export function canEvictChatGPTOverflowSession(input: {
   readonly selected: boolean;
   readonly viewed: boolean;
   readonly keepLoaded: boolean;
+  readonly attentionMarked?: boolean;
   readonly caffySoon: boolean;
   readonly deliveryPending: boolean;
   readonly sendUncertain: boolean;
 }): boolean {
   if (input.idleMs === null || input.selected || input.viewed || input.keepLoaded ||
+    input.attentionMarked ||
     input.caffySoon || input.deliveryPending || input.sendUncertain) return false;
   return (input.snoozedUntil ?? 0) > input.now ||
     input.lastUsedAt <= input.now - input.idleMs;
@@ -86,11 +89,12 @@ export function ChatGPTIdleOverflowUnloader({
   deliveryRequests: Readonly<Record<string, boolean>>;
   imminentCaffyIds: ReadonlySet<string>;
 }) {
+  const attentionPriorityIds = useAttentionPrioritySessionIds(sessions);
   // Inputs change identity often (the Caffy poll alone produces a new
   // imminentCaffyIds Set every 10s). Read them through a ref so the timers
   // below are not torn down and restarted before they ever fire.
-  const latest = useRef({ sessions, selectedId, maxCount, deliveryRequests, imminentCaffyIds });
-  latest.current = { sessions, selectedId, maxCount, deliveryRequests, imminentCaffyIds };
+  const latest = useRef({ sessions, selectedId, maxCount, deliveryRequests, imminentCaffyIds, attentionPriorityIds });
+  latest.current = { sessions, selectedId, maxCount, deliveryRequests, imminentCaffyIds, attentionPriorityIds };
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- synchronizes native/legacy guest capacity with actual Chromium residency.
   useEffect(() => {
     let disposed = false;
@@ -125,7 +129,7 @@ export function ChatGPTIdleOverflowUnloader({
         const idleMs = activeOmniworkUnloadPolicy().idleMs;
         // Reads the latest props, so re-checks after an await see current selection.
         const eligible = (session: BrowserSession) => {
-          const { selectedId, deliveryRequests, imminentCaffyIds } = latest.current;
+          const { selectedId, deliveryRequests, imminentCaffyIds, attentionPriorityIds } = latest.current;
           const key = JSON.stringify([
             environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId,
           ]);
@@ -136,7 +140,6 @@ export function ChatGPTIdleOverflowUnloader({
             session.lastDirectInteractionAt ?? 0,
             chatGPTGuestTouchedAt(key) ?? 0,
           );
-          if (session.returnMarker) return false;
           return canEvictChatGPTOverflowSession({
             now: Date.now(),
             lastUsedAt,
@@ -145,6 +148,7 @@ export function ChatGPTIdleOverflowUnloader({
             selected: session.id === selectedId,
             viewed: isChatGPTSessionBeingViewed(environmentId, session.id),
             keepLoaded: useChatGPTWarmSessions.getState().keepLoadedIds.has(session.id),
+            attentionMarked: attentionPriorityIds.has(session.id),
             caffySoon: imminentCaffyIds.has(session.id),
             deliveryPending: deliveryRequests[`${environmentId}:${session.id}`] === true,
             sendUncertain: hasUncertainChatGPTSend(environmentId, session.id),

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { visibleSplitSessionIds } from "../../chatGPTSplitLayout";
+import { useAttentionPrioritySessionIds } from "../../chatGPTAttentionPriority";
 import { inspectBrowserSession } from "../../chatGPTSessionControl";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { useParams } from "@tanstack/react-router";
@@ -25,8 +26,8 @@ import { snapshotWarmSessionOccupancy } from "../../omniwork/chatGPTWarmOccupanc
 import { activateWarmChatGPTSession, finishWarmChatGPTSessionLoad, nextWarmChatGPTSession, plannedWarmChatGPTSessions, publishWarmChatGPTForecast, useChatGPTWarmSessions } from "../../omniwork/chatGPTWarmSessionPolicy";
 import { useOpenRigManagerChatGPTSessions } from "./useOpenRigManagerChatGPTSessions";
 
-const warmPriorityReason = (c: { selected: boolean; activeBeforeFailure: boolean; recoveryQueued?: boolean; deliveryPending?: boolean; keepLoaded?: boolean; caffyDueSoon?: boolean; recentlyClicked: number; highlighted: boolean; lastActiveAt: number; manager: boolean; lastActivityAt: number }, now: number) =>
-  c.selected ? "selected by user" : c.deliveryPending ? "pending message delivery" : "returnMarked" in c && c.returnMarked ? "Return marker" : c.keepLoaded ? "kept loaded by user" : c.caffyDueSoon ? "Caffy wake due within 30 minutes" : c.recoveryQueued ? "verified recovery waiting for resident browser" : c.activeBeforeFailure ? "working before failure" :
+const warmPriorityReason = (c: { selected: boolean; activeBeforeFailure: boolean; recoveryQueued?: boolean; deliveryPending?: boolean; keepLoaded?: boolean; returnMarked?: boolean; caffyDueSoon?: boolean; recentlyClicked: number; highlighted: boolean; lastActiveAt: number; manager: boolean; lastActivityAt: number }, now: number) =>
+  c.selected ? "selected by user" : c.deliveryPending ? "pending message delivery" : c.returnMarked ? "Mark attention / GMA" : c.keepLoaded ? "kept loaded by user" : c.caffyDueSoon ? "Caffy wake due within 30 minutes" : c.recoveryQueued ? "verified recovery waiting for resident browser" : c.activeBeforeFailure ? "working before failure" :
   c.recentlyClicked >= 0 ? "recent click #" + (c.recentlyClicked + 1) :
   c.highlighted ? "highlighted" : c.lastActiveAt >= now - 2 * 60 * 60_000 && c.lastActiveAt > 0 ? "active within 2 hours" :
   c.manager ? "manager" : c.lastActivityAt > 0 ? "recent activity" : "creation time";
@@ -42,6 +43,7 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
   const environmentId = usePrimaryEnvironmentId();
   const selectedId = useParams({ strict: false, select: (params) => params.browserSessionId });
   const { sessions } = useChatGPTBrowserSessions(environmentId);
+  const attentionPriorityIds = useAttentionPrioritySessionIds(sessions);
   const managers = useOpenRigManagerChatGPTSessions(environmentId);
   const keepLoadedIds = useChatGPTWarmSessions((state) => state.keepLoadedIds);
   const warmCount = useOmniworkPreferences((state) => state.chatGPTWarmSessionCount);
@@ -166,7 +168,7 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
             caffyDueSoon: imminentCaffyIds.has(session.id),
             recoveryQueued: queuedRecovery.has(session.id),
             exceedTarget: pendingGuestIds.current.has(session.id) || imminentCaffyIds.has(session.id) || Boolean(session.returnMarker),
-            returnMarked: Boolean(session.returnMarker),
+            returnMarked: attentionPriorityIds.has(session.id),
             activeBeforeFailure: wasWarmSessionActiveBeforeFailure(environmentId, session.id),
             recentlyClicked: warmRecentClickRanks(environmentId, selectedId ?? null).get(session.id) ?? -1,
             highlighted: Boolean(session.borderColor),
@@ -247,9 +249,14 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
         const unloadKey = isPersistentChatGPTSessionOptedIn(session.id)
           ? session.id
           : JSON.stringify([environmentId, thread.threadId]);
-        if ((isChatGPTGuestManuallyUnloaded(unloadKey) ||
-          useChatGPTGuestHibernation.getState().autoEvicted?.[unloadKey]) &&
-          !session.returnMarker && !deliveryPending && !caffySoon && !keepLoadedIds.has(session.id))
+        // A new GMA request may requeue an automatically evicted guest, but
+        // must not silently undo an explicit manual Unload or Snooze.
+        const explicitUnload = isChatGPTGuestManuallyUnloaded(unloadKey);
+        const autoEvicted = useChatGPTGuestHibernation.getState().autoEvicted?.[unloadKey];
+        const urgent = Boolean(session.returnMarker) || deliveryPending || caffySoon ||
+          keepLoadedIds.has(session.id);
+        if ((explicitUnload && !urgent) ||
+          (autoEvicted && !urgent && !attentionPriorityIds.has(session.id)))
           return false;
         let savedUrl: string | null = null;
         try {
@@ -385,6 +392,6 @@ export function ChatGPTWarmScheduler({ imminentCaffyIds }: {
       clearTimeout(initial);
       clearInterval(interval);
     };
-  }, [environmentId, selectedId, sessions, managers, plan, warmCount, autoMaintenancePaused, imminentCaffyIds, keepLoadedIds]);
+  }, [environmentId, selectedId, sessions, managers, plan, warmCount, autoMaintenancePaused, imminentCaffyIds, keepLoadedIds, attentionPriorityIds]);
   return null;
 }

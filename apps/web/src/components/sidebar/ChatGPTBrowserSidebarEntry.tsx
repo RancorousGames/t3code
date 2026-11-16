@@ -70,6 +70,7 @@ import {
   withTaskBoardPermanentProjects,
 } from "../../chatGPTSessionGrouping";
 import { useChatGPTSessionSortPreference } from "../../chatGPTSessionSortPreference";
+import { useAttentionPrioritySessionIds } from "../../chatGPTAttentionPriority";
 import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { registerCommands, registerMenuAction } from "../../shortcuts/dispatcher";
@@ -532,6 +533,7 @@ export function ChatGPTBrowserSidebarEntry({
     syncInferredMetadata,
     pruneExpiredHidden,
   } = useChatGPTBrowserSessions(environmentId);
+  const attentionPriorityIds = useAttentionPrioritySessionIds(sessions);
   // Fresh OpenRig ledgers outrank history, including a complete empty set after
   // revocation. Offline fallback requires exact seat, generation and conversation.
   const managerIds = useMemo(() => {
@@ -1374,6 +1376,7 @@ export function ChatGPTBrowserSidebarEntry({
       erroredSessionsAtBottom,
       clockNow,
       taskBoardProjects,
+      attentionPriorityIds,
     );
     const filtered = filterChatGPTWorkerGroups(
       groups,
@@ -1467,6 +1470,7 @@ export function ChatGPTBrowserSidebarEntry({
     clockNow,
     environmentId,
     sortActivityById,
+    attentionPriorityIds,
   ]);
   const lastRenderedOrder = useRef<{
     environmentId: string | null | undefined;
@@ -3298,12 +3302,13 @@ export function ChatGPTBrowserSidebarEntry({
                               const idleAttentionReady = session.returnMarker === "ready" &&
                                 ["recent", "inactive", "unloaded-recent", "unloaded", "snoozed"]
                                   .includes(activities[session.id]?.age ?? "unknown");
+                              const attentionMarked = attentionPriorityIds.has(session.id);
                               return (
                                 <div
                                   data-chatgpt-selected-session={activeSessionId === session.id}
                                   data-chatgpt-visible-pane={displayedSessionIds.has(session.id)}
                                   className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${idleAttentionReady ? "ring-4 ring-inset ring-yellow-400/90" : activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
-                                  title={idleAttentionReady ? "Attention ready — click to clear" : session.returnMarker ? "Return marker armed — waiting for the next answer" : undefined}
+                                  title={idleAttentionReady ? "Attention ready — click to clear" : session.returnMarker ? "Persistent attention armed — waiting for the next answer" : attentionMarked ? "One-off GMA attention requested" : undefined}
                                   onContextMenu={(event) => {
                                     event.preventDefault();
                                     void showSessionContextMenu(session.id, {
@@ -3361,10 +3366,10 @@ export function ChatGPTBrowserSidebarEntry({
                                     )}
                                     {hoverCard}
                                   </Tooltip>
-                                  {session.returnMarker && (
+                                  {attentionMarked && (
                                     <span
-                                      aria-label={idleAttentionReady ? "Attention ready" : "Attention armed"}
-                                      title={idleAttentionReady ? "Attention ready" : "Attention armed"}
+                                      aria-label={idleAttentionReady ? "Attention ready" : session.returnMarker ? "Persistent attention armed" : "GMA attention requested"}
+                                      title={idleAttentionReady ? "Attention ready" : session.returnMarker ? "Persistent attention armed" : "GMA attention requested"}
                                       className={`flex shrink-0 items-center ${idleAttentionReady ? "text-yellow-400" : "text-muted-foreground"}`}
                                     >
                                       <BookmarkCheckIcon className="size-3.5" aria-hidden="true" />

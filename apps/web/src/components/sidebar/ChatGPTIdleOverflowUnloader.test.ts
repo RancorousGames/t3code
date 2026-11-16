@@ -51,6 +51,7 @@ describe("soft ChatGPT residency maximum", () => {
       ...eligible, snoozedUntil: now + 60_000, lastUsedAt: now,
     })).toBe(true);
     expect(canEvictChatGPTOverflowSession({ ...eligible, keepLoaded: true })).toBe(false);
+    expect(canEvictChatGPTOverflowSession({ ...eligible, attentionMarked: true })).toBe(false);
     expect(canEvictChatGPTOverflowSession({ ...eligible, selected: true })).toBe(false);
     expect(canEvictChatGPTOverflowSession({ ...eligible, viewed: true })).toBe(false);
     expect(canEvictChatGPTOverflowSession({ ...eligible, caffySoon: true })).toBe(false);

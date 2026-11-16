@@ -440,6 +440,7 @@ export function layoutChatGPTSessions(
   erroredSessionsAtBottom = true,
   now = Date.now(),
   taskBoardProjects: readonly ChatGPTTaskBoardProject[] = [],
+  attentionIds: ReadonlySet<string> = new Set(),
 ): ChatGPTSidebarGroup[] {
   if (sortMode === "started")
     return groupChatGPTSessions(sessions, projects, permanentProjects, taskBoardProjects);
@@ -447,8 +448,20 @@ export function layoutChatGPTSessions(
   void erroredSessionsAtBottom;
   void now;
 
-  // Work time (the source of blue/grey status), not sidebar clicks, decides recency.
+  // Attention is a priority *within* the green / recent-blue / other bands,
+  // never a license for an unloaded grey session to leap above a blue one.
+  const statusBand = (session: BrowserSession): number => {
+    switch (activityById[session.id]?.age) {
+      case "working": return 0;
+      case "recent":
+      case "unloaded-recent":
+      case "unloaded-working": return 1;
+      default: return 2; // Grey/unloaded/error sessions share one recency band.
+    }
+  };
   const timestamp = (session: BrowserSession) => activityById[session.id]?.lastWorkingAt ?? 0;
+  const hasAttention = (session: BrowserSession) =>
+    attentionIds.has(session.id) || Boolean(session.returnMarker);
   const ordered = applyConfirmedChatGPTSessionMetadata(sessions)
     .map((session, index) => ({ session, index }))
     .sort((a, b) => {
@@ -456,6 +469,8 @@ export function layoutChatGPTSessions(
       const bWorking = activityById[b.session.id]?.age === "working";
       return (
         Number(bWorking) - Number(aWorking) ||
+        (sortMode === "activity" ? statusBand(a.session) - statusBand(b.session) : 0) ||
+        Number(hasAttention(b.session)) - Number(hasAttention(a.session)) ||
         (aWorking && bWorking ? a.index - b.index : 0) ||
         (sortMode === "created"
           ? (b.session.createdAt ?? 0) - (a.session.createdAt ?? 0)

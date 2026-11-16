@@ -59,6 +59,21 @@ describe("stable warm ChatGPT working set", () => {
     expect(useChatGPTWarmSessions.getState().keepLoadedIds.has("pinned")).toBe(false);
   });
 
+  it("loads marked-attention/GMA guests ahead of ordinary warm candidates, within capacity", () => {
+    const candidates = [
+      candidate("highlight", { highlighted: true }),
+      candidate("recent-click", { recentlyClicked: 0 }),
+      candidate("marked", { returnMarked: true }),
+      candidate("delivery", { deliveryPending: true }),
+    ];
+    expect(plannedWarmChatGPTSessions(selection(candidates))).toEqual([
+      "delivery", "marked", "recent-click", "highlight",
+    ]);
+    // A priority boost never creates an extra guest when the warm cap is full.
+    expect(nextWarmChatGPTSession(selection(candidates, ["highlight"], 1))).toBeNull();
+    expect(nextWarmChatGPTSession(selection(candidates, [], 1))).toBe("delivery");
+  });
+
   it("selects only the three clicked ranks, most recent first; older clicks fall back", () => {
     expect(plannedWarmChatGPTSessions(selection([
       candidate("third", { recentlyClicked: 2, createdAt: 100 }),

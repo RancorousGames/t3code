@@ -364,6 +364,38 @@ describe("ChatGPT global activity and creation sorting", () => {
       .toEqual(["newest", "error", "highlight"]);
   });
 
+  it("places attention within each color band, not above higher-activity sessions", () => {
+    const sessions = [
+      { id: "grey-attention", title: "Flagged grey", returnMarker: "armed" as const },
+      { id: "blue-plain", title: "Blue", createdAt: 40 },
+      { id: "grey-plain", title: "Grey", createdAt: 80 },
+      { id: "blue-attention", title: "Flagged blue", createdAt: 10 },
+      { id: "working", title: "Working" },
+      { id: "unloaded-attention", title: "Agent GMA grey", createdAt: 20 },
+      { id: "unloaded-plain", title: "Unloaded", createdAt: 90 },
+    ];
+    const activity = {
+      working: { age: "working" as const, lastWorkingAt: 1 },
+      "blue-plain": { age: "recent" as const, lastWorkingAt: 100 },
+      "blue-attention": { age: "unloaded-recent" as const, lastWorkingAt: 90 },
+      "grey-attention": { age: "inactive" as const, lastWorkingAt: 10 },
+      "grey-plain": { age: "inactive" as const, lastWorkingAt: 20 },
+      "unloaded-attention": { age: "unloaded" as const, lastWorkingAt: 5 },
+      "unloaded-plain": { age: "unloaded" as const, lastWorkingAt: 30 },
+    };
+    const flaggedGma = new Set(["blue-attention", "unloaded-attention"]);
+    expect(ids(layoutChatGPTSessions(
+      sessions, [], "activity", activity, [], undefined, true, now, [], flaggedGma,
+    ))).toEqual([
+      "working", "blue-attention", "blue-plain",
+      "grey-attention", "unloaded-attention",
+      "unloaded-plain", "grey-plain",
+    ]);
+    // Started mode retains its project hierarchy, rather than a global queue.
+    expect(layoutChatGPTSessions(sessions, [], "started", activity, [], undefined, true, now, [], flaggedGma))
+      .toEqual(groupChatGPTSessions(sessions, []));
+  });
+
   it("falls back to creation time for sessions with tied or missing work history", () => {
     const sessions = [
       { id: "old", title: "Old", createdAt: 2 },

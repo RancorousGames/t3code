@@ -2,6 +2,7 @@ import { useParams } from "@tanstack/react-router";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { splitSessionIds, useSplitLayout } from "../../chatGPTSplitLayout";
+import { useAttentionPrioritySessionIds } from "../../chatGPTAttentionPriority";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -149,6 +150,7 @@ export function ChatGPTGuestRetention({
 } = {}) {
   const environmentId = usePrimaryEnvironmentId();
   const { sessions } = useChatGPTBrowserSessions(environmentId);
+  const attentionPriorityIds = useAttentionPrioritySessionIds(sessions);
   const deliveryRequests = useChatGPTDeliveryMountRequests((state) => state.required);
   const managerIds = useOpenRigManagerChatGPTSessions(environmentId);
   const activeSessionId = useParams({ strict: false, select: (params) => params.browserSessionId });
@@ -259,7 +261,7 @@ export function ChatGPTGuestRetention({
     const candidates = sessions.flatMap((session) => {
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
-      if (!session.returnMarker && autoEvicted?.[key] && !displayedSessionIds.has(session.id) &&
+      if (!attentionPriorityIds.has(session.id) && autoEvicted?.[key] && !displayedSessionIds.has(session.id) &&
           !deliveryRequests[`${environmentId}:${session.id}`] &&
           !imminentCaffyIds.has(session.id)) return [];
       const recentUseAt = Math.max(
@@ -278,7 +280,7 @@ export function ChatGPTGuestRetention({
             !session.parentSessionId));
       const withinLongIdle = recentUseAt > now - 4 * 60 * 60_000;
       const important =
-        Boolean(session.returnMarker) ||
+        attentionPriorityIds.has(session.id) ||
         imminentCaffyIds.has(session.id) ||
         deliveryRequests[`${environmentId}:${session.id}`] === true ||
         (warmedIds.includes(session.id) &&
@@ -324,7 +326,8 @@ export function ChatGPTGuestRetention({
           JSON.stringify([environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId]) === key)?.id;
         if (id && displayedSessionIds.has(id)) return 0;
         if (id && deliveryRequests[`${environmentId}:${id}`]) return 1;
-        return protectedKeys.has(key) ? 2 : 3;
+        if (id && attentionPriorityIds.has(id)) return 2;
+        return protectedKeys.has(key) ? 3 : 4;
       };
       return priority(a.key) - priority(b.key) || b.lastUsedAt - a.lastUsedAt;
     });
@@ -361,6 +364,7 @@ export function ChatGPTGuestRetention({
     deliveryRequests,
     warmedIds,
     imminentCaffyIds,
+    attentionPriorityIds,
     manuallyUnloaded,
     autoEvicted,
   ]);
