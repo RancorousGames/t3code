@@ -1,5 +1,6 @@
 import { openAgentAttention, openAgentAttentionRequest, rearmManualAgentAttention } from "./chatGPTAgentAttention";
 import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity";
+import { markChatGPTAttentionVisited } from "./chatGPTAttentionWorkCycle";
 import {
   type BrowserSession,
   updateChatGPTReturnMarker,
@@ -40,9 +41,11 @@ export function acknowledgeChatGPTSessionAttention(
     // A one-time agent request must not consume the user's separate Ctrl+D alert.
     if (request.source === "manual")
       rearmPersistentSessionAttention(environmentId, session, activity);
+    markChatGPTAttentionVisited(environmentId, session.id, activity);
     return true;
   }
   openAgentAttention(ids);
   rearmPersistentSessionAttention(environmentId, session, activity);
+  markChatGPTAttentionVisited(environmentId, session.id, activity);
   return true;
 }

@@ -2,25 +2,13 @@ import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity"
 import { advanceChatGPTReturnMarker, clearChatGPTSessionVerificationOnWorking, updateChatGPTReturnMarker } from "./chatGPTBrowserSessions";
 import { activateAgentAttention } from "./chatGPTAgentAttention";
 import { acknowledgeChatGPTSessionAttention } from "./chatGPTPersistentAttention";
+import { markChatGPTAttentionVisited, observeChatGPTAttentionCompletion } from "./chatGPTAttentionWorkCycle";
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 import { observeSpawnAutoCloseActivity } from "./chatGPTSpawnAutoClose";
 
 type Observation = { activity: ChatGPTActivityState; observedAt: number };
 const observations = new Map<string, Observation>();
 const key = (environmentId: string, sessionId: string) => environmentId + ":" + sessionId;
-
-/** "Error" is represented by three distinct provider states, not a literal enum. */
-export function completedAttentionTransition(
-  previous: ChatGPTActivityState | undefined,
-  next: ChatGPTActivityState,
-): boolean {
-  return next === "idle" && (
-    previous === "working" ||
-    previous === "invalid" ||
-    previous === "interrupted" ||
-    previous === "delivery-timeout"
-  );
-}
 
 /** Desktop uses hash routing; only the main selected session auto-acknowledges. */
 export function isSelectedChatGPTAttentionSession(sessionId: string, hash: string): boolean {
@@ -45,13 +33,13 @@ export function recordChatGPTProviderActivity(
   const identity = key(environmentId, sessionId);
   const previous = observations.get(identity);
   observations.set(identity, { activity, observedAt: Date.now() });
-  const completed = completedAttentionTransition(previous?.activity, activity);
+  const completed = observeChatGPTAttentionCompletion(
+    environmentId, sessionId, previous?.activity, activity);
   if (activity === "working" || completed) {
     updateChatGPTReturnMarker(environmentId, sessionId, (marker) => {
       if (!marker) return undefined;
-      // A session already in an error state may have been armed directly from
-      // idle. Error -> idle is a completion even without a preceding working probe.
-      if (completed && previous?.activity !== "working" && marker === "armed") return "ready";
+      // Preserve the Ctrl+D rule: armed while idle waits for NEW work.
+      // A previously observed working marker still becomes ready through errors.
       return advanceChatGPTReturnMarker(marker, activity === "working" ? "working" : "idle");
     });
     if (completed) {
@@ -68,6 +56,9 @@ export function recordChatGPTProviderActivity(
         // finishes another response.
         for (const requestId of newlyActivated)
           acknowledgeChatGPTSessionAttention(environmentId, entry, activity, requestId);
+        // Already selected means the output is visible, even if there was no
+        // new request to acknowledge. Do not re-alert on a later error->idle.
+        markChatGPTAttentionVisited(environmentId, sessionId, activity);
       }
     }
   }
