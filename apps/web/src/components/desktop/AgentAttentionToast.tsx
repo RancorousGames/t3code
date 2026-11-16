@@ -7,7 +7,6 @@ import {
   changeAttention,
   loadAgentAttention,
   markAgentAttentionNotified,
-  openAgentAttention,
 } from "../../chatGPTAgentAttention";
 
 /** Single actionable in-app alert. Snoozing never counts as a dismissal. */
@@ -70,7 +69,7 @@ export function AgentAttentionToast({ openSession, onDismiss }: {
       <p className="mb-3 whitespace-pre-wrap break-words text-sm">{visible.message}</p>
       <div className="flex flex-wrap gap-2 text-xs">
         <button className="rounded-md bg-primary px-3 py-2 text-primary-foreground" onClick={() => {
-          if (openSession(visible.sessionId)) openAgentAttention([visible.sessionId]);
+          openSession(visible.sessionId);
         }}>Open session</button>
         <button className="rounded-md border px-2 py-2" onClick={() =>
           changeAttention(visible.id, "snoozed", Date.now() + 15 * 60_000)}>15 min</button>

@@ -1,3 +1,5 @@
+import { randomUUID } from "./lib/utils";
+
 const STORAGE_KEY = "t3.agent-attention.v1";
 export const AGENT_ATTENTION_CHANGE_EVENT = "t3-agent-attention-change";
 const DAY = 86_400_000;
@@ -30,9 +32,11 @@ export function loadAgentAttention(): AgentAttention[] {
 }
 
 function save(items: AgentAttention[]) {
-  // Keep receipts for a month, including dismissals, so a resumed agent can reconcile.
+  // Keep receipts for a month; an armed manual Ctrl+D request must not expire.
   localStorage.setItem(STORAGE_KEY, JSON.stringify(
-    items.filter((item) => Date.now() - item.createdAt < 30 * DAY),
+    items.filter((item) => (item.source === "manual" &&
+      (item.status === "waiting" || item.status === "pending" || item.status === "snoozed")) ||
+      Date.now() - item.createdAt < 30 * DAY),
   ));
   window.dispatchEvent(new Event(AGENT_ATTENTION_CHANGE_EVENT));
 }
@@ -50,7 +54,8 @@ export function requestAgentAttention(
     return previous;
   }
   const entry: AgentAttention = {
-    id, sessionId, message, source, spokenMessage, createdAt: Date.now(), status: "waiting", nextAt: 0,
+    id, sessionId, message, source, ...(spokenMessage === undefined ? {} : { spokenMessage }),
+    createdAt: Date.now(), status: "waiting", nextAt: 0,
   };
   save([...items, entry]);
   return entry;
@@ -96,6 +101,37 @@ export function openAgentAttention(sessionIds: readonly string[]): void {
   save(items.map((item) => ids.has(item.sessionId) &&
     (item.status === "waiting" || item.status === "pending" || item.status === "snoozed")
     ? { ...item, status: "opened" as const, nextAt: 0, resolvedAt: Date.now() } : item));
+}
+
+/** Ctrl+D owns only its manual request. An agent's one-time requests must survive
+ * turning the user's persistent attention off. */
+export function cancelManualAgentAttention(sessionIds: readonly string[]): void {
+  const ids = new Set(sessionIds);
+  const items = loadAgentAttention();
+  if (!items.some((item) => ids.has(item.sessionId) && item.source === "manual" &&
+    (item.status === "waiting" || item.status === "pending" || item.status === "snoozed"))) return;
+  save(items.map((item) => ids.has(item.sessionId) && item.source === "manual" &&
+    (item.status === "waiting" || item.status === "pending" || item.status === "snoozed")
+    ? { ...item, status: "dismissed" as const, nextAt: 0, resolvedAt: Date.now() } : item));
+}
+
+/** A user acknowledgement starts a NEW one-shot manual request, preserving
+ * the Ctrl+D toggle. A fresh ID is required for phone-notification delivery. */
+export function rearmManualAgentAttention(sessionIds: readonly string[]): void {
+  const ids = new Set(sessionIds);
+  const items = loadAgentAttention();
+  const previous = items.filter((item) => ids.has(item.sessionId) && item.source === "manual").at(-1);
+  if (!previous || previous.status === "waiting") return;
+  const now = Date.now();
+  const nextRequest: AgentAttention = {
+    ...previous, id: randomUUID(), createdAt: now, status: "waiting", nextAt: 0,
+  };
+  delete nextRequest.activatedAt;
+  delete nextRequest.notifiedAt;
+  delete nextRequest.resolvedAt;
+  save([...items.map((item) => ids.has(item.sessionId) && item.source === "manual" &&
+    (item.status === "pending" || item.status === "snoozed")
+    ? { ...item, status: "opened" as const, nextAt: 0, resolvedAt: now } : item), nextRequest]);
 }
 
 export function latestAgentAttention(): AgentAttention | undefined {

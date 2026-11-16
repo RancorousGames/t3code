@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   requestAttention: vi.fn(),
   cancelAttention: vi.fn(),
+  acknowledgeAttention: vi.fn(),
   latestAttention: vi.fn(() => undefined as { id: string; sessionId: string } | undefined),
   openAttention: vi.fn(),
   clearReturnMarker: vi.fn(),
@@ -57,9 +58,14 @@ vi.mock(import("../chatGPTBrowserSessions"), async (original) => ({
 vi.mock(import("../chatGPTAgentAttention"), async (original) => ({
   ...(await original()),
   requestAgentAttention: state.requestAttention as never,
-  cancelAgentAttention: state.cancelAttention as never,
+  cancelManualAgentAttention: state.cancelAttention as never,
   latestAgentAttention: state.latestAttention as never,
   openAgentAttention: state.openAttention as never,
+}));
+
+vi.mock(import("../chatGPTPersistentAttention"), async (original) => ({
+  ...(await original()),
+  acknowledgeChatGPTSessionAttention: state.acknowledgeAttention,
 }));
 
 vi.mock(import("../chatGPTProviderActivity"), async (original) => ({
@@ -98,7 +104,7 @@ describe("Return marker shortcut", () => {
 
     await act(() => dispatchMenuAction("chatgpt.return-marker"));
     expect(state.toggleReturnMarker).toHaveBeenLastCalledWith("selected-session", "idle");
-    expect(state.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Return marker armed" }));
+    expect(state.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Persistent attention enabled" }));
     expect(state.requestAttention).toHaveBeenCalledWith(
       expect.any(String), "selected-session", expect.any(String), "manual",
     );
@@ -106,7 +112,7 @@ describe("Return marker shortcut", () => {
     state.marker = "armed";
     await act(() => dispatchMenuAction("chatgpt.return-marker"));
     expect(state.toggleReturnMarker).toHaveBeenCalledTimes(2);
-    expect(state.toast).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Return marker removed" }));
+    expect(state.toast).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Persistent attention disabled" }));
     expect(state.cancelAttention).toHaveBeenCalledWith(["selected-session"]);
   });
 
@@ -119,7 +125,7 @@ describe("Return marker shortcut", () => {
 
     await act(() => dispatchMenuAction("chatgpt.return-marker"));
     expect(state.toggleReturnMarker).toHaveBeenCalledWith("selected-session", "working");
-    expect(state.toast).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Return marker armed" }));
+    expect(state.toast).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Persistent attention enabled" }));
   });
 });
 
@@ -127,13 +133,12 @@ describe("Open last GMA session shortcut", () => {
   it("opens and acknowledges the most recently requesting session", async () => {
     state.pathname = "/browser/selected-session";
     state.latestAttention.mockReturnValue({ id: "request", sessionId: "selected-session" });
-    state.clearReturnMarker.mockClear();
-    state.openAttention.mockClear();
+    state.acknowledgeAttention.mockClear();
     state.navigate.mockClear();
     await using _view = await render(<ChatGPTNewSessionShortcut />);
     await act(() => dispatchMenuAction("chatgpt.open-last-attention"));
-    expect(state.openAttention).toHaveBeenCalledWith(["selected-session"]);
-    expect(state.clearReturnMarker).toHaveBeenCalledWith("selected-session");
+    expect(state.acknowledgeAttention).toHaveBeenCalledWith("remote",
+      expect.objectContaining({ id: "selected-session" }));
     expect(state.navigate).toHaveBeenCalledWith({
       to: "/browser/$browserSessionId", params: { browserSessionId: "selected-session" },
     });

@@ -83,7 +83,8 @@ import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedSt
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { AgentAttentionToast } from "./AgentAttentionToast";
-import { requestAgentAttention, readAgentAttention, loadAgentAttention, changeAttention, openAgentAttention, cancelAgentAttention } from "../../chatGPTAgentAttention";
+import { requestAgentAttention, readAgentAttention, loadAgentAttention, changeAttention, cancelManualAgentAttention } from "../../chatGPTAgentAttention";
+import { acknowledgeChatGPTSessionAttention, rearmPersistentSessionAttention } from "../../chatGPTPersistentAttention";
 import { queueAgentAttentionDismissal } from "../../chatGPTAttentionHandoff";
 import { readRemotePrepfileJobs, stageRemotePrepfileImageChunk, startRemotePrepfile, type RemotePrepfileRequest } from "../../prepfileRemote";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -983,6 +984,7 @@ export function DesktopAppActivationCoordinator() {
             if (command === "attention_open") {
               if (attention.status === "dismissed") throw new Error("Request already dismissed.");
               if (attention.status !== "opened") changeAttention(attention.id,"opened");
+              rearmPersistentSessionAttention(environmentId, browserSession);
             } else if (command === "attention_snooze") {
               if (o.minutes !== 15 && o.minutes !== 60 ||
                   attention.status === "dismissed" || attention.status === "opened")
@@ -2476,8 +2478,8 @@ export function DesktopAppActivationCoordinator() {
                     if (attention.status === "dismissed")
                       throw new Error("Attention request was already dismissed.");
                     if (attention.status !== "opened") changeAttention(attention.id, "opened");
-                    // Opening on the phone is the Ctrl+S acknowledgement for this exact session.
-                    updateChatGPTReturnMarker(environmentId, id, () => undefined);
+                    // Opening on the phone acknowledges the current alert, not the Ctrl+D toggle.
+                    rearmPersistentSessionAttention(environmentId, entry);
                     setSessionHidden(id, false);
                     setSessionSnooze([id], null);
                   } else if (command === "attention_snooze") {
@@ -2502,7 +2504,7 @@ export function DesktopAppActivationCoordinator() {
                   const ids = [id, publicChatGPTSessionId(current)];
                   if (current.returnMarker) {
                     updateChatGPTReturnMarker(environmentId, id, () => undefined);
-                    cancelAgentAttention(ids);
+                    cancelManualAgentAttention(ids);
                   } else {
                     const activity = readChatGPTProviderActivity(environmentId, id);
                     updateChatGPTReturnMarker(environmentId, id, () =>
@@ -3001,9 +3003,7 @@ export function DesktopAppActivationCoordinator() {
     if (entry) {
       setSessionHidden(entry.id, false);
       setSessionSnooze([entry.id], null);
-      updateChatGPTReturnMarker(environmentId, entry.id, () => undefined);
-      openAgentAttention([entry.id, ...(entry.bootstrapIdentity?.publicId
-        ? [entry.bootstrapIdentity.publicId] : [])]);
+      acknowledgeChatGPTSessionAttention(environmentId, entry);
       void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: entry.id } });
       return true;
     }

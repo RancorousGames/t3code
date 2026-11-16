@@ -3,8 +3,9 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent } from "react";
 
 import { readChatGPTBrowserSessions, useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
+import { acknowledgeChatGPTSessionAttention } from "../chatGPTPersistentAttention";
 import { readChatGPTProviderActivity } from "../chatGPTProviderActivity";
-import { requestAgentAttention, cancelAgentAttention, latestAgentAttention, openAgentAttention } from "../chatGPTAgentAttention";
+import { requestAgentAttention, cancelManualAgentAttention, latestAgentAttention } from "../chatGPTAgentAttention";
 import { toastManager } from "./ui/toast";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
@@ -19,7 +20,7 @@ export function ChatGPTNewSessionShortcut() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const environmentId = usePrimaryEnvironmentId();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { createSession, toggleSessionReturnMarker, clearSessionReturnMarker, setSessionHidden, setSessionSnooze } = useChatGPTBrowserSessions(environmentId);
+  const { createSession, toggleSessionReturnMarker, setSessionHidden, setSessionSnooze } = useChatGPTBrowserSessions(environmentId);
 
   const createNewSession = useEffectEvent(() => {
     if (!isElectron || !environmentId) return;
@@ -44,15 +45,15 @@ export function ChatGPTNewSessionShortcut() {
     toggleSessionReturnMarker(sessionId, activity);
     const ids = [session.id, ...(session.bootstrapIdentity?.publicId
       ? [session.bootstrapIdentity.publicId] : [])];
-    if (session.returnMarker) cancelAgentAttention(ids);
+    if (session.returnMarker) cancelManualAgentAttention(ids);
     else requestAgentAttention(randomUUID(), session.bootstrapIdentity?.publicId ?? session.id,
       "Return to " + session.title + " - its response is ready.", "manual");
     toastManager.add(
       session.returnMarker
-        ? { type: "success", title: "Return marker removed", description: session.title }
+        ? { type: "success", title: "Persistent attention disabled", description: session.title }
         : {
             type: "success",
-            title: "Return marker armed",
+            title: "Persistent attention enabled",
             description: activity === "working"
               ? `${session.title} — yellow border when this response finishes`
               : `${session.title} — yellow border after the next response finishes`,
@@ -73,10 +74,7 @@ export function ChatGPTNewSessionShortcut() {
       toastManager.add({ type: "error", title: "Attention session not found" });
       return;
     }
-    const ids = [session.id, ...(session.bootstrapIdentity?.publicId
-      ? [session.bootstrapIdentity.publicId] : [])];
-    openAgentAttention(ids);
-    clearSessionReturnMarker(session.id);
+    acknowledgeChatGPTSessionAttention(environmentId, session);
     setSessionHidden(session.id, false);
     setSessionSnooze([session.id], null);
     void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: session.id } });
