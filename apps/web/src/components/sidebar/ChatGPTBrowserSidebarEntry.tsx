@@ -2771,6 +2771,7 @@ export function ChatGPTBrowserSidebarEntry({
       />
       <ChatGPTCompletedWorkerCleanup
         environmentId={environmentId}
+        activeSessionId={activeSessionId}
         managerIds={verifiedManagerSessionIds}
         now={clockNow}
       />

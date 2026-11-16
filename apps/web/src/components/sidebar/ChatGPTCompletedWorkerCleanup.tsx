@@ -39,13 +39,19 @@ import { closePreviewSession } from "../preview/closePreviewSession";
  */
 export function ChatGPTCompletedWorkerCleanup({
   environmentId,
+  activeSessionId,
   managerIds,
   now,
 }: {
   environmentId: EnvironmentId;
+  activeSessionId: string | undefined;
   managerIds: ReadonlySet<string> | null;
   now: number;
 }) {
+  // A background cleanup must never remove the session the user is viewing.
+  // Re-read selection after awaits: the user may select a candidate mid-scan.
+  const selectedSessionId = useRef(activeSessionId);
+  selectedSessionId.current = activeSessionId;
   const { removeSession } = useChatGPTBrowserSessions(environmentId);
   const close = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const scanning = useRef(false);
@@ -82,7 +88,8 @@ export function ChatGPTCompletedWorkerCleanup({
         sessions: readonly (typeof initial)[number][],
         worker: (typeof initial)[number],
         at: number,
-      ) => verifiedManagers?.has(worker.id) ? null : spawnAutoCloseCandidate(
+      ) => verifiedManagers?.has(worker.id) || selectedSessionId.current === worker.id
+        ? null : spawnAutoCloseCandidate(
         sessions, worker, at,
         readSpawnAutoCloseIdleSince(environmentId, worker.id),
         creationEvidence(worker.id).lastWorkingAt ?? null,
@@ -129,6 +136,7 @@ export function ChatGPTCompletedWorkerCleanup({
             await bridge({ operation: "close", identity: {
               environmentId, sessionId: worker.id, profileId: chatGPTSessionProfileId(worker),
             } });
+            if (selectedSessionId.current === worker.id) continue;
             removeSession(worker.id, "completed-worker");
             removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, worker.id));
             removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, worker.id));
@@ -268,6 +276,7 @@ export function ChatGPTCompletedWorkerCleanup({
           }
           // At most one local container removed per scan. The conversation
           // remains on ChatGPT's servers; never archive/hide instead of close.
+          if (selectedSessionId.current === current.id) continue;
           removeSession(current.id, "completed-worker");
           removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, current.id));
           removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, current.id));

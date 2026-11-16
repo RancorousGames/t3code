@@ -106,19 +106,24 @@ test("stable t3: public ChatGPT claim focuses the held session, never a native t
   assert.deepEqual(calls.map((call) => call.action), ["list", "focus"]);
 });
 
-test("t3: native thread claim resolves after ChatGPT registry has no match", async () => {
+test("a background pickup reuses the claimed native thread without changing selection", async () => {
   const ctx = await context();
   ctx.task.claimed_by = "t3:native-id";
-  const result = await openTaskSession(ctx.input, {
+  const nativeActions = [];
+  const result = await openTaskSession({ ...ctx.input, background: true }, {
     home: ctx.home,
     command: ctx.command,
     control: async () => ({ sessions: [] }),
-    native: async (request) => request.action === "list"
-      ? { threads: [{ id: "native-id" }] }
-      : { threadId: "native-id" },
+    native: async (request) => {
+      nativeActions.push(request.action);
+      return request.action === "list"
+        ? { threads: [{ id: "native-id" }] }
+        : { threadId: "native-id" };
+    },
   });
   assert.equal(result.kind, "native");
   assert.equal(result.threadId, "native-id");
+  assert.deepEqual(nativeActions, ["list"]);
 });
 
 test("unclaimed task creates once, claims exact session, then reopens", async () => {
@@ -584,9 +589,10 @@ test("native project ambiguity stops before any thread creation", async () => {
   }), /one identifiable T3 project/);
 });
 
-test("native default finds a registered project even before its first thread", async () => {
+test("background native creation uses a registered project without stealing selection", async () => {
   const ctx = await context();
   ctx.input.kind = "codex";
+  ctx.input.background = true;
   const { DatabaseSync } = await import("node:sqlite");
   const dataDir = Path.join(ctx.home, "userdata");
   await FSP.mkdir(dataDir, { recursive: true });
@@ -618,4 +624,5 @@ test("native default finds a registered project even before its first thread", a
   assert.equal(result.status, "created");
   assert.equal(calls.find((call) => call.action === "create").workspaceRoot, "D:\\Projects\\Board");
   assert.equal(calls.find((call) => call.action === "create").modelSelection.model, "gpt-default");
+  assert.equal(calls.some((call) => call.action === "focus"), false);
 });
