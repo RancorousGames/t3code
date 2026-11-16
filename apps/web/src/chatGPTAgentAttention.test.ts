@@ -174,6 +174,47 @@ describe("Ctrl+S attention target", () => {
     expect(loadAgentAttention()).toEqual(before);
   });
 
+  it("cycles inactive recent sessions before working ones, then wraps", () => {
+    const now = vi.spyOn(Date, "now");
+    for (const [id, session, created, activated] of [
+      ["a", "working-old", 100, 150],
+      ["b", "idle-old", 200, 250],
+      ["c", "idle-new", 300, 350],
+      ["d", "working-new", 400, 450],
+    ] as const) {
+      now.mockReturnValue(created);
+      requestAgentAttention(id, session, id);
+      now.mockReturnValue(activated);
+      activateAgentAttention([session]);
+      changeAttention(id, "opened");
+    }
+    const available = new Set(["working-old", "idle-old", "idle-new", "working-new"]);
+    const working = new Set(["working-old", "working-new"]);
+    const items = loadAgentAttention();
+
+    // Starting on a working session should jump to the newest idle session.
+    expect(nextRecentAgentAttentionSessionId(
+      items, available, ["working-new"], working,
+    )).toBe("idle-new");
+    expect(nextRecentAgentAttentionSessionId(
+      items, available, ["idle-new"], working, "idle-new",
+    )).toBe("idle-old");
+    expect(nextRecentAgentAttentionSessionId(
+      items, available, ["idle-old"], working, "idle-old",
+    )).toBe("working-new");
+    expect(nextRecentAgentAttentionSessionId(
+      items, available, ["working-new"], working, "working-new",
+    )).toBe("working-old");
+    expect(nextRecentAgentAttentionSessionId(
+      items, available, ["working-old"], working, "working-old",
+    )).toBe("idle-new");
+    // A manual switch to a working session restarts from the idle group.
+    expect(nextRecentAgentAttentionSessionId(
+      items, available, ["working-old"], working, "idle-old",
+    )).toBe("idle-new");
+    expect(loadAgentAttention()).toEqual(items);
+  });
+
   it("turning Ctrl+D off does not cancel an agent's pending attention", () => {
     requestAgentAttention("manual", "session", "Watch", "manual");
     requestAgentAttention("agent", "session", "Need help");

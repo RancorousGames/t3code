@@ -202,15 +202,31 @@ export function recentAgentAttentionSessionIds(
   return result;
 }
 
-/** Next historical session after the currently displayed one, wrapping at the end. */
+/** Browse resolved attention: non-working sessions first, then working ones.
+ * The previous Ctrl+S target allows continued cycling through the working
+ * group instead of restarting at the idle group on every subsequent press. */
 export function nextRecentAgentAttentionSessionId(
   items: readonly AgentAttention[],
   availableSessionIds: ReadonlySet<string>,
   selectedSessionIds: readonly string[],
+  workingSessionIds: ReadonlySet<string> = new Set(),
+  previousTargetId?: string,
 ): string | undefined {
   const recent = recentAgentAttentionSessionIds(items, availableSessionIds);
-  const currentIndex = recent.findIndex((id) => selectedSessionIds.includes(id));
-  return recent[(currentIndex + 1) % recent.length];
+  if (!recent.length) return undefined;
+  const ordered = [
+    ...recent.filter((id) => !workingSessionIds.has(id)),
+    ...recent.filter((id) => workingSessionIds.has(id)),
+  ];
+  // Continuing a shortcut-driven tour advances through both groups, including
+  // the active tail. Manually switching to a working session starts at idle again.
+  const continuing = previousTargetId !== undefined &&
+    selectedSessionIds.includes(previousTargetId);
+  const selectedIndex = continuing
+    ? ordered.indexOf(previousTargetId)
+    : ordered.findIndex((id) =>
+        !workingSessionIds.has(id) && selectedSessionIds.includes(id));
+  return ordered[(selectedIndex + 1) % ordered.length];
 }
 
 export function markAgentAttentionNotified(id: string): void {

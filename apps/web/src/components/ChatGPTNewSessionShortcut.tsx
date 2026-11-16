@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 
 import { readChatGPTBrowserSessions, useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
 import { acknowledgeChatGPTSessionAttention } from "../chatGPTPersistentAttention";
@@ -26,6 +26,7 @@ export function ChatGPTNewSessionShortcut() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const environmentId = usePrimaryEnvironmentId();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const lastRecentAttentionTarget = useRef<string | null>(null);
   const { createSession, toggleSessionReturnMarker, setSessionHidden, setSessionSnooze } = useChatGPTBrowserSessions(environmentId);
 
   const createNewSession = useEffectEvent(() => {
@@ -76,6 +77,7 @@ export function ChatGPTNewSessionShortcut() {
     ]));
     const latest = latestAgentAttention(availableIds);
     if (latest) {
+      lastRecentAttentionTarget.current = null;
       // Pending attention always takes priority and consumes exactly one entry.
       const session = sessions.find((entry) =>
         entry.id === latest.sessionId || entry.bootstrapIdentity?.publicId === latest.sessionId);
@@ -90,18 +92,26 @@ export function ChatGPTNewSessionShortcut() {
     // alerts without re-acknowledging them or disturbing their stored receipts.
     const selectedId = pathname.match(/^\/browser\/([^/]+)\/?$/)?.[1];
     const selected = sessions.find((entry) => entry.id === selectedId);
+    const workingIds = new Set(sessions
+      .filter((entry) => readChatGPTProviderActivity(environmentId, entry.id) === "working")
+      .flatMap((entry) => [entry.id, ...(entry.bootstrapIdentity?.publicId
+        ? [entry.bootstrapIdentity.publicId] : [])]));
     const nextId = nextRecentAgentAttentionSessionId(
       loadAgentAttention(),
       availableIds,
       selected ? [selected.id, ...(selected.bootstrapIdentity?.publicId
         ? [selected.bootstrapIdentity.publicId] : [])] : [],
+      workingIds,
+      lastRecentAttentionTarget.current ?? undefined,
     );
     const session = sessions.find((entry) =>
       entry.id === nextId || entry.bootstrapIdentity?.publicId === nextId);
     if (!session) {
+      lastRecentAttentionTarget.current = null;
       toastManager.add({ type: "info", title: "No recent attention sessions" });
       return;
     }
+    lastRecentAttentionTarget.current = nextId ?? null;
     setSessionHidden(session.id, false);
     setSessionSnooze([session.id], null);
     void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: session.id } });
