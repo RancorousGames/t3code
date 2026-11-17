@@ -91,11 +91,30 @@ function imagePreflight(id) {
     const style=document.createElement("style");
     style.textContent='[data-composer-body] [class*="ComposerLayoutAttachments"] {display:none !important;}';
     document.head.appendChild(style);
-    const styleTimeout=setTimeout(()=>style.remove(),180000);
-    window.__t3ChatGPTImageSend={
+    const state={
       id:${JSON.stringify(id)},chunks:[],phase:"transfer",findProps,
-      style,styleTimeout,uploadId:null,
+      style,uploadId:null,
     };
+    state.dismissOwnAttachment=()=>{
+      const p=state.findProps();
+      const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
+      const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
+      if(!state.uploadId||draft.trim()||p?.isSubmitting||p?.isWaitingForFileUploads
+          ||p?.attachments?.length!==1||p.attachments[0].uploadId!==state.uploadId)
+        return false;
+      p.onAttachmentRemove(state.uploadId,"user");
+      return true;
+    };
+    // A killed CLI or lost IPC response must not reveal a stranded T3 image
+    // after the temporary hiding style expires. Never touch an altered draft.
+    state.styleTimeout=setTimeout(()=>{
+      style.remove();
+      if(state.phase!=="finished"){
+        try{state.dismissOwnAttachment();}catch{}
+        state.phase="finished";
+      }
+    },180000);
+    window.__t3ChatGPTImageSend=state;
     return {ok:true};
   `);
 }
@@ -128,8 +147,18 @@ function sendExpression(id, message, conversationId) {
     if((e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"").trim())
       return {ok:false,reason:"draft_changed"};
     s.phase="submitted";
-    const result=p.onSubmit(${JSON.stringify(message)},performance.now(),{preserveDraft:false},true);
-    if(result?.then)Promise.resolve(result).catch(()=>{});
+    s.submitOutcome="pending";
+    try{
+      const result=p.onSubmit(${JSON.stringify(message)},performance.now(),{preserveDraft:false},true);
+      const settled=(value)=>{s.submitOutcome=value===false?"rejected":value===true?"accepted":"completed";};
+      if(result?.then)Promise.resolve(result).then(settled,error=>{
+        s.submitOutcome="rejected";s.submitError=String(error).slice(0,160);
+      });
+      else settled(result);
+    }catch(error){
+      // A throwing callback may still have sent a request. Treat it as UNKNOWN.
+      s.submitOutcome="threw";s.submitError=String(error).slice(0,160);
+    }
     return {ok:true,submitted:true,attachmentsBefore:1};
   `);
 }
@@ -138,7 +167,16 @@ function deliveryProbe(marker) {
   return expression(`
     const el=[...document.querySelectorAll('[class*="group/user-message"]')]
       .find(n=>(n.innerText||n.textContent||"").includes(${JSON.stringify(marker)}));
-    return {found:!!el,imageCount:el?.querySelectorAll('img[alt="User attachment"],img[src^="data:image/"]')?.length||0};
+    const s=window.__t3ChatGPTImageSend;
+    const p=s?.findProps?.();
+    return {
+      found:!!el,
+      imageCount:el?.querySelectorAll('img[alt="User attachment"],img[src^="data:image/"]')?.length||0,
+      callbackOutcome:s?.submitOutcome||"pending",
+      callbackError:s?.submitError||null,
+      ownAttachment:!!s?.uploadId&&p?.attachments?.some(a=>a.uploadId===s.uploadId)===true,
+      busy:!!(p?.isSubmitting||p?.isWaitingForFileUploads),
+    };
   `);
 }
 
@@ -270,17 +308,26 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       record.reason = sent?.reason ?? "Submit callback not invoked";
       persist(home, record); return publicReceipt(record);
     }
+    let lastObserved = null;
     for (let i = 0; i < 70; i++) {
       const observed = await experiment(deliveryProbe(marker));
+      lastObserved = observed;
       if (observed?.found) {
         record.imageCount = observed.imageCount;
         record.status = observed.imageCount > 0 ? "delivered" : "text_only";
         record.reason = observed.imageCount > 0 ? null : "Text observed without the image attachment.";
         persist(home, record); return publicReceipt(record);
       }
+      // React can resolve false without sending anything. Wait briefly for
+      // a late user turn before reporting failure, but never blindly retry.
+      if (i >= 8 && observed?.callbackOutcome === "rejected" && !observed.busy)
+        throw new Error("React submit rejected: " + (observed.callbackError ?? "callback returned false"));
       await wait(400);
     }
-    throw new Error("Callback invoked, but matching user turn was not observed.");
+    throw new Error("Callback invoked, but matching user turn was not observed. "
+      + "outcome=" + (lastObserved?.callbackOutcome ?? "unavailable")
+      + ", ownAttachment=" + !!lastObserved?.ownAttachment
+      + ", busy=" + !!lastObserved?.busy);
   } catch (error) {
     if (record.sendAttempted) {
       record.status = "unknown";
@@ -296,15 +343,15 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       await guardedEval(control, expectedConversationId, sessionId, expression(`
         const s=window.__t3ChatGPTImageSend;
         if(s?.id===${JSON.stringify(requestId)}){
-          // A refused/failed send must not strand our image in the human draft.
-          // The callback's user-facing removal API takes uploadId, not file id.
-          if(${record.sendAttempted === false}&&s.phase==="uploading"&&s.uploadId){
-            const p=s.findProps();
-            if(p?.attachments?.some(a=>a.uploadId===s.uploadId))
-              p.onAttachmentRemove(s.uploadId,"user");
+          // An UNKNOWN is never retried. If React is still submitting, let
+          // the guarded orphan timer retry cleanup after the submission settles.
+          let deferredCleanup=false;
+          if(${["not_sent", "unknown", "text_only"].includes(record.status)}&&s.uploadId){
+            try{deferredCleanup=!s.dismissOwnAttachment?.();}catch{deferredCleanup=true;}
           }
-          s.chunks=[];s.phase="finished";
-          clearTimeout(s.styleTimeout);s.style?.remove();
+          s.chunks=[];s.phase=deferredCleanup?"pending_cleanup":"finished";
+          if(!deferredCleanup)clearTimeout(s.styleTimeout);
+          s.style?.remove();
         }
         return true;
       `));
