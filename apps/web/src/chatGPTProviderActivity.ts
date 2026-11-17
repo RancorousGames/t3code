@@ -1,8 +1,15 @@
 import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity";
-import { advanceChatGPTReturnMarker, clearChatGPTSessionVerificationOnWorking, updateChatGPTReturnMarker } from "./chatGPTBrowserSessions";
+import {
+  advanceChatGPTReturnMarker,
+  clearChatGPTSessionVerificationOnWorking,
+  updateChatGPTReturnMarker,
+} from "./chatGPTBrowserSessions";
 import { activateAgentAttention } from "./chatGPTAgentAttention";
 import { acknowledgeChatGPTSessionAttention } from "./chatGPTPersistentAttention";
-import { markChatGPTAttentionVisited, observeChatGPTAttentionCompletion } from "./chatGPTAttentionWorkCycle";
+import {
+  markChatGPTAttentionVisited,
+  observeChatGPTAttentionCompletion,
+} from "./chatGPTAttentionWorkCycle";
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 import { observeSpawnAutoCloseActivity } from "./chatGPTSpawnAutoClose";
 
@@ -15,8 +22,11 @@ const key = (environmentId: string, sessionId: string) => environmentId + ":" + 
 export function isSelectedChatGPTAttentionSession(sessionId: string, hash: string): boolean {
   const match = /^#\/browser\/([^/?#]+)\/?(?:\?.*)?$/.exec(hash);
   if (!match) return false;
-  try { return decodeURIComponent(match[1]!) === sessionId; }
-  catch { return false; }
+  try {
+    return decodeURIComponent(match[1]!) === sessionId;
+  } catch {
+    return false;
+  }
 }
 
 /** Share the sidebar's verified activity with the phone-facing provider catalog. */
@@ -27,9 +37,9 @@ export function recordChatGPTProviderActivity(
 ): void {
   if (activity === "unknown") return;
   if (activity === "working") clearChatGPTSessionVerificationOnWorking(environmentId, sessionId);
-  const session = getChatGPTSessionPersistedStore(environmentId).getState().sessions.find(
-    (entry) => entry.id === sessionId && entry.autoClose === true,
-  );
+  const session = getChatGPTSessionPersistedStore(environmentId)
+    .getState()
+    .sessions.find((entry) => entry.id === sessionId && entry.autoClose === true);
   if (session) observeSpawnAutoCloseActivity(environmentId, session, activity);
   const identity = key(environmentId, sessionId);
   const previous = observations.get(identity);
@@ -40,7 +50,11 @@ export function recordChatGPTProviderActivity(
     since: previous?.activity === activity ? previous.since : now,
   });
   const completed = observeChatGPTAttentionCompletion(
-    environmentId, sessionId, previous?.activity, activity);
+    environmentId,
+    sessionId,
+    previous?.activity,
+    activity,
+  );
   if (activity === "working" || completed) {
     updateChatGPTReturnMarker(environmentId, sessionId, (marker) => {
       if (!marker) return undefined;
@@ -49,10 +63,13 @@ export function recordChatGPTProviderActivity(
       return advanceChatGPTReturnMarker(marker, activity === "working" ? "working" : "idle");
     });
     if (completed) {
-      const entry = getChatGPTSessionPersistedStore(environmentId).getState().sessions.find(
-        (session) => session.id === sessionId);
-      const ids = [sessionId, ...(entry?.bootstrapIdentity?.publicId
-        ? [entry.bootstrapIdentity.publicId] : [])];
+      const entry = getChatGPTSessionPersistedStore(environmentId)
+        .getState()
+        .sessions.find((session) => session.id === sessionId);
+      const ids = [
+        sessionId,
+        ...(entry?.bootstrapIdentity?.publicId ? [entry.bootstrapIdentity.publicId] : []),
+      ];
       // An agent's one-time attention request is independent of Ctrl+D.
       // It must activate even when the user never armed a return marker.
       const newlyActivated = activateAgentAttention(ids);
@@ -78,9 +95,7 @@ export function readChatGPTProviderActivity(
   now = Date.now(),
 ): ChatGPTActivityState {
   const observation = observations.get(key(environmentId, sessionId));
-  return observation && now - observation.observedAt < 90_000
-    ? observation.activity
-    : "unknown";
+  return observation && now - observation.observedAt < 90_000 ? observation.activity : "unknown";
 }
 
 /** Activity plus when it began; `since` is null when the observation is stale. */
