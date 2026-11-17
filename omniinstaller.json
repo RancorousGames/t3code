@@ -35,7 +35,7 @@
         "install": { "script": "scripts/omniinstaller-t3.ps1", "args": ["install"] },
         "detectVersion": { "script": "scripts/omniinstaller-t3.ps1", "args": ["detectVersion"] },
         "uninstall": { "script": "scripts/omniinstaller-t3.ps1", "args": ["uninstall"] },
-        "launch": { "executable": "{InstallDir}/app/T3 Code.exe" }
+        "launch": { "executable": "{InstallDir}/app/T3 Code (Beta).exe" }
       }
     }
   ]

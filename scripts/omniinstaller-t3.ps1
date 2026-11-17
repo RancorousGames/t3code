@@ -50,7 +50,8 @@ if (-not $dest -or $env:OMNIINSTALLER_APP_ID -ne 'dev.rancorousgames.t3code') {
 }
 $app = Join-Path $dest 'app'
 $marker = Join-Path $app '.omniinstaller-version'
-$exe = Join-Path $app 'T3 Code.exe'
+$exeName = 'T3 Code (Beta).exe'
+$exe = Join-Path $app $exeName
 $cache = Join-Path $env:LOCALAPPDATA "OmniInstaller\BuildCache\dev.rancorousgames.t3code\$version"
 $artifact = Join-Path $cache 'win-unpacked'
 
@@ -64,14 +65,14 @@ switch ($Action) {
             $env:T3CODE_DESKTOP_UPDATE_REPOSITORY = 'RancorousGames/t3code'
             & vp run dist:desktop:artifact --platform win --target dir --arch x64 --output-dir $cache --verbose
             if ($LASTEXITCODE -ne 0) { throw 'T3 Code desktop build failed.' }
-            if (-not (Test-Path -LiteralPath (Join-Path $artifact 'T3 Code.exe') -PathType Leaf)) {
-                throw 'T3 Code desktop build did not produce win-unpacked/T3 Code.exe.'
+            if (-not (Test-Path -LiteralPath (Join-Path $artifact $exeName) -PathType Leaf)) {
+                throw "T3 Code desktop build did not produce win-unpacked/$exeName."
             }
         }
         finally { Pop-Location }
     }
     'install' {
-        if (-not (Test-Path -LiteralPath (Join-Path $artifact 'T3 Code.exe') -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $artifact $exeName) -PathType Leaf)) {
             throw 'No staged build for this T3 Code revision.'
         }
         $existing = Test-Path -LiteralPath $app
