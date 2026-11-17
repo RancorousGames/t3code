@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useAndroidFloatingTabs } from "../settings/appearance/AppearancePreferencesProvider";
 import { WorkspaceNoTabs } from "./WorkspaceNoTabs";
 import { useEnabledNavigationTabs } from "./navigation-tabs";
@@ -12,6 +13,8 @@ import { ScreenContent } from "../../components/ui/ScreenContent";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
+import { ChatGPTSessionsScreen } from "../chatgpt/ChatGPTSessionsScreen";
+import { ChatGPTUsageSheet } from "../chatgpt/ChatGPTUsageSheet";
 import { PullRequestToolbar } from "../pull-requests/PullRequestToolbar.android";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidWorkspaceNavigation, FloatingWorkspaceTabs } from "./AndroidWorkspaceNavigation";
@@ -23,6 +26,7 @@ import type { WorkspaceTab } from "./workspace-tabs-state";
 const TABS: readonly WorkspaceTab[] = NAVIGATION_TAB_ORDER;
 
 export function WorkspaceRootScreen() {
+  const [usageOpen, setUsageOpen] = useState(false);
   const floatingTabsEnabled = useAndroidFloatingTabs();
   const { layout, startNewTask } = useAdaptiveWorkspaceLayout();
   const workspace = useWorkspaceTabs()!;
@@ -71,7 +75,21 @@ export function WorkspaceRootScreen() {
               renderTab={(tab) =>
                 tab === "threads" ? (
                   <HomeRouteScreen />
-                ) : tab !== "pullRequests" ? (
+                ) : tab === "chatGPT" ? (
+                  <>
+                    <AndroidScreenHeader
+                      title="AI"
+                      actions={[{
+                        accessibilityLabel: "T3 usage",
+                        icon: "chart.bar.xaxis",
+                        overflowOnly: true,
+                        onPress: () => setUsageOpen(true),
+                      }]}
+                    />
+                    <ChatGPTSessionsScreen />
+                    <ChatGPTUsageSheet visible={usageOpen} onClose={() => setUsageOpen(false)} />
+                  </>
+                ) : tab === "usage" ? (
                   <WorkspaceExtraTab tab={tab} />
                 ) : layout.usesSplitView ? (
                   <>
