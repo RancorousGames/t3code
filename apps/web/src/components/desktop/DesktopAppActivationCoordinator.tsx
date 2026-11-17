@@ -95,6 +95,7 @@ import { readRemotePrepfileJobs, stageRemotePrepfileImageChunk, startRemotePrepf
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { chatGPTCloseStatus } from "../../chatGPTCloseStatus";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
+import { readVerifiedT3CaffyOverview } from "../../hooks/useT3CaffyOverview";
 import {
   readChatGPTIdleTransition,
   subscribeChatGPTIdleTransitions,
@@ -2215,6 +2216,9 @@ export function DesktopAppActivationCoordinator() {
     const publish = async () => {
       const observedAt = new Date().toISOString();
       const catalog = readChatGPTBrowserSessions(environmentId);
+      // One verified desktop scheduler snapshot for the entire catalog (no per-row IPC).
+      const caffyEntries = readVerifiedT3CaffyOverview()?.entries ?? [];
+      const observedMs = Date.now();
       // Native Chromium has no preview-state WebContents. Publish reachability
       // from the Electron owner registry (bounded read-only snapshots) instead.
       const sessions: AgentProviderV1Session[] = [];
@@ -2268,6 +2272,10 @@ export function DesktopAppActivationCoordinator() {
                   : { activity: "unknown" as const, since: null };
                 const activity = detail.activity;
                 const sinceIso = detail.since === null ? null : new Date(detail.since).toISOString();
+                const caffy = caffyEntries.find((item) =>
+                  (item.sessionId === entry.id || item.browserSessionId === entry.id ||
+                    item.publicSessionId === entry.id) &&
+                  (item.expiresAt === null || item.expiresAt > observedMs || !!item.pendingMessageId));
                 return {
                   ref: { provider: "t3", id: entry.id },
                   kind: "t3/chatgpt",
@@ -2285,6 +2293,8 @@ export function DesktopAppActivationCoordinator() {
                     ...(entry.snoozedUntil != null ? { snoozedUntil: entry.snoozedUntil } : {}),
                     ...(entry.snoozedAt != null ? { snoozedAt: entry.snoozedAt } : {}),
                     ...(entry.createdAt != null ? { createdAt: entry.createdAt } : {}),
+                    ...(entry.returnMarker ? { returnMarker: entry.returnMarker } : {}),
+                    ...(caffy ? { caffyMode: caffy.mode, caffyPaused: caffy.paused } : {}),
                   },
                   // Feed the phone's Last active sort from T3's persisted user activity,
                   // not the 30-second catalog publication timestamp.

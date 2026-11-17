@@ -107,6 +107,10 @@ export const AgentProviderV1Session = Schema.Struct({
       snoozedUntil: Schema.optional(Schema.Number),
       snoozedAt: Schema.optional(Schema.Number),
       createdAt: Schema.optional(Schema.Number),
+      // Browser-session indicators mirrored from T3 (not inferred by remote clients).
+      returnMarker: Schema.optional(Schema.Literals(["armed", "working", "ready"])),
+      caffyMode: Schema.optional(Schema.Literals(["idle", "periodic", "startup"])),
+      caffyPaused: Schema.optional(Schema.Boolean),
     }),
   ),
 });
