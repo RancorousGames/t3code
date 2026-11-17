@@ -6,7 +6,8 @@ import { markChatGPTAttentionVisited, observeChatGPTAttentionCompletion } from "
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 import { observeSpawnAutoCloseActivity } from "./chatGPTSpawnAutoClose";
 
-type Observation = { activity: ChatGPTActivityState; observedAt: number };
+// `since` is when the activity last changed (turn start while working).
+type Observation = { activity: ChatGPTActivityState; observedAt: number; since: number };
 const observations = new Map<string, Observation>();
 const key = (environmentId: string, sessionId: string) => environmentId + ":" + sessionId;
 
@@ -32,7 +33,12 @@ export function recordChatGPTProviderActivity(
   if (session) observeSpawnAutoCloseActivity(environmentId, session, activity);
   const identity = key(environmentId, sessionId);
   const previous = observations.get(identity);
-  observations.set(identity, { activity, observedAt: Date.now() });
+  const now = Date.now();
+  observations.set(identity, {
+    activity,
+    observedAt: now,
+    since: previous?.activity === activity ? previous.since : now,
+  });
   const completed = observeChatGPTAttentionCompletion(
     environmentId, sessionId, previous?.activity, activity);
   if (activity === "working" || completed) {
@@ -75,4 +81,16 @@ export function readChatGPTProviderActivity(
   return observation && now - observation.observedAt < 90_000
     ? observation.activity
     : "unknown";
+}
+
+/** Activity plus when it began; `since` is null when the observation is stale. */
+export function readChatGPTProviderActivityDetail(
+  environmentId: string,
+  sessionId: string,
+  now = Date.now(),
+): { activity: ChatGPTActivityState; since: number | null } {
+  const observation = observations.get(key(environmentId, sessionId));
+  return observation && now - observation.observedAt < 90_000
+    ? { activity: observation.activity, since: observation.since }
+    : { activity: "unknown", since: null };
 }
