@@ -402,15 +402,17 @@ export const make = Effect.gen(function* () {
           // context-menu registration and the agent calling caffy.stop().
           // `list` is polled every 10s by the UI, so it uses the 30s-throttled
           // reconcile; only an unresolved sessionId forces a fresh one.
-          if (request.sessionId && !caffy.status(request.sessionId))
+          if (request.sessionId && !caffy.status(request.sessionId) && request.targetKind !== "t3")
             await caffy.reconcileIdentityAliases(true);
           else if (action === "list") await caffy.reconcileIdentityAliases();
           let conversationId = request.conversationId;
+          let targetKind = request.targetKind;
+          let environmentId = request.environmentId;
           if (action === "begin_in" && !conversationId && request.sessionId) {
             const prior = caffy.status(request.sessionId);
             if (prior && "conversationId" in prior) conversationId = prior.conversationId;
           }
-          if ((action === "set" || action === "begin_in") && !conversationId && request.sessionId) {
+          if ((action === "set" || action === "begin_in") && request.targetKind !== "t3" && !conversationId && request.sessionId) {
             const inventory = await broker.request({
               version: 1, requestId: NodeCrypto.randomUUID(), type: "chatgpt.sessions",
               action: "list", which: "all", includeHidden: true,
@@ -429,6 +431,28 @@ export const make = Effect.gen(function* () {
                 conversationId = match[0]?.conversationId ?? match[0]?.bootstrapIdentity?.conversationId;
             }
           }
+          // Existing T3 threads can call the same Caffy tool by thread ID. Resolve the
+          // native target only after a registered ChatGPT owner failed to resolve,
+          // and always require an exact unique thread in the connected T3 environment.
+          if ((action === "set" || action === "begin_in") && request.sessionId &&
+              (targetKind === "t3" || (!targetKind && !conversationId))) {
+            const native = await broker.request({
+              version: 1, requestId: NodeCrypto.randomUUID(), type: "t3.threads",
+              action: "list", ...(environmentId ? { environmentId } : {}),
+            }).catch(() => null);
+            const listing = native?.ok && "data" in native && native.data &&
+              typeof native.data === "object" ? native.data as {
+                environmentId?: string; threads?: Array<{ id?: string }>;
+              } : null;
+            const matches = (listing?.threads ?? []).filter(entry =>
+              entry.id === request.sessionId);
+            if (matches.length === 1 && listing?.environmentId) {
+              targetKind = "t3";
+              environmentId = listing.environmentId;
+            } else if (targetKind === "t3") {
+              throw new Error("Native Caffy requires one verified T3 thread in the connected environment.");
+            }
+          }
           const data = action === "working_snapshot"
             ? caffy.reportWorkingSnapshot(request.workingSessionIds ?? [], request.workingReporterId)
             : action === "capacity"
@@ -441,6 +465,8 @@ export const make = Effect.gen(function* () {
             ? await caffy.set({
                 sessionId: request.sessionId ?? "",
                 conversationId: conversationId ?? "",
+                targetKind,
+                environmentId,
                 mode: request.mode ?? "idle",
                 respectSlots: request.respectSlots,
                 durationMinutes: request.durationMinutes,
@@ -467,7 +493,12 @@ export const make = Effect.gen(function* () {
               ? caffy.policy({ keepT3Busy: request.keepT3Busy, maxWorking: request.maxWorking,
                   shutdownWhenIdle: request.shutdownWhenIdle, busyForMinutes: request.busyForMinutes })
             : action === "begin_in"
-              ? await caffy.beginAt(request.sessionId ?? "", conversationId ?? "", request.beginAt ?? null, request.prompt, request.respectSlots, request.requestId)
+              ? targetKind === "t3" && !caffy.status(request.sessionId ?? "") && request.beginAt != null
+                ? await caffy.set({ targetKind: "t3", environmentId, sessionId: request.sessionId ?? "",
+                    conversationId: "", mode: "idle", onceOnly: true, keepAwake: false,
+                    respectSlots: request.respectSlots, beginAt: request.beginAt,
+                    delayedPrompt: request.prompt ?? null, auditRequestId: request.requestId })
+                : await caffy.beginAt(request.sessionId ?? "", conversationId ?? "", request.beginAt ?? null, request.prompt, request.respectSlots, request.requestId)
             : action === "schedule_spawn"
               ? caffy.scheduleSpawn({ id: request.jobId ?? "", title: request.title ?? "",
                   prompt: request.prompt ?? "", beginAt: request.beginAt ?? null,

@@ -734,10 +734,20 @@ export function DesktopAppActivationCoordinator() {
               startedAt: run.startedAt ? DateTime.formatIso(run.startedAt) : null,
               completedAt: run.completedAt ? DateTime.formatIso(run.completedAt) : null,
             }));
+            const latestRun = projectionResult.value.runs.reduce<(typeof projectionResult.value.runs)[number] | null>(
+              (latest, run) => latest === null || run.ordinal > latest.ordinal ? run : latest, null,
+            );
             const data = {
               environmentId,
               threadId: thread.id,
               thread: { threadId: thread.id, environmentId },
+              status: thread.runtime?.status ?? "idle",
+              latestRun: latestRun === null ? null : {
+                ordinal: latestRun.ordinal, runId: latestRun.id, status: latestRun.status,
+              },
+              messageSeen: request.clientRequestId === undefined ? false :
+                projectionResult.value.messages.some(message =>
+                  message.id === request.clientRequestId && message.role === "user"),
               recentRuns,
               nextRunCursor: recentRuns.at(-1)?.ordinal ?? runAfterOrdinal,
               hasMoreRuns: nativeRuns.length > recentRuns.length,

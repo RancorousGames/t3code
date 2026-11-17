@@ -65,6 +65,25 @@ describe("buildThreadActionMenuItems", () => {
     },
   );
 
+  it("shows native Caffy setup and lifecycle controls only when supported and permitted", () => {
+    const setup = buildThreadActionMenuItems({ ...baseState, caffy: null })
+      .find(item => item.id === "caffy:keep-running");
+    expect(setup?.children?.map(child => child.id)).toContain("caffy:begin:15");
+    expect(setup?.children?.map(child => child.id)).toContain("caffy:interval:20");
+    const running = buildThreadActionMenuItems({
+      ...baseState, caffy: { mode: "idle", paused: true, intervalMinutes: 20 },
+    }).find(item => item.id === "caffy:keep-running");
+    expect(running?.children?.map(child => child.id)).toContain("caffy:resume");
+    expect(running?.children?.map(child => child.id)).toContain("caffy:stop");
+    const denied = buildThreadActionMenuItems({
+      ...baseState, canOperate: false, caffy: null,
+    }).find(item => item.id === "caffy:keep-running");
+    expect(denied?.disabled).toBe(true);
+    expect(denied?.children?.every(child => child.disabled)).toBe(true);
+    expect(buildThreadActionMenuItems(baseState).some(item =>
+      item.id === "caffy:keep-running")).toBe(false);
+  });
+
   it("disables archive and turning into a project while the thread is running", () => {
     const items = buildThreadActionMenuItems({
       ...baseState,

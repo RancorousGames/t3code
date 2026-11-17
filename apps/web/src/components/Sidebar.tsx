@@ -107,6 +107,7 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
+import { readVerifiedT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "../hooks/useT3CaffyOverview";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import {
   pickableProjectGroups,
@@ -2601,6 +2602,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         }
         const thread = threadByKeyRef.current.get(threadKey);
         if (!thread) return;
+        const nativeCaffyId = `t3:${threadRef.environmentId}:${threadRef.threadId}`;
+        const nativeCaffy = readVerifiedT3CaffyOverview()?.entries.find(entry =>
+          entry.sessionId === nativeCaffyId);
         const threadWorkspacePath =
           thread.worktreePath ??
           projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
@@ -2629,6 +2633,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
+              ...(window.desktopBridge?.caffyControl ? {
+                caffy: nativeCaffy ? { mode: nativeCaffy.mode, paused: nativeCaffy.paused,
+                  intervalMinutes: nativeCaffy.intervalMinutes } : null,
+              } : {}),
               canOperate: readEnvironmentScope(
                 threadRef.environmentId,
                 AuthOrchestrationOperateScope,
@@ -2681,6 +2689,48 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           return;
         }
         switch (clicked.value) {
+          case "caffy:keep-running":
+          case "caffy:interval:5":
+          case "caffy:interval:20":
+          case "caffy:interval:60":
+          case "caffy:once":
+          case "caffy:begin:15":
+          case "caffy:begin:60":
+          case "caffy:pause":
+          case "caffy:resume":
+          case "caffy:wake":
+          case "caffy:stop": {
+            const caffyControl = window.desktopBridge?.caffyControl;
+            if (!caffyControl) return;
+            try {
+              const action = clicked.value;
+              const response = await caffyControl(action === "caffy:pause" ?
+                { action: "pause", sessionId: nativeCaffyId } :
+                action === "caffy:resume" ? { action: "resume", sessionId: nativeCaffyId } :
+                action === "caffy:stop" ? { action: "stop", sessionId: nativeCaffyId, stopInitiator: "user" } :
+                action === "caffy:wake" ? { action: "wake", sessionId: nativeCaffyId } : {
+                  action: "set", targetKind: "t3", environmentId: threadRef.environmentId,
+                  sessionId: threadRef.threadId,
+                  mode: action.startsWith("caffy:interval:") ? "periodic" : "idle",
+                  intervalMinutes: action.startsWith("caffy:interval:") ?
+                    Number(action.slice("caffy:interval:".length)) : 20,
+                  onceOnly: action === "caffy:once" || action.startsWith("caffy:begin:"),
+                  wakeNow: action === "caffy:once",
+                  ...(action.startsWith("caffy:begin:") ? {
+                    beginAt: Date.now() + Number(action.slice("caffy:begin:".length)) * 60_000,
+                    keepAwake: false,
+                  } : {}),
+                });
+              if (response && typeof response === "object" && "ok" in response && response.ok === false)
+                throw new Error("message" in response && typeof response.message === "string"
+                  ? response.message : "Caffy request was refused.");
+              window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+            } catch (error) {
+              toastManager.add(stackedThreadToast({ type: "error", title: "Caffy update failed",
+                description: error instanceof Error ? error.message : String(error) }));
+            }
+            return;
+          }
           case "filter-by-project":
             if (threadProjectGroup) {
               setProjectScopeKeys(
@@ -2874,6 +2924,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 }),
               );
               return;
+            }
+            // The deleted native thread can no longer receive a Caffy turn.
+            // Retire the exact environment-scoped owner only after deletion succeeds.
+            if (result._tag === "Success" && nativeCaffy) {
+              try {
+                await window.desktopBridge?.caffyControl?.({
+                  action: "retire", sessionId: nativeCaffyId, lifecycleReason: "closed",
+                });
+              } catch { /* The deleted thread is already terminal; scheduler will retain diagnostics. */ }
+              window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
             }
             return;
           }

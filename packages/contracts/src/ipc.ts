@@ -1913,6 +1913,8 @@ export interface DesktopBridge {
   /** Durable T3-owned Caffy API; no OpenRig dependency. */
   caffyControl?: (input: {
     action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "throughput" | "working_snapshot" | "retire" | "begin_in" | "auto_reboot" | "schedule_spawn" | "read_spawn" | "edit_spawn" | "cancel_spawn" | "cancel_begin";
+    targetKind?: "chatgpt" | "t3";
+    environmentId?: string;
     sessionId?: string;
     conversationId?: string;
     mode?: "idle" | "periodic" | "startup";

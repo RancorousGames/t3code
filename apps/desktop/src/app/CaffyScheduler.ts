@@ -19,6 +19,12 @@ type Mode = "idle" | "periodic" | "startup";
 type Trigger = "idle" | "periodic" | "startup" | "manual";
 type Request = (request: DesktopAppActivationRequest) => Promise<DesktopAppActivationResponse>;
 export interface CaffyConfig {
+  /** Native T3 threads have no ChatGPT conversation or browser guest. */
+  targetKind?: "t3";
+  environmentId?: string;
+  nativeThreadId?: string;
+  nativeLastRunOrdinal?: number;
+  nativeLastSendAttemptAt?: number | null;
   sessionId: string;
   browserSessionId?: string | undefined;
   /** Public Bootstrap / T3_ID alias; never use as the delivery target unless it is the browser ID. */
@@ -166,8 +172,13 @@ export function legacyMonitorOwnsConversation(
 }
 const WAKE_TEXT = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
 const CLOCK = 20_000;
+const nativeOwner = (environmentId: string, threadId: string) => `t3:${environmentId}:${threadId}`;
 const valid = (row: CaffyConfig): boolean =>
-  !!row && UUID.test(row.sessionId) && UUID.test(row.conversationId) &&
+  !!row && (row.targetKind === "t3"
+    ? !!row.environmentId && !!row.nativeThreadId &&
+      row.sessionId === nativeOwner(row.environmentId, row.nativeThreadId) &&
+      row.conversationId === row.nativeThreadId
+    : UUID.test(row.sessionId) && UUID.test(row.conversationId)) &&
   ["idle", "periodic", "startup"].includes(row.mode) &&
   Number.isFinite(row.createdAt) && Number.isInteger(row.intervalMinutes) &&
   row.intervalMinutes >= 1 && row.intervalMinutes <= 525_600 &&
@@ -191,6 +202,7 @@ export class CaffyScheduler {
   private shutdownError: string | null = null;
   private readonly shutdownPC: () => void;
   private readonly workingReports = new Map<string, { observedAt: number; ids: Set<string> }>();
+  private nativeCapacityCache: { observedAt: number; ids: string[]; known: boolean } | null = null;
   private readonly automaticAdmissions = new Set<string>();
   private readonly capacityClaims = new Map<string, LocalCapacityClaim>();
   private admissionGate: Promise<void> = Promise.resolve();
@@ -406,7 +418,7 @@ export class CaffyScheduler {
     this.backupConfiguration();
     let changed = false;
     for (const row of this.entries.values()) {
-      if (this.legacyConflict(row.sessionId, row.conversationId)) {
+      if (row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId)) {
         row.paused = true;
         row.lastError = "A legacy OmniHub wake still owns this session; cancel/reconcile it before enabling T3 Caffy.";
         changed = true;
@@ -457,7 +469,8 @@ export class CaffyScheduler {
   private lookup(sessionId: string): CaffyConfig | undefined {
     return this.entries.get(sessionId) ??
       [...this.entries.values()].find(row =>
-        row.browserSessionId === sessionId || row.publicSessionId === sessionId);
+        row.browserSessionId === sessionId || row.publicSessionId === sessionId ||
+        (row.targetKind === "t3" && row.nativeThreadId === sessionId));
   }
 
   /** Resolve public Bootstrap aliases to the durable browser owner, never by conversation ID. */
@@ -479,6 +492,7 @@ export class CaffyScheduler {
     let changed = false;
     // oxlint-disable-next-line unicorn/no-useless-spread -- Snapshot keys before lifecycle migration mutates this map.
     for (const row of [...this.entries.values()]) {
+      if (row.targetKind === "t3") continue; // Native activity uses t3.threads, never the browser roster.
       const checked = (reason: string) => {
         row.lastCheckedAt = Date.now();
         row.nextCheckAt = row.lastCheckedAt + 30_000;
@@ -560,6 +574,7 @@ export class CaffyScheduler {
     const now = Date.now();
     // oxlint-disable-next-line unicorn/no-useless-spread -- Retiring a session must not alter this roster iteration.
     for (const row of [...this.entries.values()]) {
+      if (row.targetKind === "t3") continue;
       const ids = [row.sessionId, row.browserSessionId, row.publicSessionId]
         .filter((id): id is string => !!id);
       // Existence is a property of the stable T3 session, NOT its current
@@ -758,8 +773,251 @@ export class CaffyScheduler {
       shutdownError: this.shutdownError };
   }
 
+
+  /** Native activity is authoritative from the same orchestration projection that powers the T3 thread UI. */
+  private async readNative(
+    target: Pick<CaffyConfig, "environmentId" | "nativeThreadId">,
+    pendingMessageId?: string,
+  ): Promise<{
+    status: string;
+    latestRun: { ordinal: number; status: string } | null;
+    messageSeen: boolean;
+  } | null> {
+    if (!target.environmentId || !target.nativeThreadId) return null;
+    const response = await this.request({
+      version: 1, requestId: NodeCrypto.randomUUID(), type: "t3.threads", action: "read",
+      environmentId: target.environmentId, threadId: target.nativeThreadId,
+      count: 1, ...(pendingMessageId ? { clientRequestId: pendingMessageId } : {}),
+    }).catch(() => null);
+    if (!response?.ok || !("data" in response) || !response.data ||
+        typeof response.data !== "object") return null;
+    const data = response.data as {
+      environmentId?: string; threadId?: string; status?: string;
+      latestRun?: { ordinal?: number; status?: string } | null;
+      messageSeen?: boolean;
+    };
+    if (data.environmentId !== target.environmentId ||
+        data.threadId !== target.nativeThreadId || typeof data.status !== "string") return null;
+    const latest = data.latestRun;
+    return {
+      status: data.status,
+      latestRun: latest && Number.isSafeInteger(latest.ordinal) && latest.ordinal! > 0 &&
+        typeof latest.status === "string"
+          ? { ordinal: latest.ordinal!, status: latest.status } : null,
+      messageSeen: data.messageSeen === true,
+    };
+  }
+
+  /** Native T3 threads have no ChatGPT browser session, conversation UUID or guest outbox. */
+  private async setNative(input: {
+    sessionId: string; environmentId?: string | undefined; mode: Mode;
+    intervalMinutes?: number | undefined; durationMinutes?: number | undefined; onceOnly?: boolean | undefined;
+    startup?: boolean | undefined; keepAwake?: boolean | undefined; respectSlots?: boolean | undefined;
+    wakeNow?: boolean | undefined; beginAt?: number | null | undefined; delayedPrompt?: string | null | undefined;
+    repeatPrompt?: string | undefined; autoRebootMinutes?: number | null | undefined;
+    autoRebootEveryRuns?: number | null | undefined; auditRequestId?: string | undefined;
+  }): Promise<CaffyConfig> {
+    const threadId = input.sessionId;
+    const environmentId = input.environmentId;
+    if (!environmentId || !threadId || threadId.startsWith("t3:"))
+      throw new Error("Native Caffy requires the original T3 thread ID and environment.");
+    if (!["idle", "periodic", "startup"].includes(input.mode))
+      throw new Error("Invalid native Caffy wake mode.");
+    const intervalMinutes = input.intervalMinutes ?? 20;
+    if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 525_600)
+      throw new Error("Interval must be 1..525600 minutes.");
+    if (input.durationMinutes !== undefined &&
+        (!Number.isInteger(input.durationMinutes) || input.durationMinutes < 1 ||
+          input.durationMinutes > 525_600))
+      throw new Error("Duration must be 1..525600 minutes.");
+    if (input.repeatPrompt !== undefined && input.repeatPrompt.length > 29_800)
+      throw new Error("Repeated prompt exceeds 29800 characters.");
+    if (input.delayedPrompt != null && input.delayedPrompt.length > 29_800)
+      throw new Error("Delayed prompt exceeds 29800 characters.");
+    if (input.beginAt != null && (!Number.isSafeInteger(input.beginAt) ||
+        input.beginAt <= Date.now() || input.beginAt > Date.now() + 90 * 24 * 60 * 60_000))
+      throw new Error("Scheduled start must be within the next 90 days.");
+    if (input.autoRebootMinutes != null || input.autoRebootEveryRuns != null)
+      throw new Error("Native T3 threads retain their context; ChatGPT-only reboot is unavailable.");
+    const id = nativeOwner(environmentId, threadId);
+    const prior = this.entries.get(id);
+    // Confirm exactly the requested target before recording a durable monitor.
+    const native = await this.readNative({ environmentId, nativeThreadId: threadId });
+    if (!native) throw new Error("Cannot verify the native T3 thread in its connected environment.");
+    if (prior?.pendingMessageId &&
+        (input.delayedPrompt !== undefined || input.repeatPrompt !== undefined))
+      throw new Error("A native wake is pending; wait for its exact message receipt first.");
+    const now = Date.now();
+    const same = !!prior && prior.mode === input.mode &&
+      prior.respectSlots === (input.respectSlots ?? prior.respectSlots) &&
+      prior.intervalMinutes === intervalMinutes && prior.onceOnly === (input.onceOnly ?? false) &&
+      (input.repeatPrompt === undefined || prior.repeatPrompt === (input.repeatPrompt.trim() || null)) &&
+      (input.beginAt === undefined || prior.beginAt === input.beginAt);
+    if (same) {
+      const wasPaused = prior.paused;
+      prior.paused = false;
+      if (input.wakeNow || (prior.mode === "idle" && (wasPaused || (!prior.lastWakeAt &&
+          !prior.pendingWake && !prior.pendingMessageId)))) {
+        prior.pendingWake = true;
+        prior.pendingReason = "manual";
+      }
+      this.logPauseChange(prior, wasPaused, "set:native", input.auditRequestId);
+      this.save();
+      void this.pump();
+      return prior;
+    }
+    const row: CaffyConfig = {
+      targetKind: "t3", environmentId, nativeThreadId: threadId,
+      sessionId: id, conversationId: threadId, mode: input.mode,
+      respectSlots: input.respectSlots ?? prior?.respectSlots ?? false,
+      intervalMinutes, startup: input.mode === "startup" || input.startup === true,
+      onceOnly: input.onceOnly ?? false, keepAwake: input.keepAwake ?? true,
+      paused: false, createdAt: now,
+      expiresAt: input.durationMinutes === undefined ? null :
+        (input.beginAt ?? now) + input.durationMinutes * 60_000,
+      beginAt: input.beginAt ?? null,
+      nextDueAt: input.mode === "periodic" ? (input.beginAt ?? now + intervalMinutes * 60_000) : null,
+      pendingWake: input.wakeNow === true || (input.mode === "idle" && input.beginAt == null),
+      pendingReason: input.wakeNow === true || (input.mode === "idle" && input.beginAt == null)
+        ? "manual" : null,
+      pendingMessageId: prior?.pendingMessageId ?? null,
+      pendingMessageBody: prior?.pendingMessageBody ?? null,
+      nativeLastRunOrdinal: Math.max(prior?.nativeLastRunOrdinal ?? 0, native.latestRun?.ordinal ?? 0),
+      nativeLastSendAttemptAt: prior?.nativeLastSendAttemptAt ?? null,
+      lastIdleSequence: 0, lastWakeAt: prior?.lastWakeAt ?? null,
+      lastError: null, repeatPrompt: input.repeatPrompt?.trim() || prior?.repeatPrompt || null,
+      delayedPrompt: input.delayedPrompt ?? prior?.delayedPrompt ?? null,
+    };
+    this.entries.set(id, row);
+    this.save();
+    this.backupConfiguration();
+    void this.pump();
+    return row;
+  }
+
+  /** Reconcile exact native user-message receipts before any retry; never route through ChatGPT DOM. */
+  private async pumpNative(row: CaffyConfig, now: number): Promise<void> {
+    const snapshot = await this.readNative(row, row.pendingMessageId ?? undefined);
+    if (this.entries.get(row.sessionId) !== row) return;
+    row.lastCheckedAt = Date.now();
+    row.nextCheckAt = row.lastCheckedAt + CLOCK;
+    if (!snapshot) {
+      row.availability = "unavailable";
+      row.lastCheckResult = "Native thread unavailable; preserving scheduled wake and exact message ID.";
+      row.lastError = row.lastCheckResult;
+      this.save();
+      return;
+    }
+    row.lastError = null;
+    const working = ["preparing", "queued", "starting", "running", "waiting"].includes(snapshot.status) ||
+      (snapshot.latestRun !== null &&
+        ["preparing", "queued", "starting", "running", "waiting"].includes(snapshot.latestRun.status));
+    row.availability = working ? "working" : "ready";
+    const last = snapshot.latestRun;
+    if (last && last.ordinal > (row.nativeLastRunOrdinal ?? 0) &&
+        ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(last.status)) {
+      row.nativeLastRunOrdinal = last.ordinal;
+      if (last.status === "completed" && row.mode === "idle" && !row.paused &&
+          !row.pendingMessageId && !row.pendingWake) {
+        row.pendingWake = true;
+        row.pendingReason = "idle";
+      }
+    }
+    if (row.pendingMessageId && snapshot.messageSeen) {
+      row.lastWakeAt = now;
+      row.lastActivatedAt = row.lastActivatedAt ?? now;
+      row.pendingMessageId = null;
+      row.pendingMessageBody = null;
+      row.delayedPrompt = null;
+      row.nativeLastSendAttemptAt = null;
+      row.deliveryStatus = "delivered";
+      row.deliveryAwaitingGuest = false;
+      row.lastDeliveryResult = "Exact native user message confirmed in T3 projection.";
+      if (row.mode === "periodic") row.nextDueAt = now + row.intervalMinutes * 60_000;
+      if (row.onceOnly) {
+        this.entries.delete(row.sessionId);
+        this.save();
+        return;
+      }
+    }
+    if (row.paused) { row.lastCheckResult = "Paused"; this.save(); return; }
+    if (!row.pendingMessageId) {
+      const due = reduceCaffyWake(row, { type: "due", now });
+      this.applyWakeTransition(row, due.patch);
+    }
+    if (working) { row.lastCheckResult = "Native assistant is working; waiting for idle."; this.save(); return; }
+    if (!row.pendingWake && !row.pendingMessageId) {
+      row.lastCheckResult = "Native thread idle; awaiting the next run edge or interval.";
+      this.save();
+      return;
+    }
+    if (row.respectSlots && !(await this.acquireAutomaticAdmission(
+      "wake:" + row.sessionId, row.sessionId, true,
+    ))) {
+      row.admissionReason = "Waiting for available capacity.";
+      this.save();
+      return;
+    }
+    if (this.entries.get(row.sessionId) !== row || row.paused) {
+      if (row.respectSlots) this.releaseAutomaticAdmission("wake:" + row.sessionId);
+      return;
+    }
+    row.admissionReason = null;
+    if (!row.pendingMessageId) {
+      row.pendingMessageId = NodeCrypto.randomUUID();
+      row.pendingMessageBody = row.delayedPrompt ?? row.repeatPrompt ??
+        "Continue working on this native T3 thread. When genuinely finished, stop Caffy for this native thread using its exact thread ID (or the sidebar Stop Caffy control).";
+      row.pendingWake = false;
+      row.pendingReason = null;
+      row.deliveryStatus = "queued";
+      this.save(); // Commit ID and body before any native send.
+    }
+    const messageId = row.pendingMessageId;
+    const body = row.pendingMessageBody ?? WAKE_TEXT;
+    if (row.nativeLastSendAttemptAt && now - row.nativeLastSendAttemptAt < CLOCK) {
+      if (row.respectSlots) this.releaseAutomaticAdmission("wake:" + row.sessionId);
+      return;
+    }
+    row.nativeLastSendAttemptAt = now;
+    row.lastCheckResult = "Submitting pinned native message ID; retry only after read reconciliation.";
+    this.save();
+    try {
+      const sent = await this.request({
+        version: 1, requestId: NodeCrypto.randomUUID(),
+        type: "t3.threads", action: "send", environmentId: row.environmentId,
+        threadId: row.nativeThreadId, clientRequestId: messageId, message: body,
+      }).catch(() => null);
+      if (this.entries.get(row.sessionId) !== row || row.pendingMessageId !== messageId) return;
+      const receipt = sent?.ok && "data" in sent && sent.data &&
+        typeof sent.data === "object" ? sent.data as {
+          messageId?: string; messageSent?: boolean; threadId?: string; environmentId?: string;
+        } : null;
+      if (receipt?.messageSent === true && receipt.messageId === messageId &&
+          receipt.threadId === row.nativeThreadId && receipt.environmentId === row.environmentId) {
+        row.pendingMessageId = null;
+        row.pendingMessageBody = null;
+        row.delayedPrompt = null;
+        row.nativeLastSendAttemptAt = null;
+        row.lastWakeAt = Date.now();
+        row.lastActivatedAt = row.lastActivatedAt ?? row.lastWakeAt;
+        row.deliveryStatus = "delivered";
+        row.lastDeliveryResult = "Native T3 turn accepted with exact pinned message ID.";
+        row.lastCheckResult = "Native wake accepted; awaiting assistant completion.";
+        if (row.mode === "periodic") row.nextDueAt = row.lastWakeAt + row.intervalMinutes * 60_000;
+        if (row.onceOnly) this.entries.delete(row.sessionId);
+      } else {
+        row.lastError = "Native send unconfirmed; will read exact message ID before retry.";
+        row.lastDeliveryResult = sent && !sent.ok ? sent.message : row.lastError;
+      }
+      this.save();
+    } finally {
+      if (row.respectSlots) this.releaseAutomaticAdmission("wake:" + row.sessionId);
+    }
+  }
+
   async set(input: {
     sessionId: string; conversationId: string; mode: Mode;
+    targetKind?: "chatgpt" | "t3" | undefined; environmentId?: string | undefined;
     respectSlots?: boolean | undefined;
     durationMinutes?: number | undefined; onceOnly?: boolean | undefined; startup?: boolean | undefined;
     intervalMinutes?: number | undefined; keepAwake?: boolean | undefined;
@@ -771,6 +1029,7 @@ export class CaffyScheduler {
     autoRebootMinutes?: number | null | undefined;
     autoRebootEveryRuns?: number | null | undefined;
   }) {
+    if (input.targetKind === "t3") return this.setNative(input);
     if (!UUID.test(input.sessionId) || !UUID.test(input.conversationId))
       throw new Error("Exact sessionId and conversationId UUIDs required.");
     if (!["idle", "periodic", "startup"].includes(input.mode))
@@ -981,7 +1240,7 @@ export class CaffyScheduler {
       }
     }
     const detail = `Recipient ${reason}; Caffy delivery retired.`;
-    const cancelled = this.deliveries.retireRecipient(ids, row?.conversationId ?? null,
+    const cancelled = row?.targetKind === "t3" ? 0 : this.deliveries.retireRecipient(ids, row?.conversationId ?? null,
       detail, reason === "snoozed" || reason === "hidden" || reason === "stopped");
     if (row) {
           this.save();
@@ -1202,10 +1461,11 @@ export class CaffyScheduler {
       return await this.set({ sessionId, conversationId, mode: "idle", respectSlots,
         onceOnly: true, keepAwake: false, beginAt: at, delayedPrompt: prompt ?? null, auditRequestId });
     }
+    if (row.targetKind === "t3") conversationId = row.conversationId;
     if (row.conversationId !== conversationId)
       throw new Error("Delayed start requires the same registered conversation.");
     if (row.rebootOperationId) throw new Error("A reboot is awaiting reconciliation.");
-    if (at !== null && this.legacyConflict(row.sessionId, row.conversationId))
+    if (at !== null && row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId))
       throw new Error("Legacy OmniHub monitor owns this session; cannot resume T3 Caffy.");
     if (at === null && row.onceOnly && row.mode === "idle" &&
         row.beginAt !== null && row.beginAt !== undefined && row.lastWakeAt === null) {
@@ -1269,6 +1529,8 @@ export class CaffyScheduler {
   autoReboot(sessionId: string, minutes: number | null, everyRuns: number | null = null) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("Configure Auto-continue before enabling auto-reboot.");
+    if (row.targetKind === "t3" && (minutes !== null || everyRuns !== null))
+      throw new Error("Native T3 threads keep their context; ChatGPT-only auto-reboot is unavailable.");
     if ((minutes !== null || everyRuns !== null) && row.onceOnly)
       throw new Error("Auto-reboot requires recurring work, not Once only.");
     if (minutes !== null && (!Number.isInteger(minutes) || minutes < 1 || minutes > 525_600))
@@ -1385,7 +1647,7 @@ export class CaffyScheduler {
   pause(sessionId: string, paused: boolean, auditRequestId?: string) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
-    if (!paused && this.legacyConflict(row.sessionId, row.conversationId))
+    if (!paused && row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId))
       throw new Error("Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.");
     const wasPaused = row.paused;
     row.paused = paused;
@@ -1416,7 +1678,7 @@ export class CaffyScheduler {
   wake(sessionId: string) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
-    if (this.legacyConflict(row.sessionId, row.conversationId))
+    if (row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId))
       throw new Error("Legacy OmniHub monitor still owns this session; cancel it before waking.");
     row.pendingWake = true;
     row.pendingReason = "manual";
@@ -1429,7 +1691,7 @@ export class CaffyScheduler {
     // The T3 browser/session ID is the owner. Matching by conversation alone
     // can redirect a wake across reboots or unrelated sessions.
     const row = this.lookup(event.sessionId);
-    if (!row) return;
+    if (!row || row.targetKind === "t3") return;
     const transition = reduceCaffyWake(row, { type: "idle", idle: event, now: Date.now() });
     if (!Object.keys(transition.patch).length) return;
     this.applyWakeTransition(row, transition.patch);
@@ -1453,7 +1715,7 @@ export class CaffyScheduler {
 
   private onDelivery(record: Omit<DeliveryRecord, "body">) {
     const row = this.lookup(record.sessionId);
-    if (!row || row.pendingMessageId !== record.messageId) return;
+    if (!row || row.targetKind === "t3" || row.pendingMessageId !== record.messageId) return;
     this.applyWakeTransition(row, reduceCaffyWake(row, {
       type: "delivery", receipt: record, now: Date.now(),
     }).patch);
@@ -1531,6 +1793,26 @@ export class CaffyScheduler {
     this.taskBoardInventoryReady = inventoryReady;
   }
 
+  private async nativeWorkingInventory(): Promise<{ ids: string[]; known: boolean }> {
+    const cached = this.nativeCapacityCache;
+    if (cached && Date.now() - cached.observedAt < 5_000)
+      return { ids: cached.ids, known: cached.known };
+    const reply = await this.request({
+      version: 1, requestId: NodeCrypto.randomUUID(), type: "t3.threads", action: "list",
+    }).catch(() => null);
+    const data = reply?.ok && "data" in reply && reply.data &&
+      typeof reply.data === "object" ? reply.data as {
+        environmentId?: string; threads?: Array<{ id?: string; status?: string }>;
+      } : null;
+    const known = !!data?.environmentId && Array.isArray(data.threads);
+    const ids = known ? data.threads!.filter(thread =>
+      typeof thread.id === "string" &&
+      ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status ?? "")
+    ).map(thread => nativeOwner(data.environmentId!, thread.id!)) : [];
+    this.nativeCapacityCache = { observedAt: Date.now(), ids, known };
+    return { ids, known };
+  }
+
   async capacity(extraReserved = 0): Promise<{
     observedAt: string; limit: number; working: number; reserved: number;
     workingIds: string[]; unknown: number; used: number; available: number;
@@ -1542,25 +1824,29 @@ export class CaffyScheduler {
     for (const [reporter, state] of this.workingReports)
       if (now - state.observedAt > 7_000) this.workingReports.delete(reporter);
 
-    // Exactly the green rows reported by the ChatGPT list sidebar.
-    // Neither TaskBoard ownership, Caffy monitors, startup reservations nor
-    // the separately polled session registry may change the displayed usage.
+    // Count only actual working agents, never queued messages or reservations.
+    // The ChatGPT sidebar and native orchestration are distinct live inventories.
     const workingIds = new Set<string>();
     for (const report of this.workingReports.values())
       for (const id of report.ids) workingIds.add(id);
+    const nativeInventory = await this.nativeWorkingInventory();
+    for (const id of nativeInventory.ids) workingIds.add(id);
     const used = workingIds.size;
     const observed = {
       observedAt: new Date(now).toISOString(), limit: this.maxWorking,
       working: used, workingIds: [...workingIds], used,
       available: Math.max(0, this.maxWorking - used),
     };
-    if (this.workingReports.size === 0) return {
+    if (this.workingReports.size === 0 || (!nativeInventory.known &&
+        [...this.entries.values()].some(row => row.targetKind === "t3"))) return {
       ...observed, reserved: 0, unknown: 1, admissible: false,
-      reason: "Live ChatGPT sidebar green-session count unavailable",
+      reason: this.workingReports.size === 0
+        ? "Live ChatGPT sidebar green-session count unavailable"
+        : "Native T3 working-thread inventory unavailable",
     };
 
-    // Keep T3 Busy capacity is solely the live ChatGPT green-session count.
-    // Pending messages, task reservations and startup attempts are not workers.
+    // Native + ChatGPT working threads contribute to the same cap.
+    // Pending messages, TaskBoard reservations and startup attempts are not workers.
     return {
       ...observed, reserved: 0, unknown: 0,
       admissible: policy && used < this.maxWorking,
@@ -1583,6 +1869,7 @@ export class CaffyScheduler {
       // Only actual workers, active outbox attempts or pending starts matter.
       const sending = [...this.entries.values()].some(row => {
         if (row.paused || !row.pendingMessageId) return false;
+        if (row.targetKind === "t3") return true;
         try {
           const status = this.deliveries.status(row.pendingMessageId).status;
           return status === "sending" || status === "uncertain" || status === "queued";
@@ -1819,6 +2106,10 @@ export class CaffyScheduler {
         if (row.expiresAt !== null && row.expiresAt <= now && !row.pendingMessageId) {
           this.entries.delete(row.sessionId);
           this.save();
+          continue;
+        }
+        if (row.targetKind === "t3") {
+          await this.pumpNative(row, now);
           continue;
         }
         if (row.pendingMessageId) {
