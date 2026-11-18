@@ -7,6 +7,10 @@ const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const CHUNK_CHARS = 6000;
+const UPLOAD_POLL_MS = 350;
+const UPLOAD_MISSING_RETRY_POLLS = 15; // React should stage an attachment within seconds.
+const UPLOAD_STALLED_RETRY_POLLS = 65; // A stalled upload is safe to remove before submitting.
+const UPLOAD_MAX_POLLS = 210; // Covers three bounded upload attempts without submitting twice.
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const expression = (body) => "(() => { " + body + " })()";
 const receiptDir = (home) => Path.join(home, "userdata", "chatgpt-image-deliveries-v1");
@@ -193,7 +197,8 @@ function imagePreflight(id) {
       const changed=state.composerView?.state?.doc&&state.originalDoc
         ? !state.composerView.state.doc.eq(state.originalDoc) : draft!==state.originalDraft;
       if(!state.uploadId||changed||p?.isSubmitting||p?.isWaitingForFileUploads
-          ||p?.attachments?.length!==1||p.attachments[0].uploadId!==state.uploadId)
+          ||p?.attachments?.length!==1||p.attachments[0].uploadId!==state.uploadId
+          ||p.attachments[0].size!==state.file?.size)
         return false;
       p.onAttachmentRemove(state.uploadId,"user");
       return true;
@@ -225,11 +230,76 @@ function attachmentStatus(id) {
       ? !view.state.doc.eq(s.originalDoc) : draft!==s.originalDraft;
     const attachments=Array.isArray(p.attachments)?p.attachments:[];
     const attachment=attachments.length===1?attachments[0]:null;
-    if(attachment?.uploadId)s.uploadId=attachment.uploadId;
+    // ChatGPT renames duplicate filenames (e.g. probe.png -> probe(10).png).
+    // Identity must use the unique uploadId and original bytes metadata, not name.
+    const owned=!!attachment&&attachment.size===s.file?.size&&
+      (!attachment.mimeType||attachment.mimeType===s.file?.type)&&
+      (!s.uploadId||attachment.uploadId===s.uploadId);
+    if(owned&&attachment?.uploadId&&!s.uploadId)s.uploadId=attachment.uploadId;
     return {ok:true,draftChanged:changed,uploads:document.querySelectorAll('[aria-label^="Uploading "]').length,
       attachments:attachments.length,attachmentStatus:attachment?.status||null,
-      ready:attachment?.status==="ready"&&!!attachment.id&&!!attachment.uploadId,
+      owned,uploadId:attachment?.uploadId||null,hasFileId:!!attachment?.id,
+      attachmentName:attachment?.name||null,attachmentSize:attachment?.size??null,
+      expectedName:s.file?.name||null,expectedSize:s.file?.size??null,
+      ready:owned&&attachment?.status==="ready"&&!!attachment.id&&!!attachment.uploadId,
       pending:!!p.isWaitingForFileUploads,submitting:!!p.isSubmitting};
+  `);
+}
+
+function stageUploadExpression(id, attempt, fileName, mime, size) {
+  return expression(`
+    const s=window.__t3ChatGPTImageSend;
+    if(s?.id!==${JSON.stringify(id)}||!["transfer","uploading"].includes(s.phase))
+      return {ok:false,reason:"stage_state_lost"};
+    const p=s.findProps();
+    if(!p||p.isSubmitting||p.isWaitingForFileUploads||p.attachments?.length)
+      return {ok:false,reason:"stage_composer_busy"};
+    const editor=s.composerView;
+    if(editor?.state?.doc&&s.originalDoc&&!editor.state.doc.eq(s.originalDoc))
+      return {ok:false,reason:"draft_changed"};
+    let file=s.file;
+    if(!file){
+      const decoded=atob(s.chunks.join(""));
+      s.chunks=[];
+      const bytes=Uint8Array.from(decoded,c=>c.charCodeAt(0));
+      file=new File([bytes],${JSON.stringify(fileName)},{type:${JSON.stringify(mime)}});
+      if(file.size!==${size})return {ok:false,reason:"image_size_mismatch"};
+      s.file=file;
+    }
+    const labels=["Attach photos","Attach photos or videos","Attach files"];
+    const label=labels[${attempt}];
+    const input=[...document.querySelectorAll("input[type=file]")]
+      .find(i=>i.getAttribute("aria-label")===label&&!i.disabled);
+    if(!input)return {ok:false,reason:"file_handler_missing",label};
+    const key=Object.keys(input).find(k=>k.startsWith("__reactProps"));
+    const onChange=key&&input[key]?.onChange;
+    if(typeof onChange!=="function")return {ok:false,reason:"react_file_handler_unavailable",label};
+    s.phase="uploading";s.stageAttempt=${attempt};s.uploadId=null;
+    const selected={id:input.id,files:[file],value:""};
+    onChange({currentTarget:selected,target:selected});
+    return {ok:true,route:"react_handler",label,fileInputCount:input.files?.length||0};
+  `);
+}
+
+function resetUploadExpression(id) {
+  return expression(`
+    const s=window.__t3ChatGPTImageSend;
+    if(s?.id!==${JSON.stringify(id)}||s.phase!=="uploading")
+      return {ok:false,reason:"stage_state_lost"};
+    const p=s.findProps();
+    if(!p||p.isSubmitting)return {ok:false,reason:"submit_in_progress"};
+    const a=p.attachments||[];
+    if(!a.length)return {ok:true,empty:true};
+    if(a.length!==1||!a[0].uploadId||a[0].status==="ready"||
+        a[0].size!==s.file?.size||
+        (a[0].mimeType&&a[0].mimeType!==s.file?.type))
+      return {ok:false,reason:"cannot_safely_reset",status:a[0]?.status,attachments:a.length};
+    // Cancel only the image from this request. A newly added human
+    // attachment is never removed.
+    if(!s.uploadId||a[0].uploadId!==s.uploadId)
+      return {ok:false,reason:"upload_owner_mismatch"};
+    p.onAttachmentRemove(a[0].uploadId,"user");
+    return {ok:true,removedId:a[0].uploadId};
   `);
 }
 
@@ -240,7 +310,10 @@ function sendExpression(id, message, conversationId) {
     if(location.pathname!==${JSON.stringify("/c/" + conversationId)})return {ok:false,reason:"conversation_mismatch"};
     const p=s.findProps();
     if(!p||!Array.isArray(p.attachments)||p.attachments.length!==1||p.isWaitingForFileUploads||p.isSubmitting
-        ||p.attachments[0]?.status!=="ready"||!p.attachments[0]?.id||!p.attachments[0]?.uploadId)
+        ||p.attachments[0]?.status!=="ready"||!p.attachments[0]?.id||!p.attachments[0]?.uploadId
+        ||p.attachments[0]?.size!==s.file?.size||
+          (p.attachments[0]?.mimeType&&p.attachments[0]?.mimeType!==s.file?.type)||
+          (s.uploadId&&p.attachments[0]?.uploadId!==s.uploadId))
       return {ok:false,reason:"attachment_not_ready"};
     const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
     const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
@@ -377,48 +450,64 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       `));
       if (!r?.ok) throw new Error("Image transfer failed before upload: " + JSON.stringify(r));
     }
-    const stage = await experiment(expression(`
-      const s=window.__t3ChatGPTImageSend;
-      if(s?.id!==${JSON.stringify(requestId)}||s.phase!=="transfer")
-        return {ok:false,reason:"transfer_state_lost"};
-      const decoded=atob(s.chunks.join(""));
-      s.chunks=[];
-      const bytes=Uint8Array.from(decoded,c=>c.charCodeAt(0));
-      const file=new File([bytes],${JSON.stringify(Path.basename(imagePath))},{type:${JSON.stringify(mime)}});
-      if(file.size!==${image.length})return {ok:false,reason:"image_size_mismatch"};
-      const input=document.querySelector('input[type="file"][aria-label="Attach photos or videos"]')
-        ||document.querySelector('input[type="file"][aria-label="Attach photos"]')
-        ||document.querySelector('input[type="file"][aria-label="Attach files"]');
-      if(!input||input.disabled)return {ok:false,reason:"file_input_missing"};
-      // Inject the File directly into the mounted React handler. Do NOT set
-      // input.files or dispatch a DOM change: those stage a file in the user's
-      // visible browser input, including when submission fails. With normal
-      // preserveDraft:false submission, this path transmits the attachment.
-      const key=Object.keys(input).find(k=>k.startsWith("__reactProps"));
-      const onChange=key&&input[key]?.onChange;
-      if(typeof onChange!=="function")
-        return {ok:false,reason:"react_file_handler_unavailable"};
-      s.phase="uploading";
-      const selected={id:input.id,files:[file],value:""};
-      onChange({currentTarget:selected,target:selected});
-      return {ok:true,route:"react_handler",fileInputCount:input.files?.length||0};
-    `));
+    let stage = await experiment(stageUploadExpression(
+      requestId, 0, Path.basename(imagePath), mime, image.length));
     if (!stage?.ok) throw new Error("Image attachment failed: " + JSON.stringify(stage));
     record.stageRoute = stage.route;
     record.fileInputCountAfterChange = stage.fileInputCount;
+    record.stageAttempts = [{ attempt: 0, label: stage.label }];
     record.status = "uploading";
     persist(home, record);
     let ready = false;
-    for (let i = 0; i < 110; i++) {
+    let currentAttempt = 0;
+    let pollsOnStage = 0;
+    let lastUpload = null;
+    for (let i = 0; i < UPLOAD_MAX_POLLS; i++) {
       const s = await experiment(attachmentStatus(requestId));
-      if (!s?.ok || s.draftChanged || s.submitting || s.attachments > 1)
+      lastUpload = s;
+      if (!s?.ok || s.draftChanged || s.submitting || s.attachments > 1 ||
+          (s.attachments === 1 && !s.owned))
         throw new Error("Attachment became unsafe: " + JSON.stringify(s));
-      // A preview can exist long before its upload finishes. Submitting then
-      // may silently return false and leave an orphaned image in the composer.
       if (s.ready && !s.uploads && !s.pending) { ready = true; break; }
-      await wait(350);
+      pollsOnStage++;
+      const missing = s.attachments === 0 && pollsOnStage >= UPLOAD_MISSING_RETRY_POLLS;
+      const stalled = s.attachments === 1 &&
+        (["error", "failed"].includes(s.attachmentStatus) ||
+          pollsOnStage >= UPLOAD_STALLED_RETRY_POLLS);
+      if (currentAttempt < 2 && (missing || stalled)) {
+        // No user turn was sent. Re-stage through a different React handler
+        // only after the prior attachment is absent or explicitly cancelled.
+        const reset = await experiment(resetUploadExpression(requestId));
+        if (!reset?.ok) throw new Error("Upload retry could not safely cancel: "
+          + JSON.stringify({ reset, lastUpload: s }));
+        let cleared = false;
+        for (let n = 0; n < 12; n++) {
+          const state = await experiment(attachmentStatus(requestId));
+          if (!state?.ok || state.draftChanged || state.submitting || state.attachments > 1 ||
+              (state.attachments === 1 && !state.owned))
+            throw new Error("Upload changed during retry: " + JSON.stringify(state));
+          if (state.attachments === 0 && !state.pending) { cleared = true; break; }
+          await wait(UPLOAD_POLL_MS);
+        }
+        if (!cleared) throw new Error("Previous upload did not clear before retry: "
+          + JSON.stringify(lastUpload));
+        currentAttempt++;
+        stage = await experiment(stageUploadExpression(
+          requestId, currentAttempt, Path.basename(imagePath), mime, image.length));
+        if (!stage?.ok) throw new Error("Retry image attachment failed: " + JSON.stringify(stage));
+        record.stageAttempts.push({
+          attempt: currentAttempt, label: stage.label,
+          recoveredFrom: missing ? "missing_attachment" : s.attachmentStatus || "stalled_upload",
+        });
+        persist(home, record);
+        pollsOnStage = 0;
+        continue;
+      }
+      await wait(UPLOAD_POLL_MS);
     }
-    if (!ready) throw new Error("Image upload did not finish before deadline.");
+    record.lastUploadStatus = lastUpload;
+    if (!ready) throw new Error("Image upload did not finish before deadline: "
+      + JSON.stringify({ stageAttempts: record.stageAttempts, lastUpload }));
     record.uploadReadyObserved = true;
     // The browser callback may submit even if IPC acknowledgment is lost.
     record.status = "submitting";
@@ -456,10 +545,10 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
   } catch (error) {
     if (record.sendAttempted) {
       record.status = "unknown";
-      record.reason = String(error).slice(0, 250);
+      record.reason = String(error).slice(0, 500);
     } else {
       record.status = "not_sent";
-      record.reason = String(error).slice(0, 250);
+      record.reason = String(error).slice(0, 500);
     }
     persist(home, record);
     return publicReceipt(record);
