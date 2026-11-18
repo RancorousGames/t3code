@@ -9,9 +9,17 @@ import {
   markChatGPTSpareReady,
   releaseChatGPTSpare,
 } from "../../chatGPTBrowserPrewarm";
-import { CHATGPT_DEFAULT_URL, chatGPTBrowserThreadRef, useChatGPTBrowserSessions } from "../../chatGPTBrowserSessions";
+import {
+  CHATGPT_DEFAULT_URL,
+  chatGPTBrowserThreadRef,
+  useChatGPTBrowserSessions,
+} from "../../chatGPTBrowserSessions";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
-import { nativeChatGPTResidency, warmMissingNativeChatGPT } from "../../browser/nativeChatGPTWarmSession";
+import { ensureChatGPTHighEffort } from "../../chatGPTHighEffort";
+import {
+  nativeChatGPTResidency,
+  warmMissingNativeChatGPT,
+} from "../../browser/nativeChatGPTWarmSession";
 import { isElectron } from "../../env";
 import { randomUUID } from "../../lib/utils";
 import { readThreadPreviewState } from "../../previewStateStore";
@@ -101,10 +109,18 @@ function ChatGPTBrowserPrewarmGuest({
           identity,
           expression: CHATGPT_NATIVE_PREWARM_READY_EXPRESSION,
         })) as { result?: boolean };
-        if (!disposed && response.result === true) {
-          ready = true;
-          markChatGPTSpareReady(environmentId, sessionId);
-          return;
+        if (response.result === true) {
+          const high = await ensureChatGPTHighEffort(async (expression) => {
+            const result = (await bridge({ operation: "evaluate", identity, expression })) as {
+              result?: unknown;
+            };
+            return result.result;
+          });
+          if (!disposed && high) {
+            ready = true;
+            markChatGPTSpareReady(environmentId, sessionId);
+            return;
+          }
         }
         releaseChatGPTSpare(environmentId, sessionId);
       } catch {
@@ -155,9 +171,14 @@ function ChatGPTBrowserPrewarmGuest({
                 timeout = setTimeout(() => resolve(false), 1_500);
               }),
             ]);
-            if (!disposed && ready === true) {
-              markChatGPTSpareReady(environmentId, sessionId);
-              return;
+            if (ready === true) {
+              const high = await ensureChatGPTHighEffort((expression) =>
+                webview.executeJavaScript(expression),
+              );
+              if (!disposed && high) {
+                markChatGPTSpareReady(environmentId, sessionId);
+                return;
+              }
             }
           } catch {
             // Guest attachment/navigation can fail temporarily; keep warming.

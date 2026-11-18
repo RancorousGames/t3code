@@ -76,6 +76,8 @@ export const BrowserSession = Schema.Struct({
   markedAsWorkerAt: Schema.optional(Schema.Number),
   // An exact backend spawn reservation. Manual sessions and warm spares never carry it.
   spawnRequestId: Schema.optional(Schema.String),
+  // Only new home-page sessions need their initial GPT-6 High selection.
+  initialHighEffortPending: Schema.optional(Schema.Boolean),
   // Only explicit UI-created fresh chats carry this; legacy and backend guests do not.
   manualEmptyCandidateCreatedAt: Schema.optional(Schema.Number),
   manualEmptyCandidateDisqualified: Schema.optional(Schema.Boolean),
@@ -186,6 +188,17 @@ export function chatGPTSessionCreationOrigin(
 ): "manual" | "backend" | "unknown" {
   if (session.spawnRequestId?.trim()) return "backend";
   return session.creationOrigin ?? "unknown";
+}
+
+/** Clear the new-session default only after ChatGPT confirms the model change. */
+export function markInitialChatGPTHighEffortApplied(environmentId: EnvironmentId, sessionId: string): void {
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  const current = store.getState().sessions;
+  if (!current.some((entry) => entry.id === sessionId && entry.initialHighEffortPending)) return;
+  const next = current.map((entry) => entry.id === sessionId
+    ? { ...entry, initialHighEffortPending: undefined } : entry);
+  setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), next, BrowserSessions);
+  store.setState({ sessions: next });
 }
 
 export const CHATGPT_CONVERSATION_FULL_MESSAGE =
@@ -941,6 +954,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             profileId,
             title: cleanChatGPTSessionTitle(name ?? "") || `ChatGPT ${number}`,
             createdAt,
+            ...(!metadata?.initialConversationUrl ? { initialHighEffortPending: true } : {}),
             ...(metadata?.spawnRequestId
               ? {
                   creationOrigin: "backend" as const,

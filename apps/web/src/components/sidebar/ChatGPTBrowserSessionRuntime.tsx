@@ -10,6 +10,10 @@ import {
   hasAdmittedCapacityMessage,
 } from "../../chatGPTSessionMessageQueue";
 import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
+import { ensureChatGPTHighEffort } from "../../chatGPTHighEffort";
+import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
+import { isChatGPTGuestHibernated } from "../../browser/chatGPTGuestHibernation";
+import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { isChatGPTStartupSessionDeferred } from "../../omniwork/chatGPTStartupLoadPolicy";
 import { useWarmChatGPTSessionIds } from "../../omniwork/chatGPTWarmSessionPolicy";
@@ -19,6 +23,7 @@ import {
   chatGPTBrowserLastUrlKey,
   chatGPTBrowserThreadRef,
   isChatGPTConversationUrl,
+  markInitialChatGPTHighEffortApplied,
   useChatGPTBrowserSessions,
 } from "../../chatGPTBrowserSessions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -121,6 +126,67 @@ export function ChatGPTBrowserSessionRuntime({
   }, [lastUrl, recoveredUrl, setLastUrl]);
 
   const persistentChromium = isPersistentChatGPTSessionOptedIn(sessionId);
+  const pendingHighEffort =
+    sessions.find((entry) => entry.id === sessionId)?.initialHighEffortPending === true;
+  useEffect(() => {
+    if (!pendingHighEffort) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = async () => {
+      let confirmed = false;
+      try {
+        if (persistentChromium) {
+          const bridge = window.desktopBridge?.stableChatGPTViewRequest;
+          if (!bridge) return;
+          const identity = {
+            environmentId,
+            sessionId,
+            profileId: chatGPTSessionProfileId(sessions.find((entry) => entry.id === sessionId)),
+          };
+          const state = (await bridge({ operation: "probe", identity })) as {
+            residency?: string;
+            loading?: boolean;
+            url?: string;
+          };
+          if (
+            disposed ||
+            state.residency !== "resident" ||
+            state.loading ||
+            !state.url ||
+            (!isChatGPTHomeUrl(state.url) && !isChatGPTConversationUrl(state.url))
+          )
+            return;
+          confirmed = await ensureChatGPTHighEffort(async (expression) => {
+            const reply = (await bridge({ operation: "evaluate", identity, expression })) as {
+              result?: unknown;
+            };
+            return reply.result;
+          });
+        } else {
+          const state = readThreadPreviewState(threadRef);
+          const tabId = state.activeTabId;
+          const url = state.snapshot?.navStatus;
+          if (!tabId || !state.serverEpoch || url?._tag !== "Success" || (!isChatGPTHomeUrl(url.url) && !isChatGPTConversationUrl(url.url)))
+            return;
+          const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
+          if (isChatGPTGuestHibernated(runtimeId)) return;
+          confirmed = await ensureChatGPTHighEffort((expression) =>
+            chatGPTWebviewAutomation.evaluate(runtimeId, { expression }),
+          );
+        }
+        if (confirmed && !disposed) markInitialChatGPTHighEffortApplied(environmentId, sessionId);
+      } catch {
+        // A new guest can still be loading or signing in; do not wake or reload it.
+      } finally {
+        if (!disposed && !confirmed) timer = setTimeout(() => void attempt(), 1_500);
+      }
+    };
+    void attempt();
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [environmentId, sessionId, threadRef, persistentChromium, pendingHighEffort, sessions]);
   usePreviewSession(threadRef);
   // Restored webviews load their saved URL on attach. Do not eagerly reload
   // every existing session: large sets of ChatGPT tabs can hit rate limits.

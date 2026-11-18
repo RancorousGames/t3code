@@ -4,10 +4,12 @@ import {
   CHATGPT_DEFAULT_URL,
   chatGPTBrowserThreadRef,
   readChatGPTBrowserSessions,
+  markInitialChatGPTHighEffortApplied,
 } from "./chatGPTBrowserSessions";
 import { isChatGPTHomeUrl } from "./chatGPTBrowserPrewarm";
 import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import { nativeChatGPTInitialPromptAutomation } from "./browser/nativeChatGPTInitialPromptAutomation";
+import { ensureChatGPTHighEffort } from "./chatGPTHighEffort";
 import { readChatGPTSessionProfileId } from "./chatGPTAccountProfiles";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 import { publicChatGPTParentId, publicChatGPTSessionId } from "./chatGPTBootstrapIdentity";
@@ -174,6 +176,19 @@ export async function sendInitialChatGPTPrompt(input: {
             ) {
               rejectedGuest = true;
               throw new Error("ChatGPT spawn reservation changed before dispatch.");
+            }
+            // A spawned worker must start on High, not inherit the account's last
+            // manually selected effort. Fail before submitting if ChatGPT is not ready.
+            if (session.initialHighEffortPending && input.newManagedWorker !== false) {
+              const high = await ensureChatGPTHighEffort((expression) =>
+                automation.evaluate(runtimeId, { expression }),
+              );
+              if (!high) {
+                lastError = new Error("ChatGPT High effort selection is not ready.");
+                await pause(250);
+                continue;
+              }
+              markInitialChatGPTHighEffortApplied(input.environmentId, input.sessionId);
             }
             // Submit through ChatGPT's mounted React handler. Unlike typing and
             // clicking Send, this neither mutates nor focuses a restored draft.

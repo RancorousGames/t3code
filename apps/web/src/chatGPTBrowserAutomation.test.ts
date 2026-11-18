@@ -5,6 +5,7 @@ vi.mock("./chatGPTBrowserSessions", () => ({
   CHATGPT_DEFAULT_URL: "https://chatgpt.com/",
   chatGPTBrowserThreadRef: () => ({ threadId: "session" }),
   readChatGPTBrowserSessions: () => [],
+  markInitialChatGPTHighEffortApplied: vi.fn(),
 }));
 vi.mock("./browser/previewRuntimeTabId", () => ({ previewRuntimeTabId: () => "runtime" }));
 vi.mock("./browser/browserSurfaceStore", () => ({ acquireBrowserSurfaceActivity: () => () => {} }));
@@ -26,6 +27,7 @@ function fixture() {
     type: vi.fn(),
     press: vi.fn(),
     evaluate: vi.fn(async (_runtime: string, { expression }: { expression: string }) => {
+      if (expression.includes("initializeChatGPTHighEffort")) return { status: "already_high" };
       if (expression.includes("const fresh = true")) return { submitted: true };
       if (expression.includes("data-message-author-role")) return delivered;
       return null;
@@ -64,6 +66,16 @@ describe("fresh ChatGPT session direct-submit delivery", () => {
     expect(submitted[0]).not.toContain("editor.focus");
     expect(expressions.some((expression) =>
       expression.includes('[data-content-search-unit-key$=":user"]'))).toBe(true);
+  });
+
+  it("selects High before submitting the first prompt in a spawned session", async () => {
+    const { input, automation, session } = fixture();
+    input.readSessions = (() => [{ ...session, initialHighEffortPending: true }]) as never;
+    const result = await sendInitialChatGPTPrompt(input);
+    expect(result.sendAttempted).toBe(true);
+    const expressions = automation.evaluate.mock.calls.map(([, arg]) => arg.expression);
+    expect(expressions[0]).toContain("initializeChatGPTHighEffort");
+    expect(expressions[1]).toContain("const fresh = true");
   });
 
   it("reboots a registered manual session using its original public ID, not its browser slot ID", async () => {
