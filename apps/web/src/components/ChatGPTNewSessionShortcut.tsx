@@ -3,12 +3,14 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import { readChatGPTBrowserSessions, useChatGPTBrowserSessions } from "../chatGPTBrowserSessions";
-import { acknowledgeChatGPTSessionAttention } from "../chatGPTPersistentAttention";
+import { acknowledgeChatGPTSessionAttention, rearmPersistentSessionAttention } from "../chatGPTPersistentAttention";
+import { markChatGPTAttentionVisited } from "../chatGPTAttentionWorkCycle";
+import { readChatGPTSessionTimeline } from "../chatGPTSessionTimestamps";
 import { readChatGPTProviderActivity } from "../chatGPTProviderActivity";
 import {
   requestAgentAttention,
   cancelManualAgentAttention,
-  latestAgentAttention,
+  priorityChatGPTAttentionTarget,
   loadAgentAttention,
   nextRecentAgentAttentionSessionId,
 } from "../chatGPTAgentAttention";
@@ -62,8 +64,8 @@ export function ChatGPTNewSessionShortcut() {
             type: "success",
             title: "Persistent attention enabled",
             description: activity === "working"
-              ? `${session.title} — yellow border when this response finishes`
-              : `${session.title} — yellow border after the next response finishes`,
+              ? `${session.title}: yellow border when this response finishes`
+              : `${session.title}: yellow border after the next response finishes`,
           },
     );
   });
@@ -75,34 +77,65 @@ export function ChatGPTNewSessionShortcut() {
       entry.id,
       ...(entry.bootstrapIdentity?.publicId ? [entry.bootstrapIdentity.publicId] : []),
     ]));
-    const latest = latestAgentAttention(availableIds);
-    if (latest) {
-      lastRecentAttentionTarget.current = null;
-      // Pending attention always takes priority and consumes exactly one entry.
+    const requests = loadAgentAttention();
+    // Persistent yellow markers are authoritative even if their one-shot
+    // notification is missing. Non-verification attention takes precedence
+    // over Verification and historical receipts.
+    const target = priorityChatGPTAttentionTarget(sessions.map((entry) => ({
+      id: entry.id,
+      bootstrapIdentity: entry.bootstrapIdentity,
+      verificationPending: entry.verificationPending,
+      returnMarker: entry.returnMarker,
+      hidden: entry.hidden,
+      snoozedUntil: entry.snoozedUntil,
+      working: readChatGPTProviderActivity(environmentId, entry.id) === "working",
+      lastActiveAt: readChatGPTSessionTimeline(environmentId, entry).lastActiveAt,
+    })), requests);
+    if (target) {
       const session = sessions.find((entry) =>
-        entry.id === latest.sessionId || entry.bootstrapIdentity?.publicId === latest.sessionId);
-      if (!session || !acknowledgeChatGPTSessionAttention(environmentId, session,
-        readChatGPTProviderActivity(environmentId, session.id), latest.id)) return;
+        entry.id === target.sessionId ||
+        entry.bootstrapIdentity?.publicId === target.sessionId);
+      if (!session) return;
+      const activity = readChatGPTProviderActivity(environmentId, session.id);
+      if (target.requestId) {
+        // Opening a notification consumes only that entry, preserving the stack.
+        if (!acknowledgeChatGPTSessionAttention(
+          environmentId, session, activity, target.requestId,
+        )) return;
+      } else {
+        // A yellow marker can outlive its notification record. Acknowledge the
+        // marker without clearing independent waiting agent requests.
+        rearmPersistentSessionAttention(environmentId, session, activity);
+        markChatGPTAttentionVisited(environmentId, session.id, activity);
+      }
+      lastRecentAttentionTarget.current = null;
       setSessionHidden(session.id, false);
       setSessionSnooze([session.id], null);
       void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: session.id } });
       return;
     }
-    // With an empty actionable stack, Ctrl+S cycles through recent resolved
-    // alerts without re-acknowledging them or disturbing their stored receipts.
+    // Only once NO marked-ready or pending sessions remain does Ctrl+S cycle
+    // recent resolved attention receipts.
     const selectedId = pathname.match(/^\/browser\/([^/]+)\/?$/)?.[1];
     const selected = sessions.find((entry) => entry.id === selectedId);
-    const workingIds = new Set(sessions
-      .filter((entry) => readChatGPTProviderActivity(environmentId, entry.id) === "working")
-      .flatMap((entry) => [entry.id, ...(entry.bootstrapIdentity?.publicId
-        ? [entry.bootstrapIdentity.publicId] : [])]));
+    const workingIds = new Set(sessions.flatMap((entry) =>
+      readChatGPTProviderActivity(environmentId, entry.id) === "working"
+        ? [entry.id, ...(entry.bootstrapIdentity?.publicId
+          ? [entry.bootstrapIdentity.publicId] : [])]
+        : []));
+    const verificationIds = new Set(sessions.flatMap((entry) =>
+      entry.verificationPending
+        ? [entry.id, ...(entry.bootstrapIdentity?.publicId
+          ? [entry.bootstrapIdentity.publicId] : [])]
+        : []));
     const nextId = nextRecentAgentAttentionSessionId(
-      loadAgentAttention(),
+      requests,
       availableIds,
       selected ? [selected.id, ...(selected.bootstrapIdentity?.publicId
         ? [selected.bootstrapIdentity.publicId] : [])] : [],
       workingIds,
       lastRecentAttentionTarget.current ?? undefined,
+      verificationIds,
     );
     const session = sessions.find((entry) =>
       entry.id === nextId || entry.bootstrapIdentity?.publicId === nextId);
@@ -192,7 +225,7 @@ export function ChatGPTNewSessionShortcut() {
       unregisterReturnMarkerAction();
       unregisterOpenLastAttentionAction();
     };
-  }, [environmentId, keybindings, pathname, toggleSessionReturnMarker]);
+  }, [environmentId, keybindings, pathname]);
 
   return null;
 }

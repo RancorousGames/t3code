@@ -38,8 +38,9 @@ export function acknowledgeChatGPTSessionAttention(
   if (requestId !== undefined) {
     const request = openAgentAttentionRequest(requestId, ids);
     if (!request) return false;
-    // A one-time agent request must not consume the user's separate Ctrl+D alert.
-    if (request.source === "manual")
+    // Visiting a ready/yellow session acknowledges its persistent marker too.
+    // A separate one-off request still consumes only its own stack entry.
+    if (request.source === "manual" || session.returnMarker === "ready")
       rearmPersistentSessionAttention(environmentId, session, activity);
     markChatGPTAttentionVisited(environmentId, session.id, activity);
     return true;

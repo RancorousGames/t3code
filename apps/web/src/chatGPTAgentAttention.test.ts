@@ -1,6 +1,5 @@
-// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { activateAgentAttention, activeAgentAttentionStack, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, nextRecentAgentAttentionSessionId, openAgentAttention, openAgentAttentionRequest, recentAgentAttentionSessionIds, rearmManualAgentAttention, requestAgentAttention } from "./chatGPTAgentAttention";
+import { activateAgentAttention, activeAgentAttentionStack, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, nextRecentAgentAttentionSessionId, openAgentAttention, openAgentAttentionRequest, recentAgentAttentionSessionIds, rearmManualAgentAttention, requestAgentAttention, priorityChatGPTAttentionTarget } from "./chatGPTAgentAttention";
 
 const saved = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -213,6 +212,75 @@ describe("Ctrl+S attention target", () => {
       items, available, ["working-old"], working, "idle-old",
     )).toBe("idle-new");
     expect(loadAgentAttention()).toEqual(items);
+  });
+
+  it("reproduces Ctrl+S jumping to Verification while newer yellow rows need attention", () => {
+    vi.spyOn(Date, "now").mockReturnValue(5000);
+    requestAgentAttention("old-verification", "verify", "Old verification question");
+    activateAgentAttention(["verify"]);
+    const sessions = [
+      { id: "verify", verificationPending: true, returnMarker: undefined, lastActiveAt: 900 },
+      { id: "regular-old", returnMarker: "ready" as const, lastActiveAt: 1200 },
+      { id: "regular-new", returnMarker: "ready" as const, lastActiveAt: 4800 },
+    ];
+    // The old shortcut chose latestAgentAttention first and therefore jumped
+    // to the verification session, ignoring both persistent yellow markers.
+    expect(latestAgentAttention()?.sessionId).toBe("verify");
+    expect(priorityChatGPTAttentionTarget(sessions, loadAgentAttention(), 5000))
+      .toMatchObject({ sessionId: "regular-new", reason: "ready" });
+  });
+
+  it("prioritizes active non-verification requests over verification requests and history", () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(100);
+    requestAgentAttention("verify", "verification-session", "Older verification");
+    now.mockReturnValue(200);
+    activateAgentAttention(["verification-session"]);
+    now.mockReturnValue(300);
+    requestAgentAttention("normal", "normal-session", "Normal request");
+    now.mockReturnValue(400);
+    activateAgentAttention(["normal-session"]);
+    expect(priorityChatGPTAttentionTarget([
+      { id: "verification-session", verificationPending: true },
+      { id: "normal-session" },
+    ], loadAgentAttention(), 500)?.requestId).toBe("normal");
+    changeAttention("normal", "opened");
+    expect(priorityChatGPTAttentionTarget([
+      { id: "verification-session", verificationPending: true },
+      { id: "normal-session" },
+    ], loadAgentAttention(), 500)?.requestId).toBe("verify");
+  });
+
+  it("skips snoozed and working yellow rows, but honors a yellow row with no receipt", () => {
+    vi.spyOn(Date, "now").mockReturnValue(5000);
+    const sessions = [
+      { id: "working", returnMarker: "ready" as const, working: true, lastActiveAt: 4999 },
+      { id: "snoozed", returnMarker: "ready" as const, snoozedUntil: 6000, lastActiveAt: 4998 },
+      { id: "yellow", returnMarker: "ready" as const, lastActiveAt: 3000 },
+    ];
+    expect(priorityChatGPTAttentionTarget(sessions, [], 5000))
+      .toMatchObject({ sessionId: "yellow", reason: "ready" });
+    expect(priorityChatGPTAttentionTarget(
+      sessions.filter((session) => session.id !== "yellow"), [], 5000,
+    )).toBeUndefined();
+  });
+
+  it("reproduces stale historical attention jumping to Verification ahead of normal history", () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(100);
+    requestAgentAttention("normal", "normal", "Normal");
+    activateAgentAttention(["normal"]);
+    changeAttention("normal", "opened");
+    now.mockReturnValue(200);
+    requestAgentAttention("verification", "verification", "Verification");
+    activateAgentAttention(["verification"]);
+    changeAttention("verification", "opened");
+    const ids = new Set(["normal", "verification"]);
+    // Historical selection must prefer non-verification sessions despite their age.
+    expect(nextRecentAgentAttentionSessionId(
+      loadAgentAttention(), ids, [], new Set(), undefined,
+      new Set(["verification"]),
+    )).toBe("normal");
   });
 
   it("turning Ctrl+D off does not cancel an agent's pending attention", () => {

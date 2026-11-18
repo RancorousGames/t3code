@@ -16,8 +16,8 @@ const state = vi.hoisted(() => ({
   requestAttention: vi.fn(),
   cancelAttention: vi.fn(),
   acknowledgeAttention: vi.fn(() => true),
-  latestAttention: vi.fn((_availableSessionIds?: ReadonlySet<string>) =>
-    undefined as { id: string; sessionId: string } | undefined),
+  priorityAttention: vi.fn((_sessions: readonly unknown[], _items: readonly unknown[]) =>
+    undefined as { sessionId: string; requestId?: string; reason: "ready" | "request" } | undefined),
   openAttention: vi.fn(),
   clearReturnMarker: vi.fn(),
   setSessionHidden: vi.fn(),
@@ -60,7 +60,8 @@ vi.mock(import("../chatGPTAgentAttention"), async (original) => ({
   ...(await original()),
   requestAgentAttention: state.requestAttention as never,
   cancelManualAgentAttention: state.cancelAttention as never,
-  latestAgentAttention: state.latestAttention as never,
+  priorityChatGPTAttentionTarget: state.priorityAttention as never,
+  loadAgentAttention: () => [],
   openAgentAttention: state.openAttention as never,
 }));
 
@@ -72,6 +73,9 @@ vi.mock(import("../chatGPTPersistentAttention"), async (original) => ({
 vi.mock(import("../chatGPTProviderActivity"), async (original) => ({
   ...(await original()),
   readChatGPTProviderActivity: () => state.activity,
+}));
+vi.mock("../chatGPTSessionTimestamps", () => ({
+  readChatGPTSessionTimeline: () => ({ lastActiveAt: 100 }),
 }));
 vi.mock(import("./ui/toast"), async (original) => ({
   ...(await original()),
@@ -133,25 +137,31 @@ describe("Return marker shortcut", () => {
 describe("Open last GMA session shortcut", () => {
   it("opens and acknowledges the most recently requesting session", async () => {
     state.pathname = "/browser/selected-session";
-    state.latestAttention.mockReturnValue({ id: "request", sessionId: "selected-session" });
-    state.latestAttention.mockClear();
+    state.priorityAttention.mockReturnValue({
+      requestId: "request", sessionId: "selected-session", reason: "request",
+    });
+    state.priorityAttention.mockClear();
     state.acknowledgeAttention.mockClear();
     state.navigate.mockClear();
     await using _view = await render(<ChatGPTNewSessionShortcut />);
     await act(() => dispatchMenuAction("chatgpt.open-last-attention"));
-    expect(state.latestAttention).toHaveBeenCalledWith(new Set(["selected-session"]));
+    expect(state.priorityAttention).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: "selected-session" })], [],
+    );
     expect(state.acknowledgeAttention).toHaveBeenCalledWith("remote",
       expect.objectContaining({ id: "selected-session" }), "idle", "request");
     expect(state.navigate).toHaveBeenCalledWith({
       to: "/browser/$browserSessionId", params: { browserSessionId: "selected-session" },
     });
-    state.latestAttention.mockReturnValue(undefined);
+    state.priorityAttention.mockReturnValue(undefined);
   });
 
   it("Ctrl+S opens exactly the visible notification, even from its focused controls", async () => {
     state.pathname = "/browser/selected-session";
     state.paletteOpen = false;
-    state.latestAttention.mockReturnValue({ id: "top-alert", sessionId: "selected-session" });
+    state.priorityAttention.mockReturnValue({
+      requestId: "top-alert", sessionId: "selected-session", reason: "request",
+    });
     state.acknowledgeAttention.mockClear();
     state.navigate.mockClear();
     const toast = document.createElement("section");
@@ -177,7 +187,7 @@ describe("Open last GMA session shortcut", () => {
       });
     } finally {
       toast.remove();
-      state.latestAttention.mockReturnValue(undefined);
+      state.priorityAttention.mockReturnValue(undefined);
     }
   });
 });

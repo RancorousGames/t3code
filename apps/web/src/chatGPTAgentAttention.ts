@@ -239,6 +239,59 @@ export function latestAgentAttention(
   return activeAgentAttentionStack(loadAgentAttention(), availableSessionIds)[0];
 }
 
+/** The same persistent "ready" marker that draws the yellow sidebar outline
+ * must count as active attention even if its one-shot notification is absent
+ * or already opened. Do not fall through to historical receipts while yellow
+ * sessions remain. Non-verification sessions always take precedence. */
+export function priorityChatGPTAttentionTarget(
+  sessions: readonly {
+    id: string;
+    bootstrapIdentity?: { readonly publicId?: string | undefined } | undefined;
+    verificationPending?: boolean | undefined;
+    returnMarker?: "armed" | "working" | "ready" | undefined;
+    hidden?: boolean | undefined;
+    snoozedUntil?: number | undefined;
+    working?: boolean | undefined;
+    lastActiveAt?: number | null | undefined;
+  }[],
+  items: readonly AgentAttention[],
+  now = Date.now(),
+): { sessionId: string; reason: "ready" | "request"; requestId?: string } | undefined {
+  const ids = new Set(sessions.flatMap((session) => [
+    session.id,
+    ...(session.bootstrapIdentity?.publicId ? [session.bootstrapIdentity.publicId] : []),
+  ]));
+  const pending = activeAgentAttentionStack(items, ids, now);
+  const requestsFor = (session: (typeof sessions)[number]) => pending.filter((item) =>
+    item.sessionId === session.id || item.sessionId === session.bootstrapIdentity?.publicId);
+  for (const verification of [false, true]) {
+    const group = sessions.filter((session) =>
+      Boolean(session.verificationPending) === verification);
+    const ready = group.filter((session) =>
+      session.returnMarker === "ready" && !session.hidden &&
+      !session.working && (session.snoozedUntil ?? 0) <= now)
+      .sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0));
+    if (ready.length) {
+      const session = ready[0]!;
+      // Prefer the session's own persistent request so Ctrl+S clears exactly
+      // one stack entry rather than accidentally clearing unrelated requests.
+      const request = requestsFor(session).find((item) => item.source === "manual") ??
+        requestsFor(session)[0];
+      return {
+        sessionId: session.id, reason: "ready",
+        ...(request ? { requestId: request.id } : {}),
+      };
+    }
+    const allowedIds = new Set(group.flatMap((session) => [
+      session.id,
+      ...(session.bootstrapIdentity?.publicId ? [session.bootstrapIdentity.publicId] : []),
+    ]));
+    const request = pending.find((item) => allowedIds.has(item.sessionId));
+    if (request) return { sessionId: request.sessionId, requestId: request.id, reason: "request" };
+  }
+  return undefined;
+}
+
 /** History fallback for Ctrl+S, after all actionable notifications are handled.
  * Only previously activated and resolved requests count as recent attention.
  * Deduplicate by session: visiting the same session twice is not a useful cycle.
@@ -267,30 +320,34 @@ export function recentAgentAttentionSessionIds(
   return result;
 }
 
-/** Browse resolved attention: non-working sessions first, then working ones.
- * The previous Ctrl+S target allows continued cycling through the working
- * group instead of restarting at the idle group on every subsequent press. */
+/** Browse resolved attention: non-verification sessions before verification,
+ * with idle ahead of working inside each group. Continue through the entire
+ * cycle rather than restarting at the beginning every time. */
 export function nextRecentAgentAttentionSessionId(
   items: readonly AgentAttention[],
   availableSessionIds: ReadonlySet<string>,
   selectedSessionIds: readonly string[],
   workingSessionIds: ReadonlySet<string> = new Set(),
   previousTargetId?: string,
+  verificationSessionIds: ReadonlySet<string> = new Set(),
 ): string | undefined {
   const recent = recentAgentAttentionSessionIds(items, availableSessionIds);
   if (!recent.length) return undefined;
   const ordered = [
-    ...recent.filter((id) => !workingSessionIds.has(id)),
-    ...recent.filter((id) => workingSessionIds.has(id)),
+    ...recent.filter((id) => !verificationSessionIds.has(id) && !workingSessionIds.has(id)),
+    ...recent.filter((id) => !verificationSessionIds.has(id) && workingSessionIds.has(id)),
+    ...recent.filter((id) => verificationSessionIds.has(id) && !workingSessionIds.has(id)),
+    ...recent.filter((id) => verificationSessionIds.has(id) && workingSessionIds.has(id)),
   ];
-  // Continuing a shortcut-driven tour advances through both groups, including
-  // the active tail. Manually switching to a working session starts at idle again.
+  // A manual session switch resets the tour, while another Ctrl+S continues
+  // from its previous target across both priority groups.
   const continuing = previousTargetId !== undefined &&
     selectedSessionIds.includes(previousTargetId);
   const selectedIndex = continuing
     ? ordered.indexOf(previousTargetId)
     : ordered.findIndex((id) =>
-        !workingSessionIds.has(id) && selectedSessionIds.includes(id));
+        !verificationSessionIds.has(id) && !workingSessionIds.has(id) &&
+        selectedSessionIds.includes(id));
   return ordered[(selectedIndex + 1) % ordered.length];
 }
 
