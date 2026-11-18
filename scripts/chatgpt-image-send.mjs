@@ -13,6 +13,58 @@ const receiptDir = (home) => Path.join(home, "userdata", "chatgpt-image-deliveri
 const receiptPath = (home, id) => Path.join(receiptDir(home), id + ".json");
 const lockPath = (home, sessionId) => Path.join(receiptDir(home), sessionId + ".lock");
 
+// A crashed sender must not lock a session forever. New locks record their PID;
+// never reclaim a lock while that process is alive. Old empty locks have no
+// owner evidence, so require a generous age threshold before reclaiming them.
+function acquireImageLock(home, sessionId, requestId) {
+  const path = lockPath(home, sessionId);
+  const owner = JSON.stringify({ pid: process.pid, requestId, createdAt: Date.now() });
+  const create = () => {
+    const fd = FS.openSync(path, "wx");
+    try { FS.writeFileSync(fd, owner, { flush: true }); }
+    catch (error) { FS.closeSync(fd); try { FS.unlinkSync(path); } catch {} throw error; }
+    return fd;
+  };
+  try { return { fd: create(), path }; }
+  catch (error) { if (error?.code !== "EEXIST") throw error; }
+
+  // Serialize orphan recovery separately from the actual session lock.
+  const recoveryPath = path + ".recovery";
+  let recovery;
+  try { recovery = FS.openSync(recoveryPath, "wx"); }
+  catch { throw new Error("An image send or orphan-lock recovery is already active for this session."); }
+  try {
+    let stat;
+    try { stat = FS.statSync(path); }
+    catch (error) {
+      if (error?.code === "ENOENT") return { fd: create(), path };
+      throw error;
+    }
+    let old = null;
+    try { old = JSON.parse(FS.readFileSync(path, "utf8")); }
+    catch { /* Legacy empty lock, or a sender interrupted before writing metadata. */ }
+    const ownerPid = Number.isSafeInteger(old?.pid) && old.pid > 0 ? old.pid : null;
+    if (ownerPid) {
+      try { process.kill(ownerPid, 0); throw new Error("Image send owner process is still alive."); }
+      catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+    } else if (Date.now() - stat.mtimeMs < 10 * 60_000) {
+      throw new Error("Image send lock has no owner metadata and is not yet old enough to reclaim.");
+    }
+    // While recovery guard is held, only reclaim the exact file inspected.
+    const current = FS.statSync(path);
+    if (current.ino !== stat.ino || current.mtimeMs !== stat.mtimeMs ||
+        FS.readFileSync(path, "utf8") !== (old ? JSON.stringify(old) : ""))
+      throw new Error("Image send lock changed during stale-owner inspection.");
+    FS.unlinkSync(path);
+    return { fd: create(), path };
+  } finally {
+    FS.closeSync(recovery);
+    try { FS.unlinkSync(recoveryPath); } catch {}
+  }
+}
+
 function persist(home, record) {
   FS.mkdirSync(receiptDir(home), { recursive: true });
   const target = receiptPath(home, record.requestId);
@@ -225,7 +277,11 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     const source = JSON.parse(FS.readFileSync(receiptPath(home, requestId), "utf8"));
     if (source.payloadHash !== payloadHash)
       throw new Error("The image requestId already belongs to a different send.");
-    return { ...previous, reconciled: true };
+    // A crashed sender can leave a reserved/uploading receipt before calling
+    // onSubmit. Only the exact same requestId may resume, and only after the
+    // live composer preflight below proves no attachment/draft remains.
+    if (source.sendAttempted || !["reserved", "uploading"].includes(source.status))
+      return { ...previous, reconciled: true };
   }
   const record = {
     requestId, sessionId, conversationId: expectedConversationId,
@@ -233,13 +289,16 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     imageCount: 0, sendAttempted: false, reason: null,
   };
   FS.mkdirSync(receiptDir(home), { recursive: true });
-  const lockFile = lockPath(home, sessionId);
-  let lock;
-  try { lock = FS.openSync(lockFile, "wx"); }
-  catch { throw new Error("An image send is already active for this session."); }
+  const lock = acquireImageLock(home, sessionId, requestId);
   try {
     const fresh = imageSendReceipt(home, requestId);
-    if (fresh) return fresh;
+    if (fresh) {
+      const existing = JSON.parse(FS.readFileSync(receiptPath(home, requestId), "utf8"));
+      if (existing.payloadHash !== payloadHash)
+        throw new Error("Image request payload changed while waiting for session lock.");
+      if (existing.sendAttempted || !["reserved", "uploading"].includes(existing.status))
+        return { ...fresh, reconciled: true };
+    }
     persist(home, record);
     const experiment = (js) => guardedEval(control, expectedConversationId, sessionId, js);
     const before = await experiment(imagePreflight(requestId));
@@ -361,7 +420,7 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
         return true;
       `));
     } catch { /* The guest may have navigated after submission. */ }
-    try { FS.closeSync(lock); } catch {}
-    try { FS.unlinkSync(lockFile); } catch {}
+    try { FS.closeSync(lock.fd); } catch {}
+    try { FS.unlinkSync(lock.path); } catch {}
   }
 }
