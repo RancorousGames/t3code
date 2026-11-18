@@ -50,7 +50,7 @@ function setup() {
   const id = "11111111-1111-1111-1111-111111111111";
   const window = host.createDurableNativePage(id, "test");
   host.sessions.set(id, { window });
-  return { host, window, id, throttling, setLoading: (value) => { loading = value; }, executions: () => executions };
+  return { host, window, contents, id, throttling, setLoading: (value) => { loading = value; }, executions: () => executions };
 }
 
 test("native carrier visibility preserves Chromium background scheduling", () => {
@@ -60,6 +60,13 @@ test("native carrier visibility preserves Chromium background scheduling", () =>
     window.setCarrierVisible(false);
   }
   assert.deepEqual(throttling, []);
+});
+
+test("blocks Ctrl+wheel zoom in persistent ChatGPT pages", () => {
+  const { contents } = setup();
+  let prevented = false;
+  contents.emit("zoom-changed", { preventDefault: () => { prevented = true; } }, "in");
+  assert.equal(prevented, true);
 });
 
 test("probes during main-frame navigation fail without queuing page-load listeners", async () => {

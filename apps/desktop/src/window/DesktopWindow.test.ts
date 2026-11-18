@@ -704,7 +704,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("zooms the app from Ctrl+wheel like the menu does", () =>
+  it.effect("blocks Ctrl+wheel zoom while retaining menu zoom", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
@@ -723,15 +723,13 @@ describe("DesktopWindow", () => {
 
         const zoomChanged = fakeWindow.webContentsListeners.get("zoom-changed");
         if (!zoomChanged) return yield* Effect.die("zoom-changed listener was not registered");
-        zoomChanged({}, "in");
-        zoomChanged({}, "out");
-        zoomChanged({}, "out");
+        let prevented = 0;
+        zoomChanged({ preventDefault: () => prevented++ }, "in");
+        zoomChanged({ preventDefault: () => prevented++ }, "out");
 
-        assert.deepEqual(
-          fakeWindow.setZoomLevel.mock.calls.map(([level]) => level),
-          [0.5, 0, -0.5],
-        );
-        assert.deepEqual(previewZoomReapplies, [0.5, 0, -0.5]);
+        assert.equal(prevented, 2);
+        assert.deepEqual(fakeWindow.setZoomLevel.mock.calls, []);
+        assert.deepEqual(previewZoomReapplies, []);
       }).pipe(Effect.provide(layer));
     }),
   );

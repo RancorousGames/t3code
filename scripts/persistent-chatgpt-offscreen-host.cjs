@@ -158,6 +158,8 @@ function createDurableNativePage(sessionId, partition) {
     },
   });
   relayPageInput(sessionId, view.webContents);
+  // Temporary diagnostic: suppress Ctrl+wheel zoom in persistent ChatGPT pages.
+  view.webContents.on("zoom-changed", (event) => event.preventDefault());
   // A frameless, owned Chromium carrier otherwise reports HTCAPTION across its
   // top strip and consumes ChatGPT header clicks as window dragging.
   view.webContents.on("dom-ready", () => {

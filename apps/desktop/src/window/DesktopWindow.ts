@@ -728,11 +728,9 @@ export const make = Effect.gen(function* () {
         window.webContents.send(TRACKPAD_SCROLL_END_CHANNEL);
       }
     });
-    // Ctrl+wheel bypasses menus; guest contents emit their own zoom-changed event.
-    window.webContents.on("zoom-changed", (_event, direction) => {
-      if (window.isDestroyed()) return;
-      runFork(zoomWindow(window, direction));
-    });
+    // Temporarily disable Ctrl+wheel zoom while investigating unexpected zoom changes.
+    // Menu/keyboard zoom remains available.
+    window.webContents.on("zoom-changed", (event) => event.preventDefault());
 
     window.on("page-title-updated", (event) => {
       event.preventDefault();
