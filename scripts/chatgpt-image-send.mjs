@@ -128,9 +128,11 @@ function attachmentStatus(id) {
     const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
     const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
     const attachments=Array.isArray(p.attachments)?p.attachments:[];
-    if(attachments.length===1&&attachments[0]?.uploadId)s.uploadId=attachments[0].uploadId;
+    const attachment=attachments.length===1?attachments[0]:null;
+    if(attachment?.uploadId)s.uploadId=attachment.uploadId;
     return {ok:true,draft:!!draft.trim(),uploads:document.querySelectorAll('[aria-label^="Uploading "]').length,
-      attachments:attachments.length,
+      attachments:attachments.length,attachmentStatus:attachment?.status||null,
+      ready:attachment?.status==="ready"&&!!attachment.id&&!!attachment.uploadId,
       pending:!!p.isWaitingForFileUploads,submitting:!!p.isSubmitting};
   `);
 }
@@ -141,7 +143,8 @@ function sendExpression(id, message, conversationId) {
     if(s?.id!==${JSON.stringify(id)}||s.phase!=="uploading")return {ok:false,reason:"transfer_not_ready"};
     if(location.pathname!==${JSON.stringify("/c/" + conversationId)})return {ok:false,reason:"conversation_mismatch"};
     const p=s.findProps();
-    if(!p||!Array.isArray(p.attachments)||p.attachments.length!==1||p.isWaitingForFileUploads||p.isSubmitting)
+    if(!p||!Array.isArray(p.attachments)||p.attachments.length!==1||p.isWaitingForFileUploads||p.isSubmitting
+        ||p.attachments[0]?.status!=="ready"||!p.attachments[0]?.id||!p.attachments[0]?.uploadId)
       return {ok:false,reason:"attachment_not_ready"};
     const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
     if((e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"").trim())
@@ -293,7 +296,9 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       const s = await experiment(attachmentStatus(requestId));
       if (!s?.ok || s.draft || s.submitting || s.attachments > 1)
         throw new Error("Attachment became unsafe: " + JSON.stringify(s));
-      if (s.attachments === 1 && !s.uploads && !s.pending) { ready = true; break; }
+      // A preview can exist long before its upload finishes. Submitting then
+      // may silently return false and leave an orphaned image in the composer.
+      if (s.ready && !s.uploads && !s.pending) { ready = true; break; }
       await wait(350);
     }
     if (!ready) throw new Error("Image upload did not finish before deadline.");
