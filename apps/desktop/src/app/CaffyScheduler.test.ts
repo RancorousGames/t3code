@@ -78,7 +78,9 @@ function fixture() {
     version: 1,
     requestId: input.requestId,
     ok: true,
-    data: input.type === "chatgpt.spawn"
+    data: input.type === "t3.threads" && input.action === "list"
+      ? { environmentId: "native-fixture", threads: [] }
+      : input.type === "chatgpt.spawn"
       ? { sessionId: REPLACEMENT }
       : input.action === "read"
         ? { conversationGuardValidated: guardedRead,

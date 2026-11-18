@@ -702,7 +702,7 @@ export function ChatGPTBrowserSidebarEntry({
     if (input.shutdownWhenIdle === true || input.busyForMinutes !== undefined) {
       const warning = input.busyForMinutes !== undefined
         ? `Keep T3 assigning work for ${input.busyForMinutes / 60} hour(s), then stop new automatic work and force Windows to shut down once all T3 sessions are idle? Other programs will close without saving.`
-        : "Force shutdown this PC when all ChatGPT sessions have been idle for at least 30 seconds? All running programs will be closed without saving. The setting automatically switches OFF before shutdown.";
+        : "Force shutdown this PC when all ChatGPT and native T3 threads have been idle for at least 5 minutes? All running programs will be closed without saving. The setting automatically switches OFF before shutdown.";
       const approved = await (
         readLocalApi()?.dialogs.confirm(warning, { variant: "destructive" }) ??
         Promise.resolve(window.confirm(warning))
@@ -2660,7 +2660,7 @@ export function ChatGPTBrowserSidebarEntry({
                     checked={caffyOverview?.shutdownWhenIdle ?? false}
                     disabled={viewPolicyBusy || !caffyOverview}
                     aria-label="Turn PC off when idle"
-                    title="Force shutdown Windows after 30 seconds without working ChatGPT sessions or pending automatic work. Error sessions count as idle. Disarms before shutdown."
+                    title="Force shutdown Windows after 5 minutes without working ChatGPT or native T3 threads or pending automatic work. Error sessions count as idle. Disarms before shutdown."
                     onCheckedChange={(checked) => void updateViewCaffyPolicy({ shutdownWhenIdle: checked })}
                   >
                     Turn PC off when idle

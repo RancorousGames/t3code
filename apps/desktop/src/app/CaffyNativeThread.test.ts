@@ -10,7 +10,7 @@ const ENV = "native-environment";
 const THREAD = "thread:mcp:luna-low-fixture";
 const OWNER = `t3:${ENV}:${THREAD}`;
 
-function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean }) {
+function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean; unavailableInventory?: boolean }) {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-native-caffy-"));
   const sent: string[] = [];
   const seen = new Set<string>();
@@ -28,7 +28,8 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean }) {
   }) => {
     const base = { version: 1, requestId: input.requestId };
     if (input.type === "t3.threads") {
-      if (input.action === "list")
+      if (input.action === "list") {
+        if (options?.unavailableInventory) return { ...base, ok: false, code: "renderer-unavailable", message: "Offline" };
         return {
           ...base,
           ok: true,
@@ -37,6 +38,7 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean }) {
             threads: options?.missingThread ? [] : [{ id: THREAD, status }],
           },
         };
+      }
       if (options?.missingThread || input.threadId !== THREAD || input.environmentId !== ENV)
         return { ...base, ok: false, code: "invalid-request", message: "Unknown native thread." };
       if (input.action === "read")
@@ -75,7 +77,7 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean }) {
     resumeAllowed: () => {},
     retireRecipient: () => 0,
   } as unknown as ConstructorParameters<typeof CaffyScheduler>[1];
-  const open = () =>
+  const open = (shutdownPC: () => void = () => { throw new Error("Native Caffy test must not shut down the PC."); }) =>
     new CaffyScheduler(
       directory,
       deliveries,
@@ -84,9 +86,7 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean }) {
         start: () => 1,
         stop: () => {},
       },
-      () => {
-        throw new Error("Native Caffy test must not shut down the PC.");
-      },
+      shutdownPC,
     );
   const complete = () => {
     status = "idle";
@@ -105,6 +105,7 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean }) {
   return {
     open,
     complete,
+    setStatus: (next: string) => { status = next; },
     poll,
     until,
     sent,
@@ -118,6 +119,43 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean }) {
 }
 
 describe("Caffy native T3 thread lifecycle (GPT-6 Luna low target)", () => {
+  it("does not shut down with active native threads or an unavailable native inventory", async () => {
+    for (const unavailableInventory of [false, true]) {
+      const f = fixture({ unavailableInventory });
+      let shutdowns = 0;
+      const c = f.open(() => { shutdowns++; });
+      const internal = c as unknown as {
+        checkShutdown: () => Promise<void>;
+        shutdownIdleSince: number | null;
+        nativeCapacityCache: unknown;
+      };
+      try {
+        c.reportWorkingSnapshot([], "sidebar");
+        c.setTaskReservations([], true);
+        c.policy({ shutdownWhenIdle: true });
+        c.start();
+        f.setStatus("running");
+        await internal.checkShutdown();
+        expect(shutdowns).toBe(0);
+        expect(internal.shutdownIdleSince).toBeNull();
+        internal.shutdownIdleSince = Date.now() - 6 * 60_000;
+        internal.nativeCapacityCache = null;
+        await internal.checkShutdown();
+        expect(shutdowns).toBe(0);
+        expect(internal.shutdownIdleSince).toBeNull();
+        if (!unavailableInventory) {
+          f.setStatus("idle");
+          internal.nativeCapacityCache = null;
+          await internal.checkShutdown();
+          expect(internal.shutdownIdleSince).not.toBeNull();
+          internal.shutdownIdleSince = Date.now() - 6 * 60_000;
+          internal.nativeCapacityCache = null;
+          await internal.checkShutdown();
+          expect(shutdowns).toBe(1);
+        }
+      } finally { c.close(); f.dispose(); }
+    }
+  });
   it("resumes the exact thread, waits for native run completion, and respects pause/resume", async () => {
     const f = fixture();
     const c = f.open();
