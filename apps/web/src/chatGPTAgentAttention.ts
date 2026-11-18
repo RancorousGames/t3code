@@ -74,14 +74,19 @@ export function changeAttention(id: string, status: AgentAttention["status"], ne
 
 
 /** A verified work/error -> idle transition activates the waiting requests for this session. */
-export function activateAgentAttention(sessionIds: readonly string[]): string[] {
+export function activateAgentAttention(
+  sessionIds: readonly string[],
+  source?: "manual" | "agent",
+): string[] {
   const ids = new Set(sessionIds);
   const items = loadAgentAttention();
-  const activated = items.filter((item) => ids.has(item.sessionId) && item.status === "waiting")
-    .map((item) => item.id);
+  const eligible = (item: AgentAttention) => ids.has(item.sessionId) &&
+    item.status === "waiting" && (source === undefined || (
+      source === "manual" ? item.source === "manual" : item.source !== "manual"));
+  const activated = items.filter(eligible).map((item) => item.id);
   if (activated.length === 0) return [];
   const activatedAt = Date.now();
-  save(items.map((item) => ids.has(item.sessionId) && item.status === "waiting"
+  save(items.map((item) => eligible(item)
     ? { ...item, status: "pending" as const, activatedAt, nextAt: activatedAt } : item));
   return activated;
 }
@@ -215,6 +220,51 @@ export function reactivatePersistentManualAttention(
   }
 }
 
+/** Snooze the full queue of currently actionable alerts in one durable update.
+ * Requests which have not fired yet, or are already snoozed until later, are
+ * never included; only the queue the user can see is affected. */
+export function snoozeActionableAttentionQueue(
+  until: number,
+  availableSessionIds?: ReadonlySet<string>,
+  now = Date.now(),
+): AgentAttention[] {
+  if (!Number.isFinite(until) || until <= now) return [];
+  const items = loadAgentAttention();
+  const targeted = activeAgentAttentionStack(items, availableSessionIds, now);
+  if (!targeted.length) return [];
+  const ids = new Set(targeted.map((item) => item.id));
+  save(items.map((item) => ids.has(item.id)
+    ? { ...item, status: "snoozed" as const, nextAt: until } : item));
+  return targeted;
+}
+
+/** Resolve only successfully dismissed entries, atomically. A failed agent
+ * handoff retains its pending alert instead of silently losing the request. */
+export function resolveAttentionQueueEntries(ids: readonly string[]): AgentAttention[] {
+  const targets = new Set(ids);
+  const items = loadAgentAttention();
+  const changed = items.filter((item) => targets.has(item.id) &&
+    (item.status === "pending" || item.status === "snoozed"));
+  if (!changed.length) return [];
+  const now = Date.now();
+  save(items.map((item) => targets.has(item.id) &&
+    (item.status === "pending" || item.status === "snoozed")
+    ? { ...item, status: "dismissed" as const, nextAt: 0, resolvedAt: now } : item));
+  return changed;
+}
+
+/** A temporarily snoozed manual notification suppresses the yellow marker
+ * until the snooze expires; the persistent Ctrl+D flag itself stays enabled. */
+export function isManualAttentionTemporarilySnoozed(
+  sessionIds: readonly string[],
+  items: readonly AgentAttention[],
+  now = Date.now(),
+): boolean {
+  const ids = new Set(sessionIds);
+  return items.some((item) => ids.has(item.sessionId) &&
+    item.source === "manual" && item.status === "snoozed" && item.nextAt > now);
+}
+
 /** One shared, newest-first notification stack for the toast and Ctrl+S.
  * Resolved, waiting, and not-yet-due snoozed entries do not occupy the stack. */
 export function activeAgentAttentionStack(
@@ -257,7 +307,9 @@ export function priorityChatGPTAttentionTarget(
   items: readonly AgentAttention[],
   now = Date.now(),
 ): { sessionId: string; reason: "ready" | "request"; requestId?: string } | undefined {
-  const ids = new Set(sessions.flatMap((session) => [
+  const eligibleSessions = sessions.filter((session) =>
+    (session.snoozedUntil ?? 0) <= now);
+  const ids = new Set(eligibleSessions.flatMap((session) => [
     session.id,
     ...(session.bootstrapIdentity?.publicId ? [session.bootstrapIdentity.publicId] : []),
   ]));
@@ -265,11 +317,15 @@ export function priorityChatGPTAttentionTarget(
   const requestsFor = (session: (typeof sessions)[number]) => pending.filter((item) =>
     item.sessionId === session.id || item.sessionId === session.bootstrapIdentity?.publicId);
   for (const verification of [false, true]) {
-    const group = sessions.filter((session) =>
+    const group = eligibleSessions.filter((session) =>
       Boolean(session.verificationPending) === verification);
     const ready = group.filter((session) =>
       session.returnMarker === "ready" && !session.hidden &&
-      !session.working && (session.snoozedUntil ?? 0) <= now)
+      !session.working &&
+      !isManualAttentionTemporarilySnoozed([
+        session.id,
+        ...(session.bootstrapIdentity?.publicId ? [session.bootstrapIdentity.publicId] : []),
+      ], items, now))
       .sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0));
     if (ready.length) {
       const session = ready[0]!;

@@ -12,6 +12,8 @@ import {
   snoozePersistentManualAttention,
 } from "./chatGPTAgentAttention";
 import { readChatGPTProviderActivity } from "./chatGPTProviderActivity";
+import { deferredCaffyAttention, isCaffyIdleContinuationActive } from "./chatGPTCaffyAttentionPolicy";
+import { readVerifiedT3CaffyOverview } from "./hooks/useT3CaffyOverview";
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
 import { setLocalStorageItem } from "./hooks/useLocalStorage";
 
@@ -55,6 +57,10 @@ export function watchPersistentChatGPTSessionSnoozes(environmentId: EnvironmentI
     const current = store.getState().sessions;
     const expired = current.filter((session) => persistentAttentionSnoozeDue(session, now));
     if (expired.length > 0) {
+      const caffy = readVerifiedT3CaffyOverview();
+      const continuingIds = new Set(expired
+        .filter((session) => isCaffyIdleContinuationActive(caffy, session, now))
+        .map((session) => session.id));
       const due = new Set(expired.map((session) => session.id));
       const next = current.map((session) => due.has(session.id)
         ? {
@@ -62,7 +68,8 @@ export function watchPersistentChatGPTSessionSnoozes(environmentId: EnvironmentI
             snoozedUntil: undefined,
             snoozedAt: undefined,
             quickSnoozeStep: undefined,
-            returnMarker: readChatGPTProviderActivity(environmentId, session.id) === "working"
+            returnMarker: continuingIds.has(session.id) ||
+              readChatGPTProviderActivity(environmentId, session.id) === "working"
               ? "working" as const : "ready" as const,
           }
         : session);
@@ -72,10 +79,16 @@ export function watchPersistentChatGPTSessionSnoozes(environmentId: EnvironmentI
       store.setState({ sessions: next });
       for (const session of expired) {
         const ids = sessionAttentionIds(session);
-        if (readChatGPTProviderActivity(environmentId, session.id) === "working")
+        if (continuingIds.has(session.id)) {
+          // The snooze expired, but Caffy still owns the next continuation.
+          // Do not turn yellow or announce the manual request until it stops.
+          deferredCaffyAttention.defer(environmentId, session.id);
           deferPersistentManualAttention(ids);
-        else
+        } else if (readChatGPTProviderActivity(environmentId, session.id) === "working") {
+          deferPersistentManualAttention(ids);
+        } else {
           reactivatePersistentManualAttention(ids, session.title);
+        }
       }
     }
 

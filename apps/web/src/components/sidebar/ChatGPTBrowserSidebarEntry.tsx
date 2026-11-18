@@ -71,7 +71,8 @@ import {
   withTaskBoardPermanentProjects,
 } from "../../chatGPTSessionGrouping";
 import { useChatGPTSessionSortPreference } from "../../chatGPTSessionSortPreference";
-import { useAttentionPrioritySessionIds } from "../../chatGPTAttentionPriority";
+import { useAttentionPrioritySessionIds, useSnoozedManualAttentionSessionIds } from "../../chatGPTAttentionPriority";
+import { isCaffyIdleContinuationActive } from "../../chatGPTCaffyAttentionPolicy";
 import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountRequest";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { registerCommands, registerMenuAction } from "../../shortcuts/dispatcher";
@@ -535,6 +536,7 @@ export function ChatGPTBrowserSidebarEntry({
     pruneExpiredHidden,
   } = useChatGPTBrowserSessions(environmentId);
   const attentionPriorityIds = useAttentionPrioritySessionIds(sessions);
+  const snoozedManualAttentionIds = useSnoozedManualAttentionSessionIds(sessions);
   // Fresh OpenRig ledgers outrank history, including a complete empty set after
   // revocation. Offline fallback requires exact seat, generation and conversation.
   const managerIds = useMemo(() => {
@@ -3307,6 +3309,8 @@ export function ChatGPTBrowserSidebarEntry({
                               // only while genuinely working or still snoozed.
                               const idleAttentionReady = session.returnMarker === "ready" &&
                                 !isSnoozed(session) &&
+                                !snoozedManualAttentionIds.has(session.id) &&
+                                !isCaffyIdleContinuationActive(caffyOverview, session, clockNow) &&
                                 activities[session.id]?.age !== "working";
                               const attentionMarked = attentionPriorityIds.has(session.id);
                               return (

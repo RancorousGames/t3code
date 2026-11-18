@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { activateAgentAttention, activeAgentAttentionStack, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, nextRecentAgentAttentionSessionId, openAgentAttention, openAgentAttentionRequest, recentAgentAttentionSessionIds, rearmManualAgentAttention, requestAgentAttention, priorityChatGPTAttentionTarget } from "./chatGPTAgentAttention";
+import { activateAgentAttention, activeAgentAttentionStack, cancelManualAgentAttention, changeAttention, latestAgentAttention, loadAgentAttention, nextRecentAgentAttentionSessionId, openAgentAttention, openAgentAttentionRequest, recentAgentAttentionSessionIds, rearmManualAgentAttention, requestAgentAttention, priorityChatGPTAttentionTarget, snoozeActionableAttentionQueue, resolveAttentionQueueEntries } from "./chatGPTAgentAttention";
 
 const saved = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -281,6 +281,65 @@ describe("Ctrl+S attention target", () => {
       loadAgentAttention(), ids, [], new Set(), undefined,
       new Set(["verification"]),
     )).toBe("normal");
+  });
+
+  it("lets an agent's explicit request through during Caffy while holding persistent Ctrl+D", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    requestAgentAttention("manual", "owner", "Ctrl+D", "manual");
+    requestAgentAttention("agent", "owner", "Need a decision", "agent");
+    expect(activateAgentAttention(["owner"], "agent")).toEqual(["agent"]);
+    expect(loadAgentAttention().find((item) => item.id === "manual")?.status).toBe("waiting");
+    expect(loadAgentAttention().find((item) => item.id === "agent")?.status).toBe("pending");
+    expect(activateAgentAttention(["owner"], "manual")).toEqual(["manual"]);
+  });
+
+  it("snoozes the complete actionable queue, leaving future/untriggered requests untouched", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    requestAgentAttention("manual", "one", "Manual", "manual");
+    requestAgentAttention("agent", "two", "Agent", "agent");
+    requestAgentAttention("future", "three", "Future");
+    activateAgentAttention(["one", "two"]);
+    const result = snoozeActionableAttentionQueue(11_000, new Set(["one", "two", "three"]));
+    expect(result.map((item) => item.id)).toEqual(["manual", "agent"]);
+    expect(loadAgentAttention().find((item) => item.id === "manual"))
+      .toMatchObject({ status: "snoozed", nextAt: 11_000 });
+    expect(loadAgentAttention().find((item) => item.id === "agent"))
+      .toMatchObject({ status: "snoozed", nextAt: 11_000 });
+    expect(loadAgentAttention().find((item) => item.id === "future")?.status).toBe("waiting");
+    expect(latestAgentAttention()).toBeUndefined();
+  });
+
+  it("dismisses a successful subset atomically without losing failed agent requests", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    requestAgentAttention("manual", "one", "Manual", "manual");
+    requestAgentAttention("agent", "two", "Agent", "agent");
+    activateAgentAttention(["one", "two"]);
+    const changed = resolveAttentionQueueEntries(["manual"]);
+    expect(changed.map((item) => item.id)).toEqual(["manual"]);
+    expect(loadAgentAttention().find((item) => item.id === "manual")?.status).toBe("dismissed");
+    expect(loadAgentAttention().find((item) => item.id === "agent")?.status).toBe("pending");
+  });
+
+  it("does not route Ctrl+S to a snoozed session despite a pending alert", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    requestAgentAttention("snoozed", "snoozed-session", "Question");
+    requestAgentAttention("awake", "awake-session", "Question");
+    activateAgentAttention(["snoozed-session", "awake-session"]);
+    const target = priorityChatGPTAttentionTarget([
+      { id: "snoozed-session", snoozedUntil: 10_000 },
+      { id: "awake-session" },
+    ], loadAgentAttention(), 1000);
+    expect(target).toMatchObject({ sessionId: "awake-session" });
+  });
+
+  it("does not route Ctrl+S to a yellow marker while its notice is snoozed", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    requestAgentAttention("manual", "yellow", "Manual", "manual");
+    activateAgentAttention(["yellow"]);
+    changeAttention("manual", "snoozed", 11_000);
+    expect(priorityChatGPTAttentionTarget([
+      { id: "yellow", returnMarker: "ready" },
+    ], loadAgentAttention(), 1000)).toBeUndefined();
   });
 
   it("turning Ctrl+D off does not cancel an agent's pending attention", () => {

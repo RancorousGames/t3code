@@ -1015,6 +1015,9 @@ export function DesktopAppActivationCoordinator() {
               if (!(await queueAgentAttentionDismissal(environmentId, attention)))
                 throw new Error("Could not queue durable agent notification; request remains active.");
               changeAttention(attention.id,"dismissed");
+              if (attention.source === "manual")
+                rearmPersistentSessionAttention(environmentId, browserSession,
+                  readChatGPTProviderActivity(environmentId, browserSession.id));
             }
             return {version:1,requestId:request.requestId,ok:true,
               data:{state:"Delivered",applied:command,requestId:attention.id}};

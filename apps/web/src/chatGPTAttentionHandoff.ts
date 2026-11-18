@@ -4,10 +4,13 @@ import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import type { AgentAttention } from "./chatGPTAgentAttention";
 
-/** Shared desktop/phone dismissal gate: only a durable one-off agent receipt resolves GMA. */
+/** Only agent-initiated transient requests need a durable handoff.
+ * Persistent Ctrl+D reminders are local UI state; sending an agent a dismissal
+ * message for one would be incorrect and can interrupt ongoing work. */
 export async function queueAgentAttentionDismissal(
   environmentId: string, attention: AgentAttention,
 ): Promise<boolean> {
+  if (attention.source === "manual") return true;
   const session = readChatGPTBrowserSessions(environmentId as Parameters<typeof readChatGPTBrowserSessions>[0])
     .find((entry) => entry.id === attention.sessionId ||
       entry.bootstrapIdentity?.publicId === attention.sessionId);

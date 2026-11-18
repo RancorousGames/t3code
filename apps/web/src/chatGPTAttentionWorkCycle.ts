@@ -1,4 +1,5 @@
 import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity";
+import { deferredCaffyAttention } from "./chatGPTCaffyAttentionPolicy";
 
 /** A recovery is attention-worthy only when it belongs to work the user
  * has not visited or acknowledged since that work began. */
@@ -37,5 +38,8 @@ export function markChatGPTAttentionVisited(
   sessionId: string,
   activity: ChatGPTActivityState,
 ): void {
-  if (activity !== "working") unvisitedWork.delete(key(environmentId, sessionId));
+  if (activity !== "working") {
+    unvisitedWork.delete(key(environmentId, sessionId));
+    deferredCaffyAttention.clear(environmentId, sessionId);
+  }
 }

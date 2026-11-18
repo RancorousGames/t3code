@@ -7,6 +7,8 @@ import { acknowledgeChatGPTSessionAttention, rearmPersistentSessionAttention } f
 import { markChatGPTAttentionVisited } from "../chatGPTAttentionWorkCycle";
 import { readChatGPTSessionTimeline } from "../chatGPTSessionTimestamps";
 import { readChatGPTProviderActivity } from "../chatGPTProviderActivity";
+import { isCaffyIdleContinuationActive } from "../chatGPTCaffyAttentionPolicy";
+import { readVerifiedT3CaffyOverview } from "../hooks/useT3CaffyOverview";
 import {
   requestAgentAttention,
   cancelManualAgentAttention,
@@ -29,7 +31,7 @@ export function ChatGPTNewSessionShortcut() {
   const environmentId = usePrimaryEnvironmentId();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const lastRecentAttentionTarget = useRef<string | null>(null);
-  const { createSession, toggleSessionReturnMarker, setSessionHidden, setSessionSnooze } = useChatGPTBrowserSessions(environmentId);
+  const { createSession, toggleSessionReturnMarker, setSessionHidden } = useChatGPTBrowserSessions(environmentId);
 
   const createNewSession = useEffectEvent(() => {
     if (!isElectron || !environmentId) return;
@@ -73,7 +75,11 @@ export function ChatGPTNewSessionShortcut() {
   const openLastAttentionSession = useEffectEvent(() => {
     if (!isElectron || !environmentId || isCommandPaletteOpen()) return;
     const sessions = readChatGPTBrowserSessions(environmentId);
-    const availableIds = new Set(sessions.flatMap((entry) => [
+    const now = Date.now();
+    // Ctrl+S is navigation, never an implicit unsnooze action. Exclude
+    // sleeping sessions from active alerts AND historical fallback.
+    const awake = sessions.filter((entry) => (entry.snoozedUntil ?? 0) <= now);
+    const availableIds = new Set(awake.flatMap((entry) => [
       entry.id,
       ...(entry.bootstrapIdentity?.publicId ? [entry.bootstrapIdentity.publicId] : []),
     ]));
@@ -81,14 +87,16 @@ export function ChatGPTNewSessionShortcut() {
     // Persistent yellow markers are authoritative even if their one-shot
     // notification is missing. Non-verification attention takes precedence
     // over Verification and historical receipts.
-    const target = priorityChatGPTAttentionTarget(sessions.map((entry) => ({
+    const caffy = readVerifiedT3CaffyOverview();
+    const target = priorityChatGPTAttentionTarget(awake.map((entry) => ({
       id: entry.id,
       bootstrapIdentity: entry.bootstrapIdentity,
       verificationPending: entry.verificationPending,
       returnMarker: entry.returnMarker,
       hidden: entry.hidden,
       snoozedUntil: entry.snoozedUntil,
-      working: readChatGPTProviderActivity(environmentId, entry.id) === "working",
+      working: readChatGPTProviderActivity(environmentId, entry.id) === "working" ||
+        isCaffyIdleContinuationActive(caffy, entry, now),
       lastActiveAt: readChatGPTSessionTimeline(environmentId, entry).lastActiveAt,
     })), requests);
     if (target) {
@@ -110,7 +118,6 @@ export function ChatGPTNewSessionShortcut() {
       }
       lastRecentAttentionTarget.current = null;
       setSessionHidden(session.id, false);
-      setSessionSnooze([session.id], null);
       void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: session.id } });
       return;
     }
@@ -146,7 +153,6 @@ export function ChatGPTNewSessionShortcut() {
     }
     lastRecentAttentionTarget.current = nextId ?? null;
     setSessionHidden(session.id, false);
-    setSessionSnooze([session.id], null);
     void navigate({ to: "/browser/$browserSessionId", params: { browserSessionId: session.id } });
   });
 

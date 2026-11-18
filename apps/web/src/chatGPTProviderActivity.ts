@@ -1,9 +1,11 @@
 import type { ChatGPTActivityState } from "./components/sidebar/chatGPTActivity";
 import { advanceChatGPTReturnMarker, clearChatGPTSessionVerificationOnWorking, updateChatGPTReturnMarker } from "./chatGPTBrowserSessions";
 import { activateAgentAttention } from "./chatGPTAgentAttention";
-import { acknowledgeChatGPTSessionAttention } from "./chatGPTPersistentAttention";
+import { acknowledgeChatGPTSessionAttention, rearmPersistentSessionAttention } from "./chatGPTPersistentAttention";
 import { markChatGPTAttentionVisited, observeChatGPTAttentionCompletion } from "./chatGPTAttentionWorkCycle";
 import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
+import { deferredCaffyAttention, isCaffyIdleContinuationActive } from "./chatGPTCaffyAttentionPolicy";
+import { readVerifiedT3CaffyOverview } from "./hooks/useT3CaffyOverview";
 import { observeSpawnAutoCloseActivity } from "./chatGPTSpawnAutoClose";
 
 type Observation = { activity: ChatGPTActivityState; observedAt: number };
@@ -27,43 +29,83 @@ export function recordChatGPTProviderActivity(
   if (activity === "unknown") return;
   if (activity === "working") clearChatGPTSessionVerificationOnWorking(environmentId, sessionId);
   const session = getChatGPTSessionPersistedStore(environmentId).getState().sessions.find(
-    (entry) => entry.id === sessionId && entry.autoClose === true,
+    (entry) => entry.id === sessionId,
   );
-  if (session) observeSpawnAutoCloseActivity(environmentId, session, activity);
+  if (session?.autoClose === true) observeSpawnAutoCloseActivity(environmentId, session, activity);
   const identity = key(environmentId, sessionId);
   const previous = observations.get(identity);
   observations.set(identity, { activity, observedAt: Date.now() });
   const completed = observeChatGPTAttentionCompletion(
     environmentId, sessionId, previous?.activity, activity);
-  if (activity === "working" || completed) {
-    updateChatGPTReturnMarker(environmentId, sessionId, (marker) => {
-      if (!marker) return undefined;
-      // Preserve the Ctrl+D rule: armed while idle waits for NEW work.
-      // A previously observed working marker still becomes ready through errors.
-      return advanceChatGPTReturnMarker(marker, activity === "working" ? "working" : "idle");
-    });
-    if (completed) {
-      const entry = getChatGPTSessionPersistedStore(environmentId).getState().sessions.find(
-        (session) => session.id === sessionId);
-      const ids = [sessionId, ...(entry?.bootstrapIdentity?.publicId
-        ? [entry.bootstrapIdentity.publicId] : [])];
-      // An agent's one-time attention request is independent of Ctrl+D.
-      // It must activate even when the user never armed a return marker.
-      const newlyActivated = activateAgentAttention(ids);
-      if (entry && isSelectedChatGPTAttentionSession(sessionId, window.location.hash)) {
-        // Auto-acknowledge only requests activated by this transition.
-        // Existing stack entries must not disappear when a selected page
-        // finishes another response.
-        for (const requestId of newlyActivated)
-          acknowledgeChatGPTSessionAttention(environmentId, entry, activity, requestId);
-        // Already selected means the output is visible, even if there was no
-        // new request to acknowledge. Do not re-alert on a later error->idle.
-        markChatGPTAttentionVisited(environmentId, sessionId, activity);
+  const continuation = session ? isCaffyIdleContinuationActive(
+    readVerifiedT3CaffyOverview(), session, Date.now()) : false;
+  if (activity === "working") {
+    updateChatGPTReturnMarker(environmentId, sessionId, (marker) =>
+      marker ? advanceChatGPTReturnMarker(marker, "working") : undefined);
+  }
+  if (completed) {
+    const ids = [sessionId, ...(session?.bootstrapIdentity?.publicId
+      ? [session.bootstrapIdentity.publicId] : [])];
+    const deferPersistent = continuation && Boolean(session?.returnMarker);
+    if (deferPersistent) {
+      // Caffy will continue this work, so its temporary idle state is not a
+      // genuine reason to call the user back.
+      deferredCaffyAttention.defer(environmentId, sessionId);
+    } else {
+      deferredCaffyAttention.clear(environmentId, sessionId);
+      updateChatGPTReturnMarker(environmentId, sessionId, (marker) =>
+        marker ? advanceChatGPTReturnMarker(marker, "idle") : undefined);
+    }
+    // An explicit agent request is independent of the persistent Ctrl+D flag.
+    const newlyActivated = activateAgentAttention(ids, deferPersistent ? "agent" : undefined);
+    if (session && isSelectedChatGPTAttentionSession(sessionId, window.location.hash)) {
+      for (const requestId of newlyActivated)
+        acknowledgeChatGPTSessionAttention(environmentId, session, activity, requestId);
+      // The visible answer is already handled, even when the request stack
+      // contained no manual record. Re-arm persistent Ctrl+D for the next
+      // actual turn instead of leaving a stale yellow marker behind.
+      if (session.returnMarker)
+        rearmPersistentSessionAttention(environmentId, session, activity);
+      markChatGPTAttentionVisited(environmentId, sessionId, activity);
+    }
+  }
+  if (activity === "idle" && !continuation) flushDeferredCaffyAttention(environmentId);
+  if (previous?.activity !== activity)
+    window.dispatchEvent(new CustomEvent("t3:agent-provider-refresh"));
+}
+
+/** Check deferred idle completions when Caffy is disabled, paused or expires.
+ * Called both by live activity observations and the desktop toast's periodic
+ * refresh, so an unloaded session can become yellow without a new message. */
+export function flushDeferredCaffyAttention(environmentId: string): void {
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  for (const sessionId of deferredCaffyAttention.sessions(environmentId)) {
+    const session = store.getState().sessions.find((entry) => entry.id === sessionId);
+    if (!session?.returnMarker) {
+      deferredCaffyAttention.clear(environmentId, sessionId);
+      continue;
+    }
+    const continuing = isCaffyIdleContinuationActive(
+      readVerifiedT3CaffyOverview(), session);
+    const observed = observations.get(key(environmentId, sessionId))?.activity ?? "unknown";
+    if (!deferredCaffyAttention.takeIfReady(environmentId, sessionId, continuing, observed))
+      continue;
+    updateChatGPTReturnMarker(environmentId, sessionId, (marker) =>
+      marker ? advanceChatGPTReturnMarker(marker, "idle") : undefined);
+    const ids = [sessionId, ...(session.bootstrapIdentity?.publicId
+      ? [session.bootstrapIdentity.publicId] : [])];
+    const activated = activateAgentAttention(ids, "manual");
+    if (isSelectedChatGPTAttentionSession(sessionId, window.location.hash)) {
+      const current = store.getState().sessions.find((entry) => entry.id === sessionId);
+      if (current) {
+        for (const requestId of activated)
+          acknowledgeChatGPTSessionAttention(environmentId, current, observed, requestId);
+        if (current.returnMarker)
+          rearmPersistentSessionAttention(environmentId, current, observed);
+        markChatGPTAttentionVisited(environmentId, sessionId, observed);
       }
     }
   }
-  if (previous?.activity !== activity)
-    window.dispatchEvent(new CustomEvent("t3:agent-provider-refresh"));
 }
 
 export function readChatGPTProviderActivity(
