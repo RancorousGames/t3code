@@ -1,43 +1,49 @@
-/** Change one existing ChatGPT conversation's GPT-6 effort through its mounted picker. */
+/** Set an existing ChatGPT conversation's effort through its mounted React model handler. */
 export function chatGPTEffortExpression(level) {
-  const index = { instant: 0, medium: 1, high: 2 }[level];
-  if (index === undefined) throw new Error('Effort must be instant, medium or high.');
+  const targets = {
+    instant: { slug: "gpt-6", thinkingEffort: undefined, uiEffort: "none" },
+    medium: { slug: "gpt-6-thinking", thinkingEffort: "standard", uiEffort: "medium" },
+    high: { slug: "gpt-6-thinking", thinkingEffort: "extended", uiEffort: "high" },
+  };
+  if (!Object.hasOwn(targets, level)) throw new Error("Effort must be instant, medium or high.");
+  const target = targets[level];
   return `(async () => {
-    const picker = document.querySelector('button[aria-label="Select ChatGPT model"]');
-    if (!picker || !/6\\s+(?:Instant|Medium|High)\\b/.test(picker.textContent ?? ''))
+    const button = document.querySelector('button[aria-label="Select ChatGPT model"]');
+    if (!button || !/6\\s+(?:Instant|Medium|High)\\b/.test(button.textContent ?? ''))
       return { error: 'GPT-6 reasoning picker unavailable.' };
-    const before = /6\\s+(Instant|Medium|High)\\b/.exec(picker.textContent ?? '')?.[1]?.toLowerCase();
-    if (before === ${JSON.stringify(level)}) return { level: before, changed: false };
-    const present = () => [...document.querySelectorAll('[role="slider"][aria-valuemin="0"][aria-valuemax="2"]')]
-      .find(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
-    let slider = present();
-    const opened = !slider;
-    if (opened) picker.click();
-    for (let i = 0; !slider && i < 5; i++) {
-      await new Promise(resolve => setTimeout(resolve, 20));
-      slider = present();
+    const before = button.getAttribute('data-selected-reasoning-effort');
+    let fiber = button[Object.keys(button).find(key => key.startsWith('__reactFiber$'))];
+    let changeModel;
+    let previousModel;
+    for (let i = 0; fiber && i < 90; i++, fiber = fiber.return) {
+      const props = fiber.memoizedProps;
+      if (typeof props?.onModelChange === 'function' && props.selectedModel?.versionId === '6') {
+        changeModel = props.onModelChange;
+        previousModel = props.selectedModel;
+        break;
+      }
     }
-    if (!slider) return { error: 'Reasoning slider did not appear.' };
-    const root = slider.parentElement?.parentElement;
-    if (!root) return { error: 'Reasoning slider structure changed.' };
-    const rect = root.getBoundingClientRect();
-    const x = rect.left + 14 + (rect.width - 28) * (${index} / 2);
-    const pointer = (type, buttons) => new PointerEvent(type, {
-      bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse',
-      isPrimary: true, button: 0, buttons, clientX: x, clientY: rect.top + rect.height / 2,
-    });
-    root.dispatchEvent(pointer('pointerdown', 1));
-    root.dispatchEvent(pointer('pointerup', 0));
-    let current = -1;
-    for (let i = 0; i < 6; i++) {
-      await new Promise(resolve => setTimeout(resolve, 20));
-      current = Number(present()?.getAttribute('aria-valuenow'));
-      if (current === ${index}) break;
+    if (!changeModel) return { error: 'ChatGPT model selection handler unavailable.' };
+    const target = ${JSON.stringify({slug:target.slug,thinkingEffort:target.thinkingEffort})};
+    const expectedUiEffort = ${JSON.stringify(target.uiEffort)};
+    const targetModel = { ...previousModel, slug: target.slug, thinkingEffort: target.thinkingEffort };
+    if (before !== expectedUiEffort) {
+      if (changeModel(targetModel) !== true)
+        return { error: 'ChatGPT rejected model selection.' };
     }
-    if (opened) picker.click();
-    const selected = /6\\s+(Instant|Medium|High)\\b/.exec(picker.textContent ?? '')?.[1]?.toLowerCase();
-    return selected === ${JSON.stringify(level)} && current === ${index}
-      ? { level: selected, changed: true }
-      : { error: 'Effort did not update.', selected, sliderValue: current };
+    // Escape dismisses an already-open Radix picker; there is no confirm button.
+    if (document.querySelector('[role="slider"][aria-valuemax="2"]'))
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', code: 'Escape', bubbles: true, cancelable: true,
+      }));
+    for (let i = 0; i < 8; i++) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      if (button.getAttribute('data-selected-reasoning-effort') === expectedUiEffort &&
+          !document.querySelector('[role="slider"][aria-valuemax="2"]'))
+        return { level: ${JSON.stringify(level)}, changed: before !== expectedUiEffort, dialogClosed: true };
+    }
+    return { error: 'Effort was not confirmed or dialog remains open.',
+      selected: button.getAttribute('data-selected-reasoning-effort'),
+      dialogOpen: !!document.querySelector('[role="slider"][aria-valuemax="2"]') };
   })()`;
 }
