@@ -200,6 +200,9 @@ export async function controlSessions(
     throw new Error("experimental_evaluate requires a 1..8000 character JS expression. An expectedConversationId is optional only for verified backend-created fresh chats.");
   if (input.expression !== undefined && input.action !== "experimental_evaluate")
     throw new Error("expression is valid only for experimental_evaluate.");
+  if (input.allowComposerDraft !== undefined &&
+      (input.action !== "experimental_evaluate" || typeof input.allowComposerDraft !== "boolean"))
+    throw new Error("allowComposerDraft is a boolean valid only for experimental_evaluate.");
   if (
     ![
       "list",
@@ -389,7 +392,8 @@ export async function controlSessions(
       ? {taskBoardPath: input.taskBoardPath, taskId: input.taskId,
         ...(input.action === "task_agent_action" ? {taskCommand:input.taskCommand,
           taskOptionsJson:input.taskOptionsJson} : {})} : {}),
-    ...(input.action === "experimental_evaluate" ? { expression: input.expression } : {}),
+    ...(input.action === "experimental_evaluate"
+      ? { expression: input.expression, allowComposerDraft: input.allowComposerDraft === true } : {}),
     ...(["bootstrap_title", "bootstrap_discover"].includes(input.action) ? { proposedTitle: input.proposedTitle } : {}),
     ...(input.action === "bootstrap_discover" && input.conversationUrl ? { conversationUrl: input.conversationUrl } : {}),
     ...(["request_attention", "attention_status"].includes(input.action)

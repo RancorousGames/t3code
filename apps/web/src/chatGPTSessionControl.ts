@@ -761,6 +761,7 @@ export async function runChatGPTSessionControl(input: {
   state?: "hidden" | "unhidden" | "closed" | undefined;
   sessionId?: string | undefined;
   expression?: string | undefined;
+  allowComposerDraft?: boolean | undefined;
   from?: "start" | "end" | undefined;
   count?: number | undefined;
   maxMessageChars?: number | undefined;
@@ -885,6 +886,7 @@ export async function runChatGPTSessionControl(input: {
         expectedId ?? null,
         input.expression,
         newBackendChat,
+        input.allowComposerDraft === true,
       );
       const result = await inspectPersistentChatGPTPage(environmentId, entry.id, expression);
       const after = (await bridge({ operation: "snapshot", identity })) as { url?: string };
@@ -922,6 +924,7 @@ export async function runChatGPTSessionControl(input: {
       expectedId ?? null,
       input.expression,
       newBackendChat,
+      input.allowComposerDraft === true,
     );
     const result = await chatGPTWebviewAutomation.evaluate(guest.runtimeId, { expression });
     if (guestFor(environmentId, entry.id).webview !== originalWebview)

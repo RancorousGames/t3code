@@ -3,14 +3,14 @@ import { JSDOM } from "jsdom";
 import { allowsChatGPTExperimentalNewChat, buildChatGPTExperimentalExpression } from "./chatGPTExperimentalEvaluate.ts";
 
 const id = "6ae38246-bc20-83eb-9790-b06fe02eab1b";
-async function evaluate(url, draft, expression = "({ mode: 'read_only_probe' })", backend = false) {
+async function evaluate(url, draft, expression = "({ mode: 'read_only_probe' })", backend = false, allowDraft = false) {
   const page = new JSDOM('<textarea id="prompt-textarea"></textarea>', {
     url,
     runScripts: "outside-only",
   });
   page.window.document.querySelector("textarea").value = draft;
   try {
-    return await page.window.eval(buildChatGPTExperimentalExpression(backend ? null : id, expression, backend));
+    return await page.window.eval(buildChatGPTExperimentalExpression(backend ? null : id, expression, backend, allowDraft));
   } finally {
     page.window.close();
   }
@@ -33,6 +33,17 @@ test("rejects a nonempty unsent draft", async () => {
   const result = await evaluate(`https://chatgpt.com/c/${id}`, "Unsent message");
   expect(result.reason).toBe("Composer has an unsent draft.");
 });
+test("image injection can evaluate without consuming an existing draft", async () => {
+  const result = await evaluate(
+    `https://chatgpt.com/c/${id}`,
+    "Human draft stays here",
+    '({ draft: document.querySelector("#prompt-textarea").value })',
+    false,
+    true,
+  );
+  expect(result).toEqual({ ok: true, value: { draft: "Human draft stays here" } });
+});
+
 test("rejects invalid experiment parameters", () => {
   expect(() => buildChatGPTExperimentalExpression(id, "")).toThrow();
   expect(() => buildChatGPTExperimentalExpression(id, "x".repeat(8001))).toThrow();

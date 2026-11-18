@@ -99,7 +99,7 @@ async function guardedEval(control, id, sessionId, expressionText) {
   if (expressionText.length > 8000) throw new Error("Guest expression exceeds 8000 characters.");
   const result = await control({
     action: "experimental_evaluate", sessionId, expectedConversationId: id,
-    expression: expressionText,
+    expression: expressionText, allowComposerDraft: true,
   });
   if (result?.result?.ok !== true)
     throw new Error("Guest evaluation failed: " + JSON.stringify(result?.result ?? result));
@@ -127,7 +127,6 @@ function imagePreflight(id) {
     const editor=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
     if(!editor)return {ok:false,reason:"composer_missing"};
     const draft=editor instanceof HTMLTextAreaElement?editor.value:editor.innerText||editor.textContent||"";
-    if(draft.trim())return {ok:false,reason:"draft_present"};
     if(window.__t3ChatGPTImageSend?.phase&&!["submitted","finished"].includes(window.__t3ChatGPTImageSend.phase))
       return {ok:false,reason:"another_image_send_active"};
     const stop=document.querySelector('[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"]');
@@ -145,13 +144,13 @@ function imagePreflight(id) {
     document.head.appendChild(style);
     const state={
       id:${JSON.stringify(id)},chunks:[],phase:"transfer",findProps,
-      style,uploadId:null,
+      originalDraft:draft,style,uploadId:null,
     };
     state.dismissOwnAttachment=()=>{
       const p=state.findProps();
       const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
       const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
-      if(!state.uploadId||draft.trim()||p?.isSubmitting||p?.isWaitingForFileUploads
+      if(!state.uploadId||draft!==state.originalDraft||p?.isSubmitting||p?.isWaitingForFileUploads
           ||p?.attachments?.length!==1||p.attachments[0].uploadId!==state.uploadId)
         return false;
       p.onAttachmentRemove(state.uploadId,"user");
@@ -182,7 +181,7 @@ function attachmentStatus(id) {
     const attachments=Array.isArray(p.attachments)?p.attachments:[];
     const attachment=attachments.length===1?attachments[0]:null;
     if(attachment?.uploadId)s.uploadId=attachment.uploadId;
-    return {ok:true,draft:!!draft.trim(),uploads:document.querySelectorAll('[aria-label^="Uploading "]').length,
+    return {ok:true,draftChanged:draft!==s.originalDraft,uploads:document.querySelectorAll('[aria-label^="Uploading "]').length,
       attachments:attachments.length,attachmentStatus:attachment?.status||null,
       ready:attachment?.status==="ready"&&!!attachment.id&&!!attachment.uploadId,
       pending:!!p.isWaitingForFileUploads,submitting:!!p.isSubmitting};
@@ -199,12 +198,13 @@ function sendExpression(id, message, conversationId) {
         ||p.attachments[0]?.status!=="ready"||!p.attachments[0]?.id||!p.attachments[0]?.uploadId)
       return {ok:false,reason:"attachment_not_ready"};
     const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
-    if((e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"").trim())
+    if((e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"")!==s.originalDraft)
       return {ok:false,reason:"draft_changed"};
     s.phase="submitted";
     s.submitOutcome="pending";
     try{
-      const result=p.onSubmit(${JSON.stringify(message)},performance.now(),{preserveDraft:false},true);
+      // The injected user turn is independent of text the human is composing.
+      const result=p.onSubmit(${JSON.stringify(message)},performance.now(),{preserveDraft:true},true);
       const settled=(value)=>{s.submitOutcome=value===false?"rejected":value===true?"accepted":"completed";};
       if(result?.then)Promise.resolve(result).then(settled,error=>{
         s.submitOutcome="rejected";s.submitError=String(error).slice(0,160);
@@ -279,7 +279,7 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       throw new Error("The image requestId already belongs to a different send.");
     // A crashed sender can leave a reserved/uploading receipt before calling
     // onSubmit. Only the exact same requestId may resume, and only after the
-    // live composer preflight below proves no attachment/draft remains.
+    // live composer preflight below proves no staged attachment remains.
     if (source.sendAttempted || !["reserved", "uploading"].includes(source.status))
       return { ...previous, reconciled: true };
   }
@@ -353,7 +353,7 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     let ready = false;
     for (let i = 0; i < 110; i++) {
       const s = await experiment(attachmentStatus(requestId));
-      if (!s?.ok || s.draft || s.submitting || s.attachments > 1)
+      if (!s?.ok || s.draftChanged || s.submitting || s.attachments > 1)
         throw new Error("Attachment became unsafe: " + JSON.stringify(s));
       // A preview can exist long before its upload finishes. Submitting then
       // may silently return false and leave an orphaned image in the composer.

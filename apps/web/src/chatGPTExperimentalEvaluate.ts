@@ -35,6 +35,7 @@ export function buildChatGPTExperimentalExpression(
   conversationId: string | null,
   expression: string,
   allowBackendNewChat = false,
+  allowComposerDraft = false,
 ): string {
   const newBackendChat = conversationId === null && allowBackendNewChat;
   if (!newBackendChat &&
@@ -56,7 +57,10 @@ export function buildChatGPTExperimentalExpression(
     if (!editor) return { ok: false, reason: 'ChatGPT composer is not mounted.' };
     const draft = editor instanceof HTMLTextAreaElement
       ? editor.value : (editor.innerText || editor.textContent || '');
-    if (draft.trim()) return { ok: false, reason: 'Composer has an unsent draft.' };
+    // An image sender can submit its own message with preserveDraft=true;
+    // the human's existing text is not part of that user turn.
+    if (draft.trim() && !${JSON.stringify(allowComposerDraft)})
+      return { ok: false, reason: 'Composer has an unsent draft.' };
     const stop = document.querySelector(
       '[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"]'
     );

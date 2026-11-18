@@ -1530,6 +1530,7 @@ export function DesktopAppActivationCoordinator() {
             sessionId: resolvedSessionId,
             marker: request.marker,
             expression: request.expression,
+            allowComposerDraft: request.allowComposerDraft,
             from: request.from,
             count: request.count,
             maxMessageChars: request.maxMessageChars,
