@@ -10,7 +10,11 @@ const ENV = "native-environment";
 const THREAD = "thread:mcp:luna-low-fixture";
 const OWNER = `t3:${ENV}:${THREAD}`;
 
-function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean; unavailableInventory?: boolean }) {
+function fixture(options?: {
+  lostSendAck?: boolean;
+  missingThread?: boolean;
+  unavailableInventory?: boolean;
+}) {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-native-caffy-"));
   const sent: string[] = [];
   const seen = new Set<string>();
@@ -29,7 +33,8 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean; una
     const base = { version: 1, requestId: input.requestId };
     if (input.type === "t3.threads") {
       if (input.action === "list") {
-        if (options?.unavailableInventory) return { ...base, ok: false, code: "renderer-unavailable", message: "Offline" };
+        if (options?.unavailableInventory)
+          return { ...base, ok: false, code: "renderer-unavailable", message: "Offline" };
         return {
           ...base,
           ok: true,
@@ -77,7 +82,11 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean; una
     resumeAllowed: () => {},
     retireRecipient: () => 0,
   } as unknown as ConstructorParameters<typeof CaffyScheduler>[1];
-  const open = (shutdownPC: () => void = () => { throw new Error("Native Caffy test must not shut down the PC."); }) =>
+  const open = (
+    shutdownPC: () => void = () => {
+      throw new Error("Native Caffy test must not shut down the PC.");
+    },
+  ) =>
     new CaffyScheduler(
       directory,
       deliveries,
@@ -105,7 +114,9 @@ function fixture(options?: { lostSendAck?: boolean; missingThread?: boolean; una
   return {
     open,
     complete,
-    setStatus: (next: string) => { status = next; },
+    setStatus: (next: string) => {
+      status = next;
+    },
     poll,
     until,
     sent,
@@ -123,7 +134,9 @@ describe("Caffy native T3 thread lifecycle (GPT-6 Luna low target)", () => {
     for (const unavailableInventory of [false, true]) {
       const f = fixture({ unavailableInventory });
       let shutdowns = 0;
-      const c = f.open(() => { shutdowns++; });
+      const c = f.open(() => {
+        shutdowns++;
+      });
       const internal = c as unknown as {
         checkShutdown: () => Promise<void>;
         shutdownIdleSince: number | null;
@@ -153,7 +166,10 @@ describe("Caffy native T3 thread lifecycle (GPT-6 Luna low target)", () => {
           await internal.checkShutdown();
           expect(shutdowns).toBe(1);
         }
-      } finally { c.close(); f.dispose(); }
+      } finally {
+        c.close();
+        f.dispose();
+      }
     }
   });
   it("resumes the exact thread, waits for native run completion, and respects pause/resume", async () => {
@@ -222,6 +238,53 @@ describe("Caffy native T3 thread lifecycle (GPT-6 Luna low target)", () => {
         pendingMessageId: null,
         deliveryStatus: "delivered",
       });
+    } finally {
+      c.close();
+      f.dispose();
+    }
+  });
+
+  it("edits a native schedule without retaining stale prompts or duration", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      const at = Date.now() + 60 * 60_000;
+      await c.set({
+        targetKind: "t3",
+        environmentId: ENV,
+        sessionId: THREAD,
+        conversationId: "",
+        mode: "periodic",
+        intervalMinutes: 20,
+        beginAt: at,
+        durationMinutes: 60,
+        repeatPrompt: "old recurring message",
+        delayedPrompt: "old scheduled message",
+      });
+      expect(c.status(OWNER)).toMatchObject({
+        mode: "periodic",
+        repeatPrompt: "old recurring message",
+        delayedPrompt: "old scheduled message",
+      });
+      const updated = await c.set({
+        targetKind: "t3",
+        environmentId: ENV,
+        sessionId: THREAD,
+        conversationId: "",
+        mode: "periodic",
+        intervalMinutes: 20,
+        beginAt: at,
+        durationMinutes: 120,
+        repeatPrompt: "",
+      });
+      expect(updated.repeatPrompt).toBeNull();
+      expect(updated.delayedPrompt).toBeNull();
+      expect(updated.expiresAt! - at).toBe(120 * 60_000);
+      c.startup(OWNER, true);
+      expect(c.status(OWNER)).toMatchObject({ startup: true });
+      c.startup(OWNER, false);
+      expect(c.status(OWNER)).toMatchObject({ startup: false });
+      expect(f.sent).toHaveLength(0);
     } finally {
       c.close();
       f.dispose();

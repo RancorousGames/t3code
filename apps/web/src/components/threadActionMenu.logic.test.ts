@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildThreadActionMenuItems, type ThreadActionMenuState } from "./threadActionMenu.logic";
+import { buildChatGPTSessionContextMenu } from "../chatGPTSessionContextMenu";
 
 const baseState: ThreadActionMenuState = {
   canOperate: true,
@@ -65,23 +66,61 @@ describe("buildThreadActionMenuItems", () => {
     },
   );
 
-  it("shows native Caffy setup and lifecycle controls only when supported and permitted", () => {
-    const setup = buildThreadActionMenuItems({ ...baseState, caffy: null })
-      .find(item => item.id === "caffy:keep-running");
-    expect(setup?.children?.map(child => child.id)).toContain("caffy:begin:15");
-    expect(setup?.children?.map(child => child.id)).toContain("caffy:interval:20");
-    const running = buildThreadActionMenuItems({
-      ...baseState, caffy: { mode: "idle", paused: true, intervalMinutes: 20 },
-    }).find(item => item.id === "caffy:keep-running");
-    expect(running?.children?.map(child => child.id)).toContain("caffy:resume");
-    expect(running?.children?.map(child => child.id)).toContain("caffy:stop");
+  it("uses the ChatGPT Caffy menu options and the same live scheduler state", () => {
+    const setup = buildThreadActionMenuItems({ ...baseState, caffy: null });
+    expect(setup.filter((item) => item.id.startsWith("schedule:")).map((item) => item.id)).toEqual([
+      "schedule:resume",
+      "schedule:prompt",
+    ]);
+    expect(setup.find((item) => item.id === "caffy")?.children?.map((item) => item.id)).toEqual([
+      "caffy:auto",
+      "caffy:pause",
+      "caffy:startup",
+      "caffy:stop",
+    ]);
+
+    const liveCaffy = {
+      mode: "periodic" as const,
+      paused: true,
+      startup: true,
+      onceOnly: false,
+      intervalMinutes: 20,
+      createdAt: 1000,
+      expiresAt: null,
+    };
+    const running = buildThreadActionMenuItems({ ...baseState, caffy: liveCaffy });
+    const chatgpt = buildChatGPTSessionContextMenu({
+      session: { id: "same", title: "Same" },
+      sessions: [],
+      projects: [],
+      managerIds: new Set<string>(),
+      snoozePresets: [],
+      now: Date.now(),
+      working: false,
+      hasTask: false,
+      caffy: liveCaffy,
+    });
+    const sharedIds = ["schedule:resume", "schedule:prompt", "caffy"];
+    expect(running.filter((item) => sharedIds.includes(item.id))).toEqual(
+      chatgpt.filter((item) => sharedIds.includes(item.id)),
+    );
+    expect(running.find((item) => item.id === "caffy")?.children).toEqual(
+      chatgpt.find((item) => item.id === "caffy")?.children,
+    );
+
     const denied = buildThreadActionMenuItems({
-      ...baseState, canOperate: false, caffy: null,
-    }).find(item => item.id === "caffy:keep-running");
-    expect(denied?.disabled).toBe(true);
-    expect(denied?.children?.every(child => child.disabled)).toBe(true);
-    expect(buildThreadActionMenuItems(baseState).some(item =>
-      item.id === "caffy:keep-running")).toBe(false);
+      ...baseState,
+      canOperate: false,
+      caffy: null,
+    });
+    expect(
+      denied
+        .filter((item) => sharedIds.includes(item.id))
+        .every(
+          (item) => item.disabled && (item.children?.every((child) => child.disabled) ?? true),
+        ),
+    ).toBe(true);
+    expect(buildThreadActionMenuItems(baseState).some((item) => item.id === "caffy")).toBe(false);
   });
 
   it("disables archive and turning into a project while the thread is running", () => {

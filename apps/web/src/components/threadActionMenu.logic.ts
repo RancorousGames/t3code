@@ -1,19 +1,14 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
+import {
+  buildCaffyContextMenuItems,
+  type CaffyMenuAction,
+  type CaffyMenuStatus,
+} from "../caffyContextMenu";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
   | "find"
-  | "caffy:keep-running"
-  | "caffy:interval:5"
-  | "caffy:interval:20"
-  | "caffy:interval:60"
-  | "caffy:once"
-  | "caffy:begin:15"
-  | "caffy:begin:60"
-  | "caffy:pause"
-  | "caffy:resume"
-  | "caffy:wake"
-  | "caffy:stop"
+  | CaffyMenuAction
   | "new-thread-on-branch"
   | "filter-by-project"
   | "turn-into-project"
@@ -81,7 +76,7 @@ export function buildDraftActionMenuItems(options: {
 export interface ThreadActionMenuState {
   readonly canOperate: boolean;
   /** Native T3 thread Caffy; null when not configured, undefined when desktop Caffy is absent. */
-  readonly caffy?: { readonly mode: "idle" | "periodic" | "startup"; readonly paused: boolean; readonly intervalMinutes: number } | null;
+  readonly caffy?: CaffyMenuStatus | null;
   readonly canFind?: boolean;
   readonly branch: string | null;
   readonly projectFilter: {
@@ -130,32 +125,9 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   const items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
-    ...(state.caffy !== undefined ? [{
-      id: "caffy:keep-running" as const,
-      label: state.caffy === null ? "Caffy auto-continue" :
-        `Caffy · ${state.caffy.mode === "idle" ? "Keep running" :
-          state.caffy.mode === "periodic" ? `Every ${state.caffy.intervalMinutes}m` : "Startup"}${state.caffy.paused ? " (paused)" : ""}`,
-      icon: "clock" as const,
-      children: [
-        { id: "caffy:keep-running" as const, label: "Keep running on idle",
-          checked: state.caffy?.mode === "idle" && !state.caffy.paused },
-        { id: "caffy:interval:5" as const, label: "Every 5 minutes",
-          checked: state.caffy?.mode === "periodic" && state.caffy.intervalMinutes === 5 },
-        { id: "caffy:interval:20" as const, label: "Every 20 minutes",
-          checked: state.caffy?.mode === "periodic" && state.caffy.intervalMinutes === 20 },
-        { id: "caffy:interval:60" as const, label: "Every 60 minutes",
-          checked: state.caffy?.mode === "periodic" && state.caffy.intervalMinutes === 60 },
-        { id: "caffy:once" as const, label: "Continue once now" },
-        { id: "caffy:begin:15" as const, label: "Continue once in 15 minutes" },
-        { id: "caffy:begin:60" as const, label: "Continue once in 1 hour" },
-        ...(state.caffy ? [
-          { id: "caffy:wake" as const, label: "Run now", separatorBefore: true },
-          { id: (state.caffy.paused ? "caffy:resume" : "caffy:pause") as "caffy:resume" | "caffy:pause",
-            label: state.caffy.paused ? "Resume Caffy" : "Pause Caffy" },
-          { id: "caffy:stop" as const, label: "Stop Caffy" },
-        ] : []),
-      ],
-    }] : []),
+    ...(state.caffy !== undefined
+      ? buildCaffyContextMenuItems({ caffy: state.caffy, now: Date.now() })
+      : []),
     ...(state.canFind
       ? [{ id: "find" as const, label: "Find in thread", icon: "text-search" }]
       : []),

@@ -1,4 +1,5 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
+import { buildCaffyContextMenuItems } from "./caffyContextMenu";
 /** Structural session data shared by T3 and independent embedded apps. */
 export interface ChatGPTContextMenuSession {
   id: string;
@@ -12,10 +13,12 @@ export interface ChatGPTContextMenuSession {
   project?: string | undefined;
   markedAsWorkerAt?: number | undefined;
   humanControlled?: boolean | undefined;
-  binding?: {
-    role: "manager" | "worker" | "personal";
-    taskRef?: { board: string; id: string } | null | undefined;
-  } | undefined;
+  binding?:
+    | {
+        role: "manager" | "worker" | "personal";
+        taskRef?: { board: string; id: string } | null | undefined;
+      }
+    | undefined;
   spawnRequestId?: string | undefined;
   creationOrigin?: "manual" | "backend" | undefined;
 }
@@ -32,7 +35,9 @@ export function resolveCaffyBeginAt(preset: string, now = new Date()): number | 
   const durations: Record<string, number> = { "30": 30, "60": 60, "120": 120, "240": 240 };
   if (durations[preset]) return now.getTime() + durations[preset] * 60_000;
   const hours: Record<string, number> = {
-    "tomorrow-morning": 9, "tomorrow-afternoon": 13, "tomorrow-evening": 18,
+    "tomorrow-morning": 9,
+    "tomorrow-afternoon": 13,
+    "tomorrow-evening": 18,
   };
   if (hours[preset] !== undefined) {
     const tomorrow = new Date(now);
@@ -61,25 +66,25 @@ export function buildChatGPTSessionContextMenu(input: {
   hasConversationUrl?: boolean;
   /** Older OmniHub-owned monitors are separate from T3 Caffy state. */
   legacyCaffyIds?: readonly string[];
-  caffy?: { mode: "idle" | "periodic" | "startup"; startup: boolean;
-    onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
-    intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null;
-    delayedPrompt?: string | null; repeatPrompt?: string | null } | null;
+  caffy?: {
+    mode: "idle" | "periodic" | "startup";
+    startup: boolean;
+    onceOnly: boolean;
+    paused: boolean;
+    createdAt: number;
+    expiresAt: number | null;
+    intervalMinutes: number;
+    beginAt?: number | null;
+    autoRebootMinutes?: number | null;
+    delayedPrompt?: string | null;
+    repeatPrompt?: string | null;
+  } | null;
 }): MenuItem[] {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
   const activeCaffy = input.caffy;
   const exhausted = !!session.conversationFullId;
   const legacyIds = input.legacyCaffyIds ?? [];
-  // One-click "continue once" owns a one-shot Caffy monitor. Do not silently
-  // replace another ongoing, interval, or custom-prompt schedule.
-  const quickResumeScheduled = Boolean(activeCaffy &&
-    activeCaffy.mode === "idle" && activeCaffy.onceOnly && !activeCaffy.paused &&
-    !activeCaffy.beginAt && !activeCaffy.repeatPrompt && !activeCaffy.delayedPrompt);
-  const wakeMode = !activeCaffy && legacyIds.length > 0 ? "Legacy OmniHub active" :
-    activeCaffy?.mode === "idle" ? (activeCaffy.onceOnly ? "Continue once" : "Keep running") :
-    activeCaffy?.mode === "periodic" ? "Interval wake" :
-    activeCaffy?.mode === "startup" ? "Startup only" : null;
 
   const snoozed = (session.snoozedUntil ?? 0) > now;
   const ancestors = new Set([session.id]);
@@ -169,37 +174,11 @@ export function buildChatGPTSessionContextMenu(input: {
             ],
           }),
         ]),
-    item("schedule:resume", "Continue once when idle", {
-      separatorBefore: true,
-      checked: quickResumeScheduled,
-      disabled: exhausted || Boolean(activeCaffy && !quickResumeScheduled),
-    }),
-    item("schedule:prompt", "Schedule prompt…", { disabled: exhausted }),
-    item("caffy", exhausted ? "Caffy · conversation full (reboot)" : wakeMode
-      ? `Caffy · ${wakeMode}${activeCaffy?.beginAt && activeCaffy.beginAt > now ? " (scheduled)" : ""}${activeCaffy?.paused ? " (paused)" : ""}`
-      : "Caffy", {
-      children: [
-        item("caffy:auto", "Auto-continue…", {
-          disabled: exhausted,
-          checked: Boolean(activeCaffy && activeCaffy.mode !== "startup" && !activeCaffy.onceOnly),
-        }),
-
-
-        item("caffy:pause", activeCaffy?.paused ? "Resume Caffy" : "Pause Caffy", { disabled: exhausted || !activeCaffy, separatorBefore: true }),
-        item("caffy:startup", "Resume when T3 starts", {
-          disabled: exhausted,
-          checked: input.caffy?.startup ?? false,
-          separatorBefore: true,
-        }),
-        item("caffy:stop", !activeCaffy && legacyIds.length > 0 ? "Stop legacy Caffy" : "Stop Caffy", {
-          disabled: !activeCaffy && legacyIds.length === 0,
-          separatorBefore: true,
-          ...(legacyIds.length > 1 && !activeCaffy ? {
-            children: legacyIds.map((id, index) =>
-              item(`caffy:stop-legacy:${id}`, `Legacy monitor ${index + 1}`)),
-          } : {}),
-        }),
-      ],
+    ...buildCaffyContextMenuItems({
+      caffy: activeCaffy ?? null,
+      now,
+      exhausted,
+      legacyCaffyIds: legacyIds,
     }),
     item("highlight", "Highlight", {
       children: [

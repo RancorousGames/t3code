@@ -867,10 +867,16 @@ export class CaffyScheduler {
         (input.delayedPrompt !== undefined || input.repeatPrompt !== undefined))
       throw new Error("A native wake is pending; wait for its exact message receipt first.");
     const now = Date.now();
+    const priorDuration = prior?.expiresAt == null ? null :
+      Math.max(1, Math.round((prior.expiresAt - (prior.beginAt ?? prior.createdAt)) / 60_000));
     const same = !!prior && prior.mode === input.mode &&
+      prior.startup === (input.mode === "startup" || input.startup === true) &&
       prior.respectSlots === (input.respectSlots ?? prior.respectSlots) &&
       prior.intervalMinutes === intervalMinutes && prior.onceOnly === (input.onceOnly ?? false) &&
+      priorDuration === (input.durationMinutes ?? null) &&
       (input.repeatPrompt === undefined || prior.repeatPrompt === (input.repeatPrompt.trim() || null)) &&
+      (input.repeatPrompt === undefined || input.delayedPrompt !== undefined || prior.delayedPrompt === null) &&
+      (input.delayedPrompt === undefined || prior.delayedPrompt === input.delayedPrompt) &&
       (input.beginAt === undefined || prior.beginAt === input.beginAt);
     if (same) {
       const wasPaused = prior.paused;
@@ -904,8 +910,13 @@ export class CaffyScheduler {
       nativeLastRunOrdinal: Math.max(prior?.nativeLastRunOrdinal ?? 0, native.latestRun?.ordinal ?? 0),
       nativeLastSendAttemptAt: prior?.nativeLastSendAttemptAt ?? null,
       lastIdleSequence: 0, lastWakeAt: prior?.lastWakeAt ?? null,
-      lastError: null, repeatPrompt: input.repeatPrompt?.trim() || prior?.repeatPrompt || null,
-      delayedPrompt: input.delayedPrompt ?? prior?.delayedPrompt ?? null,
+      // The shared schedule editor can clear the previous prompt: an empty
+      // string must not resurrect the old value on a native thread.
+      lastError: null,
+      repeatPrompt: input.repeatPrompt === undefined
+        ? (prior?.repeatPrompt ?? null) : (input.repeatPrompt.trim() || null),
+      delayedPrompt: input.delayedPrompt !== undefined ? input.delayedPrompt :
+        input.repeatPrompt !== undefined ? null : (prior?.delayedPrompt ?? null),
     };
     this.entries.set(id, row);
     this.save();
@@ -1117,7 +1128,7 @@ export class CaffyScheduler {
     // A fresh manual Caffy setup supersedes any earlier "agent stopped" marker.
     for (const [key, mark] of this.agentStops) {
       if ([mark.sessionId, mark.browserSessionId, mark.publicSessionId].some(id =>
-          id === input.sessionId || id === canonicalId || id === identity?.id))
+          id === input.sessionId || id === canonicalId))
         this.agentStops.delete(key);
     }
     if ((input.delayedPrompt || input.repeatPrompt !== undefined) && prior?.pendingMessageId)

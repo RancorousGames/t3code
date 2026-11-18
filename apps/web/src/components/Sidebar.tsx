@@ -107,7 +107,13 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
-import { readVerifiedT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "../hooks/useT3CaffyOverview";
+import { T3_CAFFY_UPDATED_EVENT } from "../hooks/useT3CaffyOverview";
+import type { CaffyMenuStatus } from "../caffyContextMenu";
+import {
+  ChatGPTCaffyScheduleDialog,
+  type AutoContinueConfig,
+  type CaffyScheduleRequest,
+} from "./sidebar/ChatGPTAutoContinueDialog";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import {
   pickableProjectGroups,
@@ -921,6 +927,13 @@ function readRouteThreadKey(router: AnyRouter): string | null {
 }
 
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
+  const [nativeCaffySchedule, setNativeCaffySchedule] = useState<{
+    threadRef: ScopedThreadRef;
+    title: string;
+    intent: "once" | "recurring";
+    config: AutoContinueConfig | null;
+    beginAt?: number;
+  } | null>(null);
   const {
     projects,
     serverConfigs,
@@ -2603,8 +2616,40 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const thread = threadByKeyRef.current.get(threadKey);
         if (!thread) return;
         const nativeCaffyId = `t3:${threadRef.environmentId}:${threadRef.threadId}`;
-        const nativeCaffy = readVerifiedT3CaffyOverview()?.entries.find(entry =>
-          entry.sessionId === nativeCaffyId);
+        // Always query the T3 desktop scheduler, as ChatGPT sessions do: a
+        // cached sidebar overview could show a different state after a recent edit.
+        const caffyControl = window.desktopBridge?.caffyControl;
+        let nativeCaffy: (AutoContinueConfig & CaffyMenuStatus) | null = null;
+        if (caffyControl) {
+          try {
+            const status = await caffyControl({ action: "status", sessionId: nativeCaffyId });
+            if (status !== null && status !== undefined) {
+              if (
+                !status ||
+                typeof status !== "object" ||
+                !("mode" in status) ||
+                !["idle", "periodic", "startup"].includes(String(status.mode)) ||
+                !("startup" in status) ||
+                typeof status.startup !== "boolean" ||
+                !("paused" in status) ||
+                typeof status.paused !== "boolean" ||
+                !("onceOnly" in status) ||
+                typeof status.onceOnly !== "boolean"
+              )
+                throw new Error("Caffy returned an unrecognized native schedule.");
+              nativeCaffy = status as AutoContinueConfig & CaffyMenuStatus;
+            }
+          } catch (error) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Cannot read Caffy",
+                description: error instanceof Error ? error.message : String(error),
+              }),
+            );
+            return;
+          }
+        }
         const threadWorkspacePath =
           thread.worktreePath ??
           projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
@@ -2633,10 +2678,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
-              ...(window.desktopBridge?.caffyControl ? {
-                caffy: nativeCaffy ? { mode: nativeCaffy.mode, paused: nativeCaffy.paused,
-                  intervalMinutes: nativeCaffy.intervalMinutes } : null,
-              } : {}),
+              ...(caffyControl ? { caffy: nativeCaffy } : {}),
               canOperate: readEnvironmentScope(
                 threadRef.environmentId,
                 AuthOrchestrationOperateScope,
@@ -2689,45 +2731,89 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           return;
         }
         switch (clicked.value) {
-          case "caffy:keep-running":
-          case "caffy:interval:5":
-          case "caffy:interval:20":
-          case "caffy:interval:60":
-          case "caffy:once":
-          case "caffy:begin:15":
-          case "caffy:begin:60":
+          case "schedule:prompt":
+          case "caffy:auto": {
+            setNativeCaffySchedule({
+              threadRef,
+              title: thread.title,
+              intent: clicked.value === "caffy:auto" ? "recurring" : "once",
+              config: clicked.value === "caffy:auto" ? nativeCaffy : null,
+              ...(clicked.value === "schedule:prompt" ? { beginAt: Date.now() } : {}),
+            });
+            return;
+          }
+          case "schedule:resume":
           case "caffy:pause":
-          case "caffy:resume":
-          case "caffy:wake":
+          case "caffy:startup":
           case "caffy:stop": {
-            const caffyControl = window.desktopBridge?.caffyControl;
             if (!caffyControl) return;
             try {
-              const action = clicked.value;
-              const response = await caffyControl(action === "caffy:pause" ?
-                { action: "pause", sessionId: nativeCaffyId } :
-                action === "caffy:resume" ? { action: "resume", sessionId: nativeCaffyId } :
-                action === "caffy:stop" ? { action: "stop", sessionId: nativeCaffyId, stopInitiator: "user" } :
-                action === "caffy:wake" ? { action: "wake", sessionId: nativeCaffyId } : {
-                  action: "set", targetKind: "t3", environmentId: threadRef.environmentId,
+              if (clicked.value === "schedule:resume") {
+                if (nativeCaffy) {
+                  const alreadyScheduled =
+                    nativeCaffy.mode === "idle" &&
+                    nativeCaffy.onceOnly &&
+                    !nativeCaffy.paused &&
+                    !nativeCaffy.beginAt &&
+                    !nativeCaffy.repeatPrompt &&
+                    !nativeCaffy.delayedPrompt;
+                  if (!alreadyScheduled)
+                    throw new Error("Caffy already has a schedule. Edit its schedule first.");
+                  return;
+                }
+                await caffyControl({
+                  action: "set",
+                  targetKind: "t3",
+                  environmentId: threadRef.environmentId,
                   sessionId: threadRef.threadId,
-                  mode: action.startsWith("caffy:interval:") ? "periodic" : "idle",
-                  intervalMinutes: action.startsWith("caffy:interval:") ?
-                    Number(action.slice("caffy:interval:".length)) : 20,
-                  onceOnly: action === "caffy:once" || action.startsWith("caffy:begin:"),
-                  wakeNow: action === "caffy:once",
-                  ...(action.startsWith("caffy:begin:") ? {
-                    beginAt: Date.now() + Number(action.slice("caffy:begin:".length)) * 60_000,
-                    keepAwake: false,
-                  } : {}),
+                  mode: "idle",
+                  onceOnly: true,
+                  keepAwake: false,
+                  startup: false,
+                  respectSlots: false,
+                  repeatPrompt: "",
                 });
-              if (response && typeof response === "object" && "ok" in response && response.ok === false)
-                throw new Error("message" in response && typeof response.message === "string"
-                  ? response.message : "Caffy request was refused.");
+              } else if (clicked.value === "caffy:pause") {
+                if (!nativeCaffy) throw new Error("No active Caffy schedule.");
+                await caffyControl({
+                  action: nativeCaffy.paused ? "resume" : "pause",
+                  sessionId: nativeCaffyId,
+                });
+              } else if (clicked.value === "caffy:startup") {
+                if (nativeCaffy) {
+                  await caffyControl({
+                    action: "startup",
+                    sessionId: nativeCaffyId,
+                    startup: !nativeCaffy.startup,
+                  });
+                } else {
+                  await caffyControl({
+                    action: "set",
+                    targetKind: "t3",
+                    environmentId: threadRef.environmentId,
+                    sessionId: threadRef.threadId,
+                    mode: "startup",
+                    startup: true,
+                    keepAwake: true,
+                  });
+                }
+              } else {
+                if (!nativeCaffy) throw new Error("No active Caffy schedule.");
+                await caffyControl({
+                  action: "stop",
+                  sessionId: nativeCaffyId,
+                  stopInitiator: "user",
+                });
+              }
               window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
             } catch (error) {
-              toastManager.add(stackedThreadToast({ type: "error", title: "Caffy update failed",
-                description: error instanceof Error ? error.message : String(error) }));
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Caffy update failed",
+                  description: error instanceof Error ? error.message : String(error),
+                }),
+              );
             }
             return;
           }
@@ -2930,9 +3016,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             if (result._tag === "Success" && nativeCaffy) {
               try {
                 await window.desktopBridge?.caffyControl?.({
-                  action: "retire", sessionId: nativeCaffyId, lifecycleReason: "closed",
+                  action: "retire",
+                  sessionId: nativeCaffyId,
+                  lifecycleReason: "closed",
                 });
-              } catch { /* The deleted thread is already terminal; scheduler will retain diagnostics. */ }
+              } catch {
+                /* The deleted thread is already terminal; scheduler will retain diagnostics. */
+              }
               window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
             }
             return;
@@ -3285,12 +3375,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   ...group.memberProjects.map((project) => project.title),
                 ])}
               />
-            ) : <ChatGPTRegistryRemoteSidebarEntry />}
+            ) : (
+              <ChatGPTRegistryRemoteSidebarEntry />
+            )}
           </TooltipProvider>
           <OpenRigAgentsSidebarEntry />
           {isElectron && (
-            <div role="separator" aria-label="OpenRig agents / T3 threads divider"
-              className="mx-2 my-1 h-px bg-sidebar-border/70" />
+            <div
+              role="separator"
+              aria-label="OpenRig agents / T3 threads divider"
+              className="mx-2 my-1 h-px bg-sidebar-border/70"
+            />
           )}
           {isElectron && (
             <div
@@ -3737,6 +3832,54 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ) : null}
         </SidebarGroup>
       </SidebarContent>
+      {nativeCaffySchedule && (
+        <ChatGPTCaffyScheduleDialog
+          key={`${nativeCaffySchedule.threadRef.environmentId}:${nativeCaffySchedule.threadRef.threadId}:${nativeCaffySchedule.intent}`}
+          target={{
+            kind: "session",
+            sessionId: `t3:${nativeCaffySchedule.threadRef.environmentId}:${nativeCaffySchedule.threadRef.threadId}`,
+            title: nativeCaffySchedule.title,
+            intent: nativeCaffySchedule.intent,
+            config: nativeCaffySchedule.config,
+            ...(nativeCaffySchedule.beginAt !== undefined
+              ? { beginAt: nativeCaffySchedule.beginAt }
+              : {}),
+            legacyMonitors: [],
+          }}
+          jobs={[]}
+          allowAutoReboot={false}
+          close={() => setNativeCaffySchedule(null)}
+          cancelJob={async () => {
+            throw new Error("Native thread schedules have no session-spawn job.");
+          }}
+          submit={async (input: CaffyScheduleRequest) => {
+            const control = window.desktopBridge?.caffyControl;
+            if (!control) throw new Error("T3 Caffy scheduler is unavailable.");
+            const target = nativeCaffySchedule.threadRef;
+            const onceOnly = input.frequency === "once";
+            await control({
+              action: "set",
+              targetKind: "t3",
+              environmentId: target.environmentId,
+              sessionId: target.threadId,
+              mode: input.frequency === "periodic" ? "periodic" : "idle",
+              respectSlots: input.respectSlots,
+              onceOnly,
+              intervalMinutes: input.intervalMinutes,
+              keepAwake: input.frequency === "idle" && !onceOnly,
+              startup: false,
+              beginAt: input.beginAt,
+              wakeNow: input.start === "now",
+              repeatPrompt: input.prompt,
+              ...(input.durationMinutes !== undefined
+                ? { durationMinutes: input.durationMinutes }
+                : {}),
+            });
+            window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+            setNativeCaffySchedule(null);
+          }}
+        />
+      )}
       <SidebarChromeFooter />
     </>
   );

@@ -67,6 +67,7 @@ export function ChatGPTCaffyScheduleDialog({
   submit,
   cancelJob,
   cancelLegacy,
+  allowAutoReboot = true,
 }: {
   target: CaffyScheduleTarget;
   jobs: readonly ScheduledChatGPTJob[];
@@ -74,6 +75,8 @@ export function ChatGPTCaffyScheduleDialog({
   submit: (input: CaffyScheduleRequest) => Promise<void>;
   cancelJob: (id: string) => Promise<void>;
   cancelLegacy?: (id: string, targetId: string) => Promise<void>;
+  /** Native threads retain their context and do not use ChatGPT conversation reboot. */
+  allowAutoReboot?: boolean;
 }) {
   const isSession = target.kind === "session";
   const config = isSession ? target.config : null;
@@ -186,8 +189,11 @@ export function ChatGPTCaffyScheduleDialog({
         ? Math.round(Number(customHours) * 60)
         : Number(duration);
   const rebootMinutes =
-    rebootRule === "time" && recurring ? Number(rebootEvery) * unitMinutes[rebootEveryUnit] : null;
-  const rebootRuns = rebootRule === "runs" && recurring ? Number(rebootEvery) : null;
+    allowAutoReboot && rebootRule === "time" && recurring
+      ? Number(rebootEvery) * unitMinutes[rebootEveryUnit]
+      : null;
+  const rebootRuns =
+    allowAutoReboot && rebootRule === "runs" && recurring ? Number(rebootEvery) : null;
   const valid =
     (isSession || initialPrompt.trim().length > 0) &&
     prompt.length <= 29_800 &&
@@ -511,19 +517,21 @@ export function ChatGPTCaffyScheduleDialog({
                     />
                   </label>
                 )}
-                <label className="block text-sm">
-                  Automatic reboot
-                  <select
-                    className={inputClass}
-                    value={rebootRule}
-                    onChange={(event) => setRebootRule(event.target.value)}
-                  >
-                    <option value="off">Off</option>
-                    <option value="time">After a time interval</option>
-                    <option value="runs">After N completed runs</option>
-                  </select>
-                </label>
-                {rebootRule !== "off" && (
+                {allowAutoReboot && (
+                  <label className="block text-sm">
+                    Automatic reboot
+                    <select
+                      className={inputClass}
+                      value={rebootRule}
+                      onChange={(event) => setRebootRule(event.target.value)}
+                    >
+                      <option value="off">Off</option>
+                      <option value="time">After a time interval</option>
+                      <option value="runs">After N completed runs</option>
+                    </select>
+                  </label>
+                )}
+                {allowAutoReboot && rebootRule !== "off" && (
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-sm">
                       {rebootRule === "runs" ? "Runs" : "Every"}
