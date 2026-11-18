@@ -28,6 +28,14 @@ afterEach(() => {
 });
 
 describe("per-ChatGPT session timestamp provenance", () => {
+  it("reuses date formatting across a sidebar selection", async () => {
+    vi.resetModules();
+    const { formatChatGPTSessionDateTime: format } = await import("./chatGPTSessionTimestamps");
+    const expected = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(Date.now());
+    using constructors = vi.spyOn(Intl, "DateTimeFormat");
+    for (let i = 0; i < 400; i++) expect(format(Date.now())).toBe(expected);
+    expect(constructors).toHaveBeenCalledTimes(1);
+  });
   it("does not invent creation, activity or refresh dates for legacy sessions", () => {
     const legacy = { id: "old", title: "Legacy" };
     expect(readChatGPTSessionTimeline("env", legacy)).toEqual({

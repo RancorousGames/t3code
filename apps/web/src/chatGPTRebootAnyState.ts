@@ -10,7 +10,6 @@ import {
   releaseChatGPTDeliveryMount,
   requestChatGPTDeliveryMount,
 } from "./chatGPTDeliveryMountRequest";
-import { readDurableUnknownChatGPTSend } from "./chatGPTUncertainSendFence";
 import { readThreadPreviewState } from "./previewStateStore";
 
 export type RebootBrowserSlot =
@@ -59,51 +58,6 @@ export async function findRebootBrowserSlot(
   } finally {
     releaseChatGPTDeliveryMount(environmentId, sessionId);
   }
-}
-
-/**
- * Save the *previous generation's* uncertain-send evidence before allowing
- * the new conversation to send its initial message. Its delivery is still
- * UNKNOWN; nothing from the predecessor is replayed or marked delivered.
- */
-export function archivePriorRebootUnknownSend(
-  environmentId: EnvironmentId,
-  sessionId: string,
-  priorConversationId: string,
-  operationId: string,
-): boolean {
-  const receipt = readDurableUnknownChatGPTSend(environmentId, sessionId);
-  if (!receipt) return false;
-  const priorUrl = `https://chatgpt.com/c/${priorConversationId}`;
-  const prefix = "t3code:chatgpt-unknown-send-fence:v1:";
-  const oldKey = `${prefix}${environmentId}:${sessionId}`;
-  const archivedKey = `t3code:chatgpt-reboot-unknown-archive:v1:${environmentId}:${sessionId}:${operationId}`;
-  const original = window.localStorage.getItem(oldKey);
-  if (!original) return false;
-  const entry = JSON.stringify({
-    ...receipt,
-    originalConversationUrl: receipt.conversationUrl,
-    originalMatchesRebootTarget: receipt.conversationUrl === priorUrl,
-    operationId,
-    archivedAt: Date.now(),
-    delivery: "UNKNOWN",
-    reason: "Agent Reboot initiated for same T3 browser slot",
-  });
-  const existing = window.localStorage.getItem(archivedKey);
-  if (existing && existing !== entry) {
-    // A prior successful archival may be retried after an UNKNOWN receipt.
-    // Retain the earlier immutable evidence and never create a second send.
-    return false;
-  }
-  window.localStorage.setItem(archivedKey, entry);
-  if (window.localStorage.getItem(archivedKey) !== entry)
-    throw new Error("Unable to preserve prior-generation UNKNOWN delivery receipt.");
-  if (window.localStorage.getItem(oldKey) !== original)
-    throw new Error("UNKNOWN send receipt changed while preparing Agent Reboot.");
-  window.localStorage.removeItem(oldKey);
-  if (window.localStorage.getItem(oldKey) !== null)
-    throw new Error("Prior-generation send fence remains after archival.");
-  return true;
 }
 
 /** The old URL remains recoverable even if the old guest cannot be queried. */

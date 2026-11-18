@@ -61,7 +61,7 @@ export function buildChatGPTSessionContextMenu(input: {
   hasConversationUrl?: boolean;
   /** Older OmniHub-owned monitors are separate from T3 Caffy state. */
   legacyCaffyIds?: readonly string[];
-  caffy?: { mode: "idle" | "periodic" | "queued" | "startup"; startup: boolean;
+  caffy?: { mode: "idle" | "periodic" | "startup"; startup: boolean;
     onceOnly: boolean; paused: boolean; createdAt: number; expiresAt: number | null;
     intervalMinutes: number; beginAt?: number | null; autoRebootMinutes?: number | null;
     delayedPrompt?: string | null; repeatPrompt?: string | null } | null;
@@ -71,14 +71,14 @@ export function buildChatGPTSessionContextMenu(input: {
   const activeCaffy = input.caffy;
   const exhausted = !!session.conversationFullId;
   const legacyIds = input.legacyCaffyIds ?? [];
-  // One-click resume owns a one-shot Caffy monitor. Do not silently replace
-  // another ongoing, periodic, or custom-prompt schedule.
+  // One-click "continue once" owns a one-shot Caffy monitor. Do not silently
+  // replace another ongoing, interval, or custom-prompt schedule.
   const quickResumeScheduled = Boolean(activeCaffy &&
-    activeCaffy.mode === "queued" && activeCaffy.onceOnly && !activeCaffy.paused &&
+    activeCaffy.mode === "idle" && activeCaffy.onceOnly && !activeCaffy.paused &&
     !activeCaffy.beginAt && !activeCaffy.repeatPrompt && !activeCaffy.delayedPrompt);
   const wakeMode = !activeCaffy && legacyIds.length > 0 ? "Legacy OmniHub active" :
-    activeCaffy?.mode === "idle" || activeCaffy?.mode === "queued" ? "Auto-continue" :
-    activeCaffy?.mode === "periodic" ? "Periodic auto-continue" :
+    activeCaffy?.mode === "idle" ? (activeCaffy.onceOnly ? "Continue once" : "Keep running") :
+    activeCaffy?.mode === "periodic" ? "Interval wake" :
     activeCaffy?.mode === "startup" ? "Startup only" : null;
 
   const snoozed = (session.snoozedUntil ?? 0) > now;
@@ -169,7 +169,7 @@ export function buildChatGPTSessionContextMenu(input: {
             ],
           }),
         ]),
-    item("schedule:resume", "Schedule resume", {
+    item("schedule:resume", "Continue once when idle", {
       separatorBefore: true,
       checked: quickResumeScheduled,
       disabled: exhausted || Boolean(activeCaffy && !quickResumeScheduled),
@@ -181,7 +181,7 @@ export function buildChatGPTSessionContextMenu(input: {
       children: [
         item("caffy:auto", "Auto-continue…", {
           disabled: exhausted,
-          checked: activeCaffy?.mode === "queued" || activeCaffy?.mode === "periodic",
+          checked: Boolean(activeCaffy && activeCaffy.mode !== "startup" && !activeCaffy.onceOnly),
         }),
 
 

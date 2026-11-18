@@ -83,6 +83,11 @@ export const AgentProviderV1State = Schema.Struct({
   confidence: Schema.Literals(["Confirmed", "Inferred", "Unknown"]),
   elsewhere: Schema.NullOr(Schema.Boolean),
   observedAt: Schema.String,
+  // Live progress for remote clients: when the current turn began, the last
+  // observed progress, and an optional short human-readable activity label.
+  turnStartedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  activityAt: Schema.optional(Schema.NullOr(Schema.String)),
+  activityText: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(200)))),
 });
 
 export const AgentProviderV1Session = Schema.Struct({
@@ -111,6 +116,10 @@ export const AgentProviderV1Session = Schema.Struct({
       returnMarker: Schema.optional(Schema.Literals(["armed", "working", "ready"])),
       caffyMode: Schema.optional(Schema.Literals(["idle", "periodic", "startup"])),
       caffyPaused: Schema.optional(Schema.Boolean),
+      // Native threads: sidebar section and desktop sort time (epoch ms).
+      settled: Schema.optional(Schema.Boolean),
+      pinned: Schema.optional(Schema.Boolean),
+      sortAt: Schema.optional(Schema.Number),
     }),
   ),
 });
@@ -263,7 +272,7 @@ export const AgentProviderV1Submit = Schema.Struct({
   session: AgentProviderV1SessionRef,
   content: Schema.Array(Schema.Unknown),
   delivery: AgentProviderV1Delivery,
-  maxActiveWorkers: Schema.optional(Schema.Number),
+  maxActiveWorkers: Schema.optional(Schema.NullOr(Schema.Number)),
   clientRequestId: RequestId,
   expectedConversation: Schema.optional(Schema.NullOr(OpaqueId)),
   expectedEnvironmentId: Schema.optional(Schema.NullOr(OpaqueId)),

@@ -1,22 +1,23 @@
 # Caffy wake ownership and recovery
 
-Caffy policy is keyed by the durable T3 browser/session ID. Public Bootstrap IDs are control aliases. A ChatGPT conversation ID is only a dispatch guard, never a monitor owner. `CaffyWakeMachine.ts` reduces verified events into durable wake intent and receipt transitions; `CaffyScheduler.ts` coordinates inventory, admission and persistence. `ChatGPTDeliveryQueue.ts` alone owns submission.
+Caffy policy is keyed by the durable T3 browser/session ID. Public Bootstrap IDs are control aliases. A ChatGPT conversation ID is only a dispatch guard, never a monitor owner. `CaffyWakeMachine.ts` reduces verified events into durable wake intent and receipt transitions; `CaffyScheduler.ts` coordinates inventory, admission and persistence. `ChatGPTDeliveryQueue.ts` alone owns submission, which is **at-least-once**: ChatGPT is an unreliable receiver, duplicates are acceptable, getting stuck is not.
 
 ## Transition contract
 
 | Input / condition | Transition | Persistent evidence |
 | --- | --- | --- |
-| New verified idle edge, idle/queued mode | Awaiting idle → ready | Event ID, sequence, stable message evidence key |
-| Periodic deadline | Awaiting due → ready | Advance original cadence; coalesce missed deadlines |
+| New verified idle edge, Keep running (`idle`) mode | Awaiting idle → ready | Event ID, sequence, stable message evidence key |
+| Interval (`periodic`) deadline | Awaiting due → ready | Clock stops (`nextDueAt = null`); wake waits for idle; next interval counts from the delivered wake |
 | Paused or future start | Retain policy; no new claim | Pause flag / absolute beginAt |
 | Assistant working / recovery / missing renderer | Retain intent; wait for safe recipient | Availability, check time and reason |
-| Capacity admission | Ready → awaiting admission → claimed | Idle mode bypasses capacity; other modes retain admission policy |
+| Slot admission | Ready → awaiting admission → claimed | Only rows with `respectSlots` wait for a free Keep T3 Busy slot (default: ignore slots) |
 | Claim | Ready → queued | Persist UUID and exact payload before enqueue |
 | Guarded send begins | Queued → sending | Outbox saves submission before invoking renderer |
 | Exact user turn observed | Sending/uncertain → confirmed → awaiting next event | Receipt and actual confirmation timestamp |
-| Lost acknowledgement / generic IPC timeout | Sending → uncertain | Same receipt; reconciliation only, never blind resend |
-| Verified no-submission receipt | Uncertain → queued | Exact conversation guard and expired submission lease |
-| Conversation changes | Retain owner and policy | Cancel/rebind only a proven unsent queue record; unresolved receipts remain pinned |
+| Lost acknowledgement / generic IPC timeout | Sending → uncertain | Same message ID; the outbox checks for the marker and resends after 1, 2, 4, then every 5 minutes |
+| Refused before submission (draft, busy, unmounted) | Stays queued/uncertain | Retry in 15 s (unmounted: on mount report or every 60 s); not counted as a send |
+| Outbox gives up (1 hour as lane head) | Pending → cleared, wake re-armed | `needs_attention` receipt, desktop notification; every mode sets `pendingWake` (cancellation too) |
+| Conversation changes | Retain owner and policy | Cancel the pending message whatever its state and re-arm the wake for the new conversation |
 | Renderer inventory missing | Retain monitor | Only explicit durable lifecycle actions can retire it |
 | Explicit close/stop/complete or configured expiry | Retire policy | Outbox keeps historical receipts |
 
@@ -26,14 +27,14 @@ The displayed phase is a projection of policy, availability and the outbox recei
 
 Both Electron webviews and persistent Chromium publish through `chatGPTIdleTransitions.ts`. Safe idle requires an empty inspectable composer, no Stop control, no error/interruption/login signal and stable independent observations. User-only quiescence requires three seconds. A completion missed during a renderer outage can recover from a stable DOM message identity and two observations; increasing `totalTurns` is not evidence. Message identity deduplicates rehydration; timestamp-floored sequences avoid restarting at one after renderer journal loss. The desktop journal persists before notifying Caffy. New events and restart replay enter the same reducer.
 
-Old stores with an already-consumed sequence and an observation newer than the last confirmed wake receive a one-time migration claim, persisted as an event ID. This repairs the historical sequence-61 / turn-count-5→4 incident without repeated wakes. Periodic stores missing a deadline recover from their original creation time and interval; idle mode has no periodic deadline.
+Old stores with an already-consumed sequence and an observation newer than the last confirmed wake receive a one-time migration claim, persisted as an event ID. This repairs the historical sequence-61 / turn-count-5→4 incident without repeated wakes. Older stores: `queued` rows load as Keep running, and every row loads with `respectSlots: false` unless set. An interval row with no deadline and no wake in flight restarts its interval at load.
 
 The local named-pipe inventory is the scheduler's binding source. The server registry is a replicated UI/remote view, not a second wake authority. Incomplete inventories cannot migrate or retire owners. Dispatch still validates the actual mounted conversation, working state and draft immediately before submission. Browser recovery retains its existing draft and uncertainty safeguards; Caffy does not force reloads.
 
-New Caffy deliveries include their UUID marker in the actual user turn. Persisted legacy pending deliveries retain their original payload format. A missing renderer recipient does not cancel a durable T3 message: a proven first-send refusal remains queued for an exact verified remount, while an earlier uncertain submission keeps its original ID for read-only reconciliation. Reconciliation is allowed while paused or capacity is unavailable because it is read-only. Queue admission is serialized separately from browser round trips, allowing other recipient lanes to progress during a slow request.
+New Caffy deliveries include their UUID marker in the actual user turn. Persisted legacy pending deliveries retain their original payload format. A missing renderer recipient does not cancel a durable T3 message; it waits for a mount report (or the periodic retry) until the lane's give-up time. Every message terminates (delivered, cancelled or `needs_attention`), so a pending wake can never hold Caffy forever. Paused schedules hold their pending wake until it gives up. Queue admission is serialized separately from browser round trips, allowing other recipient lanes to progress during a slow request.
 
 ## Reproduction and limits
 
-`CaffyRecovery.test.ts` combines real scheduler persistence and the real outbox with a controlled renderer transport. It reproduces uncertain-receipt loss and unsent-intent loss during rebinding, and exercises idle/periodic restart recovery with one guarded send followed only by reconciliation. Renderer journal tests cover cold completion, quiescence, DOM count reset and duplicate observations. Outbox tests model mount prerequisites explicitly and cover draft/focus refusal, wrong conversations, expiry receipts, crashes and independent recipient lanes.
+`CaffyRecovery.test.ts` combines real scheduler persistence and the real outbox with a controlled renderer transport. It checks that every delivery outcome (gave up, cancelled, still retrying) leaves the row able to wake again. Renderer journal tests cover cold completion, quiescence, DOM count reset and duplicate observations. Outbox tests cover first-try delivery, resend after an unobserved send, refusal retries, give-up with notification and lane release, and crash recovery.
 
-A canceled application restart does not activate staged source. Build staging and live deployment must be reported separately. A stuck or uninspectable guest remains blocked with its policy retained; neither enqueue nor an idle registry label is proof of a delivered wake. Stable message IDs unavailable on a cold assistant page require a new witnessed generation/idle edge rather than guessing from turn counts. Unknown submissions require exact receipt evidence or explicit human resolution; conversation migration never clears them.
+A canceled application restart does not activate staged source. Build staging and live deployment must be reported separately. A stuck or uninspectable guest remains blocked with its policy retained; neither enqueue nor an idle registry label is proof of a delivered wake. Stable message IDs unavailable on a cold assistant page require a new witnessed generation/idle edge rather than guessing from turn counts. Unobserved submissions are resent under the same marker; the renderer skips the send when that marker is already visible in a user turn.

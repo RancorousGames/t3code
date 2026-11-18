@@ -105,8 +105,13 @@ export function readChatGPTSessionTimeline(
   };
 }
 
+// Sidebar hover cards share the expensive ICU formatter across sessions and selections.
+let sessionDateFormatter: Intl.DateTimeFormat | undefined;
 export function formatChatGPTSessionDateTime(at: number | null): string {
-  return at === null
-    ? "Unknown (not recorded)"
-    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(at);
+  if (at === null) return "Unknown (not recorded)";
+  sessionDateFormatter ??= new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  return sessionDateFormatter.format(at);
 }

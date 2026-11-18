@@ -41,6 +41,15 @@ const keyFor = (environmentId: EnvironmentId, sessionId: string) =>
 const empty = "[]";
 const processing = new Set<string>();
 const capacityReleases = new Set<string>();
+const conversationChangedBeforeSend =
+  "Conversation changed before queued delivery. The message was not sent.";
+
+function refusedForPreviousConversation(item: SessionQueuedMessage) {
+  // Recognize persisted pre-submit refusals; other attention states may have sent.
+  return item.state === "needs_attention" &&
+    item.condition !== "wait_for_slot" &&
+    !!item.conversationId && item.detail === conversationChangedBeforeSend;
+}
 
 function readRaw(key: string) {
   try {
@@ -242,11 +251,12 @@ export async function deliverNextChatGPTSessionMessage(
   let queue = readQueue(key);
   // Reconcile first: a lost browser acknowledgement or stalled assistant must
   // not leave an already-observed user turn looking queued (or send it twice).
-  const next = queue.find((row) => row.state !== "delivered");
-  if (!next) return;
+  const head = queue.find((row) => row.state !== "delivered");
+  if (!head) return;
   const session = sessions.find((row) => row.id === sessionId);
   if (!session || session.hidden) return;
   if (isChatGPTConversationFull(environmentId, sessionId)) {
+    // Keep exact attempts and UNKNOWN receipts; never submit a fresh turn to a full chat.
     const now = Date.now();
     if (queue.some(row => row.state === "queued"))
       writeQueue(key, queue.map(row => row.state === "queued" ? {
@@ -257,6 +267,16 @@ export async function deliverNextChatGPTSessionMessage(
   }
   processing.add(key);
   try {
+    const current = refusedForPreviousConversation(head)
+      ? await inspectBrowserSession(environmentId, session, "end", 12, true, 512)
+      : null;
+    // A proven unsent message for an older conversation must not starve its successor.
+    // Retain it for review, preserving FIFO and uncertain-send fences everywhere else.
+    const next = current?.conversationId
+      ? readQueue(key).find(row => row.state !== "delivered" &&
+          !(refusedForPreviousConversation(row) && row.conversationId !== current.conversationId))
+      : head;
+    if (!next) return;
     const acknowledgeObserved = (observed: Awaited<ReturnType<typeof inspectBrowserSession>>) => {
       if (!observedQueuedUserTurn(next, observed)) return false;
       writeQueue(key, readQueue(key).map((row) =>
@@ -267,7 +287,7 @@ export async function deliverNextChatGPTSessionMessage(
     // UNKNOWN is read-only. A lost acknowledgement may already have sent the
     // message; only an exact observed user turn can retire it.
     if (next.state !== "queued") {
-      acknowledgeObserved(await inspectBrowserSession(environmentId, session, "end", 12, true, 512));
+      acknowledgeObserved(current ?? await inspectBrowserSession(environmentId, session, "end", 12, true, 512));
       return;
     }
     // Admit capacity BEFORE inspecting/loading the ChatGPT guest. Otherwise
@@ -297,6 +317,7 @@ export async function deliverNextChatGPTSessionMessage(
     // A pending/stalled assistant may still follow a positively submitted
     // user turn. Check before the idle gate, even with an UNKNOWN send fence.
     const observed = await inspectBrowserSession(environmentId, session, "end", 12, true, 512);
+    if (current && current.conversationId !== observed.conversationId) return;
     if (acknowledgeObserved(observed)) return;
     if (observed.conversationFull) {
       writeQueue(key, readQueue(key).map(row => row.id === next.id
@@ -325,8 +346,7 @@ export async function deliverNextChatGPTSessionMessage(
                     ...row,
                     state: "needs_attention" as const,
                     updatedAt: Date.now(),
-                    detail:
-                      "Conversation changed before queued delivery. The message was not sent.",
+                    detail: conversationChangedBeforeSend,
                   }
                 : row,
             ),

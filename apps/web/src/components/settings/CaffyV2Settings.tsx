@@ -5,7 +5,8 @@ import { T3_CAFFY_UPDATED_EVENT } from "../../hooks/useT3CaffyOverview";
 
 interface Monitor {
   sessionId: string;
-  mode: "idle" | "periodic" | "queued" | "startup";
+  mode: "idle" | "periodic" | "startup";
+  respectSlots?: boolean;
   paused: boolean;
   startup: boolean;
   onceOnly: boolean;
@@ -120,7 +121,8 @@ export function CaffyV2Settings({ capacityOnly = false }: { capacityOnly?: boole
               <div className="space-y-1 rounded border px-2 py-2" key={entry.sessionId}>
                 <div className="font-mono">{entry.sessionId}</div>
                 <div>
-                  {entry.mode}{entry.paused ? " · Paused" : ""}
+                  {entry.mode === "idle" ? "Keep running" : entry.mode === "periodic" ? "Interval wake" : "Startup only"}
+                  {entry.respectSlots ? " · Respects slots" : ""}{entry.paused ? " · Paused" : ""}
                   {entry.startup ? " · Startup resume" : ""}
                   {entry.onceOnly ? " · Once" : ""}
                   {entry.mode === "periodic" ? ` · Every ${entry.intervalMinutes}m` : ""}

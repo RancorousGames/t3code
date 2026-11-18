@@ -1,6 +1,10 @@
 /**
  * Wake policy belongs to the durable T3 owner. This reducer owns trigger and
- * receipt transitions; the outbox alone owns submission and its immutable target.
+ * receipt transitions; the outbox alone owns submission (at-least-once).
+ * Modes: "idle" (Keep running) wakes on every verified idle edge; "periodic"
+ * (Interval) requests a wake when due, waits for idle, and restarts its
+ * interval from the delivered wake. A pending wake always ends: delivered,
+ * cancelled or gave up. The last two re-arm the wake, so Caffy never stalls.
  * Runtime availability is orthogonal to intent: outages never consume a wake.
  */
 import type { CaffyConfig } from "./CaffyScheduler.ts";
@@ -48,23 +52,21 @@ export function reduceCaffyWake(
     };
     if (r.status === "delivered") Object.assign(patch, {
       pendingMessageId: null, pendingMessageBody: null, delayedPrompt: null,
-      runWithoutBusy: false, lastWakeAt: r.updatedAt,
+      lastWakeAt: r.updatedAt,
+      ...(row.mode === "periodic" ? { nextDueAt: r.updatedAt + row.intervalMinutes * 60_000 } : {}),
       lastActivatedAt: row.lastActivatedAt ?? r.updatedAt, lastError: null,
       lastCheckResult: "Wake confirmed in the exact recipient; awaiting the next verified idle event.",
     });
-    else if (r.status === "cancelled") {
-      // Cancellation is not a durable T3 close. Unknown cancelled submissions
-      // retain their receipt and require resolution, never an automatic replay.
-      if (r.lastSubmissionAt || r.uncertainSince || /unknown|may have occurred/i.test(r.lastError ?? ""))
-        patch.lastError = "Cancelled delivery may have been submitted; inspect its receipt before continuing.";
-      else Object.assign(patch, {
-        pendingMessageId: null, pendingMessageBody: null,
-        lastError: r.lastError ?? "Wake cancelled before submission; schedule retained.",
-      });
-    } else if (r.status === "needs_attention") patch.lastError = r.lastError ?? "Delivery needs attention.";
-    else patch.lastError = r.status === "uncertain"
-      ? "Submission outcome unknown; read-only receipt reconciliation, no resend."
-      : null;
+    else if (r.status === "cancelled" || r.status === "needs_attention") Object.assign(patch, {
+      // The outbox gave up (and notified) or the send was cancelled. Never
+      // stall: re-arm the wake so the next safe idle moment tries again.
+      pendingMessageId: null, pendingMessageBody: null,
+      pendingWake: true, pendingReason: row.pendingReason ?? (row.mode === "periodic" ? "periodic" : "idle"),
+      lastError: r.lastError ?? (r.status === "cancelled"
+        ? "Wake cancelled; retrying on the next opportunity."
+        : "Wake delivery gave up; retrying on the next opportunity."),
+    });
+    else patch.lastError = null;
     return { patch, requested: false };
   }
   if (row.paused || row.rebootOperationId || row.pendingMessageId ||
@@ -83,11 +85,10 @@ export function reduceCaffyWake(
   if (event.type === "due") {
     if (row.mode !== "periodic" || row.nextDueAt === null || row.nextDueAt > event.now)
       return unchanged;
-    const interval = row.intervalMinutes * 60_000;
+    // The interval restarts from the delivered wake, so the clock stops here.
     return { patch: {
-      nextDueAt: row.nextDueAt + (Math.floor((event.now - row.nextDueAt) / interval) + 1) * interval,
-      pendingWake: true, pendingReason: "periodic",
-      lastCheckResult: "Periodic deadline reached; wake requested.",
+      nextDueAt: null, pendingWake: true, pendingReason: "periodic",
+      lastCheckResult: "Interval reached; waking once the session is idle.",
     }, requested: !row.pendingWake };
   }
   const idle = event.idle;
@@ -107,7 +108,7 @@ export function reduceCaffyWake(
   };
   const repeatedEvidence = idle.evidenceKey != null && idle.evidenceKey === row.lastIdleEvidenceKey;
   if (idle.evidenceKey) patch.lastIdleEvidenceKey = idle.evidenceKey;
-  if ((row.mode === "idle" || row.mode === "queued") && !row.pendingWake &&
+  if (row.mode === "idle" && !row.pendingWake &&
       !repeatedEvidence && idle.observedAt > (row.lastWakeAt ?? row.createdAt)) {
     Object.assign(patch, {
       pendingWake: true, pendingReason: "idle",

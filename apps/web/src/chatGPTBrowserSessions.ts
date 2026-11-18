@@ -794,6 +794,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       const current = sessionStore.getState().sessions;
       const proposed =
         typeof update === "function" ? update(current.length ? current : INITIAL_SESSIONS) : update;
+      if (proposed === current) return;
       // A second renderer may still hold a snapshot from before a close.
       const next = filterClosedChatGPTSessions(
         environmentId ?? "unconnected",
@@ -1241,11 +1242,13 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
   const resetQuickSnooze = useCallback(
     (id: string) =>
       setSessions((current) =>
-        current.map((session) =>
-          session.id === id && session.quickSnoozeStep !== undefined
-            ? { ...session, quickSnoozeStep: undefined }
-            : session,
-        ),
+        !current.some((session) => session.id === id && session.quickSnoozeStep !== undefined)
+          ? current
+          : current.map((session) =>
+              session.id === id && session.quickSnoozeStep !== undefined
+                ? { ...session, quickSnoozeStep: undefined }
+                : session,
+            ),
       ),
     [setSessions],
   );

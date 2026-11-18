@@ -9,10 +9,7 @@ import {
   wakeChatGPTRebootPredecessor,
   hasUncertainChatGPTSend,
 } from "./chatGPTSessionControl";
-import {
-  reserveDurableUnknownChatGPTSend,
-  releaseDurableUnknownChatGPTSend,
-} from "./chatGPTUncertainSendFence";
+import { beginChatGPTSend } from "./chatGPTUncertainSendFence";
 
 const id = "6ad81f45-bd10-83ed-8128-6a3d584c876c";
 const environment = EnvironmentId.make("reboot-lab");
@@ -130,16 +127,15 @@ afterEach(() => {
 });
 
 describe("reboot loaded guest safety and atomic navigation", () => {
-  it("refuses reboot when an UNKNOWN send survived renderer restart without its original text", async () => {
-    const url = `https://chatgpt.com/c/${id}`;
-    reserveDurableUnknownChatGPTSend(environment, session.id, url, false);
+  it("refuses reboot while a send to the guest is in flight", async () => {
+    const release = beginChatGPTSend(environment, session.id);
     expect(hasUncertainChatGPTSend(environment, session.id)).toBe(true);
     await expect(assertChatGPTRebootSafe(environment, session, id)).rejects.toThrow(
       "UNKNOWN sends",
     );
     expect(writer).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
-    releaseDurableUnknownChatGPTSend(environment, session.id);
+    release();
     expect(hasUncertainChatGPTSend(environment, session.id)).toBe(false);
   });
   it("wakes a hibernated predecessor in its existing slot before the private draft backup", async () => {

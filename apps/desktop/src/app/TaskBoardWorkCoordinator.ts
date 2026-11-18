@@ -725,9 +725,9 @@ export class TaskBoardWorkCoordinator {
       if (!journal && stopped.some(row =>
         row.sessionId === id || row.browserSessionId === id || row.publicSessionId === id)) continue;
       const existing = this.caffy.status(id) as {
-        mode?: string; conversationId?: string; createdAt?: number;
+        mode?: string; respectSlots?: boolean; conversationId?: string; createdAt?: number;
       } | null;
-      if (existing && (!journal || existing.mode !== "queued" ||
+      if (existing && (!journal || existing.mode !== "idle" || !existing.respectSlots ||
           existing.conversationId !== session.conversationId)) continue;
       const wake: ManagedWorkerWake = journal ?? {
         boardRoot, taskId: item.taskId, requestId: item.reservationId!,
@@ -742,7 +742,7 @@ export class TaskBoardWorkCoordinator {
         if (!existing) {
           const created = await this.caffy.set({
             sessionId: id, conversationId: wake.conversationId,
-            mode: "queued", onceOnly: false, keepAwake: true,
+            mode: "idle", respectSlots: true, onceOnly: false, keepAwake: true,
             durationMinutes: AUTOMATIC_WORKER_CAFFY_MINUTES,
             beginAt: Math.max(wake.beginAt, Date.now() + 30_000),
           });

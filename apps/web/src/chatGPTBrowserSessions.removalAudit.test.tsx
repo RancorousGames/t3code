@@ -94,6 +94,17 @@ afterEach(async () => {
 });
 
 describe("durable T3 ChatGPT local browser removal audit", () => {
+  it("does not rewrite or notify the session list when a click has no snooze step to reset", async () => {
+    const id = await add("Selected session");
+    const sessions = harness.sessions;
+    const writes = vi.spyOn(window.localStorage, "setItem");
+    await act(async () => harness.resetQuickSnooze(id));
+    expect(harness.sessions).toBe(sessions);
+    expect(writes).not.toHaveBeenCalled();
+    await act(async () => harness.quickSnoozeSession(id, Date.now() + 60_000, 2));
+    await act(async () => harness.resetQuickSnooze(id));
+    expect(harness.sessions.find((session) => session.id === id)?.quickSnoozeStep).toBeUndefined();
+  });
   it("uses persisted manual origin, a synthetic 30-minute boundary, and an auditable local-only disposition", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
     let id = "";

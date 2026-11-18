@@ -89,6 +89,46 @@ describe("ChatGPT Session Queue", () => {
     expect(pending()[0]?.state).toBe("needs_attention");
   });
 
+  it("delivers a successor wake past messages refused for older conversations", async () => {
+    const original = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const successor = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    const old = queueChatGPTSessionMessage(environmentId, sessionId, "Old wake", original);
+    inspect.mockResolvedValue({ activity: "idle", status: "done_or_idle", conversationId: successor });
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    expect(pending().find(row => row.id === old)?.state).toBe("needs_attention");
+    const older = queueChatGPTSessionMessage(environmentId, sessionId, "Another old wake", original);
+    const wake = queueChatGPTSessionMessage(environmentId, sessionId, "Completed job", successor);
+    send.mockResolvedValue({ delivery: "user_turn_observed", messageSent: true });
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    inspect.mockResolvedValue({ activity: "working", status: "working", conversationId: successor });
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    expect(send).not.toHaveBeenCalled();
+    inspect.mockResolvedValue({ activity: "idle", status: "done_or_idle", conversationId: successor });
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    expect(pending().find(row => row.id === older)?.state).toBe("needs_attention");
+    expect(pending().find(row => row.id === wake)?.state).toBe("delivered");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      expectedConversationId: successor, message: `[T3-MSG:${wake}]\nCompleted job`,
+    }));
+    inspect.mockResolvedValue({ activity: "idle", status: "done_or_idle", conversationId: original });
+    queueChatGPTSessionMessage(environmentId, sessionId, "Later original message", original);
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["unknown", "needs_attention", "sending"])("preserves the %s fence before a successor wake", async (state) => {
+    const old = queueChatGPTSessionMessage(environmentId, sessionId, "Unresolved", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa");
+    localStorage.setItem(key, JSON.stringify(pending().map(row => ({ ...row, state }))));
+    const successor = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    const wake = queueChatGPTSessionMessage(environmentId, sessionId, "Completed job", successor);
+    inspect.mockResolvedValue({ activity: "idle", status: "done_or_idle", conversationId: successor });
+    await deliverNextChatGPTSessionMessage(environmentId, sessionId, sessions);
+    expect(send).not.toHaveBeenCalled();
+    expect(pending().find(row => row.id === wake)?.state).toBe("queued");
+    expect(pending().find(row => row.id === old)?.state).not.toBe("delivered");
+  });
+
   it("reconciles a delivered user turn when ChatGPT leaves only an empty assistant placeholder", async () => {
     const conversationId = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
     const id = queueChatGPTSessionMessage(environmentId, sessionId, "Clean up the dialog", conversationId);

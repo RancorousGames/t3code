@@ -6,7 +6,7 @@ import type { T3CaffyEntry, T3CaffyOverview } from "../hooks/useT3CaffyOverview"
 const now = Date.parse("2026-11-04T15:00:00+01:00");
 const minute = 60_000;
 const entry = (changes: Partial<T3CaffyEntry> = {}): T3CaffyEntry => ({
-  sessionId: "browser", publicSessionId: "public", mode: "queued",
+  sessionId: "browser", publicSessionId: "public", mode: "idle", respectSlots: true,
   paused: false, onceOnly: false, expiresAt: null, intervalMinutes: 20,
   pendingWake: true, ...changes,
 });
@@ -21,11 +21,11 @@ describe("Caffy-aware keep-warm / unload protection", () => {
     expect(isCaffyWakeImminent(entry({ beginAt: now + 2 * minute }), true, now)).toBe(true);
   });
 
-  it("respects pause, expired schedules and queued Keep T3 Busy", () => {
+  it("respects pause, expired schedules and slot-respecting Keep T3 Busy", () => {
     expect(isCaffyWakeImminent(entry({ paused: true }), true, now)).toBe(false);
     expect(isCaffyWakeImminent(entry({ expiresAt: now - 1 }), true, now)).toBe(false);
     expect(isCaffyWakeImminent(entry(), false, now)).toBe(false);
-    expect(isCaffyWakeImminent(entry({ mode: "periodic", pendingWake: false, nextDueAt: now + 29 * minute }), false, now)).toBe(true);
+    expect(isCaffyWakeImminent(entry({ mode: "periodic", respectSlots: false, pendingWake: false, nextDueAt: now + 29 * minute }), false, now)).toBe(true);
   });
 
   it("resolves public and browser aliases and does not warm hidden or snoozed sessions", () => {

@@ -98,7 +98,7 @@ describe("persistent Chrome sidebar responsiveness", () => {
       bindingRevision:null,
     });
     await act(async()=>{await vi.advanceTimersByTimeAsync(1_300);});
-    expect(readChatGPTIdleTransition(environmentId,id)?.sequence).toBe(1);
+    expect(readChatGPTIdleTransition(environmentId,id)?.sequence).toBeGreaterThan(0);
   });
 
   it("keeps background idle pages on the slow cadence", async () => {

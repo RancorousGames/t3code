@@ -1,11 +1,33 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off -- Main-process filesystem/IPC boundary owns durable delivery and retry timers.
-// Durable browser-message outbox. The desktop main process owns retries, not React
-// components or application callers. One in-flight message per conversation.
+/**
+ * Durable at-least-once outbox for messages typed into ChatGPT browser sessions.
+ *
+ * ChatGPT is an unreliable receiver: a send can land without T3 being able to
+ * prove it. Duplicates are acceptable, getting stuck is not. So:
+ *   - Every message carries a `[T3-MSG:<id>]` marker. Each attempt is a plain
+ *     `send`; the renderer first looks for the marker and reports
+ *     `user_turn_observed` instead of sending again when it is already visible.
+ *   - Not observed after a send: retry with backoff (1, 2, 4, then every 5 min).
+ *   - Refused before submission (draft, busy, unmounted): retry soon, nothing sent.
+ *   - Every message reaches a terminal state: delivered, cancelled, or
+ *     `needs_attention` (gave up GIVE_UP_MS after becoming its lane's head;
+ *     the user is notified).
+ * Lanes: one in-flight message per conversation, FIFO within a lane, lanes
+ * independent. Because the head always terminates, a lane can never stall.
+ */
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import type { DesktopAppActivationRequest, DesktopAppActivationResponse } from "@t3tools/contracts";
 
+/**
+ * queued: waiting for its first send (or for the recipient to mount).
+ * sending: a send round trip is running.
+ * uncertain: sent at least once but not yet observed; checked and resent automatically.
+ * delivered: marked user turn observed.
+ * needs_attention: gave up after GIVE_UP_MS (terminal; user was notified).
+ * cancelled: retired by the caller or recipient lifecycle (terminal).
+ */
 export type DeliveryState =
   | "queued"
   | "sending"
@@ -20,77 +42,54 @@ export interface DeliveryRecord {
   body: string;
   /** Trusted main-process Caffy wake, independent of user-written body text. */
   caffyWake?: boolean;
-  /** New Caffy receipts include their ID in the observed user turn. Legacy pending payloads stay unchanged. */
-  receiptVersion?: 2;
   status: DeliveryState;
+  /** Delivery passes that reached the renderer (sends and refusals). */
   attempts: number;
-  /** Number of duplicate-risk submissions, persisted across desktop restarts. */
+  /** Sends that may have reached ChatGPT; drives the resend backoff. */
   duplicateResends?: number;
-  /** Repeated preflight refusals because a composer has an existing draft. */
-  draftRefusals?: number;
-  /** When the last attempted submission began, including an ambiguous one. */
+  /** When the last possibly-submitted send began. */
   lastSubmissionAt?: number;
-  /** Start of the unresolved delivery, so retries keep their schedule after restart. */
-  uncertainSince?: number;
-  /** Renderer refuses a late first submission after this time; required for safe pre-submit recovery. */
-  sendExpiresAt?: number;
   createdAt: number;
   updatedAt: number;
   lastError?: string;
   /** Renderer confirmed this exact marker exists in a verified user turn. */
   observedDeliveryId?: string;
-  /** Suspended while guest is unloaded; only an observed mount can resume it. */
+  /** Recipient guest is unloaded; a mount report (or the periodic retry) resumes it. */
   awaitingGuest?: boolean;
 }
 
 type BrowserRequest = Extract<DesktopAppActivationRequest, { type: "chatgpt.sessions" }>;
 type Sender = (request: DesktopAppActivationRequest) => Promise<DesktopAppActivationResponse>;
+type PublicRecord = Omit<DeliveryRecord, "body">;
 const MARKER = (messageId: string) => `[T3-MSG:${messageId}]`;
-// Keep wake notices free of T3-MSG prefixes; the outbox still owns their IDs.
-const isWakeBody = (body: string) =>
-  /^WAKE - Elapsed: (?:\d+h)?\d+m \| This: \d{2}:\d{2}\n {7}Next: (?:\d{2}:\d{2}|—) \| Final: \d{2}:\d{2}\nTo stop wakes, call keep_awake\.complete\([a-f0-9]{12}\)$/.test(
-    body,
-  ) ||
-  /^\[WAKE [1-9]\d*\] - To stop wakes, call keep_awake\.complete\([a-f0-9]{12}\)\. Total time elapsed: (?:\d+h)?\d+m$/.test(
-    body,
-  );
-const isCaffyWakeBody = (body: string) => body === "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
-const isCaffyRecord = (record: DeliveryRecord) => record.caffyWake === true || isCaffyWakeBody(record.body);
-const isCustomCaffyRecord = (record: DeliveryRecord) => record.caffyWake === true && !isCaffyWakeBody(record.body);
-const deliveryText = (record: DeliveryRecord) =>
-  isWakeBody(record.body) || (isCaffyRecord(record) && !isCustomCaffyRecord(record) && record.receiptVersion !== 2) ? record.body : `${MARKER(record.messageId)}\n${record.body}`;
-// All message types use the same guarded retry policy after reconciliation.
-const DUPLICATE_RETRY_DELAYS_MS = [60_000, 3 * 60_000];
-const LONG_RETRY_MS = 5 * 60_000;
-const RECONCILE_RETRY_MS = 60_000;
+const CAFFY_WAKE_BODY = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
+const isCaffyRecord = (record: DeliveryRecord) => record.caffyWake === true || record.body === CAFFY_WAKE_BODY;
 const PREFLIGHT_RETRY_MS = 15_000;
+const UNMOUNTED_RETRY_MS = 60_000;
+const MAX_RESEND_DELAY_MS = 5 * 60_000;
+/** Resend delay after the n-th unobserved send: 1, 2, 4, then 5 minutes. */
+const resendDelay = (sends: number) => Math.min(MAX_RESEND_DELAY_MS, 60_000 * 2 ** Math.max(0, sends - 1));
+/** Every lane head terminates: give up (and notify) this long after it became head. */
+const GIVE_UP_MS = 60 * 60_000;
 const MAX_ACTIVE_CONVERSATIONS = 4;
-const ABANDON_UNREACHABLE_MS = 30 * 60_000;
 const isUuid = (id: string) => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id);
+const terminal = (status: DeliveryState) =>
+  status === "delivered" || status === "cancelled" || status === "needs_attention";
 
-// These failures happen before the renderer touches the composer. Keep this
-// legacy-text adapter here; arbitrary IPC errors can still follow a real send.
+/** Renderer refusals that happen before anything is submitted. Misclassifying
+ * either way is harmless now: it only changes how soon the next attempt runs. */
 function refusedBeforeSubmission(response: DesktopAppActivationResponse) {
   return (
     !response.ok &&
-    !/Outcome UNKNOWN|outcome indeterminate|may already have occurred/i.test(response.message) &&
-    /User-focused composer before typing; no message sent|Automated composer ownership still active before typing; no message sent|Composer contains an existing draft; refusing to overwrite it|Conversation is not confirmed idle|ChatGPT guest is not attached|ChatGPT page is unavailable before typing; no message sent|ChatGPT session registry is not hydrated; no message sent|Cannot send while session is|Queued attempt expired before (?:dispatch|typing); no message sent|Queued delivery expired during renderer preflight; no message sent|ChatGPT conversation not yet mounted with verified messages; original session retained, no message sent|Session URL, generation or guest changed before typing; refusing send|Unknown-send ledger changed before typing; aborting|Session bootstrap is awaiting its first assistant marker; no message sent|Session bootstrap ID mismatch:.*no message sent/i.test(
+    !/UNKNOWN|indeterminate|may (?:already )?have occurred/i.test(response.message) &&
+    /no message sent|no click issued|refusing (?:send|to overwrite)|not (?:yet )?mounted|not attached|not confirmed idle|Cannot send while session is|User-focused composer|aborting|hibernated|session is missing/i.test(
       response.message,
     )
   );
 }
 
-function missingRecipient(response: DesktopAppActivationResponse) {
-  return (
-    !response.ok &&
-    response.message ===
-      "T3 browser session is missing; original recipient retained, no message sent."
-  );
-}
-
-function invalidRecipient(detail: string) {
-  return /Conversation ID and expectedConversationId disagree/i.test(detail);
-}
+const unmounted = (detail: string) =>
+  /not (?:yet )?mounted|not attached|hibernated|session is missing|unavailable before/i.test(detail);
 
 /** Accepted means persisted, never that a model read the message. */
 export class ChatGPTDeliveryQueue {
@@ -98,19 +97,22 @@ export class ChatGPTDeliveryQueue {
   private readonly eventFile: string;
   private readonly send: Sender;
   private readonly records = new Map<string, DeliveryRecord>();
-  private readonly transitionListeners = new Set<(record: Omit<DeliveryRecord, "body">) => void>();
-  private dispatchAllowed: (record: {messageId: string; sessionId: string}) => boolean = () => true;
-  private dispatchAdmission: (record: {messageId: string; sessionId: string}) => Promise<boolean> = async () => true;
+  private readonly transitionListeners = new Set<(record: PublicRecord) => void>();
+  private dispatchAllowed: (record: { messageId: string; sessionId: string }) => boolean = () => true;
+  private dispatchAdmission: (record: { messageId: string; sessionId: string }) => Promise<boolean> = async () => true;
   private selectionGate: Promise<void> = Promise.resolve();
   private readonly activeConversations = new Set<string>();
   private closed = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
   private nextTry = new Map<string, number>();
+  /** When each message became its lane's head (in memory; a restart grants a fresh hour). */
+  private headSince = new Map<string, number>();
   private lastScheduledConversation: string | undefined;
-  private readonly notifyExhausted: (record: Omit<DeliveryRecord, "body">) => void;
+  private readonly notifyExhausted: (record: PublicRecord) => void;
 
-  constructor(directory: string, send: Sender, notifyExhausted: (record: Omit<DeliveryRecord, "body">) => void = () => {}) {
+  /** `notifyExhausted` fires once when a message gives up (desktop notification). */
+  constructor(directory: string, send: Sender, notifyExhausted: (record: PublicRecord) => void = () => {}) {
     this.notifyExhausted = notifyExhausted;
     this.send = send;
     NodeFS.mkdirSync(directory, { recursive: true });
@@ -131,18 +133,8 @@ export class ChatGPTDeliveryQueue {
           !r.status
         )
           throw new Error("ChatGPT delivery journal contains an invalid record.");
-        this.records.set(r.messageId, {
-          ...r,
-          status:
-            r.status === "sending" ||
-            (r.status === "needs_attention" &&
-              !invalidRecipient(r.lastError ?? "") &&
-              !(r.draftRefusals && r.draftRefusals >= 3))
-              ? "uncertain"
-              : r.status,
-          duplicateResends: r.duplicateResends ?? 0,
-          draftRefusals: r.draftRefusals ?? 0,
-        });
+        // A crash mid-send leaves "sending": it may have landed, check and resend.
+        this.records.set(r.messageId, { ...r, status: r.status === "sending" ? "uncertain" : r.status });
       }
     }
     this.save();
@@ -170,20 +162,18 @@ export class ChatGPTDeliveryQueue {
     void this.pulse().catch(() => {});
   }
 
-  /** Queued Caffy delivery is suspended with Keep T3 Busy / pause. All
-   * ordinary T3 outbox traffic remains unaffected. */
-  setDispatchPermission(check: (record: {messageId: string; sessionId: string}) => boolean) {
+  /** Caffy uses these to pause its own wakes; ordinary traffic is unaffected. */
+  setDispatchPermission(check: (record: { messageId: string; sessionId: string }) => boolean) {
     this.dispatchAllowed = check;
   }
-  setDispatchAdmission(check: (record: {messageId: string; sessionId: string}) => Promise<boolean>) {
+  setDispatchAdmission(check: (record: { messageId: string; sessionId: string }) => Promise<boolean>) {
     this.dispatchAdmission = check;
   }
   resumeAllowed() {
     void this.pulse().catch(() => {});
   }
 
-  /** Retry deadlines are one-shot; new work and verified idle events trigger
-   * immediate drains. No 3-second full-queue polling loop is needed. */
+  /** One-shot timer to the earliest lane head that is due. */
   private scheduleNext() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
@@ -192,16 +182,14 @@ export class ChatGPTDeliveryQueue {
     const seen = new Set<string>();
     let next = Number.POSITIVE_INFINITY;
     for (const record of this.records.values()) {
-      if (
-        record.status === "delivered" ||
-        record.status === "cancelled" ||
-        seen.has(record.conversationId)
-      )
-        continue;
+      if (terminal(record.status) || seen.has(record.conversationId)) continue;
       seen.add(record.conversationId);
-      if (!this.dispatchAllowed(record)) continue;
       if (this.activeConversations.has(record.conversationId)) continue;
-      next = Math.min(next, this.nextTry.get(record.messageId) ?? 0);
+      // Paused Caffy wakes still need a timer so they can give up eventually.
+      const due = this.dispatchAllowed(record)
+        ? (this.nextTry.get(record.messageId) ?? 0)
+        : (this.headSince.get(record.messageId) ?? Date.now()) + GIVE_UP_MS;
+      next = Math.min(next, due);
     }
     if (!Number.isFinite(next)) return;
     this.timer = setTimeout(
@@ -214,8 +202,7 @@ export class ChatGPTDeliveryQueue {
     this.timer.unref?.();
   }
 
-  /** A verified T3 idle edge releases ONLY this exact recipient lane. Queued
-   * messages use the normal guarded submission; UNKNOWN never blindly resends. */
+  /** A verified idle edge is a good moment to retry this recipient right away. */
   onIdleTransition(event: { sessionId: string; conversationId: string }) {
     if (!this.started || this.closed || !isUuid(event.conversationId)) return;
     let ready = false;
@@ -223,27 +210,26 @@ export class ChatGPTDeliveryQueue {
       if (
         record.sessionId !== event.sessionId ||
         record.conversationId !== event.conversationId ||
-        !["queued", "uncertain"].includes(record.status)
+        terminal(record.status) ||
+        record.awaitingGuest
       )
         continue;
-      if (record.awaitingGuest) continue;
       this.nextTry.delete(record.messageId);
       ready = true;
     }
     if (ready) void this.pulse().catch(() => {});
   }
 
-  /** Explicit observation from the renderer: resume only the exact conversation.
-   * Repeated reports are safe and cannot send to another conversation. */
+  /** The renderer saw this exact conversation mounted: resume its lane now. */
   onRecipientMounted(event: { sessionId: string; conversationId: string }) {
     if (this.closed || !isUuid(event.conversationId)) return false;
     let ready = false;
     for (const record of this.records.values()) {
       if (record.sessionId !== event.sessionId || record.conversationId !== event.conversationId ||
-          record.status !== "queued" || !record.awaitingGuest) continue;
+          terminal(record.status) || !record.awaitingGuest) continue;
       record.awaitingGuest = false;
       this.nextTry.delete(record.messageId);
-      this.update(record, "queued");
+      this.update(record, record.status);
       ready = true;
     }
     if (ready && this.started) void this.pulse().catch(() => {});
@@ -251,7 +237,7 @@ export class ChatGPTDeliveryQueue {
   }
 
   /** Called only after the queue has persisted a transition; no composer access. */
-  subscribeTransitions(listener: (record: Omit<DeliveryRecord, "body">) => void) {
+  subscribeTransitions(listener: (record: PublicRecord) => void) {
     this.transitionListeners.add(listener);
     return () => this.transitionListeners.delete(listener);
   }
@@ -298,10 +284,9 @@ export class ChatGPTDeliveryQueue {
     const now = Date.now();
     const record: DeliveryRecord = {
       ...input,
-      ...(input.caffyWake ? { receiptVersion: 2 as const } : {}),
       status: "queued",
-      // Initial enqueue is not evidence of recipient readiness. Never submit
-      // until the renderer observes the exact mounted, idle conversation.
+      // Wait for the renderer to report the recipient mounted; the periodic
+      // retry also tries on its own in case that report never comes.
       awaitingGuest: true,
       attempts: 0,
       duplicateResends: 0,
@@ -342,9 +327,9 @@ export class ChatGPTDeliveryQueue {
       cancelled: 0,
     };
     for (const row of all) counts[row.status]++;
-    const active = all.filter((row) => row.status !== "delivered" && row.status !== "cancelled");
+    const active = all.filter((row) => !terminal(row.status));
     const recent = all
-      .filter((row) => row.status === "delivered" || row.status === "cancelled")
+      .filter((row) => terminal(row.status))
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 50);
     const diagnoses = new Map<string, ReturnType<ChatGPTDeliveryQueue["diagnose"]>>();
@@ -378,36 +363,24 @@ export class ChatGPTDeliveryQueue {
   /** Privacy-safe, read-only conversation liveness. No guest access or journal mutation. */
   diagnose(conversationId: string, now = Date.now()) {
     const unresolved = [...this.records.values()].filter(
-      (r) => r.conversationId === conversationId && !["delivered", "cancelled"].includes(r.status),
+      (r) => r.conversationId === conversationId && !terminal(r.status),
     );
-    const attention = unresolved.filter((r) => r.status === "needs_attention").length;
     const head = unresolved[0];
     if (!head)
-      return {
-        conversationId,
-        blocked: false as const,
-        queuedBehind: 0,
-        pending: unresolved.length,
-        needsAttention: attention,
-      };
+      return { conversationId, blocked: false as const, queuedBehind: 0, pending: 0, needsAttention: 0 };
     // Never expose body, renderer stack/error detail, or any composer content.
-    const reason = head.lastError?.includes("Composer contains an existing draft")
-      ? "recipient_draft_present"
-      : head.status === "queued"
-        ? head.awaitingGuest ? "guest_unmounted" : head.lastError?.includes("not confirmed idle")
+    const error = head.lastError ?? "";
+    const reason = head.awaitingGuest || unmounted(error)
+      ? "guest_unmounted"
+      : /existing draft/i.test(error)
+        ? "recipient_draft_present"
+        : /not confirmed idle|Cannot send while/i.test(error)
           ? "recipient_not_confirmed_idle"
-          : head.lastError?.includes("User-focused composer")
+          : /User-focused composer/i.test(error)
             ? "composer_user_focused"
-            : head.lastError?.includes("Composer contains an existing draft")
-              ? "recipient_draft_present"
-              : /hibernated|not attached|not yet mounted/i.test(head.lastError ?? "")
-                ? "guest_unmounted"
-                : "awaiting_dispatch"
-        : head.status === "needs_attention"
-          ? "unverifiable_send_requires_resolution"
-          : head.status === "uncertain" || head.status === "sending"
-            ? "unknown_send_read_only_reconciliation"
-            : "unresolved_delivery";
+            : head.status === "uncertain"
+              ? "sent_not_yet_observed"
+              : "awaiting_dispatch";
     return {
       conversationId,
       blocked: true as const,
@@ -415,41 +388,24 @@ export class ChatGPTDeliveryQueue {
       oldestStatus: head.status,
       oldestAgeMs: Math.max(0, now - head.createdAt),
       oldestAttempts: head.attempts,
-      queuedBehind: unresolved.filter((r) => r !== head && r.status === "queued").length,
+      queuedBehind: unresolved.length - 1,
       pending: unresolved.length,
-      needsAttention: attention,
+      needsAttention: 0,
       reason,
-      nextStep:
-        reason === "composer_user_focused"
-          ? "wait_for_recipient_focus_release"
-          : reason === "recipient_draft_present"
-            ? "preserve_recipient_draft"
-            : reason === "guest_unmounted"
-              ? "wait_for_verified_recipient_mount"
-              : reason === "recipient_not_confirmed_idle"
-                ? "wait_for_recipient_idle"
-                : head.status === "queued"
-                  ? "verify_idle_recipient"
-                  : "reconcile_then_retry_same_message",
+      nextStep: reason === "sent_not_yet_observed" ? "check_then_resend" : "retry_automatically",
     };
   }
 
+  /** Stop delivering one message, whatever its state. */
   cancel(messageId: string) {
     const record = this.records.get(messageId);
     if (!record) throw new Error("Unknown delivery messageId.");
-    if (record.status !== "queued")
-      throw new Error("Only a not-yet-attempted queued message can be cancelled.");
     this.retireRecipient([record.sessionId], record.conversationId,
-      "Delivery cancelled before submission.", false, record.messageId);
+      "Delivery cancelled.", false, record.messageId);
     return this.publicRecord(record);
   }
 
-  /**
-   * A closed, hidden, snoozed or removed recipient cannot receive future
-   * queued work. Retire every matching lane, including UNKNOWN attempts.
-   * Keep the durable journal and attempted-send evidence: an in-flight user
-   * turn may already have been submitted before this request arrived.
-   */
+  /** A closed, hidden, snoozed or removed recipient gets no further delivery. */
   retireRecipient(
     sessionIds: readonly string[],
     conversationId: string | null,
@@ -458,20 +414,16 @@ export class ChatGPTDeliveryQueue {
     messageId?: string,
   ): number {
     const ids = new Set(sessionIds);
-    let retired: DeliveryRecord[] = [];
+    const retired: DeliveryRecord[] = [];
     for (const row of this.records.values()) {
       if (messageId && row.messageId !== messageId) continue;
       if (!ids.has(row.sessionId) ||
           (conversationId && row.conversationId !== conversationId) ||
           (caffyOnly && !isCaffyRecord(row)) ||
-          row.status === "delivered" || row.status === "cancelled") continue;
-      const possiblySent = row.attempts > 0 ||
-        row.status === "sending" || row.status === "uncertain";
+          terminal(row.status)) continue;
       row.status = "cancelled";
       row.updatedAt = Date.now();
-      row.lastError = possiblySent
-        ? `${reason} Prior submission outcome may be unknown; no further delivery will be attempted.`
-        : reason;
+      row.lastError = reason;
       this.nextTry.delete(row.messageId);
       retired.push(row);
     }
@@ -483,15 +435,14 @@ export class ChatGPTDeliveryQueue {
     return retired.length;
   }
 
-  private publicRecord(record: DeliveryRecord) {
+  private publicRecord(record: DeliveryRecord): PublicRecord {
     // Never expose full prompt contents through delivery status/logging.
     const { body: _body, ...result } = record;
     return result;
   }
 
   private update(record: DeliveryRecord, status: DeliveryState, error?: string) {
-    // Lifecycle retirement wins even if an earlier asynchronous send or
-    // reconciliation returns after the recipient was closed or snoozed.
+    // Retirement wins even if an earlier send returns after the recipient closed.
     if (record.status === "cancelled" && status !== "cancelled") return;
     const previousStatus = record.status;
     const previousError = record.lastError;
@@ -508,39 +459,18 @@ export class ChatGPTDeliveryQueue {
     this.notifyTransition(record);
   }
 
-  private async dispatch(record: DeliveryRecord, action: "send" | "reconcile_send", retry = false) {
-    // The most recent observed delivery can survive as composer residue after a restart.
-    let previous: DeliveryRecord | undefined;
-    for (const item of this.records.values()) {
-      if (
-        item.sessionId === record.sessionId &&
-        item.conversationId === record.conversationId &&
-        item.status === "delivered" &&
-        item.messageId !== record.messageId &&
-        item.createdAt <= record.createdAt &&
-        (!previous || item.createdAt >= previous.createdAt)
-      )
-        previous = item;
-    }
-    const request: BrowserRequest = {
-      version: 1,
-      requestId: NodeCrypto.randomUUID(),
-      type: "chatgpt.sessions",
-      action,
-      sessionId: record.sessionId,
-      expectedConversationId: record.conversationId,
-      ...(previous ? { previousDeliveredMessage: deliveryText(previous) } : {}),
-      message: isWakeBody(record.body) || (isCaffyRecord(record) && !isCustomCaffyRecord(record) && record.receiptVersion !== 2)
-        ? record.body
-        : `${MARKER(record.messageId)}\n${retry ? "[Potential duplicate: acknowledgement was lost. If you already handled this message ID, do not repeat its actions.]\n" : ""}${record.body}`,
-      ...(retry ? { allowPossibleDuplicate: true } : {}),
-      ...(record.sendExpiresAt ? { sendExpiresAt: record.sendExpiresAt } : {}),
-    };
-    return this.send(request);
+  /** Terminal give-up: notify once and free the lane. */
+  private giveUp(record: DeliveryRecord) {
+    const sends = record.duplicateResends ?? 0;
+    this.update(record, "needs_attention", sends > 0
+      ? `Gave up after ${Math.round(GIVE_UP_MS / 60_000)} minutes; sent ${sends} time(s) but never observed. ${record.lastError ?? ""}`.trim()
+      : `Gave up after ${Math.round(GIVE_UP_MS / 60_000)} minutes without being able to send. ${record.lastError ?? ""}`.trim());
+    this.nextTry.delete(record.messageId);
+    this.headSince.delete(record.messageId);
+    try { this.notifyExhausted(this.publicRecord(record)); } catch { /* notification is best effort */ }
   }
 
-  /** Only the renderer's exact-conversation, actually-observed user turn is proof.
-   * A generic successful IPC or messageSent flag is not enough to clear UNKNOWN. */
+  /** Only an exact-conversation, actually-observed user turn counts as delivered. */
   private confirmed(record: DeliveryRecord, response: DesktopAppActivationResponse): boolean {
     const data = response.ok && "data" in response ? response.data : null;
     return (
@@ -551,235 +481,129 @@ export class ChatGPTDeliveryQueue {
       "conversationGuardValidated" in data &&
       data.conversationGuardValidated === true &&
       "verifiedConversationId" in data &&
-      data.verifiedConversationId === record.conversationId &&
-      // A new send must report both facts; read-only reconciliation instead
-      // proves an existing turn without issuing a send or setting messageSent.
-      (record.status !== "sending" || ("messageSent" in data && data.messageSent === true))
-    );
-  }
-
-  /** An exact renderer-owned pre-submit proof alone permits the original queued ID
-   * to be retried. No other negative/UNKNOWN result may authorize a new click. */
-  private provenNotSubmitted(
-    record: DeliveryRecord,
-    response: DesktopAppActivationResponse,
-    requireExpiry = true,
-  ): boolean {
-    const data = response.ok && "data" in response ? response.data : null;
-    return (
-      (!requireExpiry || (!!record.sendExpiresAt && Date.now() > record.sendExpiresAt)) &&
-      !!data &&
-      typeof data === "object" &&
-      "delivery" in data &&
-      data.delivery === "pre_submit_aborted" &&
-      "messageSent" in data &&
-      data.messageSent === false &&
-      "sendAttempted" in data &&
-      data.sendAttempted === false &&
-      "conversationGuardValidated" in data &&
-      data.conversationGuardValidated === true &&
-      "verifiedConversationId" in data &&
       data.verifiedConversationId === record.conversationId
     );
   }
 
-  private async submit(record: DeliveryRecord, retry: boolean) {
-    if (record.status === "cancelled") return;
-    const previous = {
-      lastSubmissionAt: record.lastSubmissionAt,
-      sendExpiresAt: record.sendExpiresAt,
-      duplicateResends: record.duplicateResends ?? 0,
-    };
-    record.lastSubmissionAt = Date.now();
-    record.sendExpiresAt = Date.now() + 70_000;
-    if (retry) record.duplicateResends = previous.duplicateResends + 1;
-    this.update(record, "sending");
-    const response = await this.dispatch(record, "send", retry);
+  /** The renderer proved nothing was submitted (callback never ran). */
+  private notSubmitted(response: DesktopAppActivationResponse): boolean {
+    const data = response.ok && "data" in response ? response.data : null;
+    return !!data && typeof data === "object" && "delivery" in data &&
+      data.delivery === "pre_submit_aborted";
+  }
+
+  /** One delivery pass: send (the renderer skips the send if the marker is
+   * already visible) and schedule the next pass from the outcome. */
+  private async process(record: DeliveryRecord) {
+    if (terminal(record.status)) return;
+    record.attempts++;
+    const wasSentBefore = (record.duplicateResends ?? 0) > 0;
+    const startedAt = Date.now();
+    this.update(record, "sending", record.lastError);
+    let response: DesktopAppActivationResponse;
+    try {
+      response = await this.send({
+        version: 1,
+        requestId: NodeCrypto.randomUUID(),
+        type: "chatgpt.sessions",
+        action: "send",
+        sessionId: record.sessionId,
+        expectedConversationId: record.conversationId,
+        message: `${MARKER(record.messageId)}\n${record.body}`,
+        // The renderer refuses to submit a request that arrives this late.
+        sendExpiresAt: startedAt + 70_000,
+      } satisfies BrowserRequest);
+    } catch (error) {
+      response = { ok: false, message: String(error) } as DesktopAppActivationResponse;
+    }
+    // The recipient may have been retired while the send was running.
+    if ((record.status as DeliveryState) === "cancelled") return;
     if (this.confirmed(record, response)) {
       record.observedDeliveryId = `${MARKER(record.messageId)}:user_turn_observed`;
       this.update(record, "delivered");
       return;
     }
-    const detail = response.ok ? "Delivery not positively observed." : response.message;
-    if (missingRecipient(response)) {
-      // A renderer inventory miss is not the durable T3 session's deletion.
-      // Retain the same receipt: only an original pre-submit refusal can
-      // return to queued, and it must await a verified recipient mount.
-      Object.assign(record, previous);
-      if (retry) {
-        this.update(record, "uncertain",
-          "Recipient unavailable; an earlier submission may have occurred. Reconcile the original receipt.");
+    const detail = response.ok
+      ? ("data" in response && response.data && typeof response.data === "object" &&
+          "reason" in response.data && typeof response.data.reason === "string"
+          ? response.data.reason : "Send not observed yet.")
+      : response.message;
+    const settled: DeliveryState = wasSentBefore ? "uncertain" : "queued";
+    if (this.notSubmitted(response) || refusedBeforeSubmission(response)) {
+      // Nothing was submitted this pass. Unmounted guests wait for a mount report.
+      if (unmounted(detail)) {
+        record.awaitingGuest = true;
+        this.nextTry.set(record.messageId, Date.now() + UNMOUNTED_RETRY_MS);
       } else {
-        record.awaitingGuest = true;
-        this.nextTry.delete(record.messageId);
-        this.update(record, "queued",
-          "Recipient unavailable before submission; awaiting verified mount of the original T3 session.");
+        this.nextTry.set(record.messageId, Date.now() + PREFLIGHT_RETRY_MS);
       }
+      this.update(record, settled, detail);
       return;
     }
-    if (refusedBeforeSubmission(response)) {
-      if (/not (?:yet )?mounted|not attached|unavailable before typing|hibernated/i.test(detail)) {
-        Object.assign(record, previous);
-        record.awaitingGuest = true;
-        this.nextTry.delete(record.messageId);
-        this.update(record, "queued", "ChatGPT guest is not attached; awaiting verified mount.");
-        return;
-      }
-      // A busy composer does not spend the duplicate retry budget or erase
-      // uncertainty about an earlier submission.
-      Object.assign(record, previous);
-      const draftBlocked = detail.includes("Composer contains an existing draft");
-      record.draftRefusals = draftBlocked ? (record.draftRefusals ?? 0) + 1 : 0;
-      const needsDraftReview = draftBlocked && record.draftRefusals >= 3;
-      this.update(
-        record,
-        needsDraftReview ? "needs_attention" : retry ? "uncertain" : "queued",
-        detail,
-      );
-      this.nextTry.set(
-        record.messageId,
-        Date.now() + (needsDraftReview ? 5 * 60_000 : PREFLIGHT_RETRY_MS),
-      );
-      return;
-    }
-    if (this.provenNotSubmitted(record, response, false)) {
-      // A direct React callback that was not available never touched the
-      // composer or invoked submission. Requeue the same ID without UNKNOWN.
-      Object.assign(record, previous);
-      this.update(record, retry ? "uncertain" : "queued", "Renderer verified no submission.");
-      this.nextTry.set(record.messageId, Date.now() + PREFLIGHT_RETRY_MS);
-      return;
-    }
-    record.uncertainSince ??= record.lastSubmissionAt;
-    this.update(record, invalidRecipient(detail) ? "needs_attention" : "uncertain", detail);
+    // The send may have landed. Check (and resend if absent) after a backoff.
+    record.lastSubmissionAt = startedAt;
+    record.duplicateResends = (record.duplicateResends ?? 0) + 1;
+    this.nextTry.set(record.messageId, Date.now() + resendDelay(record.duplicateResends));
+    this.update(record, "uncertain", detail);
   }
 
-  private async process(record: DeliveryRecord) {
-    if (record.status === "cancelled") return;
-
-    record.attempts++;
-    this.nextTry.set(record.messageId, Date.now() + RECONCILE_RETRY_MS);
-    try {
-      if (
-        record.status === "queued" ||
-        (record.status === "needs_attention" && (record.draftRefusals ?? 0) >= 3)
-      ) {
-        // Periodic exact guarded recovery, never overwriting any draft.
-        await this.submit(record, false);
-        return;
-      }
-      const response = await this.dispatch(record, "reconcile_send");
-      if (this.confirmed(record, response)) {
-        record.observedDeliveryId = `${MARKER(record.messageId)}:user_turn_observed`;
-        this.update(record, "delivered");
-        return;
-      }
-      if (missingRecipient(response)) {
-        // Absence cannot disprove an earlier send. Keep this ID unresolved,
-        // including across reboots or conversation migration.
-        record.uncertainSince ??= record.lastSubmissionAt ?? record.createdAt;
-        if (Date.now() - (record.uncertainSince ?? Date.now()) >= ABANDON_UNREACHABLE_MS) {
-          this.update(record, "cancelled", "Abandoned after 30 minutes of recipient unavailability.");
-        } else {
-          this.update(record, "uncertain", "Recipient unavailable; retrying after reconciliation.");
-        }
-        return;
-      }
-      // An identity mismatch needs resolution; do not retarget or submit.
-      if (record.status === "needs_attention") return;
-      if ((record.duplicateResends ?? 0) === 0 && this.provenNotSubmitted(record, response)) {
-        delete record.uncertainSince;
-        this.update(record, "queued", "Renderer verified no submission before expiry.");
-        this.nextTry.set(record.messageId, Date.now() + 3_000);
-        return;
-      }
-      const detail = response.ok ? "Original user turn not positively observed." : response.message;
-      if (invalidRecipient(detail)) {
-        this.update(record, "needs_attention", detail);
-        return;
-      }
-      record.uncertainSince ??= record.lastSubmissionAt ?? record.createdAt;
-      const retryCount = record.duplicateResends ?? 0;
-      const retryDelay = DUPLICATE_RETRY_DELAYS_MS[retryCount];
-      const retryDue =
-        retryDelay !== undefined
-          ? Date.now() - record.uncertainSince >= retryDelay
-          : Date.now() - (record.lastSubmissionAt ?? record.createdAt) >= LONG_RETRY_MS;
-      if (retryDue) {
-        await this.submit(record, true);
-      } else {
-        this.update(record, "uncertain", detail);
-      }
-    } catch (error) {
-      // A lost IPC acknowledgement is ambiguous. Preserve the persisted retry
-      // count and reconcile before another possible submission.
-      record.uncertainSince ??= record.lastSubmissionAt ?? record.createdAt;
-      this.update(
-        record,
-        record.status === "needs_attention" ? "needs_attention" : "uncertain",
-        String(error),
-      );
-    }
-  }
-
-  /** Independent conversations progress concurrently. Each lane preserves FIFO;
-   * unresolved messages hold their own lane without blocking other recipients. */
+  /** Independent conversations progress concurrently; FIFO within each lane. */
   async pulse() {
     if (this.closed) return;
-    // Serialize admission only, not the network/browser round trip. A slow
-    // recipient must not monopolize otherwise-free conversation lanes.
+    // Serialize lane selection only, not the browser round trip.
     const previousSelection = this.selectionGate;
     let releaseSelection!: () => void;
     this.selectionGate = new Promise<void>(resolve => { releaseSelection = resolve; });
     await previousSelection;
     const work: Promise<void>[] = [];
     try {
-    if (this.closed) return;
-    const conversations = new Map<string, DeliveryRecord[]>();
-    for (const record of this.records.values()) {
-      if (record.status === "delivered" || record.status === "cancelled") continue;
-      const group = conversations.get(record.conversationId) ?? [];
-      group.push(record);
-      conversations.set(record.conversationId, group);
-    }
-    const due = (record: DeliveryRecord) => (this.nextTry.get(record.messageId) ?? 0) <= Date.now();
-    const lanes = [...conversations];
-    const lastIndex = lanes.findIndex(([id]) => id === this.lastScheduledConversation);
-    const ordered =
-      lastIndex < 0 ? lanes : [...lanes.slice(lastIndex + 1), ...lanes.slice(0, lastIndex + 1)];
-    for (const [conversationId, records] of ordered) {
-      if (this.activeConversations.size >= MAX_ACTIVE_CONVERSATIONS) break;
-      if (this.activeConversations.has(conversationId)) continue;
-      const head = records[0];
-      if (!head || !this.dispatchAllowed(head) || !due(head)) continue;
-      if (head.awaitingGuest) {
-        if (Date.now() - head.createdAt >= ABANDON_UNREACHABLE_MS) {
-          this.update(head, "cancelled", "Recipient did not mount within 30 minutes; message abandoned.");
-        } else {
-          this.nextTry.set(head.messageId, Date.now() + RECONCILE_RETRY_MS);
-        }
-        continue;
-      }
-      // Revalidate queued-worker capacity immediately before the actual send.
-      // This matters when manual sessions start after a wake was reserved.
-      let admitted = false;
-      try { admitted = await this.dispatchAdmission(head); } catch { admitted = false; }
-      if (!admitted || this.records.get(head.messageId)?.status === "cancelled" || !this.dispatchAllowed(head)) {
-        this.nextTry.set(head.messageId, Date.now() + 10_000);
-        continue;
-      }
-      this.activeConversations.add(conversationId);
-      this.lastScheduledConversation = conversationId;
-      work.push(
-        (async () => {
-          try {
-            if (!this.closed) await this.process(head);
-          } finally {
-            this.activeConversations.delete(conversationId);
+      if (this.closed) return;
+      const now = Date.now();
+      const conversations = new Map<string, DeliveryRecord[]>();
+      for (const record of this.records.values()) {
+        if (terminal(record.status)) continue;
+        const group = conversations.get(record.conversationId) ?? [];
+        // Lane head: start its give-up clock, and give up once it runs out.
+        if (!group.length && !this.activeConversations.has(record.conversationId)) {
+          const since = this.headSince.get(record.messageId) ?? now;
+          this.headSince.set(record.messageId, since);
+          if (now - since >= GIVE_UP_MS) {
+            this.giveUp(record);
+            continue;
           }
-        })(),
-      );
-    }
+        }
+        group.push(record);
+        conversations.set(record.conversationId, group);
+      }
+      const due = (record: DeliveryRecord) => (this.nextTry.get(record.messageId) ?? 0) <= Date.now();
+      const lanes = [...conversations];
+      const lastIndex = lanes.findIndex(([id]) => id === this.lastScheduledConversation);
+      const ordered =
+        lastIndex < 0 ? lanes : [...lanes.slice(lastIndex + 1), ...lanes.slice(0, lastIndex + 1)];
+      for (const [conversationId, records] of ordered) {
+        if (this.activeConversations.size >= MAX_ACTIVE_CONVERSATIONS) break;
+        if (this.activeConversations.has(conversationId)) continue;
+        const head = records[0];
+        if (!head || !this.dispatchAllowed(head) || !due(head)) continue;
+        // Capacity is rechecked right before sending (manual sessions may have started).
+        let admitted = false;
+        try { admitted = await this.dispatchAdmission(head); } catch { admitted = false; }
+        if (!admitted || terminal(head.status) || !this.dispatchAllowed(head)) {
+          this.nextTry.set(head.messageId, Date.now() + 10_000);
+          continue;
+        }
+        this.activeConversations.add(conversationId);
+        this.lastScheduledConversation = conversationId;
+        work.push(
+          (async () => {
+            try {
+              if (!this.closed) await this.process(head);
+            } finally {
+              this.activeConversations.delete(conversationId);
+            }
+          })(),
+        );
+      }
     } finally {
       releaseSelection();
     }

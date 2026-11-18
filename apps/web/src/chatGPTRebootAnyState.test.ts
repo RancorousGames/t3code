@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId } from "@t3tools/contracts";
 import {
-  archivePriorRebootUnknownSend,
   findRebootBrowserSlot,
   recordPriorRebootState,
   replaceRebootBrowserSlot,
@@ -14,7 +13,6 @@ const operationId = "operation";
 const priorConversationId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 let activeTab: string | null = "tab";
 let mount: boolean = true;
-let oldUnknown: object | null = null;
 let native = false;
 const nativeBridge = vi.fn(async (_request: { operation: string; url?: string; identity?: object }): Promise<unknown> => ({
   url: "https://chatgpt.com/c/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -49,15 +47,11 @@ vi.mock("./previewStateStore", () => ({
     serverEpoch: "epoch",
   }),
 }));
-vi.mock("./chatGPTUncertainSendFence", () => ({
-  readDurableUnknownChatGPTSend: () => oldUnknown,
-}));
 
 beforeEach(() => {
   storage.clear();
   activeTab = "tab";
   mount = true;
-  oldUnknown = null;
   native = false;
   nativeBridge.mockClear().mockImplementation(async () => ({
     url: "https://chatgpt.com/c/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", destroyed: false,
@@ -161,30 +155,5 @@ describe("Agent Reboot all-state host path", () => {
         )!,
       ),
     ).toMatchObject({ priorConversationId, draftBackup: "unavailable" });
-  });
-
-  it("archives a prior conversation's UNKNOWN send without treating it as delivered", () => {
-    const oldKey = `t3code:chatgpt-unknown-send-fence:v1:${environmentId}:${sessionId}`;
-    const receipt = {
-      version: 2,
-      reservedAt: Date.now(),
-      conversationUrl: `https://chatgpt.com/c/${priorConversationId}`,
-    };
-    oldUnknown = receipt;
-    storage.set(oldKey, JSON.stringify(receipt));
-    expect(
-      archivePriorRebootUnknownSend(environmentId, sessionId, priorConversationId, operationId),
-    ).toBe(true);
-    expect(storage.has(oldKey)).toBe(false);
-    const archived = JSON.parse(
-      storage.get(
-        `t3code:chatgpt-reboot-unknown-archive:v1:${environmentId}:${sessionId}:${operationId}`,
-      )!,
-    );
-    expect(archived).toMatchObject({
-      delivery: "UNKNOWN",
-      operationId,
-      originalConversationUrl: receipt.conversationUrl,
-    });
   });
 });

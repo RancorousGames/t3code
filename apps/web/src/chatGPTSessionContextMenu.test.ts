@@ -33,7 +33,7 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu.find((item) => item.id === "task:open")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "reboot")).toBeDefined();
     expect(menu.find((item) => item.id === "schedule:resume")).toMatchObject({
-      label: "Schedule resume", disabled: false, checked: false,
+      label: "Continue once when idle", disabled: false, checked: false,
     });
     expect(menu.findIndex((item) => item.id === "schedule:resume")).toBe(
       menu.findIndex((item) => item.id === "schedule:prompt") - 1,
@@ -50,12 +50,12 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")?.disabled)
       .toBe(true);
   });
-  it("unifies capacity and periodic auto-continue behind one configuration dialog", () => {
+  it("shows interval wake behind the single configuration dialog", () => {
     const menu = buildChatGPTSessionContextMenu({ ...state, caffy: {
       mode: "periodic", startup: false, onceOnly: false, paused: false,
       createdAt: 1000, expiresAt: 1000 + 3 * 60 * 60_000, intervalMinutes: 1440,
     } });
-    expect(menu.find((item) => item.id === "caffy")?.label).toContain("Periodic auto-continue");
+    expect(menu.find((item) => item.id === "caffy")?.label).toContain("Interval wake");
     expect(menu.find((item) => item.id === "caffy")?.children?.[0]?.id).toBe("caffy:auto");
     expect(menu.find((item) => item.id === "schedule:resume")?.disabled).toBe(true);
   });
@@ -70,7 +70,7 @@ describe("ChatGPT native sidebar menu", () => {
   });
   it("marks a one-shot default resume as already scheduled without replacing another policy", () => {
     const menu = buildChatGPTSessionContextMenu({ ...state, caffy: {
-      mode: "queued", startup: false, onceOnly: true, paused: false,
+      mode: "idle", startup: false, onceOnly: true, paused: false,
       createdAt: 1000, expiresAt: null, intervalMinutes: 20,
       repeatPrompt: null, delayedPrompt: null,
     } });

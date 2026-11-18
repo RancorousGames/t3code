@@ -11,9 +11,6 @@ vi.mock("./browser/persistentChatGPTSessionMode", () => ({
 import { inspectChatGPTPage, isSafeEmptyChatGPTHomepage } from "./chatGPTSessionDom";
 import { hasChatGPTLoadFailure } from "./components/sidebar/chatGPTConversationRecovery";
 import {
-  hasUncertainChatGPTSend,
-  isDuplicateSafeGenericWake,
-  canReplaceGenericUnknown,
   matchesSessionWhich,
   hasObservedMarkedChatGPTUserTurn,
   matchesObservedChatGPTSend,
@@ -25,12 +22,7 @@ import {
   appendUnverifiedOpenRigPolicies,
   prepareChatGPTSessionMessage,
 } from "./chatGPTSessionMessaging";
-import { reserveDurableUnknownChatGPTSend, recordDurableChatGPTSendConfirmed } from "./chatGPTUncertainSendFence";
 
-const autoWake = (id: string) =>
-  "[AUTOMATED TEMPORARY OMNIHUB KEEP-AWAKE; not a human message] If you have already been assigned work that is still authorized and unfinished, please resume it and report meaningful progress or blockers. If you are blocked on a human decision, finished, or awaiting input, do not invent work; state that fact. This monitor is a temporary bootstrap to be replaced by OpenRig's canonical scheduler. [Monitor attempt: " +
-  id +
-  "]";
 
 describe("collapsed user turn delivery acknowledgement", () => {
   it("recognizes unique leading markers and substantial legacy excerpts", () => {
@@ -61,24 +53,6 @@ describe("direct-injection marker acknowledgement", () => {
       <div data-content-search-unit-key="fallback-turn-3:0:user">Other text</div>`;
     expect(hasObservedMarkedChatGPTUserTurn(marker)).toBe(false);
     expect(hasObservedMarkedChatGPTUserTurn("Other text")).toBe(false);
-  });
-});
-
-describe("OMNI-0033 generic UNKNOWN exact-scope duplicate policy", () => {
-  const a = autoWake("00000000-0000-4000-8000-000000000001");
-  const b = autoWake("00000000-0000-4000-8000-000000000002");
-  it("allows only another distinct canonical auto wake after an identical un-enriched UNKNOWN", () => {
-    expect(isDuplicateSafeGenericWake(a)).toBe(true);
-    expect(canReplaceGenericUnknown({ original: a, text: a }, b)).toBe(true);
-    expect(canReplaceGenericUnknown({ original: a, text: a }, a)).toBe(false);
-    expect(canReplaceGenericUnknown({ original: a, text: a + "\nOpenRig policy" }, b)).toBe(false);
-  });
-  it("preserves unrelated UNKNOWN payloads and altered messages", () => {
-    expect(canReplaceGenericUnknown({ original: "Human task", text: "Human task" }, b)).toBe(false);
-    expect(canReplaceGenericUnknown({ original: a, text: a }, "Human task")).toBe(false);
-    expect(isDuplicateSafeGenericWake(a + " extra")).toBe(false);
-    expect(isDuplicateSafeGenericWake(a.replace("This monitor", "That monitor"))).toBe(false);
-    expect(canReplaceGenericUnknown(null, b)).toBe(false);
   });
 });
 
@@ -636,42 +610,6 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     }
   });
 
-  it("proves an expired queued attempt never reached Enter before allowing resubmission", async () => {
-    const fixture = guestFixture(async () => { throw new Error("offline"); });
-    const original = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\\nTest";
-    const input = {
-      environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      sessionId: browserId,
-      expectedConversationId: conversationId,
-      message: original,
-    };
-    try {
-      await expect(runChatGPTSessionControl({
-        ...input, action: "send", sendExpiresAt: Date.now() - 1,
-      })).rejects.toThrow(/expired before dispatch/);
-      expect(fixture.presses).toBe(0);
-      expect(fixture.typed).toBe("");
-      expect(await runChatGPTSessionControl({
-        ...input, action: "reconcile_send", sendExpiresAt: Date.now() - 6_000,
-      })).toMatchObject({
-        delivery: "pre_submit_aborted", messageSent: false, sendAttempted: false,
-        verifiedConversationId: conversationId,
-      });
-      await expect(runChatGPTSessionControl({
-        ...input, action: "reconcile_send",
-      })).rejects.toThrow("not observable");
-      fixture.setComposerDraft("User typing a draft");
-      await expect(runChatGPTSessionControl({
-        ...input, action: "reconcile_send", sendExpiresAt: Date.now() - 6_000,
-      })).rejects.toThrow("not observable");
-      expect(fixture.presses).toBe(0);
-      expect(fixture.typed).toBe("");
-    } finally {
-      fixture.guest.remove();
-    }
-  });
-
   it("direct submission never edits a human composer during guarded delivery", async () => {
     const fixture = guestFixture(async () => { throw Error("offline"); });
     try {
@@ -690,47 +628,6 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     } finally { fixture.guest.remove(); }
   });
 
-  it("preserves confirmed prior residue while directly submitting the next queued message", async () => {
-    const previous = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\nPrevious";
-    const enriched = previous + "\npolicy context";
-    const next = "[T3-MSG:bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb]\nNext";
-    const fixture = guestFixture(async () => { throw Error("offline"); });
-    const input = { environmentId: "local" as never, sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const, sessionId: browserId, expectedConversationId: conversationId,
-      sendExpiresAt: Date.now() + 70_000, previousDeliveredMessage: previous, message: next };
-    try {
-      recordDurableChatGPTSendConfirmed(input.environmentId, browserId,
-        `https://chatgpt.com/c/${conversationId}`, previous, enriched);
-      fixture.setComposerDraft(enriched + " edited");
-      expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "user_turn_observed" });
-      expect(fixture.draft).toBe(enriched + " edited");
-      expect(fixture.typed).toBe(next);
-      expect(fixture.presses).toBe(1);
-    } finally { fixture.guest.remove(); }
-  });
-
-  it("retains staged ownership through restart and a temporarily changed draft", async () => {
-    const original = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\nQueued message";
-    const url = `https://chatgpt.com/c/${conversationId}`;
-    const fixture = guestFixture(async () => { throw Error("offline"); });
-    const input = { environmentId: "local" as never, sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const, sessionId: browserId, expectedConversationId: conversationId,
-      sendExpiresAt: Date.now() + 70_000, message: original };
-    try {
-      reserveDurableUnknownChatGPTSend(input.environmentId, browserId, url, false, {
-        staged: true, original, text: original, url, before: { totalTurns: 1, lastUserTurnKey: "old-key" },
-        policyEnrichment: { schema: "t3-c05-browser-optional/v1", status: "not_eligible" },
-      });
-      resetUncertainChatGPTSendsForTests(true);
-      fixture.setComposerDraft(original + " edited");
-      await expect(runChatGPTSessionControl(input)).rejects.toThrow("UNKNOWN send");
-      expect(hasUncertainChatGPTSend(input.environmentId, browserId)).toBe(true);
-      fixture.setComposerDraft(original);
-      expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "user_turn_observed" });
-      expect(fixture.presses).toBe(1);
-    } finally { fixture.guest.remove(); }
-  });
-
   it.each([false, true])("recovers a receiptless exact queued draft; observed=%s", async (observed) => {
     const original = "[T3-MSG:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa]\nQueued message";
     const fixture = guestFixture(async () => { throw Error("offline"); });
@@ -745,107 +642,6 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     } finally { fixture.guest.remove(); }
   });
 
-  it("finishes only an exact staged automated draft, never a human-edited composer", async () => {
-    const id = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
-    const original = "[T3-MSG:" + id + "]\nQueued message";
-    const prefixed = "[T3-MSG:" + id + "]\n[POTENTIALLY DUPLICATE: delivery unconfirmed]\nQueued message";
-    const fixture = guestFixture(async () => { throw Error("offline"); },
-      { delayed: true, pressThrows: true });
-    let now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const input = { environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const, sessionId: browserId,
-      expectedConversationId: conversationId };
-    try {
-      await runChatGPTSessionControl({ ...input, message: original });
-      expect(fixture.presses).toBe(1);
-      fixture.setComposerDraft("Human is writing");
-      now += 5 * 60_000;
-      await expect(runChatGPTSessionControl({ ...input, message: prefixed,
-        allowPossibleDuplicate: true, sendExpiresAt: now + 70_000,
-      })).rejects.toThrow("UNKNOWN send");
-      expect(fixture.presses).toBe(1);
-      fixture.setComposerDraft(original);
-      expect(await runChatGPTSessionControl({ ...input, message: prefixed,
-        allowPossibleDuplicate: true, sendExpiresAt: now + 70_000,
-      })).toMatchObject({ delivery: "unknown", sendAttempted: true });
-      expect(fixture.presses).toBe(2);
-      expect(fixture.typed).toBe(original); // Didn't overwrite the existing draft.
-    } finally { clock.mockRestore(); fixture.guest.remove(); }
-  });
-
-  it("can resend an UNKNOWN queued message only after a long gap, preserving marker and old evidence", async () => {
-    const id = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
-    const original = "[T3-MSG:" + id + "]\\nPlay safely";
-    const retried = "[T3-MSG:" + id + "]\\n[POTENTIALLY DUPLICATE: earlier delivery unconfirmed. If already received, ignore this repeat.]\\nPlay safely";
-    const fixture = guestFixture(async () => { throw Error("offline"); }, { delayed: true, pressThrows: true });
-    let now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const base = { environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const, sessionId: browserId,
-      expectedConversationId: conversationId };
-    try {
-      expect(await runChatGPTSessionControl({ ...base, message: original })).toMatchObject({
-        delivery: "unknown", sendAttempted: true,
-      });
-      now += 5 * 60_000;
-      expect(await runChatGPTSessionControl({ ...base,
-        message: retried, allowPossibleDuplicate: true, sendExpiresAt: now + 70_000,
-      })).toMatchObject({ delivery: "unknown", sendAttempted: true });
-      expect(fixture.presses).toBe(2);
-      // The original message can reconcile a retried message because the stable
-      // [T3-MSG] identity remains unchanged despite the duplicate warning.
-      fixture.revealTurn();
-      expect(await runChatGPTSessionControl({
-        ...base, action: "reconcile_send", message: original,
-      })).toMatchObject({ delivery: "user_turn_observed", reconciled: true });
-      expect(fixture.presses).toBe(2);
-    } finally {
-      clock.mockRestore();
-      fixture.guest.remove();
-    }
-  });
-
-  it("reconciles after post-click transport failure and refuses an unconfirmed duplicate", async () => {
-    const fixture = guestFixture(
-      async () => {
-        throw new Error("offline");
-      },
-      { virtualized: true, delayed: true, pressThrows: true },
-    );
-    const input = {
-      environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const,
-      sessionId: browserId,
-      expectedConversationId: conversationId,
-      message: "Postclick ambiguous delivery",
-    };
-    try {
-      expect(await runChatGPTSessionControl(input)).toMatchObject({
-        messageSent: false,
-        delivery: "unknown",
-        sendAttempted: true,
-      });
-      expect(await runChatGPTSessionControl(input)).toMatchObject({
-        messageSent: false,
-        delivery: "unknown",
-      });
-      expect(fixture.presses).toBe(1);
-      fixture.revealTurn();
-      expect(await runChatGPTSessionControl(input)).toMatchObject({
-        messageSent: true,
-        delivery: "user_turn_observed",
-        reconciled: true,
-      });
-      expect(fixture.presses).toBe(1);
-      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(false);
-    } finally {
-      fixture.guest.remove();
-    }
-  });
   it("confirms marked direct delivery even when turn count and last user key stay unchanged", async () => {
     const original = "[T3-MSG:4a83b58d-51fe-42ec-ae6d-d8efba2ef93d]\nPayload";
     const fixture = guestFixture(async () => { throw Error("offline"); },
@@ -864,156 +660,6 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     } finally { fixture.guest.remove(); }
   });
 
-  it("restores UNKNOWN evidence after renderer restart and confirms delivery without another click", async () => {
-    const fixture = guestFixture(async () => { throw new Error("offline"); },
-      { virtualized: true, delayed: true, pressThrows: true });
-    const input = { environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const, sessionId: browserId,
-      expectedConversationId: conversationId, message: "Restart recovery task" };
-    try {
-      expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "unknown" });
-      resetUncertainChatGPTSendsForTests(true);
-      expect(await runChatGPTSessionControl(input)).toMatchObject({ delivery: "unknown" });
-      expect(fixture.presses).toBe(1);
-      fixture.revealTurn();
-      const result = await runChatGPTSessionControl({ ...input, action: "read" });
-      expect(result).toMatchObject({ sendReceipt: { delivery: "user_turn_observed" } });
-      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(false);
-      expect(fixture.presses).toBe(1);
-    } finally { fixture.guest.remove(); }
-  });
-  it("preserves an unrelated legacy receipt when a requested history turn is observed", async () => {
-    const fixture = guestFixture(async () => { throw new Error("offline"); }, { pressThrows: true });
-    const input = { environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const, sessionId: browserId,
-      expectedConversationId: conversationId, message: "Known history checkpoint" };
-    try {
-      await runChatGPTSessionControl(input);
-      resetUncertainChatGPTSendsForTests();
-      reserveDurableUnknownChatGPTSend("local" as never, browserId,
-        `https://chatgpt.com/c/${conversationId}`, false);
-      await expect(runChatGPTSessionControl({ ...input, action: "reconcile_send", message: "Missing message" }))
-        .rejects.toThrow("not observable");
-      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
-      expect(await runChatGPTSessionControl({ ...input, action: "reconcile_send" })).toMatchObject({
-        reconciled: true, legacyReceipt: true, sendAttempted: false,
-        delivery: "user_turn_observed",
-      });
-      expect(fixture.presses).toBe(1);
-      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
-    } finally { fixture.guest.remove(); }
-  });
-  it("returns UNKNOWN after a clicked but unobserved message times out without replay", async () => {
-    const fixture = guestFixture(
-      async () => {
-        throw new Error("offline");
-      },
-      { delayed: true },
-    );
-    vi.useFakeTimers();
-    const input = {
-      environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const,
-      sessionId: browserId,
-      expectedConversationId: conversationId,
-      message: "No visible confirmation",
-    };
-    try {
-      const pending = runChatGPTSessionControl(input);
-      await vi.advanceTimersByTimeAsync(17_000);
-      expect(await pending).toMatchObject({
-        messageSent: false,
-        delivery: "unknown",
-        sendAttempted: true,
-        conversationGuardValidated: true,
-        verifiedConversationId: conversationId,
-      });
-      expect(await runChatGPTSessionControl(input)).toMatchObject({
-        messageSent: false,
-        delivery: "unknown",
-      });
-      expect(fixture.presses).toBe(1);
-    } finally {
-      vi.useRealTimers();
-      fixture.guest.remove();
-    }
-  });
-  it("backs up the exact mounted guest + unresolved send without reconciliation or duplicate click", async () => {
-    const fixture = guestFixture(
-      async () => {
-        throw new Error("offline");
-      },
-      {
-        delayed: true,
-        pressThrows: true,
-      },
-    );
-    const savePrivate = vi.fn(
-      async (input: {
-        sessionId: string;
-        url: string;
-        draft: string;
-        uncertainSend: { original: string } | null;
-      }) => ({
-        sessionId: input.sessionId,
-        url: input.url,
-        bytes: new TextEncoder().encode(input.draft).length,
-        sha256: "f".repeat(64),
-        path: "PRIVATE_FIXTURE_PATH",
-        uncertainSendPresent: input.uncertainSend !== null,
-      }),
-    );
-    Object.assign(window.desktopBridge!, { savePrivateChatGPTDraftSnapshot: savePrivate });
-    fixture.setComposerDraft("");
-    const command = {
-      environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3", hidden: false }] as never,
-      sessionId: browserId,
-    };
-    try {
-      expect(
-        await runChatGPTSessionControl({
-          ...command,
-          action: "send",
-          expectedConversationId: conversationId,
-          message: "Pending private fixture",
-        }),
-      ).toMatchObject({ sendAttempted: true, delivery: "unknown" });
-      // Empty guest composers must not auto-hibernate while an UNKNOWN send is pending.
-      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
-      fixture.setComposerDraft("Unsent Unicode 🌲");
-      const snapshot = (await runChatGPTSessionControl({
-        ...command,
-        action: "snapshot",
-      })) as { status: string; uncertainSendPresent: boolean; bytes: number; draft?: string };
-      expect(snapshot).toMatchObject({
-        status: "backed_up_nonempty",
-        uncertainSendPresent: true,
-      });
-      expect(snapshot.bytes).toBe(new TextEncoder().encode("Unsent Unicode 🌲").length);
-      expect(snapshot).not.toHaveProperty("draft");
-      const writerPayload = savePrivate.mock.calls[0]![0];
-      expect(writerPayload.uncertainSend?.original).toBe("Pending private fixture");
-      expect(writerPayload.draft).toBe("Unsent Unicode 🌲");
-      // The previous UNKNOWN receipt remains intact; snapshot cannot consume it.
-      expect(
-        await runChatGPTSessionControl({
-          ...command,
-          action: "send",
-          expectedConversationId: conversationId,
-          message: "Pending private fixture",
-        }),
-      ).toMatchObject({ sendAttempted: true, delivery: "unknown" });
-      expect(fixture.presses).toBe(1);
-      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(true);
-    } finally {
-      fixture.guest.remove();
-    }
-  });
-
   it("never wakes a hibernated/unmounted guest for a preservation snapshot", async () => {
     const command = {
       environmentId: "local" as never,
@@ -1027,74 +673,6 @@ describe("C05 policy optional on the ONE authorized guarded ChatGPT send", () =>
     });
   });
 
-  it("does not let a payload-less legacy UNKNOWN block a new independently guarded message forever", async () => {
-    const url = `https://chatgpt.com/c/${conversationId}`;
-    const fixture = guestFixture(async () => ({ schema: "t3-c05-browser-optional/v1",
-      status: "ready", browserSessionId: browserId, conversationId, policies: [] }));
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() - 120_000);
-    reserveDurableUnknownChatGPTSend("local" as never, browserId, url, false);
-    vi.useRealTimers();
-    try {
-      const result = await runChatGPTSessionControl({
-        environmentId: "local" as never,
-        sessions: [{ id: browserId, title: "Coordinator" }] as never,
-        action: "send", sessionId: browserId, expectedConversationId: conversationId,
-        message: "New distinct test message",
-      });
-      expect(result).toMatchObject({ messageSent: true, delivery: "user_turn_observed" });
-      expect(fixture.presses).toBe(1);
-      expect(fixture.typed).toBe("New distinct test message");
-      expect(hasUncertainChatGPTSend("local" as never, browserId)).toBe(false);
-      expect([...Array(window.localStorage.length).keys()]
-        .map(i => window.localStorage.key(i))
-        .some(k => k?.includes("chatgpt-legacy-unknown-archive"))).toBe(true);
-    } finally {
-      fixture.guest.remove();
-    }
-  });
-
-  it("exposes UNKNOWN then reconciled DELIVERED on read, without resubmitting", async () => {
-    const fixture = guestFixture(
-      async () => {
-        throw new Error("offline");
-      },
-      { virtualized: true, delayed: true, pressThrows: true },
-    );
-    const input = {
-      environmentId: "local" as never,
-      sessions: [{ id: browserId, title: "M3" }] as never,
-      action: "send" as const,
-      sessionId: browserId,
-      expectedConversationId: conversationId,
-      message: "Read-only receipt recovery",
-    };
-    const read = () =>
-      runChatGPTSessionControl({
-        environmentId: input.environmentId,
-        sessions: input.sessions,
-        action: "read",
-        sessionId: browserId,
-        expectedConversationId: conversationId,
-      });
-    try {
-      expect(await runChatGPTSessionControl(input)).toMatchObject({
-        messageSent: false,
-        delivery: "unknown",
-      });
-      expect(await read()).toMatchObject({
-        sendReceipt: { delivery: "unknown", sendAttempted: true },
-      });
-      fixture.revealTurn();
-      expect(await read()).toMatchObject({
-        sendReceipt: { delivery: "user_turn_observed", sendAttempted: true },
-        session: { status: "pending_or_stalled" },
-      });
-      expect(fixture.presses).toBe(1);
-    } finally {
-      fixture.guest.remove();
-    }
-  });
 });
 
 describe("OMCP session listing and reload policy", () => {

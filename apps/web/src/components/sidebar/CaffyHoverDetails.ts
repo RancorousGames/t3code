@@ -13,10 +13,9 @@ export function caffyDiagnosticLines(monitor: T3CaffyEntry, now: number): string
     if (monitor.mode === "periodic")
       return monitor.nextDueAt != null
         ? `At ${at(monitor.nextDueAt)}`
-        : "Waiting for periodic schedule";
+        : "Interval restarts after the pending wake lands";
     if (monitor.mode === "startup") return "Next T3 restart";
-    if (monitor.mode === "queued") return "When eligible / free capacity";
-    return "Event-driven: after the next verified idle event";
+    return "As soon as the session goes idle";
   })();
 
   const checkedAt = monitor.lastCheckedAt;
@@ -30,7 +29,9 @@ export function caffyDiagnosticLines(monitor: T3CaffyEntry, now: number): string
     `Next scheduler check: ${monitor.nextCheckAt != null ? `${at(monitor.nextCheckAt)}${monitor.nextCheckAt < now ? " (overdue; scheduler may be unavailable)" : ""}` : "When T3 is ready"}`,
     `Last wake sent: ${monitor.lastWakeAt != null ? at(monitor.lastWakeAt) : "Never"}`,
   ];
-  lines.push(`Mode: ${monitor.mode}; ${monitor.paused ? "paused" : "enabled"}`);
+  const modeLabel = monitor.mode === "idle" ? "Keep running" :
+    monitor.mode === "periodic" ? `Interval wake every ${monitor.intervalMinutes} min` : "Startup only";
+  lines.push(`Mode: ${modeLabel}; ${monitor.respectSlots ? "respects" : "ignores"} working slots; ${monitor.paused ? "paused" : "enabled"}`);
   if (monitor.wakePhase) lines.push(`State: ${monitor.wakePhase} (revision ${monitor.transitionVersion ?? 0})`);
   if (monitor.availability) lines.push(`Browser: ${monitor.availability}`);
   if (monitor.pendingMessageId) lines.push(`Receipt: ${monitor.pendingMessageId}; ${monitor.deliveryStatus ?? "pending journal"}${monitor.deliveryAwaitingGuest ? "; awaiting verified mount" : ""}`);

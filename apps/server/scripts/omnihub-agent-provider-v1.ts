@@ -72,13 +72,18 @@ while (true) {
       endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
       endpoint.pathname = "/api/orchestration/shell";
       endpoint.search = "";
-      const [snapshotResponse, providerResult] = await Promise.all([
+      const [snapshotResponse, providerResult, config] = await Promise.all([
         fetch(endpoint, { headers: {
           Authorization: "Bearer " + token,
           "x-t3-orchestration-protocol": String(ORCHESTRATION_PROTOCOL_VERSION),
         }, signal: AbortSignal.timeout(16_000) }),
         Effect.runPromise(client[WS_METHODS.serverRefreshProviders]({})),
+        // Desktop model favorites/hidden models live in server settings.
+        Effect.runPromise(client[WS_METHODS.serverGetConfig]({})).catch(() => null),
       ]);
+      const favorites = new Set((config?.settings.favorites ?? [])
+        .map((f) => f.provider + "|" + f.model));
+      const prefs = config?.settings.providerModelPreferences ?? {};
       if (!snapshotResponse.ok) throw new Error("T3CatalogReadUnavailable");
       const snapshot = await snapshotResponse.json() as {
         projects: Array<{ id: string; title: string; workspaceRoot: string;
@@ -95,8 +100,10 @@ while (true) {
         projects: (snapshot.projects ?? []).filter((p) => !p.archivedAt)
           .map((p) => ({ id: p.id, title: p.title,
             workspaceRoot: p.workspaceRoot, defaultModelSelection: p.defaultModelSelection ?? null })),
+        // Same picker rules as desktop: hidden models dropped, favorites first.
         models: providers.filter((p) => p.enabled && p.installed).flatMap((p) =>
-          p.models.map((model) => {
+          p.models.filter((model) => !prefs[p.instanceId]?.hiddenModels.includes(model.slug))
+          .map((model) => {
             const effort = model.capabilities?.optionDescriptors?.find(
               (d) => d.type === "select" &&
                 (d.id === "reasoningEffort" || d.id === "effort"),
@@ -104,15 +111,29 @@ while (true) {
             return {
               instanceId: p.instanceId, provider: p.driver,
               slug: model.slug, label: model.slug, isDefault: model.isDefault === true,
+              favorite: favorites.has(p.instanceId + "|" + model.slug),
               effortId: effort?.id ?? null,
               efforts: effort?.type === "select" ? effort.options.map((o) =>
                 ({ id: o.id, label: o.label })) : [],
             };
           }),
-        ),
+        ).sort((a, b) => Number(b.favorite) - Number(a.favorite)),
       };
       process.stdout.write(JSON.stringify({ id, result: {
         apiVersion: T3_AGENT_PROVIDER_VERSION, requestId: id, ok: true, data,
+      } }) + "\n");
+      continue;
+    }
+    // Toggle a desktop model favorite ({instanceId, model, favorite}); shared with T3 desktop.
+    if (message.method === "models.favorite") {
+      const { instanceId, model, favorite } = message.params as Record<string, unknown>;
+      if (typeof instanceId !== "string" || !instanceId || typeof model !== "string" || !model ||
+          typeof favorite !== "boolean") throw new Error("InvalidFavorite");
+      await Effect.runPromise(client[WS_METHODS.serverUpdateSettings]({
+        patch: { setModelFavorites: [{ provider: instanceId as never, model, favorite }] },
+      }));
+      process.stdout.write(JSON.stringify({ id, result: {
+        apiVersion: T3_AGENT_PROVIDER_VERSION, requestId: id, ok: true, data: { instanceId, model, favorite },
       } }) + "\n");
       continue;
     }

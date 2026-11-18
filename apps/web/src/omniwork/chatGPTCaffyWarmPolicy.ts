@@ -14,11 +14,11 @@ export function isCaffyWakeImminent(
 ): boolean {
   if (monitor.paused || monitor.rebootOperationId ||
       (monitor.expiresAt !== null && monitor.expiresAt <= now)) return false;
-  if (monitor.mode === "queued" && !keepT3Busy) return false;
+  if (monitor.respectSlots && !keepT3Busy) return false;
   if (typeof monitor.beginAt === "number" && monitor.beginAt > now)
     return monitor.beginAt - now <= windowMs;
   if (monitor.pendingMessageId || monitor.pendingWake) return true;
-  if (monitor.mode === "idle" || monitor.mode === "queued") return true;
+  if (monitor.mode === "idle") return true;
   if (monitor.mode === "periodic" && monitor.nextDueAt != null)
     return monitor.nextDueAt - now <= windowMs;
   return false; // Startup-only has no new due time after the launch event.

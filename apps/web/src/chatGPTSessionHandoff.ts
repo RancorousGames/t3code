@@ -61,7 +61,9 @@ export function buildChatGPTSessionHandoffPrompt(
   const bootstrapInstruction = [
     `Call OMCP Tools ${bootstrap} exactly once, without a title argument.`,
     "Read and follow its returned instructions.",
-    `Print [T3_ID:${sessionId}] in your first response after Bootstrap; preserve the same T3 session identity and do not print T3_TITLE.`,
+    managedSpawn
+      ? `Print [T3_ID:${sessionId}] in your first response for new-session registration; do not print T3_TITLE.`
+      : "This is a reboot of an already named session. Do not print T3_ID or T3_TITLE; the Bootstrap tool result provides the registration receipt.",
   ].join("\n");
   const match = managedSpawn ? task.match(/\b([A-Z][A-Z0-9]*-\d{3,5})\b/u) : null;
   const suppliedTitle = context?.taskTitle?.trim().replace(/[\r\n]+/gu, " ");

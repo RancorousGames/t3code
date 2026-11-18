@@ -6,7 +6,8 @@ export interface T3CaffyEntry {
   sessionId: string;
   browserSessionId?: string | undefined;
   publicSessionId?: string | undefined;
-  mode: "idle" | "periodic" | "queued" | "startup";
+  mode: "idle" | "periodic" | "startup";
+  respectSlots?: boolean;
   paused: boolean;
   onceOnly: boolean;
   expiresAt: number | null;
@@ -91,7 +92,7 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
         const entries: T3CaffyEntry[] = data.entries.filter((entry): entry is T3CaffyEntry =>
           !!entry && typeof entry === "object" &&
           typeof entry.sessionId === "string" &&
-          ["idle", "periodic", "queued", "startup"].includes(entry.mode) &&
+          ["idle", "periodic", "startup"].includes(entry.mode) &&
           typeof entry.paused === "boolean" &&
           (entry.expiresAt === null || typeof entry.expiresAt === "number"),
         );
