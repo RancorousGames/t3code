@@ -198,7 +198,7 @@ function imagePreflight(id) {
         ? !state.composerView.state.doc.eq(state.originalDoc) : draft!==state.originalDraft;
       if(!state.uploadId||changed||p?.isSubmitting||p?.isWaitingForFileUploads
           ||p?.attachments?.length!==1||p.attachments[0].uploadId!==state.uploadId
-          ||p.attachments[0].size!==state.file?.size)
+          ||p.attachments[0].name?.replace(/\\(\\d+\\)(?=\\.[^.]+$)/, "")!==state.file?.name)
         return false;
       p.onAttachmentRemove(state.uploadId,"user");
       return true;
@@ -230,9 +230,9 @@ function attachmentStatus(id) {
       ? !view.state.doc.eq(s.originalDoc) : draft!==s.originalDraft;
     const attachments=Array.isArray(p.attachments)?p.attachments:[];
     const attachment=attachments.length===1?attachments[0]:null;
-    // ChatGPT renames duplicate filenames (e.g. probe.png -> probe(10).png).
-    // Identity must use the unique uploadId and original bytes metadata, not name.
-    const owned=!!attachment&&attachment.size===s.file?.size&&
+    // React may re-encode an image, and ChatGPT may suffix duplicate names.
+    // The initially empty composer and upload ID bind the staged attachment.
+    const owned=!!attachment&&attachment.source==="local"&&attachment.name?.replace(/\\(\\d+\\)(?=\\.[^.]+$)/, "")===s.file?.name&&
       (!attachment.mimeType||attachment.mimeType===s.file?.type)&&
       (!s.uploadId||attachment.uploadId===s.uploadId);
     if(owned&&attachment?.uploadId&&!s.uploadId)s.uploadId=attachment.uploadId;
@@ -291,7 +291,7 @@ function resetUploadExpression(id) {
     const a=p.attachments||[];
     if(!a.length)return {ok:true,empty:true};
     if(a.length!==1||!a[0].uploadId||a[0].status==="ready"||
-        a[0].size!==s.file?.size||
+        a[0].name?.replace(/\\(\\d+\\)(?=\\.[^.]+$)/, "")!==s.file?.name||
         (a[0].mimeType&&a[0].mimeType!==s.file?.type))
       return {ok:false,reason:"cannot_safely_reset",status:a[0]?.status,attachments:a.length};
     // Cancel only the image from this request. A newly added human
@@ -311,7 +311,7 @@ function sendExpression(id, message, conversationId) {
     const p=s.findProps();
     if(!p||!Array.isArray(p.attachments)||p.attachments.length!==1||p.isWaitingForFileUploads||p.isSubmitting
         ||p.attachments[0]?.status!=="ready"||!p.attachments[0]?.id||!p.attachments[0]?.uploadId
-        ||p.attachments[0]?.size!==s.file?.size||
+        ||p.attachments[0]?.name?.replace(/\\(\\d+\\)(?=\\.[^.]+$)/, "")!==s.file?.name||
           (p.attachments[0]?.mimeType&&p.attachments[0]?.mimeType!==s.file?.type)||
           (s.uploadId&&p.attachments[0]?.uploadId!==s.uploadId))
       return {ok:false,reason:"attachment_not_ready"};
