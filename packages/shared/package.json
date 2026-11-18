@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./managedMcpServers": {
+      "types": "./src/managedMcpServers.ts",
+      "import": "./src/managedMcpServers.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

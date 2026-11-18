@@ -376,6 +376,8 @@ export function applyServerSettingsPatch(
     providerResetWakeups: providerResetWakeupsPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
+    // Shared MCP server list is authoritative: removal must delete old entries.
+    mcpServers: mcpServersPatch,
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
     projectAutoPullOverrides: _legacyAutoPull,
     projectScriptOverrides: _legacyScripts,
@@ -471,6 +473,7 @@ export function applyServerSettingsPatch(
   const next = deepMerge(current, patchForMerge);
   const nextWithReplacementsBase = {
     ...next,
+    ...(mcpServersPatch === undefined ? {} : { mcpServers: mcpServersPatch }),
     favorites,
     providerModelPreferences: nextModelPreferences,
     ...(worktreeCleanupPatch === undefined

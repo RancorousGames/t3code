@@ -14,6 +14,7 @@ import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySettings.ts";
+import { enabledManagedMcpServers, managedMcpServerKey } from "./managedMcpServers.ts";
 import { createModelSelection } from "./model.ts";
 import { resolveProjectScripts } from "./projectScripts.ts";
 import {
@@ -83,6 +84,27 @@ describe("fallbackTextGenerationModelSelection", () => {
 });
 
 describe("serverSettings helpers", () => {
+  it("replaces managed MCP entries and filters disabled or unrelated providers", () => {
+    const codex = {
+      name: "OMCPT",
+      url: "http://127.0.0.1:8773/mcp",
+      enabled: true,
+      providers: ["codex", "claude"] as const,
+    };
+    const claude = {
+      name: "Other",
+      url: "https://example.com/mcp",
+      enabled: false,
+      providers: ["claude"] as const,
+    };
+    const saved = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      mcpServers: [codex, claude],
+    });
+    expect(enabledManagedMcpServers(saved.mcpServers, "codex")).toEqual([codex]);
+    expect(enabledManagedMcpServers(saved.mcpServers, "claude")).toEqual([codex]);
+    expect(managedMcpServerKey(codex.name)).toBe("t3-managed-OMCPT");
+    expect(applyServerSettingsPatch(saved, { mcpServers: [] }).mcpServers).toEqual([]);
+  });
   it("translates a shipped client's idle compaction switch into a mode", () => {
     const off = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { idleCompaction: "off" });
     expect([off.idleCompaction, off.compactIdleThreads]).toEqual(["off", false]);

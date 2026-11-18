@@ -156,6 +156,8 @@ import {
 import * as ServerConfig from "../../config.ts";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import type { ManagedMcpServer } from "@t3tools/contracts/settings";
+import { enabledManagedMcpServers, managedMcpServerKey } from "@t3tools/shared/managedMcpServers";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
@@ -1770,29 +1772,42 @@ export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 export function claudeMcpQueryOverrides(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly readOnlySandbox: boolean;
+  readonly managedMcpServers?: ReadonlyArray<ManagedMcpServer>;
   readonly allowedTools?: ReadonlyArray<string>;
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
 } {
   const session = input.mcpSession;
-  if (session === undefined) {
+  const externalServers = Object.fromEntries(
+    enabledManagedMcpServers(input.managedMcpServers ?? [], "claude").map((server) => [
+      managedMcpServerKey(server.name),
+      { type: "http" as const, url: server.url },
+    ]),
+  );
+  if (session === undefined && Object.keys(externalServers).length === 0) {
     return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
   }
-  const mcpAllowedTools = input.readOnlySandbox
-    ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
-    : [CLAUDE_T3_MCP_TOOL_WILDCARD];
+  const mcpAllowedTools =
+    session === undefined
+      ? []
+      : input.readOnlySandbox
+        ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
+        : [CLAUDE_T3_MCP_TOOL_WILDCARD];
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
-      "t3-code": {
-        type: "http",
-        url: session.endpoint,
-        headers: {
-          Authorization: session.authorizationHeader,
-        },
-        timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
-      },
+      ...externalServers,
+      ...(session === undefined
+        ? {}
+        : {
+            "t3-code": {
+              type: "http" as const,
+              url: session.endpoint,
+              headers: { Authorization: session.authorizationHeader },
+              timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
+            },
+          }),
     },
   };
 }
@@ -3401,9 +3416,7 @@ function claudeToolResultBlocksFromUserMessage(
   // compiler cannot narrow through Array.filter. Validate each discriminant
   // before mapping the block into the tool-result subset.
   return message.message.content.flatMap((part) =>
-    isClaudeUserToolResultContentBlock(part)
-      ? [part as ClaudeUserToolResultContentBlock]
-      : [],
+    isClaudeUserToolResultContentBlock(part) ? [part as ClaudeUserToolResultContentBlock] : [],
   );
 }
 
@@ -10289,8 +10302,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         ) {
           const queryPolicy = yield* queryPolicyForTurn(turnInput);
           const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+          const managedMcpServers = Option.isSome(serverSettings)
+            ? yield* serverSettings.value.getSettings.pipe(
+                Effect.map((settings) => settings.mcpServers),
+                Effect.orElseSucceed(() => [] as ReadonlyArray<ManagedMcpServer>),
+              )
+            : [];
           const mcpOverrides = claudeMcpQueryOverrides({
             mcpSession,
+            managedMcpServers,
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
             ...(queryPolicy.allowedTools === undefined

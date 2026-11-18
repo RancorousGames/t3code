@@ -762,7 +762,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "omnihub-keep-awake",
     title: "Caffy",
     to: "/settings/omniwork",
-    searchTerms: ["caffy timed resume on idle keep awake wake session monitor omnihub openrig cancel"],
+    searchTerms: [
+      "caffy timed resume on idle keep awake wake session monitor omnihub openrig cancel",
+    ],
     desktopOnly: true,
   },
   {
@@ -835,6 +837,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "agents cli codex claude cursor grok fx opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
     ],
+  },
+  {
+    id: "mcp-servers",
+    title: "MCP servers",
+    to: "/settings/providers",
+    searchTerms: [
+      "model context protocol MCP integrations agent tools HTTP endpoint add remove enable disable codex claude",
+    ],
+    providerSettingsOnly: true,
   },
   {
     id: "usage-providers",

@@ -1220,7 +1220,19 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+// LOCAL TEMPORARY FEATURE: Remove this shared MCP model and its UI/provider wiring once
+// upstream T3 Code ships its own MCP server manager (see pingdotgg/t3code #14118).
+export const ManagedMcpServer = Schema.Struct({
+  name: Schema.String.check(Schema.isPattern(/^[a-zA-Z][a-zA-Z0-9_-]{0,47}$/)),
+  url: Schema.String.check(Schema.isPattern(/^https?:\/\/[^\s/]+(?:\/[^\s]*)?$/)),
+  enabled: Schema.Boolean,
+  providers: Schema.Array(Schema.Literals(["codex", "claude"])).check(Schema.isMinLength(1)),
+});
+export type ManagedMcpServer = typeof ManagedMcpServer.Type;
+export const ManagedMcpServers = Schema.Array(ManagedMcpServer).check(Schema.isMaxLength(24));
+
 export const ServerSettings = Schema.Struct({
+  mcpServers: ManagedMcpServers.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   providerModelPreferences: Schema.NullOr(ProviderModelPreferences).pipe(
@@ -1600,6 +1612,7 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  mcpServers: Schema.optionalKey(ManagedMcpServers),
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),
