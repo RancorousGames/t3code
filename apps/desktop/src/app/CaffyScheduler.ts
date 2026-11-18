@@ -1864,8 +1864,7 @@ export class CaffyScheduler {
       working: used, workingIds: [...workingIds], used,
       available: Math.max(0, this.maxWorking - used),
     };
-    if (this.workingReports.size === 0 || (!nativeInventory.known &&
-        [...this.entries.values()].some(row => row.targetKind === "t3"))) return {
+    if (this.workingReports.size === 0 || !nativeInventory.known) return {
       ...observed, reserved: 0, unknown: 1, admissible: false,
       reason: this.workingReports.size === 0
         ? "Live ChatGPT sidebar green-session count unavailable"
