@@ -84,6 +84,37 @@ describe("instant ChatGPT provider Retry", () => {
     watcher.dispose();
   });
 
+  it("retries ChatGPT's account-changed delivery error", async () => {
+    const dom = create(
+      '<div role="alert">Your account changed. Send your message again. <button>Try again</button></div>',
+    );
+    const button = dom.window.document.querySelector("button")!;
+    const click = vi.spyOn(button, "click");
+    const watcher = installChatGPTInstantRetry(
+      dom.window as unknown as Window & typeof globalThis, dom.window.document,
+    );
+    await Promise.resolve();
+    expect(click).toHaveBeenCalledOnce();
+    watcher.dispose();
+  });
+
+  it("clicks the account-changed resubmit button, but not one quoted in a conversation", async () => {
+    const dom = create(
+      '<div class="markdown">Your account changed. <button>Send your message again</button></div>' +
+      '<div role="alert">Your account changed. <button>Send your message again</button></div>',
+    );
+    const buttons = [...dom.window.document.querySelectorAll("button")];
+    const quotedClick = vi.spyOn(buttons[0]!, "click");
+    const providerClick = vi.spyOn(buttons[1]!, "click");
+    const watcher = installChatGPTInstantRetry(
+      dom.window as unknown as Window & typeof globalThis, dom.window.document,
+    );
+    await Promise.resolve();
+    expect(quotedClick).not.toHaveBeenCalled();
+    expect(providerClick).toHaveBeenCalledOnce();
+    watcher.dispose();
+  });
+
   it("ignores other Retry buttons and hidden timeout notices", async () => {
     const dom = create(
       '<div role="alert" hidden>Message delivery timed out. Please <button>Try again</button>.</div>' +

@@ -34,12 +34,13 @@ export function installChatGPTInstantRetry(win: Window & typeof globalThis, doc:
       if (parent.closest('.markdown,.prose,[data-markdown-text-style="assistant-message"]'))
         return false;
       const content = (parent.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (/^(?:Message delivery timed out|Could not load this ChatGPT conversation|Something went wrong|An error occurred|There was an error|Network error|Failed to load (?:conversation|response)|Unable to load (?:conversation|response))[.!]?\s*(?:(?:Please )?(?:Retry|Try again)[.!]?)?$/i.test(content))
+      if (/^(?:Message delivery timed out|Could not load this ChatGPT conversation|Something went wrong|An error occurred|There was an error|Network error|Failed to load (?:conversation|response)|Unable to load (?:conversation|response))[.!]?\s*(?:(?:Please )?(?:Retry|Try again)[.!]?)?$/i.test(content) ||
+          /^Your account changed[.!]?\s*(?:Send your message again[.!]?)?\s*(?:(?:Retry|Try again|Send your message again)[.!]?)?$/i.test(content))
         return visible(parent);
       // ChatGPT also renders transient retry controls in an error alert without
       // an exact message; do not accept arbitrary Retry buttons in page content.
       if (parent.matches('[role="alert"], [data-state="error"]') &&
-          /(?:error|failed|timed out|went wrong|unable to load|retry)/i.test(content))
+          /(?:error|failed|timed out|went wrong|unable to load|retry|account changed)/i.test(content))
         return visible(parent);
       if (content.length > 180) break;
     }
@@ -51,7 +52,7 @@ export function installChatGPTInstantRetry(win: Window & typeof globalThis, doc:
       return;
     for (const button of doc.querySelectorAll("button,[role='button']")) {
       const label = (button.getAttribute("aria-label") || button.textContent || "").trim();
-      if (attempted.has(button) || !/^(?:try again|retry)$/i.test(label) ||
+      if (attempted.has(button) || !/^(?:try again|retry|send your message again)$/i.test(label) ||
           !eligible(button)) continue;
       const remaining = 1_000 - (Date.now() - lastClickAt);
       if (remaining > 0) {
