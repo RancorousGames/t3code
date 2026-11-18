@@ -31,7 +31,7 @@ export function ChatGPTNewSessionShortcut() {
   const environmentId = usePrimaryEnvironmentId();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const lastRecentAttentionTarget = useRef<string | null>(null);
-  const { createSession, toggleSessionReturnMarker, setSessionHidden } = useChatGPTBrowserSessions(environmentId);
+  const { createSession, toggleSessionReturnMarker, setSessionHidden, setSessionWorker } = useChatGPTBrowserSessions(environmentId);
 
   const createNewSession = useEffectEvent(() => {
     if (!isElectron || !environmentId) return;
@@ -54,6 +54,9 @@ export function ChatGPTNewSessionShortcut() {
     const observed = readChatGPTProviderActivity(environmentId, sessionId);
     const activity = observed === "working" || observed === "idle" ? observed : "unknown";
     toggleSessionReturnMarker(sessionId, activity);
+    // Explicit persistent attention means the user has taken ownership of this chat.
+    // Reuse the sidebar's Mark as personal action; disabling attention keeps that role.
+    if (!session.returnMarker) setSessionWorker(sessionId, false);
     const ids = [session.id, ...(session.bootstrapIdentity?.publicId
       ? [session.bootstrapIdentity.publicId] : [])];
     if (session.returnMarker) cancelManualAgentAttention(ids);

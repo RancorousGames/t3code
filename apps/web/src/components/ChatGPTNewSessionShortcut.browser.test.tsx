@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   paletteOpen: false,
   createSession: vi.fn(() => "created-session-id"),
   toggleReturnMarker: vi.fn(),
+  setSessionWorker: vi.fn(),
   toast: vi.fn(),
   marker: undefined as "armed" | "working" | "ready" | undefined,
   activity: "idle" as "idle" | "working" | "unknown",
@@ -52,6 +53,7 @@ vi.mock(import("../chatGPTBrowserSessions"), async (original) => ({
     createSession: state.createSession, toggleSessionReturnMarker: state.toggleReturnMarker,
     clearSessionReturnMarker: state.clearReturnMarker,
     setSessionHidden: state.setSessionHidden, setSessionSnooze: state.setSessionSnooze,
+    setSessionWorker: state.setSessionWorker,
   }),
   readChatGPTBrowserSessions: () => [{ id: "selected-session", title: "Selected session", returnMarker: state.marker }],
 }));
@@ -104,11 +106,13 @@ describe("Return marker shortcut", () => {
     state.activity = "idle";
     state.marker = undefined;
     state.toggleReturnMarker.mockClear();
+    state.setSessionWorker.mockClear();
     state.toast.mockClear();
     await using _view = await render(<ChatGPTNewSessionShortcut />);
 
     await act(() => dispatchMenuAction("chatgpt.return-marker"));
     expect(state.toggleReturnMarker).toHaveBeenLastCalledWith("selected-session", "idle");
+    expect(state.setSessionWorker).toHaveBeenCalledExactlyOnceWith("selected-session", false);
     expect(state.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Persistent attention enabled" }));
     expect(state.requestAttention).toHaveBeenCalledWith(
       expect.any(String), "selected-session", expect.any(String), "manual",
@@ -117,6 +121,7 @@ describe("Return marker shortcut", () => {
     state.marker = "armed";
     await act(() => dispatchMenuAction("chatgpt.return-marker"));
     expect(state.toggleReturnMarker).toHaveBeenCalledTimes(2);
+    expect(state.setSessionWorker).toHaveBeenCalledTimes(1); // disabling attention does not revert to worker
     expect(state.toast).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Persistent attention disabled" }));
     expect(state.cancelAttention).toHaveBeenCalledWith(["selected-session"]);
   });
