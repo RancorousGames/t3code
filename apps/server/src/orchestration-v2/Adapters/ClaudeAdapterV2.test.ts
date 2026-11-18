@@ -236,6 +236,26 @@ function makeClaudeTestTurnInput(input: {
 }
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
+  it("enables hosted Artifact only for explicit publishing requests", () => {
+    assert.isFalse(ClaudeAdapterV2.claudeHostedArtifactRequested("Implement an HTML dashboard"));
+    assert.isFalse(ClaudeAdapterV2.claudeHostedArtifactRequested("Why is Claude Artifact large?"));
+    assert.isTrue(
+      ClaudeAdapterV2.claudeHostedArtifactRequested("Publish this as a Claude Artifact"),
+    );
+    assert.isTrue(ClaudeAdapterV2.claudeHostedArtifactRequested("/artifact-publishing"));
+
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "artifact-opt-in",
+      resume: false,
+      cwd: "/workspace",
+      disallowedTools: ["Artifact"],
+    });
+    assert.deepEqual(options.disallowedTools, [
+      ...ClaudeAdapterV2.CLAUDE_NATIVE_CHILD_DENIED_TOOLS,
+      "Artifact",
+    ]);
+  });
   it.each([
     "-- --thinking-display omitted",
     "--thinking-display summarized -- --thinking-display omitted",

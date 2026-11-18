@@ -507,6 +507,18 @@ export type ClaudeAgentSdkQueryTools = ClaudeAgentSdkQueryToolList | ClaudeAgent
 
 export const CLAUDE_READ_ONLY_ALLOWED_TOOLS = ["Read", "Glob", "Grep"] as const;
 
+// Artifact is an eager, ~37k-character built-in tool even with ToolSearch enabled.
+// Keep it outside ordinary coding prompts; the user can request hosted publishing
+// explicitly without changing Claude's regular file/HTML creation capabilities.
+export function claudeHostedArtifactRequested(text: string): boolean {
+  return (
+    /(?:^|\n)\s*\/artifact-publishing\b/i.test(text) ||
+    /\b(?:publish|deploy|host|share|create|make|update|edit|open|read|view)\b[^.!?\n]{0,120}\b(?:claude(?:\.ai)?\s+artifact|artifact\s+(?:on|at)\s+claude\.ai)\b/i.test(
+      text,
+    )
+  );
+}
+
 function claudeAgentSdkQueryToolsForSdk(
   tools: ClaudeAgentSdkQueryTools,
 ): NonNullable<ClaudeQueryOptions["tools"]> {
@@ -2624,6 +2636,7 @@ export interface ClaudeRuntimeQueryPolicy {
   readonly permissionMode: PermissionMode;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
+  readonly disallowedTools?: ReadonlyArray<string>;
   readonly allowDangerouslySkipPermissions?: true;
   readonly installPermissionCallback: boolean;
 }
@@ -2781,7 +2794,7 @@ function claudeRuntimeQueryPolicyKey(policy: ClaudeRuntimeQueryPolicy): string {
     allowDangerouslySkipPermissions: policy.allowDangerouslySkipPermissions,
     installPermissionCallback: policy.installPermissionCallback,
     nativeChildDenyRevision: CLAUDE_NATIVE_CHILD_DENY_POLICY_REVISION,
-    disallowedTools: CLAUDE_NATIVE_CHILD_DENIED_TOOLS,
+    disallowedTools: [...CLAUDE_NATIVE_CHILD_DENIED_TOOLS, ...(policy.disallowedTools ?? [])],
   });
 }
 
@@ -4886,6 +4899,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           );
         });
         const openedNativeThreads = yield* Ref.make(new Set<string>());
+        const artifactEnabledThreads = new Set<string>();
         const pdfBudgets = new Map<string, ReturnType<typeof makeClaudeAttachmentBudget>>();
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
         // Claude 5 task tools edit one list per native session, across turns.
@@ -10300,7 +10314,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           nativeThreadId: string,
         ) {
-          const queryPolicy = yield* queryPolicyForTurn(turnInput);
+          // User opt-in is sticky for this adapter lifetime, including follow-up edits.
+          // A process restart returns to the lightweight default until requested again.
+          if (
+            turnInput.message.createdBy !== "agent" &&
+            claudeHostedArtifactRequested(turnInput.message.text)
+          ) {
+            artifactEnabledThreads.add(turnInput.threadId);
+          }
+          const baseQueryPolicy = yield* queryPolicyForTurn(turnInput);
+          const queryPolicy: ClaudeRuntimeQueryPolicy = {
+            ...baseQueryPolicy,
+            disallowedTools: artifactEnabledThreads.has(turnInput.threadId) ? [] : ["Artifact"],
+          };
           const mcpSession = yield* mcpSessions.read(turnInput.threadId);
           const managedMcpServers = Option.isSome(serverSettings)
             ? yield* serverSettings.value.getSettings.pipe(
@@ -10450,6 +10476,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : undefined,
             ),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
+            disallowedTools: queryPolicy.disallowedTools,
             ...(mcpOverrides.allowedTools === undefined
               ? {}
               : { allowedTools: mcpOverrides.allowedTools }),
