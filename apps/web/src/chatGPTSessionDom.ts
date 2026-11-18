@@ -106,9 +106,13 @@ export function inspectChatGPTPage(input: {
   // a temporarily unavailable composer. Ignore quoted code and message bodies.
   const conversationFull = [...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]')]
     .some((el) => visible(el) &&
-      !el.closest('[data-message-author-role],pre,code,blockquote') &&
+      !el.closest('[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote') &&
       /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i.test(
-        (el.textContent ?? '').slice(0, 400)));
+        (el.textContent ?? '').slice(0, 400))) ||
+    [...document.querySelectorAll("main div,main p,main span")].some((el) =>
+      visible(el) && !el.closest('[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote') &&
+      (el.textContent ?? "").length < 400 &&
+      /you['’]ve reached the maximum length for this conversation/i.test(el.textContent ?? ""));
   // Evaluating the load-failure probe is delegated to T3's existing detector.
   const stuck = false;
   // ChatGPT changes its message wrappers periodically. Prefer explicit roles,

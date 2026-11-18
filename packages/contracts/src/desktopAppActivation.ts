@@ -70,7 +70,7 @@ export const DesktopAppActivationRequest = Schema.Union([
     type: Schema.Literal("caffy"),
     targetKind: Schema.optional(Schema.Literals(["chatgpt", "t3"])),
     environmentId: Schema.optional(TrimmedNonEmptyString),
-    action: Schema.Literals(["set", "configure", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "throughput", "working_snapshot", "retire", "begin_in", "auto_reboot", "schedule_spawn", "read_spawn", "edit_spawn", "cancel_spawn", "cancel_begin"]),
+    action: Schema.Literals(["set", "configure", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "throughput", "working_snapshot", "retire", "terminal", "begin_in", "auto_reboot", "schedule_spawn", "read_spawn", "edit_spawn", "cancel_spawn", "cancel_begin"]),
     sessionId: Schema.optional(Schema.String),
     conversationId: Schema.optional(ChatGPTConversationId),
     mode: Schema.optional(Schema.Literals(["idle", "periodic", "startup"])),

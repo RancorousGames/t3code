@@ -113,6 +113,27 @@ const monitor = (scheduler: CaffyScheduler) =>
   (scheduler as unknown as { entries: Map<string, CaffyConfig> }).entries.get(SESSION) ?? null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
+  it("permanently retires full conversations and refuses rearming after restart", async () => {
+    const f = fixture();
+    f.setRoster([{
+      id: SESSION, conversationId: ORIGINAL,
+      bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+    }]);
+    const c = f.open();
+    try {
+      expect(monitor(c)).not.toBeNull();
+      expect(c.terminal(SESSION, ORIGINAL)).toMatchObject({ terminal: true });
+      expect(monitor(c)).toBeNull();
+      await expect(c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" }))
+        .rejects.toThrow("maximum length");
+    } finally { c.close(); }
+    const restored = f.open();
+    try {
+      expect(monitor(restored)).toBeNull();
+      await expect(restored.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" }))
+        .rejects.toThrow("maximum length");
+    } finally { restored.close(); f.dispose(); }
+  });
   it("runs user-scheduled work at free capacity with TaskBoard autofill off", async () => {
     const f = fixture();
     const c = f.open();

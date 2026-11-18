@@ -42,6 +42,9 @@ import {
   chatGPTBrowserThreadRef,
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserLastUrlKey,
+  CHATGPT_CONVERSATION_FULL_MESSAGE,
+  isChatGPTConversationFull,
+  markChatGPTConversationFull,
   type BrowserSession,
 } from "./chatGPTBrowserSessions";
 import { COMPOSER_SELECTOR } from "./chatGPTBrowserAutomation";
@@ -704,6 +707,8 @@ export async function inspectBrowserSession(
     );
     result.activity = page.activity;
     result.conversationFull = page.conversationFull === true;
+    if (result.conversationFull && result.conversationId)
+      markChatGPTConversationFull(environmentId, entry.id, result.conversationId);
     result.lastRole = page.lastRole;
     result.lastUserTurnKey = page.lastUserTurnKey;
     result.lastUserTurn = page.lastUserTurn;
@@ -1890,6 +1895,8 @@ export async function runChatGPTSessionControl(input: {
     }
   }
   if (action === "send") {
+    if (isChatGPTConversationFull(environmentId, entry.id))
+      throw new Error(CHATGPT_CONVERSATION_FULL_MESSAGE);
     const expired = () => !!input.sendExpiresAt && Date.now() >= input.sendExpiresAt;
     if (expired()) throw new Error("Queued attempt expired before dispatch; no message sent.");
     const prepared = prepareChatGPTSessionMessage(
@@ -2276,6 +2283,8 @@ export async function runChatGPTSessionControl(input: {
       throw new Error(
         "Unrelated or unverifiable UNKNOWN send remains; manual reconciliation required.",
       );
+    if (before.conversationFull)
+      throw new Error(CHATGPT_CONVERSATION_FULL_MESSAGE);
     if (!acceptsSend(before))
       throw new Error("ChatGPT page is unavailable before direct submission; no message sent.");
     const { runtimeId } = guestFor(environmentId, entry.id);

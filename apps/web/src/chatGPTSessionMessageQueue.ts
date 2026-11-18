@@ -1,6 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { randomUUID } from "./lib/utils";
-import { wakeChatGPTBrowserSession } from "./chatGPTBrowserSessions";
+import { CHATGPT_CONVERSATION_FULL_MESSAGE, isChatGPTConversationFull, wakeChatGPTBrowserSession } from "./chatGPTBrowserSessions";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import type { BrowserSession } from "./chatGPTBrowserSessions";
@@ -107,6 +107,8 @@ export function queueChatGPTSessionMessage(
   stableMessageId?: string,
   options?: { condition?: "when_idle" | "wait_for_slot" },
 ) {
+  if (isChatGPTConversationFull(environmentId, sessionId))
+    throw new Error(CHATGPT_CONVERSATION_FULL_MESSAGE);
   const key = keyFor(environmentId, sessionId);
   const body = text.trim();
   if (!body || body.length > 29_800)
@@ -244,6 +246,15 @@ export async function deliverNextChatGPTSessionMessage(
   if (!next) return;
   const session = sessions.find((row) => row.id === sessionId);
   if (!session || session.hidden) return;
+  if (isChatGPTConversationFull(environmentId, sessionId)) {
+    const now = Date.now();
+    if (queue.some(row => row.state === "queued"))
+      writeQueue(key, queue.map(row => row.state === "queued" ? {
+        ...row, state: "needs_attention" as const, updatedAt: now,
+        detail: CHATGPT_CONVERSATION_FULL_MESSAGE,
+      } : row));
+    return;
+  }
   processing.add(key);
   try {
     const acknowledgeObserved = (observed: Awaited<ReturnType<typeof inspectBrowserSession>>) => {
@@ -287,6 +298,13 @@ export async function deliverNextChatGPTSessionMessage(
     // user turn. Check before the idle gate, even with an UNKNOWN send fence.
     const observed = await inspectBrowserSession(environmentId, session, "end", 12, true, 512);
     if (acknowledgeObserved(observed)) return;
+    if (observed.conversationFull) {
+      writeQueue(key, readQueue(key).map(row => row.id === next.id
+        ? { ...row, state: "needs_attention" as const, updatedAt: Date.now(),
+            detail: CHATGPT_CONVERSATION_FULL_MESSAGE }
+        : row));
+      return;
+    }
     // An existing interrupted/UNKNOWN injection owns this guest. Preserve FIFO
     // without generating another send until that delivery is reconciled.
     if (hasUncertainChatGPTSend(environmentId, sessionId)) return;

@@ -154,6 +154,7 @@ interface CaffyStore {
   shutdownWhenIdle?: boolean;
   busyUntil?: number | null;
   agentStops?: AgentStoppedCaffy[];
+  terminalConversations?: Array<{ sessionId: string; conversationId: string }>;
 }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const LEGACY_TERMINAL_STATES = new Set([
@@ -193,6 +194,7 @@ export class CaffyScheduler {
   private readonly entries = new Map<string, CaffyConfig>();
   private readonly scheduledSpawns = new Map<string, ScheduledChatGPTSpawn>();
   private readonly agentStops = new Map<string, AgentStoppedCaffy>();
+  private readonly terminalConversations = new Map<string, string>();
   private keepT3Busy = false;
   private maxWorking = 6;
   private shutdownWhenIdle = false;
@@ -282,6 +284,14 @@ export class CaffyScheduler {
               Number.isFinite(claim.createdAt))
             this.capacityClaims.set(claim.messageId, claim);
         }
+        for (const terminal of saved.terminalConversations ?? []) {
+          if (UUID.test(terminal.sessionId) && UUID.test(terminal.conversationId))
+            this.terminalConversations.set(terminal.sessionId, terminal.conversationId);
+        }
+        for (const [id, row] of this.entries) {
+          if (this.terminalConversations.get(id) === row.conversationId)
+            this.entries.delete(id);
+        }
         for (const mark of saved.agentStops ?? []) {
           if (mark && UUID.test(mark.sessionId) && Number.isFinite(mark.stoppedAt) &&
               Date.now() - mark.stoppedAt < 7 * 24 * 60 * 60_000)
@@ -369,6 +379,7 @@ export class CaffyScheduler {
         scheduledSpawns: [...this.scheduledSpawns.values()],
         capacityClaims: [...this.capacityClaims.values()],
         agentStops: [...this.agentStops.values()].slice(-128),
+        terminalConversations: [...this.terminalConversations].map(([sessionId, conversationId]) => ({ sessionId, conversationId })),
         keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
         shutdownWhenIdle: this.shutdownWhenIdle,
         busyUntil: this.busyUntil,
@@ -1065,6 +1076,9 @@ export class CaffyScheduler {
     }
     const browserSessionId = identity?.browserSessionId ?? input.sessionId;
     const canonicalId = browserSessionId;
+    if (this.terminalConversations.get(canonicalId) === input.conversationId ||
+        this.terminalConversations.get(input.sessionId) === input.conversationId)
+      throw new Error("This conversation reached its maximum length. Reboot the session before enabling Caffy.");
     if ([...this.entries.values()].some(row => row.conversationId === input.conversationId &&
         row.sessionId !== canonicalId && row.browserSessionId !== input.sessionId &&
         row.publicSessionId !== input.sessionId))
@@ -1246,6 +1260,19 @@ export class CaffyScheduler {
           this.save();
     }
     return { stopped: !!row, cancelled };
+  }
+
+  /** Permanently retire every wake for this exhausted conversation, until a new chat is booted. */
+  terminal(sessionId: string, conversationId: string) {
+    if (!UUID.test(sessionId) || !UUID.test(conversationId))
+      throw new Error("Exact ChatGPT session and conversation IDs required.");
+    this.terminalConversations.set(sessionId, conversationId);
+    const row = this.lookup(sessionId);
+    if (row?.conversationId === conversationId) this.retire(row.sessionId, "stopped");
+    this.deliveries.retireRecipient([sessionId], conversationId,
+      "ChatGPT conversation reached maximum length; reboot required.", true);
+    this.save();
+    return { terminal: true, sessionId, conversationId };
   }
 
   stop(sessionId: string, initiator: "user" | "agent" = "agent") {

@@ -3300,7 +3300,7 @@ export function ChatGPTBrowserSidebarEntry({
                               // Identity backgrounds are separate from status text/icon colors.
                               // Personal highlights frame the drag icon without outlining the whole row.
                               const highlightAccent = chatGPTSessionHighlightAccentClass(
-                                session.borderColor,
+                                session.conversationFullId ? "purple" : session.borderColor,
                               );
                               // A persisted ready marker remains yellow even when an
                               // unloaded session's activity probe is unknown. Hide it
@@ -3313,8 +3313,8 @@ export function ChatGPTBrowserSidebarEntry({
                                 <div
                                   data-chatgpt-selected-session={activeSessionId === session.id}
                                   data-chatgpt-visible-pane={displayedSessionIds.has(session.id)}
-                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${idleAttentionReady ? "ring-4 ring-inset ring-yellow-400/90" : activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
-                                  title={idleAttentionReady ? "Attention ready — click to clear" : session.returnMarker ? "Persistent attention armed — waiting for the next answer" : attentionMarked ? "One-off GMA attention requested" : undefined}
+                                  className={`relative flex min-w-0 items-center gap-0 rounded-md ${needsAnswer ? "bg-lime-400/15 ring-1 ring-inset ring-lime-400/60" : session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${session.conversationFullId ? "ring-4 ring-inset ring-violet-500/90 bg-violet-500/10" : idleAttentionReady ? "ring-4 ring-inset ring-yellow-400/90" : activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
+                                  title={session.conversationFullId ? "Maximum conversation length reached — sending and Caffy disabled. Reboot this session." : idleAttentionReady ? "Attention ready — click to clear" : session.returnMarker ? "Persistent attention armed — waiting for the next answer" : attentionMarked ? "One-off GMA attention requested" : undefined}
                                   onContextMenu={(event) => {
                                     event.preventDefault();
                                     void showSessionContextMenu(session.id, {

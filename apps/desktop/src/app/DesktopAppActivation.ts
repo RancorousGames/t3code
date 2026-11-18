@@ -518,6 +518,8 @@ export const make = Effect.gen(function* () {
               ? caffy.cancelDelayedPrompt(request.sessionId ?? "")
             : action === "auto_reboot"
               ? caffy.autoReboot(request.sessionId ?? "", request.rebootMinutes ?? null, request.rebootEveryRuns ?? null)
+            : action === "terminal"
+              ? caffy.terminal(request.sessionId ?? "", conversationId ?? "")
             : action === "retire"
               ? caffy.retire(request.sessionId ?? "", request.lifecycleReason ?? "closed")
             : action === "stop"

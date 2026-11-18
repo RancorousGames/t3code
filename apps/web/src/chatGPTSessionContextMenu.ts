@@ -7,6 +7,7 @@ export interface ChatGPTContextMenuSession {
   snoozedUntil?: number | undefined;
   verificationPending?: boolean | undefined;
   borderColor?: string | undefined;
+  conversationFullId?: string | undefined;
   hidden?: boolean | undefined;
   project?: string | undefined;
   markedAsWorkerAt?: number | undefined;
@@ -68,6 +69,7 @@ export function buildChatGPTSessionContextMenu(input: {
   const { session, sessions, managerIds, projects, snoozePresets, now, working, hasTask } = input;
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
   const activeCaffy = input.caffy;
+  const exhausted = !!session.conversationFullId;
   const legacyIds = input.legacyCaffyIds ?? [];
   // One-click resume owns a one-shot Caffy monitor. Do not silently replace
   // another ongoing, periodic, or custom-prompt schedule.
@@ -170,20 +172,22 @@ export function buildChatGPTSessionContextMenu(input: {
     item("schedule:resume", "Schedule resume", {
       separatorBefore: true,
       checked: quickResumeScheduled,
-      disabled: Boolean(activeCaffy && !quickResumeScheduled),
+      disabled: exhausted || Boolean(activeCaffy && !quickResumeScheduled),
     }),
-    item("schedule:prompt", "Schedule prompt…"),
-    item("caffy", wakeMode
+    item("schedule:prompt", "Schedule prompt…", { disabled: exhausted }),
+    item("caffy", exhausted ? "Caffy · conversation full (reboot)" : wakeMode
       ? `Caffy · ${wakeMode}${activeCaffy?.beginAt && activeCaffy.beginAt > now ? " (scheduled)" : ""}${activeCaffy?.paused ? " (paused)" : ""}`
       : "Caffy", {
       children: [
         item("caffy:auto", "Auto-continue…", {
+          disabled: exhausted,
           checked: activeCaffy?.mode === "queued" || activeCaffy?.mode === "periodic",
         }),
 
 
-        item("caffy:pause", activeCaffy?.paused ? "Resume Caffy" : "Pause Caffy", { disabled: !activeCaffy, separatorBefore: true }),
+        item("caffy:pause", activeCaffy?.paused ? "Resume Caffy" : "Pause Caffy", { disabled: exhausted || !activeCaffy, separatorBefore: true }),
         item("caffy:startup", "Resume when T3 starts", {
+          disabled: exhausted,
           checked: input.caffy?.startup ?? false,
           separatorBefore: true,
         }),

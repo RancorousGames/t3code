@@ -1,4 +1,5 @@
 ﻿import { getChatGPTSessionPersistedStore } from "./chatGPTSessionPersistedStore";
+import { markChatGPTConversationFull } from "./chatGPTBrowserSessions";
 import type { ChatGPTPageSnapshot } from "./chatGPTPageSnapshotInspection";
 export { inspectChatGPTPageSnapshot } from "./chatGPTPageSnapshotInspection";
 export type { ChatGPTPageSnapshot } from "./chatGPTPageSnapshotInspection";
@@ -13,7 +14,6 @@ export function saveChatGPTPageSnapshot(
   if (
     !candidate ||
     !sessionId ||
-    candidate.turnCount <= 0 ||
     !Number.isFinite(candidate.observedAt) ||
     !candidate.conversationId ||
     !/^[0-9a-f]{8}$/.test(candidate.contentHash) ||
@@ -32,6 +32,9 @@ export function saveChatGPTPageSnapshot(
       pathMatch?.[1]?.toLowerCase() !== candidate.conversationId.toLowerCase()
     )
       return false;
+    if (candidate.signals.conversationFull)
+      markChatGPTConversationFull(environmentId, sessionId, candidate.conversationId);
+    if (candidate.turnCount <= 0) return false;
     const store = getChatGPTSessionPersistedStore(environmentId);
     const state = store.getState();
     const previous = state.snapshots?.[sessionId] as ChatGPTPageSnapshot | undefined;

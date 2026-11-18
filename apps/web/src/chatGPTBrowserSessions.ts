@@ -107,6 +107,8 @@ export const BrowserSession = Schema.Struct({
   project: Schema.optional(Schema.String),
   // User-chosen sidebar border color name; unknown names render no border.
   borderColor: Schema.optional(Schema.String),
+  /** ChatGPT confirmed this exact conversation reached its permanent length limit. */
+  conversationFullId: Schema.optional(Schema.String),
   // Persisted across T3 restarts: armed needs a new working observation before becoming ready.
   returnMarker: Schema.optional(Schema.Literals(["armed", "working", "ready"])),
   completion: Schema.optional(
@@ -186,6 +188,53 @@ export function chatGPTSessionCreationOrigin(
   return session.creationOrigin ?? "unknown";
 }
 
+export const CHATGPT_CONVERSATION_FULL_MESSAGE =
+  "This conversation has reached its maximum length. Sending is disabled; reboot this session to continue in a new chat.";
+
+export function isChatGPTConversationFull(
+  environmentId: string, sessionId: string, conversationId?: string | null,
+): boolean {
+  const session = getChatGPTSessionPersistedStore(environmentId).getState().sessions
+    .find((entry) => entry.id === sessionId);
+  return !!session?.conversationFullId &&
+    (conversationId == null || session.conversationFullId === conversationId);
+}
+
+const terminalCaffySynced = new Set<string>();
+const terminalCaffyPending = new Set<string>();
+const terminalCaffyLastAttempt = new Map<string, number>();
+
+/** A positive ChatGPT notice permanently fences its conversation, including after T3 restart. */
+export function markChatGPTConversationFull(
+  environmentId: EnvironmentId, sessionId: string, conversationId: string,
+): void {
+  const store = getChatGPTSessionPersistedStore(environmentId);
+  const current = store.getState().sessions;
+  const session = current.find((entry) => entry.id === sessionId);
+  if (!session) return;
+  if (session.conversationFullId !== conversationId) {
+    const next = current.map((entry) => entry.id === sessionId
+      ? { ...entry, conversationFullId: conversationId } : entry);
+    setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), next, BrowserSessions);
+    store.setState({ sessions: next });
+  }
+  const key = environmentId + ":" + sessionId + ":" + conversationId;
+  const control = window.desktopBridge?.caffyControl;
+  if (!control || terminalCaffySynced.has(key) || terminalCaffyPending.has(key) ||
+      Date.now() - (terminalCaffyLastAttempt.get(key) ?? 0) < 20_000) return;
+  terminalCaffyLastAttempt.set(key, Date.now());
+  terminalCaffyPending.add(key);
+  void control({ action: "terminal", sessionId, conversationId })
+    .then((receipt) => {
+      if (receipt?.ok === true) {
+        terminalCaffySynced.add(key);
+        window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+      }
+    })
+    .catch(() => { /* A later verified page observation retries the terminal retirement. */ })
+    .finally(() => terminalCaffyPending.delete(key));
+}
+
 export const BrowserSessions = Schema.Array(BrowserSession);
 export const chatGPTBrowserSessionsKey = (environmentId: EnvironmentId | null) =>
   `t3code:chatgpt-browser:sessions:${environmentId ?? "unconnected"}`;
@@ -197,9 +246,12 @@ export function beginChatGPTBootstrapReboot(environmentId: EnvironmentId, sessio
   const store = getChatGPTSessionPersistedStore(environmentId);
   const current = store.getState().sessions;
   const next = current.map((entry) =>
-    entry.id !== sessionId || !entry.bootstrapIdentity
-      ? entry
-      : { ...entry, bootstrapIdentity: nextChatGPTBootstrapGeneration(entry.bootstrapIdentity) },
+    entry.id !== sessionId ? entry : {
+      ...entry, conversationFullId: undefined,
+      ...(entry.bootstrapIdentity
+        ? { bootstrapIdentity: nextChatGPTBootstrapGeneration(entry.bootstrapIdentity) }
+        : {}),
+    },
   );
   if (current.every((entry, index) => entry === next[index])) return;
   setLocalStorageItem(chatGPTBrowserSessionsKey(environmentId), next, BrowserSessions);

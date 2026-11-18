@@ -93,12 +93,15 @@ export function inspectChatGPTPageSnapshot(activityState: string): ChatGPTPageSn
     ...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]'),
   ]
     .filter(
-      (node) => visible(node) && !node.closest("[data-message-author-role],pre,code,blockquote"),
+      (node) => visible(node) && !node.closest("[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote"),
     )
     .map((node) => (node.textContent ?? "").slice(0, 400));
-  const conversationFull = alerts.some((text) =>
-    /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i.test(text),
-  );
+  const limitNotice = /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i;
+  const conversationFull = alerts.some((text) => limitNotice.test(text)) ||
+    [...document.querySelectorAll("main div,main p,main span")].some((node) =>
+      visible(node) && !node.closest('[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote') &&
+      (node.textContent ?? "").length < 400 &&
+      /you['’]ve reached the maximum length for this conversation/i.test(node.textContent ?? ""));
   const signInOrCaptcha = !!document.querySelector(
     'iframe[src*="captcha"],iframe[src*="challenge"],input[autocomplete="current-password"],[data-testid="login-button"]',
   );

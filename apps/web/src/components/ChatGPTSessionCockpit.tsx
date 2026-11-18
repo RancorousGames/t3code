@@ -9,6 +9,7 @@ import {
   chatGPTBrowserThreadRef,
   chatGPTBrowserLastUrlKey,
   findExistingChatGPTConversation,
+  CHATGPT_CONVERSATION_FULL_MESSAGE,
   useChatGPTBrowserSessions,
 } from "../chatGPTBrowserSessions";
 import { chatGPTConversationIdFromUrl } from "../chatGPTConversationIdentity";
@@ -265,6 +266,7 @@ export function ChatGPTSessionCockpit({
     };
   }, [environmentId, sessionId, cachedConversationId, readCachedTranscript]);
   const uncertain = hasUncertainChatGPTSend(environmentId, sessionId);
+  const conversationFull = !!session?.conversationFullId;
   const restartOutcome = useMemo(() => {
     try {
       const receipt = window.localStorage.getItem(
@@ -313,8 +315,8 @@ export function ChatGPTSessionCockpit({
   // Queue accepts a message before a page observation exists; the mounted
   // runtime, not this view, waits for a verified idle recipient. Steer is the
   // explicit immediate path, using the existing guarded send implementation.
-  const canQueue = !sending && draft.trim().length > 0;
-  const canSteer = !!session && !sending && !uncertain && draft.trim().length > 0;
+  const canQueue = !conversationFull && !sending && draft.trim().length > 0;
+  const canSteer = !!session && !conversationFull && !sending && !uncertain && draft.trim().length > 0;
   const canSend =
     mode === "steer"
       ? canSteer
@@ -886,6 +888,11 @@ export function ChatGPTSessionCockpit({
               void send();
             }}
           >
+            {conversationFull && (
+              <p role="alert" className="rounded-md border border-violet-500/70 bg-violet-500/10 p-3 text-sm text-violet-400">
+                {CHATGPT_CONVERSATION_FULL_MESSAGE} Right-click the session and select Agent Reboot.
+              </p>
+            )}
             <label htmlFor="t3-cockpit-compose" className="text-xs font-semibold">
               Message ·{" "}
               {mode === "queue"
@@ -899,8 +906,10 @@ export function ChatGPTSessionCockpit({
               rows={3}
               className="w-full resize-y rounded-md border border-input bg-background p-3 text-sm"
               placeholder={
+                conversationFull ? "Reboot this exhausted conversation to send again" :
                 uncertain ? "Resolve unconfirmed delivery before sending…" : "Message this session…"
               }
+              disabled={conversationFull}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
             />
@@ -924,7 +933,7 @@ export function ChatGPTSessionCockpit({
                       size="xs"
                       variant="outline"
                       title={action.text}
-                      disabled={sending || (action.mode === "steer" && (!session || uncertain))}
+                      disabled={conversationFull || sending || (action.mode === "steer" && (!session || uncertain))}
                       onClick={() => void sendAction(action)}
                     >
                       {action.label} · {action.mode === "queue" ? "Queue" : "Steer"}
