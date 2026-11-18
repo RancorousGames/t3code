@@ -101,12 +101,13 @@ describe("fresh ChatGPT session direct-submit delivery", () => {
 
   it("keeps UNKNOWN and does not resubmit after IPC failure at callback invocation", async () => {
     const { input, automation } = fixture();
+    automation.evaluate.mockResolvedValueOnce({ status: "already_high" });
     automation.evaluate.mockRejectedValueOnce(new Error("bridge disconnected"));
     const result = await sendInitialChatGPTPrompt(input);
     expect(result).toMatchObject({
       delivery: "unknown", sendAttempted: true, reason: "bridge disconnected",
     });
-    expect(automation.evaluate).toHaveBeenCalledTimes(1);
+    expect(automation.evaluate).toHaveBeenCalledTimes(2);
   });
 
   it("returns not_sent when the composer never becomes ready", async () => {
@@ -129,6 +130,7 @@ describe("fresh ChatGPT session direct-submit delivery", () => {
     const { input, automation, setDelivered } = fixture();
     let attempts = 0;
     automation.evaluate.mockImplementation(async (_runtime, { expression }) => {
+      if (expression.includes("initializeChatGPTHighEffort")) return { status: "already_high" };
       if (expression.includes("const fresh = true")) {
         attempts++;
         return { submitted: attempts > 1 };
