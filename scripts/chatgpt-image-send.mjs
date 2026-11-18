@@ -190,7 +190,9 @@ function imagePreflight(id) {
       const p=state.findProps();
       const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
       const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
-      if(!state.uploadId||draft!==state.originalDraft||p?.isSubmitting||p?.isWaitingForFileUploads
+      const changed=state.composerView?.state?.doc&&state.originalDoc
+        ? !state.composerView.state.doc.eq(state.originalDoc) : draft!==state.originalDraft;
+      if(!state.uploadId||changed||p?.isSubmitting||p?.isWaitingForFileUploads
           ||p?.attachments?.length!==1||p.attachments[0].uploadId!==state.uploadId)
         return false;
       p.onAttachmentRemove(state.uploadId,"user");
@@ -218,10 +220,13 @@ function attachmentStatus(id) {
     if(!p)return {ok:false,reason:"callback_lost"};
     const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
     const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
+    const view=s.composerView;
+    const changed=view?.state?.doc&&s.originalDoc
+      ? !view.state.doc.eq(s.originalDoc) : draft!==s.originalDraft;
     const attachments=Array.isArray(p.attachments)?p.attachments:[];
     const attachment=attachments.length===1?attachments[0]:null;
     if(attachment?.uploadId)s.uploadId=attachment.uploadId;
-    return {ok:true,draftChanged:draft!==s.originalDraft,uploads:document.querySelectorAll('[aria-label^="Uploading "]').length,
+    return {ok:true,draftChanged:changed,uploads:document.querySelectorAll('[aria-label^="Uploading "]').length,
       attachments:attachments.length,attachmentStatus:attachment?.status||null,
       ready:attachment?.status==="ready"&&!!attachment.id&&!!attachment.uploadId,
       pending:!!p.isWaitingForFileUploads,submitting:!!p.isSubmitting};
@@ -238,8 +243,10 @@ function sendExpression(id, message, conversationId) {
         ||p.attachments[0]?.status!=="ready"||!p.attachments[0]?.id||!p.attachments[0]?.uploadId)
       return {ok:false,reason:"attachment_not_ready"};
     const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
-    if((e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"")!==s.originalDraft)
-      return {ok:false,reason:"draft_changed"};
+    const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
+    const changed=s.composerView?.state?.doc&&s.originalDoc
+      ? !s.composerView.state.doc.eq(s.originalDoc) : draft!==s.originalDraft;
+    if(changed)return {ok:false,reason:"draft_changed"};
     s.phase="submitted";
     s.submitOutcome="pending";
     try{
@@ -383,18 +390,18 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
         ||document.querySelector('input[type="file"][aria-label="Attach photos"]')
         ||document.querySelector('input[type="file"][aria-label="Attach files"]');
       if(!input||input.disabled)return {ok:false,reason:"file_input_missing"};
-      // A synthetic React onChange with a fake input/files array can show
-      // a ready attachment in the composer but omit it from the actual sent
-      // user turn. Use the real file input and the real bubbling change path.
-      // We hide the automated attachment preview without hiding draft text.
-      const transfer=new DataTransfer();
-      transfer.items.add(file);
-      input.files=transfer.files;
-      s.fileInput=input;
-      s.file=file;
+      // Inject the File directly into the mounted React handler. Do NOT set
+      // input.files or dispatch a DOM change: those stage a file in the user's
+      // visible browser input, including when submission fails. With normal
+      // preserveDraft:false submission, this path transmits the attachment.
+      const key=Object.keys(input).find(k=>k.startsWith("__reactProps"));
+      const onChange=key&&input[key]?.onChange;
+      if(typeof onChange!=="function")
+        return {ok:false,reason:"react_file_handler_unavailable"};
       s.phase="uploading";
-      input.dispatchEvent(new Event("change",{bubbles:true}));
-      return {ok:true,route:"dom_file_input",fileInputCount:input.files?.length||0};
+      const selected={id:input.id,files:[file],value:""};
+      onChange({currentTarget:selected,target:selected});
+      return {ok:true,route:"react_handler",fileInputCount:input.files?.length||0};
     `));
     if (!stage?.ok) throw new Error("Image attachment failed: " + JSON.stringify(stage));
     record.stageRoute = stage.route;
@@ -468,12 +475,7 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
             try{deferredCleanup=!s.dismissOwnAttachment?.();}catch{deferredCleanup=true;}
           }
           s.chunks=[];s.phase=deferredCleanup?"pending_cleanup":"finished";
-          if(!deferredCleanup){
-            clearTimeout(s.styleTimeout);
-            // Only clear T3's own file-input selection, never another image.
-            if(s.fileInput?.files?.length===1&&s.fileInput.files[0]===s.file)
-              s.fileInput.value="";
-          }
+          if(!deferredCleanup)clearTimeout(s.styleTimeout);
           s.style?.remove();
         }
         return true;
