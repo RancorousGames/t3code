@@ -4,7 +4,6 @@ import {
   CHATGPT_DEFAULT_URL,
   chatGPTBrowserThreadRef,
   readChatGPTBrowserSessions,
-  markInitialChatGPTHighEffortApplied,
 } from "./chatGPTBrowserSessions";
 import { isChatGPTHomeUrl } from "./chatGPTBrowserPrewarm";
 import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
@@ -179,7 +178,7 @@ export async function sendInitialChatGPTPrompt(input: {
             }
             // A spawned worker must start on High, not inherit the account's last
             // manually selected effort. Fail before submitting if ChatGPT is not ready.
-            if (session.initialHighEffortPending && input.newManagedWorker !== false) {
+            if (input.newManagedWorker !== false) {
               const high = await ensureChatGPTHighEffort((expression) =>
                 automation.evaluate(runtimeId, { expression }),
               );
@@ -188,7 +187,6 @@ export async function sendInitialChatGPTPrompt(input: {
                 await pause(250);
                 continue;
               }
-              markInitialChatGPTHighEffortApplied(input.environmentId, input.sessionId);
             }
             // Submit through ChatGPT's mounted React handler. Unlike typing and
             // clicking Send, this neither mutates nor focuses a restored draft.

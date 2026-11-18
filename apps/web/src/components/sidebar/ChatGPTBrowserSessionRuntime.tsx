@@ -134,6 +134,7 @@ export function ChatGPTBrowserSessionRuntime({
     let timer: ReturnType<typeof setTimeout> | undefined;
     const attempt = async () => {
       let confirmed = false;
+      let conversationObserved = false;
       try {
         if (persistentChromium) {
           const bridge = window.desktopBridge?.stableChatGPTViewRequest;
@@ -156,6 +157,7 @@ export function ChatGPTBrowserSessionRuntime({
             (!isChatGPTHomeUrl(state.url) && !isChatGPTConversationUrl(state.url))
           )
             return;
+          conversationObserved = isChatGPTConversationUrl(state.url);
           confirmed = await ensureChatGPTHighEffort(async (expression) => {
             const reply = (await bridge({ operation: "evaluate", identity, expression })) as {
               result?: unknown;
@@ -170,15 +172,18 @@ export function ChatGPTBrowserSessionRuntime({
             return;
           const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
           if (isChatGPTGuestHibernated(runtimeId)) return;
+          conversationObserved = isChatGPTConversationUrl(url.url);
           confirmed = await ensureChatGPTHighEffort((expression) =>
             chatGPTWebviewAutomation.evaluate(runtimeId, { expression }),
           );
         }
-        if (confirmed && !disposed) markInitialChatGPTHighEffortApplied(environmentId, sessionId);
+        if (confirmed && conversationObserved && !disposed)
+          markInitialChatGPTHighEffortApplied(environmentId, sessionId);
       } catch {
         // A new guest can still be loading or signing in; do not wake or reload it.
       } finally {
-        if (!disposed && !confirmed) timer = setTimeout(() => void attempt(), 1_500);
+        if (!disposed && !(confirmed && conversationObserved))
+          timer = setTimeout(() => void attempt(), confirmed ? 5_000 : 1_500);
       }
     };
     void attempt();
