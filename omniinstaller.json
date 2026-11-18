@@ -5,6 +5,7 @@
     {
       "id": "dev.rancorousgames.t3code",
       "name": "T3 Code",
+      "description": "T3 Code and Monku no Mori install and update together.",
       "workingDirectory": ".",
       "defaultDestination": "{LocalAppData}/OmniInstaller/Apps/{AppId}",
       "sources": { "git": {} },
@@ -30,6 +31,9 @@
           "installHint": "In Visual Studio Installer, add Desktop development with C++, the Windows SDK, and the latest MSVC x64/x86 Spectre-mitigated libraries. The build also requires Python 3."
         }
       ],
+      "companionLaunchers": {
+        "Monku no Mori": { "executable": "{InstallDir}/app/mori/Monku no Mori.exe" }
+      },
       "commands": {
         "build": { "script": "scripts/omniinstaller-t3.ps1", "args": ["build"] },
         "install": { "script": "scripts/omniinstaller-t3.ps1", "args": ["install"] },
