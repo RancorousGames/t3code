@@ -8,11 +8,26 @@ import { controlAddress, sendAppControlRequest } from "./spawn-chatgpt-session.m
 import { isPipeUnavailable, readSnapshotAcrossIntegrity } from "./desktop-readonly-snapshot.mjs";
 import { sanitizeRecoveryAggregate } from "./chatgpt-recovery-metrics.mjs";
 import { computeChatGPTCapacityStatus } from "./chatgpt-capacity-status.mjs";
+import { chatGPTEffortExpression } from "./chatgpt-effort-expression.mjs";
 
 export async function controlSessions(
   input,
   { home = NodePath.resolve(import.meta.dirname, "../.t3"), exchange = sendAppControlRequest } = {},
 ) {
+  if (input?.action === "set_effort") {
+    const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+    if (Object.keys(input).some(key => !["action", "sessionId", "expectedConversationId", "level"].includes(key)) ||
+        !uuid.test(input.sessionId ?? "") || !uuid.test(input.expectedConversationId ?? ""))
+      throw new Error("set_effort needs exact sessionId, expectedConversationId and level.");
+    const expression = chatGPTEffortExpression(input.level);
+    const result = await controlSessions({ action: "experimental_evaluate", sessionId: input.sessionId,
+      expectedConversationId: input.expectedConversationId, expression }, { home, exchange });
+    const applied = result?.result;
+    if (!applied?.ok || applied.value?.error || applied.value?.level !== input.level)
+      throw new Error(`ChatGPT effort not confirmed: ${JSON.stringify(applied ?? result)}`);
+    return { action: "set_effort", sessionId: input.sessionId,
+      verifiedConversationId: input.expectedConversationId, ...applied.value };
+  }
   if (input?.action === "capacity_status") {
     if (Object.keys(input).some((field) => field !== "action"))
       throw new Error("capacity_status is a read-only global T3 snapshot with no session overrides.");
