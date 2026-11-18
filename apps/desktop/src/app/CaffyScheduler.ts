@@ -528,9 +528,17 @@ export class CaffyScheduler {
       row.bindingObservedAt = now;
       row.availability = binding.working ? "working" : binding.status === "stuck"
         ? "recovering" : binding.activity === "unknown" ? "unavailable" : "ready";
-      // Aliases route controls, but never replace the durable monitor owner.
       row.publicSessionId = binding.id;
       row.browserSessionId = binding.browserSessionId;
+      // A schedule created using a Bootstrap alias is normalized once the
+      // durable browser owner appears. Do not retarget an in-flight delivery.
+      if (!row.pendingMessageId && row.sessionId !== binding.browserSessionId &&
+          !this.entries.has(binding.browserSessionId)) {
+        this.entries.delete(row.sessionId);
+        row.sessionId = binding.browserSessionId;
+        this.entries.set(row.sessionId, row);
+        changed = true;
+      }
 
       // Both live notifications and startup journal recovery enter the SAME
       // deterministic transition model. DOM totalTurns is never an event key.
@@ -1065,16 +1073,11 @@ export class CaffyScheduler {
       throw new Error("Reboot run interval must be 1..10000.");
     if (input.autoRebootMinutes != null && input.autoRebootEveryRuns != null)
       throw new Error("Select either a reboot interval or a run count.");
-    // A cold/errored guest can still be scheduled using T3's exact persisted
-    // session binding. The actual delivery always requires a fresh guarded read.
-    const identity = await this.registered(input.sessionId, input.conversationId).catch(() => null);
-    if (!identity) {
-      const observed = await this.read(input.sessionId, input.conversationId).catch(() => null);
-      if (!(observed?.conversationGuardValidated === true &&
-            observed.verifiedConversationId === input.conversationId))
-        throw new Error("T3 could not confirm the session/conversation binding. No schedule created.");
-    }
-    const browserSessionId = identity?.browserSessionId ?? input.sessionId;
+    // Scheduling is a durable local preference, not a message send. Do not
+    // block its save on a renderer roster/guarded read; the pump verifies the
+    // current conversation before enqueuing any wake.
+    const known = this.lookup(input.sessionId);
+    const browserSessionId = known?.browserSessionId ?? known?.sessionId ?? input.sessionId;
     const canonicalId = browserSessionId;
     if (this.terminalConversations.get(canonicalId) === input.conversationId ||
         this.terminalConversations.get(input.sessionId) === input.conversationId)
@@ -1104,23 +1107,12 @@ export class CaffyScheduler {
       (!prior || prior.paused || prior.mode !== "idle" || prior.onceOnly ||
         prior.conversationId !== input.conversationId ||
         (!prior.pendingWake && !prior.pendingMessageId && prior.lastWakeAt === null));
-    // One-time schedules retain their existing explicit "now vs later" policy.
-    const inspectOnceOnly = input.mode === "idle" && input.onceOnly === true &&
+    // A newly configured one-off continuation waits for the next safe idle;
+    // no live renderer read is necessary while saving the schedule.
+    const initialOnceWake = input.mode === "idle" && input.onceOnly === true &&
       input.wakeNow === undefined &&
       (!prior || prior.paused || prior.mode !== "idle" ||
         prior.conversationId !== input.conversationId);
-    const observed = inspectOnceOnly
-      ? await this.read(canonicalId, input.conversationId).catch(() => null) : null;
-    const observedSession = observed?.session as {
-      conversationId?: string; activity?: string; status?: string; lastRole?: string;
-    } | undefined;
-    const initialOnceWake = inspectOnceOnly &&
-      observed?.conversationGuardValidated === true &&
-      observed.verifiedConversationId === input.conversationId &&
-      observedSession?.conversationId === input.conversationId &&
-      observedSession?.activity === "idle" &&
-      (observedSession.status === "done_or_idle" || observedSession.status === "waiting_for_input") &&
-      observedSession.lastRole === "assistant";
     const armWake = input.wakeNow === true || initialIdleWake || initialOnceWake;
     // A fresh manual Caffy setup supersedes any earlier "agent stopped" marker.
     for (const [key, mark] of this.agentStops) {
@@ -1181,7 +1173,7 @@ export class CaffyScheduler {
       prior.conversationId === input.conversationId;
     const row: CaffyConfig = {
       sessionId: canonicalId, browserSessionId,
-      publicSessionId: identity?.id ?? prior?.publicSessionId,
+      publicSessionId: prior?.publicSessionId ?? input.sessionId,
       conversationId: input.conversationId,
       mode, respectSlots, intervalMinutes,
       startup: mode === "startup" ? true : input.startup ?? false, onceOnly: input.onceOnly ?? false,
@@ -1192,10 +1184,7 @@ export class CaffyScheduler {
       pendingWake: armWake,
       pendingReason: armWake ? "manual" : null,
       pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
-      lastIdleSequence: Math.max(
-        continuingSameMonitor ? (prior?.lastIdleSequence ?? 0) : initialIdleSequence,
-        identity?.idleSequence ?? 0,
-      ),
+      lastIdleSequence: continuingSameMonitor ? (prior?.lastIdleSequence ?? 0) : initialIdleSequence,
       lastHandledIdleEventId: (continuingSameMonitor ? prior?.lastHandledIdleEventId : journalIdle?.eventId) ?? null,
       lastIdleEvidenceKey: (continuingSameMonitor ? prior?.lastIdleEvidenceKey : journalIdle?.evidenceKey) ?? null,
       lastHandledIdleTurnCount: continuingSameMonitor
@@ -2177,26 +2166,10 @@ export class CaffyScheduler {
         }
         row.admissionReason = null;
         try {
-        // A cold or errored session cannot pass a live guarded read until
-        // it has been mounted. Enqueue from the exact registry binding so
-        // the *existing* T3 delivery queue will mount/recover it. The guarded
-        // send still refuses a working composer, draft or wrong conversation.
-        const bound = await this.registered(row.sessionId, row.conversationId).catch(() => null);
+        // Do not gate queued work on a separate roster lookup. The delivery
+        // queue verifies the exact conversation and safe idle before sending;
+        // an unavailable or stale roster must not prevent trying that path.
         if (this.entries.get(row.sessionId) !== row || row.paused) continue;
-        if (!bound) {
-          // Reconciliation already identified this as the same live session
-          // with a new conversation. Preserve the more actionable diagnostic,
-          // and avoid rewriting the Caffy state every scheduler tick.
-          if (row.lastError?.startsWith("Session switched conversations;")) continue;
-          const reason = "T3 cannot verify this exact session and conversation; pending wake retained.";
-          if (row.lastError !== reason) { row.lastError = reason; this.save(); }
-          continue;
-        }
-        if (bound.working) {
-          row.lastCheckResult = "Assistant working; wake intent retained until safe idle.";
-          if (!row.lastActivatedAt) { row.lastActivatedAt = Date.now(); this.save(); }
-          continue;
-        }
         const rebootAnchor = row.lastRebootAt ?? row.createdAt;
         if (!row.onceOnly && ((row.autoRebootMinutes &&
             now - rebootAnchor >= row.autoRebootMinutes * 60_000) ||

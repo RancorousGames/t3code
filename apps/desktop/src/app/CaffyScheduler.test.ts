@@ -42,7 +42,7 @@ function fixture() {
     version: 2, entries: [initial], keepT3Busy: true, maxWorking: 3,
   }));
   let roster: Array<{
-    id: string; conversationId: string; bootstrapIdentity: {
+    id: string; browserSessionId?: string; conversationId: string; bootstrapIdentity: {
       state: string; publicId: string; conversationId: string;
     }; hidden?: boolean; snoozedUntil?: number; status?: string; activity?: string; statusObservedAt?: string;
     lastRole?: string; binding?: {boundAt?: string};
@@ -883,6 +883,44 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
     } finally { c.close(); f.dispose(); }
   });
 
+  it("saves Caffy immediately even when renderer binding is stale, then reconciles the conversation", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      c.stop(SESSION, "user");
+      f.setRoster([{
+        id: SESSION, conversationId: REPLACEMENT,
+        bootstrapIdentity: { state: "mismatch", publicId: SESSION, conversationId: ORIGINAL },
+      }]);
+      const saved = await c.set({
+        sessionId: SESSION, conversationId: ORIGINAL, mode: "idle",
+        onceOnly: false, repeatPrompt: "Continue the assignment.",
+      });
+      expect(saved.pendingWake).toBe(true);
+      expect(monitor(c)?.conversationId).toBe(ORIGINAL);
+      await c.reconcileLifecycle();
+      expect(monitor(c)?.conversationId).toBe(ORIGINAL);
+      f.verifyRead();
+      await c.reconcileLifecycle();
+      expect(monitor(c)?.conversationId).toBe(REPLACEMENT);
+      expect(monitor(c)?.repeatPrompt).toBe("Continue the assignment.");
+    } finally { c.close(); f.dispose(); }
+  });
+  it("normalizes a saved public session alias when the browser owner returns", async () => {
+    const f = fixture();
+    const c = f.open();
+    try {
+      c.stop(SESSION, "user");
+      f.setRoster([{
+        id: WAKE, browserSessionId: SESSION, conversationId: ORIGINAL,
+        bootstrapIdentity: { state: "registered", publicId: WAKE, conversationId: ORIGINAL },
+      }]);
+      await c.set({ sessionId: WAKE, conversationId: ORIGINAL, mode: "idle" });
+      await c.reconcileIdentityAliases(true);
+      expect((c.status(SESSION) as CaffyConfig)?.sessionId).toBe(SESSION);
+      expect((c.status(WAKE) as CaffyConfig)?.browserSessionId).toBe(SESSION);
+    } finally { c.close(); f.dispose(); }
+  });
   it("keeps Caffy through snooze, but retires a paused monitor", async () => {
     const f = fixture();
     const c = f.open();
