@@ -8,6 +8,7 @@ import { readChatGPTProviderActivity, flushDeferredCaffyAttention } from "../../
 import { isCaffyIdleContinuationActive } from "../../chatGPTCaffyAttentionPolicy";
 import { readVerifiedT3CaffyOverview } from "../../hooks/useT3CaffyOverview";
 import { rearmPersistentSessionAttention } from "../../chatGPTPersistentAttention";
+import { captureHiddenAttention, retainHiddenAttention } from "../../chatGPTAttentionToastVisibility";
 import { useClientSettings } from "../../hooks/useSettings";
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
@@ -23,8 +24,27 @@ import {
   snoozeActionableAttentionQueue,
 } from "../../chatGPTAgentAttention";
 
+/** A notification is actionable only if its session is available and is
+ * not currently protected by session snooze or Caffy continuation. */
+function availableAttentionIds(
+  items: readonly AgentAttention[],
+  environmentId: EnvironmentId | undefined,
+  now: number,
+): ReadonlySet<string> {
+  if (!environmentId) return new Set();
+  const sessions = readChatGPTBrowserSessions(environmentId);
+  const caffy = readVerifiedT3CaffyOverview();
+  return new Set(items.filter((item) => {
+    const session = sessions.find((entry) =>
+      entry.id === item.sessionId || entry.bootstrapIdentity?.publicId === item.sessionId);
+    return session !== undefined && (session.snoozedUntil ?? 0) <= now &&
+      !(item.source === "manual" && isCaffyIdleContinuationActive(caffy, session, now));
+  }).map((item) => item.sessionId));
+}
+
 /** Open consumes one stack item; snooze and dismiss apply to the entire
- * currently actionable queue, without touching future untriggered requests. */
+ * currently actionable queue, without touching future untriggered requests.
+ * Hide is UI-only until the next newly actionable notification. */
 export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, environmentId }: {
   openSession: (request: AgentAttention) => boolean;
   onDismiss: (request: AgentAttention) => Promise<boolean>;
@@ -38,13 +58,21 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
   const [now, setNow] = useState(Date.now);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState(false);
+  const [hiddenAppearances, setHiddenAppearances] = useState<ReadonlySet<string> | null>(null);
   const publishingIds = useRef(new Set<string>());
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Subscribes to the shared external attention store and its timed snooze refresh.
   useEffect(() => {
     const refresh = () => {
       if (environmentId) flushDeferredCaffyAttention(environmentId);
-      setItems(loadAgentAttention());
-      setNow(Date.now());
+      const nextItems = loadAgentAttention();
+      const nextNow = Date.now();
+      const nextStack = activeAgentAttentionStack(
+        nextItems, availableAttentionIds(nextItems, environmentId, nextNow), nextNow);
+      // Do not bring back the old queue on polls, receipt updates or reorders.
+      // A genuinely new alert (or a snooze reappearance) reveals everything.
+      setHiddenAppearances((previous) => retainHiddenAttention(previous, nextStack));
+      setItems(nextItems);
+      setNow(nextNow);
     };
     window.addEventListener(AGENT_ATTENTION_CHANGE_EVENT, refresh);
     window.addEventListener("storage", refresh);
@@ -63,14 +91,7 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
     : undefined, [environmentId]);
   // A sleeping session is not actionable: do not surface it in the toast,
   // publish a phone alert for it, or let queue buttons wake it indirectly.
-  const availableIds = new Set(items.filter((item) => {
-    if (!environmentId || sessionTitle(item.sessionId) === undefined) return false;
-    const session = readChatGPTBrowserSessions(environmentId).find((entry) =>
-      entry.id === item.sessionId || entry.bootstrapIdentity?.publicId === item.sessionId);
-    return session !== undefined && (session.snoozedUntil ?? 0) <= now &&
-      !(item.source === "manual" && isCaffyIdleContinuationActive(
-        readVerifiedT3CaffyOverview(), session, now));
-  }).map((item) => item.sessionId));
+  const availableIds = availableAttentionIds(items, environmentId, now);
   const toPublish = items.find((item) => item.status === "pending" &&
     !item.notifiedAt && availableIds.has(item.sessionId));
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronizes actionable attention with the external phone-notification transport.
@@ -87,9 +108,9 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
       .then((success) => { if (success) markAgentAttentionNotified(id); })
       .catch((error: unknown) => console.warn("[Agent attention] Phone notification failed", error))
       .finally(() => { publishingIds.current.delete(id); });
-  }, [toPublish, sessionTitle]);
+  }, [toPublish, sessionTitle, publishingIds]);
   const stack = activeAgentAttentionStack(items, availableIds, now);
-  const visible = stack[0];
+  const visible = hiddenAppearances === null ? stack[0] : undefined;
   const snoozeQueue = (until: number) => {
     snoozeActionableAttentionQueue(until, availableIds);
   };
@@ -201,6 +222,10 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
         <button disabled={dismissing} className="rounded-md border px-2 py-2 disabled:opacity-50"
           onClick={() => { void dismissQueue(); }}>
           {dismissing ? "Dismissing…" : "Dismiss all"}
+        </button>
+        <button className="rounded-md border px-2 py-2"
+          onClick={() => setHiddenAppearances(captureHiddenAttention(stack))}>
+          Hide
         </button>
       </div>
       {dismissError && <p role="alert" className="mt-2 text-xs text-destructive">Some agent requests could not be dismissed. Those alerts remain queued.</p>}
