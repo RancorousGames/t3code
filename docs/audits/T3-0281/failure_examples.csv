@@ -1,0 +1,16 @@
+type,classification,thread_id,item_id,timestamp,status
+command_execution,shell/argument syntax,6d6269f2-5c58-4387-9aac-4850d461798a,turn-item:provider:codex:native-item:exec-1a339607-75b9-4e77-910d-70a44b01720a,2026-11-11T00:40:36.623Z,failed
+command_execution,missing path or command,6d6269f2-5c58-4387-9aac-4850d461798a,turn-item:provider:codex:native-item:exec-1c0975db-2386-4e84-af07-f4f8da164829,2026-11-11T00:41:57.345Z,failed
+command_execution,timeout/cancel,6d6269f2-5c58-4387-9aac-4850d461798a,turn-item:provider:codex:native-item:exec-1ef024f0-987b-46d4-b160-5334cc7d7632,2026-11-11T00:42:25.006Z,failed
+command_execution,tool failure,6d6269f2-5c58-4387-9aac-4850d461798a,turn-item:provider:codex:native-item:exec-e7344c7c-9288-44ba-88a6-c797391a7396,2026-11-11T00:45:01.461Z,failed
+command_execution,other/unknown,6d6269f2-5c58-4387-9aac-4850d461798a,turn-item:provider:codex:native-item:exec-38ecfcba-6e56-42c9-bfef-cb7f89492465,2026-11-11T01:01:31.324Z,failed
+dynamic_tool,other/unknown,6d6269f2-5c58-4387-9aac-4850d461798a,turn-item:provider:codex:native-item:exec-37ad41f3-938a-44ad-9053-d60e490f1db1,2026-11-11T01:06:30.255Z,failed
+error,usage/rate limit,6677c5d8-f70e-47bd-b62a-639630b137b2,turn-item:provider:codex:native-item:terminal-failure%3Aprovider-turn%3Aprovider%3Acodex%3Anative-turn%3A01a1c879-9360-7b33-ba61-f6f09acbd407,2026-11-11T02:47:35.233Z,failed
+command_execution,permission/coordination,120834b7-eb2a-491d-8e25-a19c04f05b0d,turn-item:provider:codex:native-item:exec-f5ba2500-da4f-4f53-81c5-5e036926cc16,2026-11-11T22:49:08.935Z,failed
+dynamic_tool,tool failure,6677c5d8-f70e-47bd-b62a-639630b137b2,turn-item:provider:claudeAgent:native-item:toolu_01WEB9dkE8WN9swKck88FePJ,2026-11-11T22:59:38.307Z,failed
+dynamic_tool,missing path or command,6677c5d8-f70e-47bd-b62a-639630b137b2,turn-item:provider:claudeAgent:native-item:toolu_01PSTwtC1vfnVKTQHcVEDKYN,2026-11-11T23:05:42.194Z,failed
+error,tool failure,6677c5d8-f70e-47bd-b62a-639630b137b2,turn-item:provider:claudeAgent:native-item:terminal-failure%3Aprovider-turn%3Aprovider%3AclaudeAgent%3Anative-turn%3Aturn%253Arun-attempt%253Arun%253Arun%25253Athread%25253A6677c5d8-f70e-47bd-b62a-639630b137b2%25253Aordinal%25253A9%253Aattempt%253A1,2026-11-11T23:15:06.718Z,failed
+dynamic_tool,permission/coordination,6677c5d8-f70e-47bd-b62a-639630b137b2,turn-item:provider:claudeAgent:native-item:toolu_01MHx6UExLxWB1SNaoT8zuQa,2026-11-11T23:55:19.509Z,failed
+dynamic_tool,timeout/cancel,thread:delegated-task:command%3Amcp%3Aaf2dcbec-f599-46b8-8a28-664e26278693%3Adelegate-task%3Ad30686a5-2dc7-46be-9f81-85d7cd865d10,turn-item:provider:claudeAgent:native-item:toolu_01BrBg6ckyRFakD1wEzZkAy1,2026-11-13T00:56:38.109Z,failed
+dynamic_tool,shell/argument syntax,a3876a98-d486-43b7-9d2f-7c9fbd74d5f6,turn-item:provider:claudeAgent:native-item:toolu_01ANqqRoKPaGqvc23ur3TNna,2026-11-14T20:19:37.774Z,failed
+file_change,tool failure,thread:delegated-task:command%3Amcp%3Ac0ba555f-bd80-41c9-810a-a6f0e900bc00%3Adelegate-task%3Aced656e6-1885-436a-b4e1-084c2a95a83d,turn-item:provider:claudeAgent:native-item:toolu_011uFcwUawBST2qQ2quss4ro,2026-11-17T18:00:04.306Z,failed
