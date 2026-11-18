@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "repository": { "url": "https://github.com/RancorousGames/t3code" },
+  "apps": [
+    {
+      "id": "dev.rancorousgames.t3code",
+      "name": "T3 Code",
+      "description": "T3 Code and Monku no Mori install and update together.",
+      "workingDirectory": ".",
+      "defaultDestination": "{LocalAppData}/OmniInstaller/Apps/{AppId}",
+      "sources": { "git": {} },
+      "companionLaunchers": {
+        "Monku no Mori": { "executable": "{InstallDir}/app/mori/Monku no Mori.exe" }
+      },
+      "commands": {
+        "build": { "script": "scripts/omniinstaller-t3.ps1", "args": ["build"] },
+        "install": { "script": "scripts/omniinstaller-t3.ps1", "args": ["install"] },
+        "detectVersion": { "script": "scripts/omniinstaller-t3.ps1", "args": ["detectVersion"] },
+        "uninstall": { "script": "scripts/omniinstaller-t3.ps1", "args": ["uninstall"] },
+        "launch": { "executable": "{InstallDir}/app/T3 Code (Beta).exe" }
+      }
+    }
+  ]
+}
