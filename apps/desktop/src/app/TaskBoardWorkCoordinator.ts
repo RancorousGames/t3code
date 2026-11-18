@@ -114,16 +114,19 @@ const ROOT_CANDIDATES = [
   NodePath.resolve(process.cwd(), "..", ".."),
   "D:\\SSDProjects\\Tools\\t3code",
 ].filter((value): value is string => !!value).map(value => NodePath.resolve(value));
-function resolveRoot(): string {
-  const root = ROOT_CANDIDATES.find(value =>
-    NodeFS.existsSync(NodePath.join(value, "scripts", "taskboard-dispatch.mjs")));
-  if (!root) throw new Error("T3 TaskBoard dispatcher scripts could not be located.");
-  return root;
+/** TaskBoard is an optional local integration, never a prerequisite for T3 startup. */
+export function findTaskBoardRoot(candidates: readonly string[]): string | null {
+  return candidates.find(value =>
+    NodeFS.existsSync(NodePath.join(value, "scripts", "taskboard-dispatch.mjs"))) ?? null;
 }
-const ROOT = resolveRoot();
+const ROOT = findTaskBoardRoot(ROOT_CANDIDATES);
 const TASKBOARD_CLI = process.env.TASKBOARD_CLI
   ? NodePath.resolve(process.env.TASKBOARD_CLI)
-  : NodePath.resolve(ROOT, "..", "TaskBoard", "packages", "task-cli", "target", "release", "taskboard.exe");
+  : ROOT ? NodePath.resolve(ROOT, "..", "TaskBoard", "packages", "task-cli", "target", "release", "taskboard.exe") : null;
+function dispatcherScript(): string {
+  if (!ROOT) throw new Error("TaskBoard dispatcher scripts are unavailable.");
+  return NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs");
+}
 const TASKBOARD_CATALOG = () => NodePath.join(
   process.env.APPDATA ?? NodePath.join(process.env.USERPROFILE ?? "", "AppData", "Roaming"),
   "TaskBoard", "projects.json",
@@ -195,6 +198,7 @@ export function completedQueueTask(
 export class TaskBoardWorkCoordinator {
   private readonly caffy: CaffyScheduler;
   private readonly home: string;
+  private integrationAvailable = false;
   private releaseHeartbeat: (() => void) | null = null;
   private followupTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
@@ -307,7 +311,22 @@ export class TaskBoardWorkCoordinator {
   }
 
   private async readQueues(): Promise<QueueSnapshot[]> {
-    if (!NodeFS.existsSync(TASKBOARD_CLI)) throw new Error("Local TaskBoard CLI missing.");
+    // A second PC may have no TaskBoard checkout, CLI or project catalog.
+    // Treat that as an empty optional queue, not a broken T3 installation.
+    if (!ROOT || !TASKBOARD_CLI || !NodeFS.existsSync(TASKBOARD_CLI) ||
+        !NodeFS.existsSync(TASKBOARD_CATALOG())) {
+      this.integrationAvailable = false;
+      if (this.lastObservedAt !== null) {
+        // An integration disappearing mid-run is not proof that its live
+        // reservations were released. Preserve the existing fail-closed path.
+        this.syncReservations(false);
+        throw new Error("TaskBoard became unavailable after queue discovery.");
+      }
+      this.snapshots = [];
+      this.lastIdleReason = "TaskBoard not installed or configured; automatic task dispatch disabled.";
+      this.caffy.setTaskReservations([], true);
+      return [];
+    }
     try {
       const snapshots: QueueSnapshot[] = [];
       for (const project of this.projects()) {
@@ -325,6 +344,7 @@ export class TaskBoardWorkCoordinator {
         this.lastObservedAt = output.observedAt ?? new Date().toISOString();
       }
       this.snapshots = snapshots;
+      this.integrationAvailable = true;
       const startingIds = new Set(snapshots.flatMap(board => board.items
         .filter(item => item.state === "starting" && item.reservationId)
         .map(item => item.reservationId!)));
@@ -462,6 +482,7 @@ export class TaskBoardWorkCoordinator {
       row.holdUntil !== undefined && row.holdUntil <= Date.now());
     return {
       active: this.running,
+      taskBoardAvailable: this.integrationAvailable,
       keepT3Busy: this.caffy.policyEnabled,
       observedAt: this.lastObservedAt,
       reservations,
@@ -540,6 +561,7 @@ export class TaskBoardWorkCoordinator {
   }
 
   private async taskCommand(boardRoot: string, args: string[]) {
+    if (!TASKBOARD_CLI) throw new Error("TaskBoard CLI is unavailable.");
     return await cli(TASKBOARD_CLI, ["--json", "--root", boardRoot, ...args]);
   }
 
@@ -565,7 +587,7 @@ export class TaskBoardWorkCoordinator {
       return;
     }
     const result = await cli("node.exe", [
-      NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+      dispatcherScript(),
     ], JSON.stringify({
       action: "open-task",
       taskRef: { board: boardRoot, id: item.taskId },
@@ -656,7 +678,7 @@ export class TaskBoardWorkCoordinator {
       .map(item => ({boardRoot: board.boardRoot, item})));
     if (!currentClaims.length) return;
     const listed = await cli("node.exe", [
-      NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+      dispatcherScript(),
     ], JSON.stringify({
       action: "list", which: "all", includeHidden: true, home: this.home,
     }), 25_000) as {
@@ -761,7 +783,7 @@ export class TaskBoardWorkCoordinator {
         item.claimed && item.claimedBy === `t3:${item.sessionId}` && !item.legacyOpenRig)
       .map(item => ({ boardRoot: board.boardRoot, item })));
     if (!working.length) return;
-    const listed = await cli("node.exe", [NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs")],
+    const listed = await cli("node.exe", [dispatcherScript()],
       JSON.stringify({ action: "list", which: "all", includeHidden: true, home: this.home }),
       25_000) as { sessions?: Array<{ id: string; spawnRequestId?: string;
         binding?: {boundAt?: string};
@@ -781,7 +803,7 @@ export class TaskBoardWorkCoordinator {
     const { item, boardRoot } = candidate;
     this.promptRecoveryAttempts.set(item.reservationId!,
       (this.promptRecoveryAttempts.get(item.reservationId!) ?? 0) + 1);
-    await cli("node.exe", [NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs")],
+    await cli("node.exe", [dispatcherScript()],
       JSON.stringify({
         action: "open-task", taskRef: { board: boardRoot, id: item.taskId },
         intent: "implement", kind: "chatgpt", background: true,
@@ -796,7 +818,7 @@ export class TaskBoardWorkCoordinator {
       return new Map(this.sessionBoardOwners);
     try {
       const listed = await cli("node.exe", [
-        NodePath.join(ROOT, "scripts", "taskboard-dispatch.mjs"),
+        dispatcherScript(),
       ], JSON.stringify({
         action: "list", which: "all", includeHidden: true, home: this.home,
       }), 25_000) as {
@@ -833,7 +855,7 @@ export class TaskBoardWorkCoordinator {
     this.pumpStartedAt = Date.now();
     try {
       let snapshots = await this.readQueues();
-      if (!this.running) return;
+      if (!this.running || !this.integrationAvailable) return;
       try { this.cleanupManagedWorkerWakes(snapshots); }
       catch (error) { this.lastError = `Managed Caffy cleanup: ${String(error)}`; }
       this.scheduleWorkerWakeMaintenance(snapshots);

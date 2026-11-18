@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { boardOwnersFromSessions, compareQueuedCandidates, completedQueueTask, sessionsForStartRequest, TaskBoardWorkCoordinator } from "./TaskBoardWorkCoordinator.ts";
+import { boardOwnersFromSessions, compareQueuedCandidates, completedQueueTask, findTaskBoardRoot, sessionsForStartRequest, TaskBoardWorkCoordinator } from "./TaskBoardWorkCoordinator.ts";
 
 const WT = "B:\\GDrive\\Test\\Wartribes\\Tasks";
 const T3 = "B:\\GDrive\\Test\\t3code\\Tasks";
@@ -16,6 +16,39 @@ const task = (boardRoot: string, taskId: string, created: string,
   });
 
 describe("TaskBoard Keep Busy selection", () => {
+  it("does not require TaskBoard dispatcher scripts on machines without TaskBoard", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-optional-taskboard-"));
+    try {
+      expect(findTaskBoardRoot([dir])).toBeNull();
+      NodeFS.mkdirSync(NodePath.join(dir, "scripts"));
+      NodeFS.writeFileSync(NodePath.join(dir, "scripts", "taskboard-dispatch.mjs"), "");
+      expect(findTaskBoardRoot([dir])).toBe(dir);
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("keeps Caffy usable when TaskBoard is not installed", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-no-taskboard-"));
+    const previous = process.env.APPDATA;
+    const updates: Array<{ count: number; ready: boolean }> = [];
+    try {
+      process.env.APPDATA = dir; // Force an absent TaskBoard catalog on this machine.
+      const coordinator = new TaskBoardWorkCoordinator(dir, {
+        policyEnabled: true,
+        setTaskReservations: (rows: unknown[], ready: boolean) => {
+          updates.push({ count: rows.length, ready });
+        },
+      } as unknown as ConstructorParameters<typeof TaskBoardWorkCoordinator>[1]);
+      const queues = await (coordinator as unknown as { readQueues(): Promise<unknown[]> }).readQueues();
+      expect(queues).toEqual([]);
+      expect(updates).toEqual([{ count: 0, ready: true }]);
+      expect(coordinator.status().taskBoardAvailable).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.APPDATA;
+      else process.env.APPDATA = previous;
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("retires the exact automatic idle Caffy on task cleanup, but not a manually replaced monitor", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-worker-wake-"));
     try {
