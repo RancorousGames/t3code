@@ -127,7 +127,21 @@ function imagePreflight(id) {
     const editor=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
     if(!editor)return {ok:false,reason:"composer_missing"};
     const draft=editor instanceof HTMLTextAreaElement?editor.value:editor.innerText||editor.textContent||"";
-    if(window.__t3ChatGPTImageSend?.phase&&!["submitted","finished"].includes(window.__t3ChatGPTImageSend.phase))
+    const previous=window.__t3ChatGPTImageSend;
+    if(previous?.phase==="pending_cleanup"){
+      // A text-only/failed send can leave temporary attachment state while
+      // ChatGPT finishes submitting. Reconcile it on the next preflight
+      // instead of blocking a worker until the three-minute orphan timer.
+      try{previous.dismissOwnAttachment?.();}catch{}
+      const priorProps=previous.findProps?.();
+      if(!priorProps?.isSubmitting&&!priorProps?.isWaitingForFileUploads&&
+          !priorProps?.attachments?.length){
+        clearTimeout(previous.styleTimeout);
+        previous.style?.remove();
+        previous.phase="finished";
+      }
+    }
+    if(previous?.phase&&!["submitted","finished"].includes(previous.phase))
       return {ok:false,reason:"another_image_send_active"};
     const stop=document.querySelector('[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"]');
     if(stop?.getClientRects().length&&!stop.disabled)return {ok:false,reason:"generation_active"};
@@ -139,12 +153,38 @@ function imagePreflight(id) {
     // The upload is temporary T3-owned state. Keep the attachment preview
     // out of the human composer while React completes the authenticated upload.
     // This does not replace ChatGPT's upload protocol with an undocumented API.
+    // ProseMirror's document, not innerText, preserves markup and mentions.
+    // React's preserveDraft=true can also exclude staged attachments from the
+    // submitted turn. Snapshot the draft and restore it *after* a normal send.
+    const editorFiber=editor.parentElement?.[Object.keys(editor.parentElement).find(k=>k.startsWith("__reactFiber"))];
+    let composerFiber=editorFiber, composerView=null;
+    for(let i=0;composerFiber&&i<90;i++,composerFiber=composerFiber.return){
+      const view=composerFiber.memoizedProps?.composerController?.view;
+      if(view?.state?.doc&&typeof view.dispatch==="function"){composerView=view;break;}
+    }
+    if(draft.trim()&&!composerView)return {ok:false,reason:"draft_view_unavailable"};
     const style=document.createElement("style");
     style.textContent='[data-composer-body] [class*="ComposerLayoutAttachments"] {display:none !important;}';
     document.head.appendChild(style);
     const state={
       id:${JSON.stringify(id)},chunks:[],phase:"transfer",findProps,
-      originalDraft:draft,style,uploadId:null,
+      originalDraft:draft,style,uploadId:null,composerView,
+      originalDoc:composerView?.state.doc,
+      selectionBookmark:composerView?.state.selection?.getBookmark?.(),
+    };
+    state.restoreDraft=()=>{
+      if(!state.originalDraft.trim()||!state.composerView?.state)return false;
+      const view=state.composerView;
+      const now=view.state.doc;
+      if(now.eq(state.originalDoc))return true;
+      // If a human has typed new text since submission, never replace it.
+      if(now.textContent.trim())return false;
+      let transaction=view.state.tr.replaceWith(0,now.content.size,state.originalDoc.content);
+      try{
+        if(state.selectionBookmark)transaction=transaction.setSelection(state.selectionBookmark.resolve(transaction.doc));
+      }catch{}
+      view.dispatch(transaction);
+      return true;
     };
     state.dismissOwnAttachment=()=>{
       const p=state.findProps();
@@ -203,11 +243,23 @@ function sendExpression(id, message, conversationId) {
     s.phase="submitted";
     s.submitOutcome="pending";
     try{
-      // The injected user turn is independent of text the human is composing.
-      const result=p.onSubmit(${JSON.stringify(message)},performance.now(),{preserveDraft:true},true);
-      const settled=(value)=>{s.submitOutcome=value===false?"rejected":value===true?"accepted":"completed";};
+      // preserveDraft=true can omit staged image attachments from the send.
+      // A normal submission consumes the upload; afterward restore the
+      // snapshot through ProseMirror rather than mutating the visible DOM.
+      const result=p.onSubmit(${JSON.stringify(message)},performance.now(),{preserveDraft:false},true);
+      const settled=(value)=>{
+        s.submitOutcome=value===false?"rejected":value===true?"accepted":"completed";
+        // ChatGPT can clear the ProseMirror view asynchronously. Restore only
+        // if the original draft was erased; never override newer human edits.
+        if(s.originalDraft.trim()){
+          for(const ms of [0,100,500,1500]){
+            setTimeout(()=>{try{s.restoreDraft?.()}catch{}},ms);
+          }
+        }
+      };
       if(result?.then)Promise.resolve(result).then(settled,error=>{
         s.submitOutcome="rejected";s.submitError=String(error).slice(0,160);
+        try{s.restoreDraft?.()}catch{}
       });
       else settled(result);
     }catch(error){
@@ -331,23 +383,22 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
         ||document.querySelector('input[type="file"][aria-label="Attach photos"]')
         ||document.querySelector('input[type="file"][aria-label="Attach files"]');
       if(!input||input.disabled)return {ok:false,reason:"file_input_missing"};
+      // A synthetic React onChange with a fake input/files array can show
+      // a ready attachment in the composer but omit it from the actual sent
+      // user turn. Use the real file input and the real bubbling change path.
+      // We hide the automated attachment preview without hiding draft text.
+      const transfer=new DataTransfer();
+      transfer.items.add(file);
+      input.files=transfer.files;
+      s.fileInput=input;
+      s.file=file;
       s.phase="uploading";
-      // Call the mounted React file-selection handler with a File object.
-      // Unlike assigning input.files and dispatching a DOM change event,
-      // this never inserts the image into the physical file input.
-      const key=Object.keys(input).find(k=>k.startsWith("__reactProps"));
-      const onChange=key&&input[key]?.onChange;
-      if(typeof onChange==="function"){
-        const selected={id:input.id,files:[file],value:""};
-        onChange({currentTarget:selected,target:selected});
-        return {ok:true,route:"react_handler",fileInputCount:input.files?.length||0};
-      }
-      // Compatibility fallback for ChatGPT versions with no exposed handler.
-      const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;
       input.dispatchEvent(new Event("change",{bubbles:true}));
-      return {ok:true,route:"dom_file_input"};
+      return {ok:true,route:"dom_file_input",fileInputCount:input.files?.length||0};
     `));
     if (!stage?.ok) throw new Error("Image attachment failed: " + JSON.stringify(stage));
+    record.stageRoute = stage.route;
+    record.fileInputCountAfterChange = stage.fileInputCount;
     record.status = "uploading";
     persist(home, record);
     let ready = false;
@@ -361,6 +412,7 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       await wait(350);
     }
     if (!ready) throw new Error("Image upload did not finish before deadline.");
+    record.uploadReadyObserved = true;
     // The browser callback may submit even if IPC acknowledgment is lost.
     record.status = "submitting";
     record.sendAttempted = true;
@@ -376,7 +428,9 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     for (let i = 0; i < 70; i++) {
       const observed = await experiment(deliveryProbe(marker));
       lastObserved = observed;
-      if (observed?.found) {
+      // User text can appear before ChatGPT renders its image. Give the
+      // attachment a short bounded opportunity to render before text_only.
+      if (observed?.found && (observed.imageCount > 0 || i >= 12)) {
         record.imageCount = observed.imageCount;
         record.status = observed.imageCount > 0 ? "delivered" : "text_only";
         record.reason = observed.imageCount > 0 ? null : "Text observed without the image attachment.";
@@ -414,7 +468,12 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
             try{deferredCleanup=!s.dismissOwnAttachment?.();}catch{deferredCleanup=true;}
           }
           s.chunks=[];s.phase=deferredCleanup?"pending_cleanup":"finished";
-          if(!deferredCleanup)clearTimeout(s.styleTimeout);
+          if(!deferredCleanup){
+            clearTimeout(s.styleTimeout);
+            // Only clear T3's own file-input selection, never another image.
+            if(s.fileInput?.files?.length===1&&s.fileInput.files[0]===s.file)
+              s.fileInput.value="";
+          }
           s.style?.remove();
         }
         return true;
