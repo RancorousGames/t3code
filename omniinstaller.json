@@ -9,28 +9,6 @@
       "workingDirectory": ".",
       "defaultDestination": "{LocalAppData}/OmniInstaller/Apps/{AppId}",
       "sources": { "git": {} },
-      "prerequisites": [
-        {
-          "id": "node",
-          "detect": { "script": "scripts/omniinstaller-t3.ps1", "args": ["checkNode"] },
-          "installHint": "Install the Node.js version pinned in this checkout's package.json and put it on PATH."
-        },
-        {
-          "id": "vite-plus",
-          "detect": { "script": "scripts/omniinstaller-t3.ps1", "args": ["checkVp"] },
-          "installHint": "Install Vite+ for Windows (https://viteplus.dev/guide/) and put vp on PATH."
-        },
-        {
-          "id": "rust",
-          "detect": { "script": "scripts/omniinstaller-t3.ps1", "args": ["checkRust"] },
-          "installHint": "Install Rust and run rustup target add x86_64-pc-windows-msvc."
-        },
-        {
-          "id": "msvc",
-          "detect": { "script": "scripts/omniinstaller-t3.ps1", "args": ["checkMsvc"] },
-          "installHint": "In Visual Studio Installer, add Desktop development with C++, the Windows SDK, and the latest MSVC x64/x86 Spectre-mitigated libraries. The build also requires Python 3."
-        }
-      ],
       "companionLaunchers": {
         "Monku no Mori": { "executable": "{InstallDir}/app/mori/Monku no Mori.exe" }
       },

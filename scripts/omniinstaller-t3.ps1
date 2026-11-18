@@ -1,48 +1,11 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('checkNode', 'checkVp', 'checkRust', 'checkMsvc', 'build', 'install', 'detectVersion', 'uninstall')]
+    [ValidateSet('build', 'install', 'detectVersion', 'uninstall')]
     [string]$Action
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-if ($Action -eq 'checkNode') {
-    if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) { exit 10 }
-    $required = (Get-Content -LiteralPath (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).engines.node
-    $actual = & node.exe --version
-    if ($LASTEXITCODE -ne 0 -or "$actual" -ne "v$required") {
-        Write-Output "This checkout requires Node.js $required (found $actual)."
-        exit 10
-    }
-    exit 0
-}
-if ($Action -eq 'checkVp') {
-    if (-not (Get-Command vp -ErrorAction SilentlyContinue)) { exit 10 }
-    & vp --version *> $null
-    if ($LASTEXITCODE -ne 0) { exit 10 }
-    exit 0
-}
-if ($Action -eq 'checkRust') {
-    if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue) -or
-        -not (Get-Command rustc.exe -ErrorAction SilentlyContinue)) { exit 10 }
-    $lib = & rustc.exe --print target-libdir --target x86_64-pc-windows-msvc
-    if ($LASTEXITCODE -ne 0 -or -not $lib -or -not (Test-Path -LiteralPath $lib -PathType Container)) { exit 10 }
-    exit 0
-}
-if ($Action -eq 'checkMsvc') {
-    # Match the x64 desktop packager's Windows preflight before running vp install.
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { exit 10 }
-    $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if (-not $vs) { exit 10 }
-    $sdk = Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -Name KitsRoot10 -ErrorAction SilentlyContinue
-    if (-not $sdk -or -not (Test-Path -LiteralPath (Join-Path $sdk 'Lib'))) { exit 10 }
-    $toolset = Get-ChildItem -LiteralPath (Join-Path $vs 'VC/Tools/MSVC') -Directory -ErrorAction SilentlyContinue |
-        Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
-    if (-not $toolset -or -not (Test-Path -LiteralPath (Join-Path $toolset.FullName 'lib/spectre/x64'))) { exit 10 }
-    exit 0
-}
-
 $dest = $env:OMNIINSTALLER_INSTALL_DIR
 $version = $env:OMNIINSTALLER_SOURCE_VERSION
 if (-not $dest -or $env:OMNIINSTALLER_APP_ID -ne 'dev.rancorousgames.t3code') {
@@ -60,13 +23,15 @@ $moriExeName = 'Monku no Mori.exe'
 
 switch ($Action) {
     'build' {
+        . (Join-Path $PSScriptRoot 'omniinstaller-toolchain.ps1')
         Push-Location $repo
         try {
             $env:CI = 'true'
-            & vp install --frozen-lockfile
-            if ($LASTEXITCODE -ne 0) { throw 'T3 Code dependency installation failed.' }
+            Initialize-OmniInstallerToolchain $repo
+            Initialize-OmniInstallerResourceMonitor $repo
+            $vp = Join-Path $repo 'node_modules/.bin/vp.cmd'
             $env:T3CODE_DESKTOP_UPDATE_REPOSITORY = 'RancorousGames/t3code'
-            & vp run dist:desktop:artifact --platform win --target dir --arch x64 --output-dir $cache --verbose
+            & $vp run dist:desktop:artifact --platform win --target dir --arch x64 --output-dir $cache
             if ($LASTEXITCODE -ne 0) { throw 'T3 Code desktop build failed.' }
             if (-not (Test-Path -LiteralPath (Join-Path $artifact $exeName) -PathType Leaf)) {
                 throw "T3 Code desktop build did not produce win-unpacked/$exeName."
@@ -75,7 +40,7 @@ switch ($Action) {
             Push-Location (Join-Path $repo 'apps/mori-web')
             try {
                 # Bundle the renderer using the workspace-pinned Vite+, as launch_mori.py does.
-                & (Join-Path $repo 'node_modules/.bin/vp.cmd') build
+                & $vp build
                 if ($LASTEXITCODE -ne 0) { throw 'Monku no Mori renderer build failed.' }
             }
             finally { Pop-Location }
