@@ -5,6 +5,23 @@ enable it in **Settings > Providers**. See [provider setup](./install.md#provide
 T3 Code requires OpenCode 1.14.19 or newer, including when you connect an existing
 OpenCode server.
 
+## Google AI Studio API key
+
+Google AI Studio can run through OpenCode's built-in Google provider; T3 Code does not
+need a separate native driver or a shared OpenCode login. In **Settings > Providers**,
+add an **OpenCode** instance named **Google AI Studio**. Leave **Server URL** empty
+for a locally managed OpenCode process. Under **Variables**, add
+`GOOGLE_GENERATIVE_AI_API_KEY`, keep it marked sensitive, and enter your AI Studio
+key. T3 Code stores sensitive values separately and passes the variable only to this
+provider instance. The other OpenCode instances need not share the credential.
+
+Refresh provider status after saving, then select a model labeled **Google** in the
+model picker (rather than an identically named OpenRouter model). Google may list
+older models that the current account cannot generate with; on an API deprecation
+error, select a currently supported Google model such as `google/gemini-3.8-flash`
+if available to your account. The model list and actual generation permission can
+change independently.
+
 ## OpenCode 2
 
 T3 Code supports OpenCode 2.0.18 and newer. It detects the version on its own, so
