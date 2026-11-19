@@ -61,23 +61,37 @@ export function inspectChatGPTPageSnapshot(activityState: string): ChatGPTPageSn
     clickedAt: number;
   };
   const scopedWindow = window as typeof window & { __t3ExplicitStopWitness?: StopWitness };
-  const witness = scopedWindow.__t3ExplicitStopWitness ??= {
-    installed: false, workingTurn: null, conversation: null,
-    clickedTurn: null, clickedConversation: null, clickedAt: 0,
-  };
+  const witness = (scopedWindow.__t3ExplicitStopWitness ??= {
+    installed: false,
+    workingTurn: null,
+    conversation: null,
+    clickedTurn: null,
+    clickedConversation: null,
+    clickedAt: 0,
+  });
   if (!witness.installed) {
     witness.installed = true;
-    document.addEventListener("click", (event) => {
-      if (!event.isTrusted || !(event.target instanceof Element)) return;
-      const button = event.target.closest(
-        'button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]',
-      );
-      if (!button || !visible(button) || button.hasAttribute("disabled") ||
-          witness.workingTurn === null || !witness.conversation) return;
-      witness.clickedTurn = witness.workingTurn;
-      witness.clickedConversation = witness.conversation;
-      witness.clickedAt = Date.now();
-    }, true);
+    document.addEventListener(
+      "click",
+      (event) => {
+        if (!event.isTrusted || !(event.target instanceof Element)) return;
+        const button = event.target.closest(
+          'button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]',
+        );
+        if (
+          !button ||
+          !visible(button) ||
+          button.hasAttribute("disabled") ||
+          witness.workingTurn === null ||
+          !witness.conversation
+        )
+          return;
+        witness.clickedTurn = witness.workingTurn;
+        witness.clickedConversation = witness.conversation;
+        witness.clickedAt = Date.now();
+      },
+      true,
+    );
   }
   const composerPresent = visible(composer);
   // Draft presence is safe to store. Do not return draft characters, hashes or lengths.
@@ -93,15 +107,25 @@ export function inspectChatGPTPageSnapshot(activityState: string): ChatGPTPageSn
     ...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]'),
   ]
     .filter(
-      (node) => visible(node) && !node.closest("[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote"),
+      (node) =>
+        visible(node) &&
+        !node.closest(
+          "[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote",
+        ),
     )
     .map((node) => (node.textContent ?? "").slice(0, 400));
   const limitNotice = /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i;
-  const conversationFull = alerts.some((text) => limitNotice.test(text)) ||
-    [...document.querySelectorAll("main div,main p,main span")].some((node) =>
-      visible(node) && !node.closest('[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote') &&
-      (node.textContent ?? "").length < 400 &&
-      /you['’]ve reached the maximum length for this conversation/i.test(node.textContent ?? ""));
+  const conversationFull =
+    alerts.some((text) => limitNotice.test(text)) ||
+    [...document.querySelectorAll("main div,main p,main span")].some(
+      (node) =>
+        visible(node) &&
+        !node.closest(
+          "[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote",
+        ) &&
+        (node.textContent ?? "").length < 400 &&
+        /you['’]ve reached the maximum length for this conversation/i.test(node.textContent ?? ""),
+    );
   const signInOrCaptcha = !!document.querySelector(
     'iframe[src*="captcha"],iframe[src*="challenge"],input[autocomplete="current-password"],[data-testid="login-button"]',
   );
@@ -156,18 +180,31 @@ export function inspectChatGPTPageSnapshot(activityState: string): ChatGPTPageSn
     witness.conversation = match[1]!;
   }
   const explicitStopRequested =
-    !stopButton && (activityState === "idle") &&
+    !stopButton &&
+    activityState === "idle" &&
     witness.clickedTurn === turnCount &&
     witness.clickedConversation === match[1] &&
-    witness.clickedAt > 0 && Date.now() - witness.clickedAt < 120_000;
+    witness.clickedAt > 0 &&
+    Date.now() - witness.clickedAt < 120_000;
   // Only materialize two DOM text values regardless of conversation length.
   const userContent =
     lastUserNode?.querySelector('[data-testid="user-message"],.whitespace-pre-wrap') ??
     lastUserNode;
-  const assistantContent =
-    lastAssistantNode?.querySelector(
-      '[data-markdown-text-style="assistant-message"],.markdown,.prose',
-    ) ?? lastAssistantNode;
+  // Image-generation refusals/errors render beside an EMPTY markdown block, so
+  // fall back to the whole turn (minus toolbar controls) when it has no text.
+  const markdown = lastAssistantNode?.querySelector(
+    '[data-markdown-text-style="assistant-message"],.markdown,.prose',
+  );
+  const textOf = (node: Element | null | undefined) =>
+    (node as HTMLElement | null)?.innerText?.trim() || node?.textContent?.trim() || "";
+  let assistantContent: Element | null = markdown ?? lastAssistantNode;
+  if (lastAssistantNode && markdown && !textOf(markdown)) {
+    const copy = lastAssistantNode.cloneNode(true) as Element;
+    copy
+      .querySelectorAll('button,[role="button"],svg,[data-testid*="action"]')
+      .forEach((el) => el.remove());
+    assistantContent = copy;
+  }
   const userText =
     (userContent as HTMLElement | null)?.innerText?.trim() ||
     userContent?.textContent?.trim() ||
@@ -207,7 +244,8 @@ export function inspectChatGPTPageSnapshot(activityState: string): ChatGPTPageSn
         ? "failed"
         : "unknown";
   const lastNode = lastTurnRole === "user" ? lastUserNode : lastAssistantNode;
-  const lastTurnKey = lastNode?.getAttribute("data-message-id") ??
+  const lastTurnKey =
+    lastNode?.getAttribute("data-message-id") ??
     lastNode?.querySelector("[data-message-id]")?.getAttribute("data-message-id") ??
     lastNode?.getAttribute("data-content-search-unit-key");
   return {

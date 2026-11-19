@@ -27,9 +27,16 @@ export interface PageInspection {
   messages: PageMessage[];
   url: string;
   diagnostics?: {
-    roleElements: number; turnElements: number; textLength: number; title: string;
-    markerInPage?: boolean; markerInAssistantUnits?: boolean; assistantUnitCount?: number;
-    markerInScripts?: boolean; markerInUserUnits?: boolean; markerInToolPanels?: boolean;
+    roleElements: number;
+    turnElements: number;
+    textLength: number;
+    title: string;
+    markerInPage?: boolean;
+    markerInAssistantUnits?: boolean;
+    assistantUnitCount?: number;
+    markerInScripts?: boolean;
+    markerInUserUnits?: boolean;
+    markerInToolPanels?: boolean;
     markerInAssistantMarkdown?: boolean;
   };
 }
@@ -104,15 +111,26 @@ export function inspectChatGPTPage(input: {
   }
   // A full conversation is terminal for this ChatGPT conversation, unlike
   // a temporarily unavailable composer. Ignore quoted code and message bodies.
-  const conversationFull = [...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]')]
-    .some((el) => visible(el) &&
-      !el.closest('[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote') &&
-      /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i.test(
-        (el.textContent ?? '').slice(0, 400))) ||
-    [...document.querySelectorAll("main div,main p,main span")].some((el) =>
-      visible(el) && !el.closest('[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote') &&
-      (el.textContent ?? "").length < 400 &&
-      /you['’]ve reached the maximum length for this conversation/i.test(el.textContent ?? ""));
+  const conversationFull =
+    [...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]')].some(
+      (el) =>
+        visible(el) &&
+        !el.closest(
+          "[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote",
+        ) &&
+        /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i.test(
+          (el.textContent ?? "").slice(0, 400),
+        ),
+    ) ||
+    [...document.querySelectorAll("main div,main p,main span")].some(
+      (el) =>
+        visible(el) &&
+        !el.closest(
+          "[data-message-author-role],[data-content-search-unit-key],[data-testid^=conversation-turn-],[data-turn-key],pre,code,blockquote",
+        ) &&
+        (el.textContent ?? "").length < 400 &&
+        /you['’]ve reached the maximum length for this conversation/i.test(el.textContent ?? ""),
+    );
   // Evaluating the load-failure probe is delegated to T3's existing detector.
   const stuck = false;
   // ChatGPT changes its message wrappers periodically. Prefer explicit roles,
@@ -170,16 +188,26 @@ export function inspectChatGPTPage(input: {
     null;
   // Toolbar labels such as "Copy" are not generated content. In particular,
   // a newly inserted empty assistant unit must never become done_or_idle.
+  // Image-generation refusals/errors render beside an EMPTY markdown block;
+  // then read the whole turn (still without toolbar controls).
   const assistantText = (node: Element) => {
-    const content =
-      node.querySelector('[data-markdown-text-style="assistant-message"],.markdown,.prose') ?? node;
-    const copy = content.cloneNode(true) as Element;
-    copy
-      .querySelectorAll('button,[role="button"],svg,[data-testid*="action"]')
-      .forEach((el) => el.remove());
-    return copy.textContent?.trim() ?? "";
+    const strip = (content: Element) => {
+      const copy = content.cloneNode(true) as Element;
+      copy
+        .querySelectorAll('button,[role="button"],svg,[data-testid*="action"]')
+        .forEach((el) => el.remove());
+      return copy.textContent?.trim() ?? "";
+    };
+    const markdown = node.querySelector(
+      '[data-markdown-text-style="assistant-message"],.markdown,.prose',
+    );
+    return (markdown && strip(markdown)) || strip(node);
   };
-  const latestText = last ? (last.role === "assistant" ? assistantText(last.node) : getText(last.node)) : "";
+  const latestText = last
+    ? last.role === "assistant"
+      ? assistantText(last.node)
+      : getText(last.node)
+    : "";
   const latestMessageFirstFiveWords = latestText.trim().split(/\s+/u).slice(0, 5).join(" ") || null;
   const assistantHasContent = !!last && last.role === "assistant" && latestText.length > 0;
   const from = input.from === "start" ? 0 : Math.max(0, totalTurns - input.count);
@@ -219,21 +247,30 @@ export function inspectChatGPTPage(input: {
           textLength: document.body?.textContent?.length ?? 0,
           title: document.title,
           markerInPage: (document.body?.textContent ?? "").includes("[T3_ID:"),
-          markerInAssistantUnits: contentUnits.some((node) =>
-            node.getAttribute("data-content-search-unit-key")?.endsWith(":assistant") &&
-            (node.textContent ?? "").includes("[T3_ID:")),
+          markerInAssistantUnits: contentUnits.some(
+            (node) =>
+              node.getAttribute("data-content-search-unit-key")?.endsWith(":assistant") &&
+              (node.textContent ?? "").includes("[T3_ID:"),
+          ),
           assistantUnitCount: contentUnits.filter((node) =>
-            node.getAttribute("data-content-search-unit-key")?.endsWith(":assistant")).length,
+            node.getAttribute("data-content-search-unit-key")?.endsWith(":assistant"),
+          ).length,
           markerInScripts: [...document.querySelectorAll("script")].some((node) =>
-            (node.textContent ?? "").includes("[T3_ID:")),
-          markerInUserUnits: contentUnits.some((node) =>
-            node.getAttribute("data-content-search-unit-key")?.endsWith(":user") &&
-            (node.textContent ?? "").includes("[T3_ID:")),
+            (node.textContent ?? "").includes("[T3_ID:"),
+          ),
+          markerInUserUnits: contentUnits.some(
+            (node) =>
+              node.getAttribute("data-content-search-unit-key")?.endsWith(":user") &&
+              (node.textContent ?? "").includes("[T3_ID:"),
+          ),
           markerInToolPanels: [...document.querySelectorAll('[data-testid*="tool"]')].some((node) =>
-            (node.textContent ?? "").includes("[T3_ID:")),
-          markerInAssistantMarkdown: [...document.querySelectorAll(
-            '[data-markdown-text-style="assistant-message"],.markdown,.prose',
-          )].some((node) => (node.textContent ?? "").includes("[T3_ID:")),
+            (node.textContent ?? "").includes("[T3_ID:"),
+          ),
+          markerInAssistantMarkdown: [
+            ...document.querySelectorAll(
+              '[data-markdown-text-style="assistant-message"],.markdown,.prose',
+            ),
+          ].some((node) => (node.textContent ?? "").includes("[T3_ID:")),
         }
       : undefined,
   };

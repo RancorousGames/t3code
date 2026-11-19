@@ -106,10 +106,14 @@ export class ChatGPTIdleTransitionJournal {
   }
 
   /** A desktop Caffy monitor has a stable browser UUID but no environment ID.
-   * Refuse ambiguous matches rather than replaying another environment's idle edge. */
+   * Browser UUIDs are unique; if one ever appears under several environments
+   * (re-pairing), use the newest edge. Caffy still checks the conversation. */
   latestForSession(sessionId: string): VerifiedChatGPTIdleTransition | null {
-    const matches = Object.values(this.latestBySession).filter(event => event.sessionId === sessionId);
-    return matches.length === 1 ? matches[0]! : null;
+    let latest: VerifiedChatGPTIdleTransition | null = null;
+    for (const event of Object.values(this.latestBySession))
+      if (event.sessionId === sessionId && (!latest || event.sequence > latest.sequence))
+        latest = event;
+    return latest;
   }
 
   /** Event-driven wait for one exact recipient. Timeout means unchanged, not idle. */
