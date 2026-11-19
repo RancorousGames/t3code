@@ -186,6 +186,8 @@ const CLOCK = 20_000;
  * (e.g. the reply was a ChatGPT refusal the edge detector cannot read), wake
  * anyway once the roster has shown a settled assistant turn this long. */
 const IDLE_FALLBACK_MS = 2 * 60_000;
+/** How long an unavailable working-agent inventory may block idle shutdown. */
+const UNKNOWN_GRACE_MS = 5 * 60_000;
 const nativeOwner = (environmentId: string, threadId: string) => `t3:${environmentId}:${threadId}`;
 const valid = (row: CaffyConfig): boolean =>
   !!row &&
@@ -219,6 +221,9 @@ export class CaffyScheduler {
   private shutdownIdleSince: number | null = null;
   private shutdownChecking = false;
   private shutdownError: string | null = null;
+  /** Why the idle shutdown hasn't fired yet; shown in the Keep T3 Busy tooltip. */
+  private shutdownBlocker: string | null = null;
+  private shutdownUnknownSince: number | null = null;
   private readonly shutdownPC: () => void;
   private readonly workingReports = new Map<string, { observedAt: number; ids: Set<string> }>();
   private nativeCapacityCache: { observedAt: number; ids: string[]; known: boolean } | null = null;
@@ -906,6 +911,7 @@ export class CaffyScheduler {
       shutdownWhenIdle: this.shutdownWhenIdle,
       busyUntil: this.busyUntil,
       shutdownError: this.shutdownError,
+      shutdownBlocker: this.shutdownWhenIdle ? this.shutdownBlocker : null,
     };
   }
 
@@ -2545,8 +2551,17 @@ export class CaffyScheduler {
    * No fallback to guessed zero when the live header or inventory is missing. */
   private async checkShutdown(): Promise<void> {
     this.expireTimedBusy();
-    if (!this.started || !this.shutdownWhenIdle || this.busyUntil !== null || this.shutdownChecking)
+    if (
+      !this.started ||
+      !this.shutdownWhenIdle ||
+      this.busyUntil !== null ||
+      this.shutdownChecking
+    ) {
+      if (!this.shutdownWhenIdle) this.shutdownBlocker = null;
+      else if (this.busyUntil !== null)
+        this.shutdownBlocker = `Timed work runs until ${new Date(this.busyUntil).toLocaleTimeString()}`;
       return;
+    }
     this.shutdownChecking = true;
     try {
       const snapshot = await this.capacity();
@@ -2564,22 +2579,39 @@ export class CaffyScheduler {
           return false;
         }
       });
-      if (
-        snapshot.unknown > 0 ||
-        snapshot.working > 0 ||
-        sending ||
-        this.taskReservations.length > 0 ||
-        !this.taskBoardInventoryReady
-      ) {
+      // Missing inventories block shutdown only briefly: a source that stays
+      // unreadable for UNKNOWN_GRACE_MS must not keep the PC on forever.
+      const unknown = snapshot.unknown > 0 || !this.taskBoardInventoryReady;
+      const now = Date.now();
+      if (!unknown) this.shutdownUnknownSince = null;
+      else this.shutdownUnknownSince ??= now;
+      const unknownBlocks = unknown && now - (this.shutdownUnknownSince ?? now) < UNKNOWN_GRACE_MS;
+      const blocker = unknownBlocks
+        ? snapshot.unknown > 0
+          ? (snapshot.reason ?? "Working-agent count unavailable")
+          : "TaskBoard inventory not loaded"
+        : snapshot.working > 0
+          ? `${snapshot.working} agent${snapshot.working === 1 ? "" : "s"} working`
+          : sending
+            ? "Caffy message being delivered"
+            : this.taskReservations.length > 0
+              ? "TaskBoard work reserved"
+              : null;
+      if (blocker) {
+        this.shutdownBlocker = blocker;
         this.shutdownIdleSince = null;
         return;
       }
-      const now = Date.now();
       if (this.shutdownIdleSince === null) {
         this.shutdownIdleSince = now;
         return;
       }
-      if (now - this.shutdownIdleSince < 5 * 60_000) return;
+      const remaining = 5 * 60_000 - (now - this.shutdownIdleSince);
+      if (remaining > 0) {
+        this.shutdownBlocker = `Idle, shutting down in ${Math.ceil(remaining / 1000)}s`;
+        return;
+      }
+      this.shutdownBlocker = null;
       // Disarm durably BEFORE initiating /f. A failed OS call will remain off
       // rather than unexpectedly retry and terminate the user's later work.
       this.shutdownWhenIdle = false;

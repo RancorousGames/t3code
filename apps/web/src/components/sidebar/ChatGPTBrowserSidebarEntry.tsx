@@ -2951,7 +2951,11 @@ export function ChatGPTBrowserSidebarEntry({
                     checked={caffyOverview?.keepT3Busy ?? false}
                     disabled={viewPolicyBusy || !caffyOverview}
                     aria-label="Keep T3 Busy"
-                    title="Allow TaskBoard automatic starts and queued Caffy wakes, within T3 working-agent capacity."
+                    title={`Allow TaskBoard automatic starts and queued Caffy wakes, within T3 working-agent capacity.${
+                      caffyOverview?.shutdownWhenIdle
+                        ? `\nPC shutdown: ${caffyOverview.shutdownBlocker ?? "waiting for next check"}`
+                        : ""
+                    }`}
                     onCheckedChange={(checked) =>
                       void updateViewCaffyPolicy({ keepT3Busy: checked })
                     }

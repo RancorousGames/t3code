@@ -6,12 +6,24 @@ import type { T3CaffyEntry, T3CaffyOverview } from "../hooks/useT3CaffyOverview"
 const now = Date.parse("2026-11-04T15:00:00+01:00");
 const minute = 60_000;
 const entry = (changes: Partial<T3CaffyEntry> = {}): T3CaffyEntry => ({
-  sessionId: "browser", publicSessionId: "public", mode: "idle", respectSlots: true,
-  paused: false, onceOnly: false, expiresAt: null, intervalMinutes: 20,
-  pendingWake: true, ...changes,
+  sessionId: "browser",
+  publicSessionId: "public",
+  mode: "idle",
+  respectSlots: true,
+  paused: false,
+  onceOnly: false,
+  expiresAt: null,
+  intervalMinutes: 20,
+  pendingWake: true,
+  ...changes,
 });
 const overview = (monitors: T3CaffyEntry[], keepT3Busy = true): T3CaffyOverview => ({
-  entries: monitors, keepT3Busy, maxWorking: 3, shutdownWhenIdle: false, busyUntil: null,
+  entries: monitors,
+  keepT3Busy,
+  maxWorking: 3,
+  shutdownWhenIdle: false,
+  busyUntil: null,
+  shutdownBlocker: null,
 });
 
 describe("Caffy-aware keep-warm / unload protection", () => {
@@ -25,33 +37,59 @@ describe("Caffy-aware keep-warm / unload protection", () => {
     expect(isCaffyWakeImminent(entry({ paused: true }), true, now)).toBe(false);
     expect(isCaffyWakeImminent(entry({ expiresAt: now - 1 }), true, now)).toBe(false);
     expect(isCaffyWakeImminent(entry(), false, now)).toBe(false);
-    expect(isCaffyWakeImminent(entry({ mode: "periodic", respectSlots: false, pendingWake: false, nextDueAt: now + 29 * minute }), false, now)).toBe(true);
+    expect(
+      isCaffyWakeImminent(
+        entry({
+          mode: "periodic",
+          respectSlots: false,
+          pendingWake: false,
+          nextDueAt: now + 29 * minute,
+        }),
+        false,
+        now,
+      ),
+    ).toBe(true);
   });
 
   it("resolves public and browser aliases and does not warm hidden or snoozed sessions", () => {
     const sessions = [
-      { id: "public" }, { id: "browser", hidden: true },
+      { id: "public" },
+      { id: "browser", hidden: true },
       { id: "other", snoozedUntil: now + minute },
     ];
-    expect([...imminentCaffySessionIds(sessions, overview([entry()]), now)])
-      .toEqual(["public"]);
+    expect([...imminentCaffySessionIds(sessions, overview([entry()]), now)]).toEqual(["public"]);
   });
 
   it("preempts ordinary warm candidates, even when the soft warm limit is reached", () => {
     const defaults = {
-      manager: false, highlighted: false, selected: false,
-      activeBeforeFailure: false, recentlyClicked: -1,
-      lastActiveAt: 0, lastActivityAt: 0, createdAt: 0,
+      manager: false,
+      highlighted: false,
+      selected: false,
+      activeBeforeFailure: false,
+      recentlyClicked: -1,
+      lastActiveAt: 0,
+      lastActivityAt: 0,
+      createdAt: 0,
     };
     const candidates: WarmCandidate[] = [
       { ...defaults, id: "old", recentlyClicked: 0 },
       { ...defaults, id: "caffy", caffyDueSoon: true, exceedTarget: true },
     ];
-    expect(nextWarmChatGPTSession({
-      candidates, loadedIds: new Set(["already-loaded"]), targetCount: 1, now,
-    })).toBe("caffy");
-    expect(nextWarmChatGPTSession({
-      candidates, loadedIds: new Set(["native-resident"]), targetCount: 0, now,
-    })).toBe("caffy");
+    expect(
+      nextWarmChatGPTSession({
+        candidates,
+        loadedIds: new Set(["already-loaded"]),
+        targetCount: 1,
+        now,
+      }),
+    ).toBe("caffy");
+    expect(
+      nextWarmChatGPTSession({
+        candidates,
+        loadedIds: new Set(["native-resident"]),
+        targetCount: 0,
+        now,
+      }),
+    ).toBe("caffy");
   });
 });
