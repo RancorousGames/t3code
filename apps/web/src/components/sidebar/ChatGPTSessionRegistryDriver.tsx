@@ -100,7 +100,8 @@ export function registryChangesFromStore(
     .map((session) => ({
       environmentId,
       sessionId: session.id,
-      record: { ...session },
+      // JSON round-trip drops `undefined` fields, which the sync schema rejects for the whole batch.
+      record: JSON.parse(JSON.stringify(session)) as ChatGPTRegistryRecord,
       snapshot: registrySnapshotFromPage(state.snapshots[session.id]),
       timeline: state.timeline[session.id] ?? null,
       appliedMetadataRevision:
@@ -700,6 +701,22 @@ export function ChatGPTSessionRegistryDriver() {
         const localStore = getChatGPTSessionPersistedStore(targetEnvironment);
         const audit = registryCloseReceipts(targetEnvironment);
         const removed = new Set(audit.map((item) => item.sessionId));
+        // Publish explicit local removal receipts BEFORE the metadata sync, so a
+        // failing sync batch can never leave closed sessions open on the server
+        // (that stranded every close from Nov 15 until this fix).
+        // Closed history stays server-side, but later sends/reloads are refused.
+        const toClose = audit.filter(
+          (item) => !reportedRemovals.has(`${item.sessionId}:${item.removedAt}`),
+        );
+        if (toClose.length) {
+          const response = await closeRegistry({
+            environmentId: targetEnvironment,
+            input: { environmentId: targetEnvironment, driverId, receipts: toClose },
+          });
+          if (response._tag === "Success" && response.value.ok)
+            for (const receipt of toClose)
+              reportedRemovals.add(`${receipt.sessionId}:${receipt.removedAt}`);
+        }
         const legacySessionsKey = chatGPTBrowserSessionsKey(targetEnvironment);
         // An empty new renderer profile may recover the original desktop catalog
         // from the server. Never resurrect sessions after an explicit local close:
@@ -878,20 +895,6 @@ export function ChatGPTSessionRegistryDriver() {
           }
         }
         migrating = false;
-        // Publish only explicit local removal receipts. Keep closed history
-        // server-side but refuse any later send/reload for those T3 IDs.
-        const toClose = audit.filter(
-          (item) => !reportedRemovals.has(`${item.sessionId}:${item.removedAt}`),
-        );
-        if (toClose.length) {
-          const response = await closeRegistry({
-            environmentId: targetEnvironment,
-            input: { environmentId: targetEnvironment, driverId, receipts: toClose },
-          });
-          if (response._tag !== "Success" || !response.value.ok) return;
-          for (const receipt of toClose)
-            reportedRemovals.add(`${receipt.sessionId}:${receipt.removedAt}`);
-        }
         // Action draining has its own interval: neither this migration nor a
         // slow registry read can hold external notifications hostage.
       } catch {
