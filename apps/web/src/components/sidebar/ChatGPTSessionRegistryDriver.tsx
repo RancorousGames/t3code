@@ -136,21 +136,35 @@ export async function executeRegistryDriverAction(
     try {
       if (action.actionId === "schedule_list") {
         const result = await scheduler({ action: "list" });
-        const data = result && typeof result === "object" ? result as {
-          scheduledSpawns?: readonly Record<string, unknown>[];
-          entries?: readonly Record<string, unknown>[];
-          keepT3Busy?: boolean;
-        } : {};
-        return { ok: true, status: "schedules_listed",
+        const data =
+          result && typeof result === "object"
+            ? (result as {
+                scheduledSpawns?: readonly Record<string, unknown>[];
+                entries?: readonly Record<string, unknown>[];
+                keepT3Busy?: boolean;
+              })
+            : {};
+        return {
+          ok: true,
+          status: "schedules_listed",
           jobs: (data.scheduledSpawns ?? []).slice(-30),
-          entries: (data.entries ?? []).filter(entry =>
-            (typeof entry.beginAt === "number" && entry.beginAt > Date.now()) ||
-            (typeof entry.delayedPrompt === "string" && !!entry.delayedPrompt) ||
-            (typeof entry.pendingMessageBody === "string" && !!entry.pendingMessageBody &&
-              !entry.pendingMessageBody.startsWith("Continue working on your current assignment.")))
-            .map(entry => ({
-              sessionId: entry.sessionId, beginAt: entry.beginAt,
-              mode: entry.mode, onceOnly: entry.onceOnly, pendingWake: entry.pendingWake,
+          entries: (data.entries ?? [])
+            .filter(
+              (entry) =>
+                (typeof entry.beginAt === "number" && entry.beginAt > Date.now()) ||
+                (typeof entry.delayedPrompt === "string" && !!entry.delayedPrompt) ||
+                (typeof entry.pendingMessageBody === "string" &&
+                  !!entry.pendingMessageBody &&
+                  !entry.pendingMessageBody.startsWith(
+                    "Continue working on your current assignment.",
+                  )),
+            )
+            .map((entry) => ({
+              sessionId: entry.sessionId,
+              beginAt: entry.beginAt,
+              mode: entry.mode,
+              onceOnly: entry.onceOnly,
+              pendingWake: entry.pendingWake,
               onIdle: entry.mode === "queued" && entry.beginAt == null,
             })),
           keepT3Busy: data.keepT3Busy ?? false,
@@ -167,15 +181,27 @@ export async function executeRegistryDriverAction(
       const prompt = action.args.prompt;
       const onIdle = action.args.onIdle === true;
       const beginAt = action.args.beginAt;
-      if (typeof title !== "string" || title.trim().length < 1 || title.length > 120 ||
-          typeof prompt !== "string" || !prompt.trim() || prompt.length > 8_000 ||
-          (onIdle ? beginAt !== null : !Number.isSafeInteger(beginAt) ||
+      if (
+        typeof title !== "string" ||
+        title.trim().length < 1 ||
+        title.length > 120 ||
+        typeof prompt !== "string" ||
+        !prompt.trim() ||
+        prompt.length > 8_000 ||
+        (onIdle
+          ? beginAt !== null
+          : !Number.isSafeInteger(beginAt) ||
             (beginAt as number) <= Date.now() ||
-            (beginAt as number) > Date.now() + 90 * 24 * 60 * 60_000))
+            (beginAt as number) > Date.now() + 90 * 24 * 60 * 60_000)
+      )
         return { ok: false, reason: "Provide a title, prompt and valid schedule." };
       await scheduler({
-        action: "schedule_spawn", jobId: action.requestId,
-        title: title.trim(), prompt, onIdle, beginAt: onIdle ? null : beginAt as number,
+        action: "schedule_spawn",
+        jobId: action.requestId,
+        title: title.trim(),
+        prompt,
+        onIdle,
+        beginAt: onIdle ? null : (beginAt as number),
       });
       return { ok: true, status: "scheduled", jobId: action.requestId };
     } catch (error) {
@@ -195,9 +221,16 @@ export async function executeRegistryDriverAction(
         if (current) {
           return { ok: false, reason: "A Caffy schedule already exists. Edit or stop it first." };
         }
-        await scheduler({ action: "set", sessionId: target.id, mode: "idle",
-          onceOnly: true, keepAwake: false, startup: false, respectSlots: false,
-          intervalMinutes: 20 });
+        await scheduler({
+          action: "set",
+          sessionId: target.id,
+          mode: "idle",
+          onceOnly: true,
+          keepAwake: false,
+          startup: false,
+          respectSlots: false,
+          intervalMinutes: 20,
+        });
         return { ok: true, status: "Caffy will continue once when idle." };
       }
       if (!current) return { ok: false, reason: "No active Caffy schedule." };
@@ -226,24 +259,47 @@ export async function executeRegistryDriverAction(
     const onIdle = action.args.onIdle === true;
     const beginAt = action.args.beginAt;
     const expectedConversationId = action.args.expectedConversationId;
-    if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 8_000 ||
-        typeof expectedConversationId !== "string" ||
-        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(expectedConversationId) ||
-        (onIdle ? beginAt !== null : !Number.isSafeInteger(beginAt) ||
+    if (
+      typeof prompt !== "string" ||
+      !prompt.trim() ||
+      prompt.length > 8_000 ||
+      typeof expectedConversationId !== "string" ||
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(expectedConversationId) ||
+      (onIdle
+        ? beginAt !== null
+        : !Number.isSafeInteger(beginAt) ||
           (beginAt as number) <= Date.now() ||
-          (beginAt as number) > Date.now() + 90 * 24 * 60 * 60_000))
+          (beginAt as number) > Date.now() + 90 * 24 * 60 * 60_000)
+    )
       return { ok: false, reason: "Provide a prompt, exact conversation ID and valid schedule." };
-    const registered = target.bootstrapIdentity?.state === "registered"
-      ? target.bootstrapIdentity.conversationId : null;
+    const registered =
+      target.bootstrapIdentity?.state === "registered"
+        ? target.bootstrapIdentity.conversationId
+        : null;
     if (registered !== expectedConversationId)
       return { ok: false, reason: "Conversation changed or is unregistered; no prompt scheduled." };
     try {
-      await scheduler(onIdle
-        ? { action: "set", sessionId: target.id, conversationId: expectedConversationId,
-            mode: "queued", onceOnly: true, startup: false, keepAwake: false,
-            prompt, beginAt: null }
-        : { action: "begin_in", sessionId: target.id, conversationId: expectedConversationId,
-            beginAt: beginAt as number, prompt });
+      await scheduler(
+        onIdle
+          ? {
+              action: "set",
+              sessionId: target.id,
+              conversationId: expectedConversationId,
+              mode: "queued",
+              onceOnly: true,
+              startup: false,
+              keepAwake: false,
+              prompt,
+              beginAt: null,
+            }
+          : {
+              action: "begin_in",
+              sessionId: target.id,
+              conversationId: expectedConversationId,
+              beginAt: beginAt as number,
+              prompt,
+            },
+      );
       return { ok: true, status: onIdle ? "queued_for_capacity" : "scheduled" };
     } catch (error) {
       return { ok: false, reason: errorText(error) };
@@ -505,7 +561,8 @@ function registryCloseReceipts(
         if (
           (entry.source === "desktop-menu-action" || entry.source === "sidebar-user-action") &&
           Date.now() - Date.parse(entry.removedAt) < CHATGPT_CLOSE_UNDO_MS
-        ) return [];
+        )
+          return [];
         return [{ sessionId: entry.sessionId, removedAt: entry.removedAt }];
       })
       .slice(-128);
@@ -572,20 +629,26 @@ export function ChatGPTSessionRegistryDriver() {
       if (disposed || !registered || actionRunning) return;
       actionRunning = true;
       try {
-        const pending = await take({
-          environmentId: targetEnvironment,
-          input: { environmentId: targetEnvironment, driverId },
-        });
-        if (disposed || pending._tag !== "Success" || !pending.value.ok) return;
-        for (const action of pending.value.actions) {
+        // Take one action at a time: taking marks it dispatched (UNKNOWN, never
+        // resent), so batching would strand the untouched rest if this renderer
+        // reloads or a call throws mid-drain.
+        for (let taken = 0; taken < 20; taken++) {
           if (disposed) return;
+          const pending = await take({
+            environmentId: targetEnvironment,
+            input: { environmentId: targetEnvironment, driverId },
+          });
+          if (disposed || pending._tag !== "Success" || !pending.value.ok) return;
+          const action = pending.value.actions[0];
+          if (!action) return;
           const result = await executeRegistryDriverAction(
             targetEnvironment,
             action,
             setSessionSnooze,
             setSessionCompletion,
           );
-          if (disposed) return;
+          // Report even if disposed meanwhile: the action already ran, and a
+          // receipt beats leaving it UNKNOWN (finish checks owner, not lease).
           await finish({
             environmentId: targetEnvironment,
             input: { requestId: action.requestId, driverId, result },
@@ -695,7 +758,8 @@ export function ChatGPTSessionRegistryDriver() {
 
         // The mobile AI screen receives a bounded, read-only Caffy projection.
         // Do not serialize prompts or pending message bodies into the registry.
-        const caffyState: unknown = await window.desktopBridge?.caffyControl?.({ action: "list" })
+        const caffyState: unknown = await window.desktopBridge
+          ?.caffyControl?.({ action: "list" })
           .catch(() => null);
         const monitorsById = new Map<string, CaffyReadout>();
         const agentStopsById = new Map<string, number>();
@@ -708,12 +772,20 @@ export function ChatGPTSessionRegistryDriver() {
             const monitor = readCaffyRecord(value);
             if (!monitor) continue;
             const safe: CaffyReadout = {
-              mode: monitor.mode, paused: monitor.paused, onceOnly: monitor.onceOnly,
-              intervalMinutes: monitor.intervalMinutes, respectSlots: monitor.respectSlots,
-              startup: monitor.startup, beginAt: monitor.beginAt, expiresAt: monitor.expiresAt,
-              createdAt: monitor.createdAt, nextDueAt: monitor.nextDueAt,
-              lastWakeAt: monitor.lastWakeAt, lastCheckedAt: monitor.lastCheckedAt,
-              nextCheckAt: monitor.nextCheckAt, pendingWake: monitor.pendingWake,
+              mode: monitor.mode,
+              paused: monitor.paused,
+              onceOnly: monitor.onceOnly,
+              intervalMinutes: monitor.intervalMinutes,
+              respectSlots: monitor.respectSlots,
+              startup: monitor.startup,
+              beginAt: monitor.beginAt,
+              expiresAt: monitor.expiresAt,
+              createdAt: monitor.createdAt,
+              nextDueAt: monitor.nextDueAt,
+              lastWakeAt: monitor.lastWakeAt,
+              lastCheckedAt: monitor.lastCheckedAt,
+              nextCheckAt: monitor.nextCheckAt,
+              pendingWake: monitor.pendingWake,
               lastCheckResult: monitor.lastCheckResult?.slice(0, 120),
               lastDeliveryResult: monitor.lastDeliveryResult?.slice(0, 120),
               lastError: monitor.lastError?.slice(0, 160),
@@ -757,14 +829,14 @@ export function ChatGPTSessionRegistryDriver() {
         // New task workers must become addressable before a large migration of
         // idle historical sessions. Otherwise a failed first prompt can leave
         // a TaskBoard-claimed guest absent from the recovery registry.
-        const changed = current.filter(
-          (entry) => lastHashes.get(entry.sessionId) !== revisionHash(entry),
-        ).sort((a, b) => {
-          const urgent = (entry: SyncRecord) => entry.record.spawnRequestId ? 1 : 0;
-          const created = (entry: SyncRecord) =>
-            typeof entry.record.createdAt === "number" ? entry.record.createdAt : 0;
-          return urgent(b) - urgent(a) || created(b) - created(a);
-        });
+        const changed = current
+          .filter((entry) => lastHashes.get(entry.sessionId) !== revisionHash(entry))
+          .sort((a, b) => {
+            const urgent = (entry: SyncRecord) => (entry.record.spawnRequestId ? 1 : 0);
+            const created = (entry: SyncRecord) =>
+              typeof entry.record.createdAt === "number" ? entry.record.createdAt : 0;
+            return urgent(b) - urgent(a) || created(b) - created(a);
+          });
         if (changed.length) {
           const known = new Set(remote.value.sessions.map((row) => row.sessionId));
           // Existing rows MUST receive the desktop's latest snapshot on

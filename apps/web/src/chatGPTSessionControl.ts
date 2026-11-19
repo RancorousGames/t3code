@@ -333,7 +333,11 @@ export function hasObservedMarkedChatGPTUserTurn(expected: string): boolean {
     '[data-message-author-role="user"],[data-content-search-unit-key$=":user"]',
   );
   for (const node of nodes) {
-    if (node.closest('[data-message-author-role="assistant"],[data-content-search-unit-key$=":assistant"]'))
+    if (
+      node.closest(
+        '[data-message-author-role="assistant"],[data-content-search-unit-key$=":assistant"]',
+      )
+    )
       continue;
     const content = (node as HTMLElement).innerText || node.textContent || "";
     if (content.trim().toLowerCase().startsWith(marker)) return true;
@@ -358,7 +362,7 @@ const messageMarker = (text: string) => {
 
 // Explicit guest results returned before the Send callback ran: nothing was
 // submitted, so the outbox can retry soon without counting a send.
-const isUnsubmittedPress = (error: unknown) =>
+const isUnsubmittedPress = (error: unknown): error is Error =>
   error instanceof Error &&
   (/^Queued attempt expired before submitting; no click issued\.$/.test(error.message) ||
     /^Composer changed before submitting; refusing to click Send\.$/.test(error.message) ||
@@ -870,7 +874,11 @@ export async function runChatGPTSessionControl(input: {
     if (isPersistentChatGPTSessionOptedIn(entry.id)) {
       const bridge = window.desktopBridge?.stableChatGPTViewRequest;
       if (!bridge) throw new Error("Native Chromium experiment bridge unavailable.");
-      const identity = { sessionId: entry.id, environmentId, profileId: chatGPTSessionProfileId(entry) };
+      const identity = {
+        sessionId: entry.id,
+        environmentId,
+        profileId: chatGPTSessionProfileId(entry),
+      };
       const before = (await bridge({ operation: "snapshot", identity })) as {
         url?: string;
         destroyed?: boolean;
@@ -946,7 +954,11 @@ export async function runChatGPTSessionControl(input: {
       if (entry.hidden) return { sessionId: entry.id, status: "unmounted", markerFound: false };
       const bridge = window.desktopBridge?.stableChatGPTViewRequest;
       if (!bridge) return { sessionId: entry.id, status: "unmounted", markerFound: false };
-      const identity = { sessionId: entry.id, environmentId, profileId: chatGPTSessionProfileId(entry) };
+      const identity = {
+        sessionId: entry.id,
+        environmentId,
+        profileId: chatGPTSessionProfileId(entry),
+      };
       try {
         const before = (await bridge({ operation: "snapshot", identity })) as {
           url?: string;
@@ -1000,7 +1012,11 @@ export async function runChatGPTSessionControl(input: {
       const bridge = window.desktopBridge?.stableChatGPTViewRequest;
       const writer = window.desktopBridge?.savePrivateChatGPTDraftSnapshot;
       if (!bridge || !writer) return unknown("native_bridge_or_private_backup_unavailable");
-      const identity = { sessionId: entry.id, environmentId, profileId: chatGPTSessionProfileId(entry) };
+      const identity = {
+        sessionId: entry.id,
+        environmentId,
+        profileId: chatGPTSessionProfileId(entry),
+      };
       try {
         const snapshot = (await bridge({ operation: "snapshot", identity })) as {
           url?: string;
@@ -1289,7 +1305,11 @@ export async function runChatGPTSessionControl(input: {
       if (isPersistentChatGPTSessionOptedIn(entry.id)) {
         const bridge = window.desktopBridge?.stableChatGPTViewRequest;
         if (!bridge) throw new Error("Native Chromium bridge unavailable for permanent close.");
-        const identity = { environmentId, sessionId: entry.id, profileId: chatGPTSessionProfileId(entry) };
+        const identity = {
+          environmentId,
+          sessionId: entry.id,
+          profileId: chatGPTSessionProfileId(entry),
+        };
         for (let check = 0; check < 2; check++) {
           const probe = await inspectPersistentChatGPTPage<ComposerProbe>(
             environmentId,
@@ -1388,7 +1408,9 @@ export async function runChatGPTSessionControl(input: {
               value.slice(0, 64) === expected.slice(0, 64)); }); })()`,
     });
     if (observed !== true)
-      throw new Error("Original user message is not observable; no send or receipt change occurred.");
+      throw new Error(
+        "Original user message is not observable; no send or receipt change occurred.",
+      );
     return {
       sessionId: entry.id,
       reconciled: true,
@@ -1742,10 +1764,15 @@ export async function runChatGPTSessionControl(input: {
     if (input.expectedConversationId !== undefined) {
       requireExpectedChatGPTConversation(input.expectedConversationId, before.observedGuestUrl);
     }
-    if (input.expectedNewChat &&
-        (before.status !== "new" || before.conversationId ||
-         !allowsChatGPTExperimentalNewChat(entry, before.observedGuestUrl ?? "")))
-      throw new Error("New-chat target is not an exact backend-owned fresh guest; no message sent.");
+    if (
+      input.expectedNewChat &&
+      (before.status !== "new" ||
+        before.conversationId ||
+        !allowsChatGPTExperimentalNewChat(entry, before.observedGuestUrl ?? ""))
+    )
+      throw new Error(
+        "New-chat target is not an exact backend-owned fresh guest; no message sent.",
+      );
     const guard = input.expectedConversationId
       ? {
           conversationGuardValidated: true as const,
@@ -1764,17 +1791,22 @@ export async function runChatGPTSessionControl(input: {
       url: session.observedGuestUrl ?? "",
       before: { totalTurns: session.totalTurns, lastUserTurnKey: session.lastUserTurnKey },
     });
-    if (before.conversationFull)
-      throw new Error(CHATGPT_CONVERSATION_FULL_MESSAGE);
+    if (before.conversationFull) throw new Error(CHATGPT_CONVERSATION_FULL_MESSAGE);
     if (!acceptsSend(before))
       throw new Error("ChatGPT page is unavailable before direct submission; no message sent.");
     const { runtimeId } = guestFor(environmentId, entry.id);
     if (!runtimeId) throw new Error("ChatGPT guest is not attached.");
     // At-least-once delivery: if an earlier attempt of this exact marked
     // message already landed, report it instead of sending a duplicate.
-    if (/^\[t3-msg:/.test(messageMarker(prepared.text) ?? "") &&
-        (await reconcileChatGPTSend(environmentId, entry.id, runtimeId,
-          snapshotOf(before, prepared.text)).catch(() => false)))
+    if (
+      /^\[t3-msg:/.test(messageMarker(prepared.text) ?? "") &&
+      (await reconcileChatGPTSend(
+        environmentId,
+        entry.id,
+        runtimeId,
+        snapshotOf(before, prepared.text),
+      ).catch(() => false))
+    )
       return result({
         messageSent: true,
         delivery: "user_turn_observed",
@@ -1875,23 +1907,29 @@ export async function runChatGPTSessionControl(input: {
     if (guardedConversation) {
       requireExpectedChatGPTConversation(guardedConversation, refreshed.observedGuestUrl);
     }
-    if (input.expectedNewChat &&
-        (refreshed.status !== "new" || refreshed.conversationId ||
-         !allowsChatGPTExperimentalNewChat(entry, refreshed.observedGuestUrl ?? "")))
+    if (
+      input.expectedNewChat &&
+      (refreshed.status !== "new" ||
+        refreshed.conversationId ||
+        !allowsChatGPTExperimentalNewChat(entry, refreshed.observedGuestUrl ?? ""))
+    )
       throw new Error("New-chat target changed before direct submission; no message sent.");
     if (
       refreshed.observedGuestUrl !== before.observedGuestUrl ||
       !acceptsSend(refreshed) ||
       guestFor(environmentId, entry.id).runtimeId !== runtimeId
     ) {
-      throw new Error("Session URL, generation or guest changed before direct submission; refusing send.");
+      throw new Error(
+        "Session URL, generation or guest changed before direct submission; refusing send.",
+      );
     }
     // The callback resolves its own React fiber. Do not edit, focus, or clear
     // the composer: a human draft is unrelated to this automated message.
     const observedConversation = chatGPTConversationIdFromUrl(refreshed.observedGuestUrl);
     if (!input.expectedNewChat && !observedConversation)
       throw new Error("No verified ChatGPT conversation for direct submission.");
-    if (expired()) throw new Error("Queued attempt expired before direct submission; no message sent.");
+    if (expired())
+      throw new Error("Queued attempt expired before direct submission; no message sent.");
     const attempt = snapshotOf(before, message);
     // Marks the guest busy for reload/unload code only; never blocks a later send.
     const release = beginChatGPTSend(environmentId, entry.id);
@@ -1908,8 +1946,14 @@ export async function runChatGPTSessionControl(input: {
           throw new Error("Direct callback unavailable before submitting; no click issued.");
       } catch (error) {
         if (isUnsubmittedPress(error))
-          return { sessionId: entry.id, delivery: "pre_submit_aborted", messageSent: false,
-            sendAttempted: false, ...guard };
+          return {
+            sessionId: entry.id,
+            delivery: "pre_submit_aborted",
+            messageSent: false,
+            sendAttempted: false,
+            reason: error.message,
+            ...guard,
+          };
         return result({
           messageSent: false,
           delivery: "unknown" as const,
@@ -1919,7 +1963,9 @@ export async function runChatGPTSessionControl(input: {
       }
       const deadline = Date.now() + 15_000;
       while (Date.now() < deadline) {
-        if (await reconcileChatGPTSend(environmentId, entry.id, runtimeId, attempt).catch(() => false))
+        if (
+          await reconcileChatGPTSend(environmentId, entry.id, runtimeId, attempt).catch(() => false)
+        )
           return result({
             messageSent: true,
             delivery: "user_turn_observed" as const,
@@ -1936,7 +1982,8 @@ export async function runChatGPTSessionControl(input: {
         delivery: "unknown" as const,
         sendAttempted: true,
         policyEnrichment,
-        reason: "Send was invoked but its user turn was not observed yet; the sender may check and resend.",
+        reason:
+          "Send was invoked but its user turn was not observed yet; the sender may check and resend.",
       });
     } finally {
       release();

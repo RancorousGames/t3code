@@ -62,16 +62,22 @@ type BrowserRequest = Extract<DesktopAppActivationRequest, { type: "chatgpt.sess
 type Sender = (request: DesktopAppActivationRequest) => Promise<DesktopAppActivationResponse>;
 type PublicRecord = Omit<DeliveryRecord, "body">;
 const MARKER = (messageId: string) => `[T3-MSG:${messageId}]`;
-const CAFFY_WAKE_BODY = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
-const isCaffyRecord = (record: DeliveryRecord) => record.caffyWake === true || record.body === CAFFY_WAKE_BODY;
+const CAFFY_WAKE_BODY =
+  "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
+const isCaffyRecord = (record: DeliveryRecord) =>
+  record.caffyWake === true || record.body === CAFFY_WAKE_BODY;
 const PREFLIGHT_RETRY_MS = 15_000;
 const UNMOUNTED_RETRY_MS = 60_000;
 const MAX_RESEND_DELAY_MS = 5 * 60_000;
 /** Resend delay after the n-th unobserved send: 1, 2, 4, then 5 minutes. */
-const resendDelay = (sends: number) => Math.min(MAX_RESEND_DELAY_MS, 60_000 * 2 ** Math.max(0, sends - 1));
+const resendDelay = (sends: number) =>
+  Math.min(MAX_RESEND_DELAY_MS, 60_000 * 2 ** Math.max(0, sends - 1));
 /** Every lane head terminates: give up (and notify) this long after it became head. */
 const GIVE_UP_MS = 60 * 60_000;
 const MAX_ACTIVE_CONVERSATIONS = 4;
+/** Terminal records older than this are dropped at startup. The journal is
+ * rewritten (fsync) on every transition, so it must not grow forever. */
+const TERMINAL_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const isUuid = (id: string) => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id);
 const terminal = (status: DeliveryState) =>
   status === "delivered" || status === "cancelled" || status === "needs_attention";
@@ -89,7 +95,9 @@ function refusedBeforeSubmission(response: DesktopAppActivationResponse) {
 }
 
 const unmounted = (detail: string) =>
-  /not (?:yet )?mounted|not attached|hibernated|session is missing|unavailable before/i.test(detail);
+  /not (?:yet )?mounted|not attached|hibernated|session is missing|unavailable before/i.test(
+    detail,
+  );
 
 /** Accepted means persisted, never that a model read the message. */
 export class ChatGPTDeliveryQueue {
@@ -98,8 +106,12 @@ export class ChatGPTDeliveryQueue {
   private readonly send: Sender;
   private readonly records = new Map<string, DeliveryRecord>();
   private readonly transitionListeners = new Set<(record: PublicRecord) => void>();
-  private dispatchAllowed: (record: { messageId: string; sessionId: string }) => boolean = () => true;
-  private dispatchAdmission: (record: { messageId: string; sessionId: string }) => Promise<boolean> = async () => true;
+  private dispatchAllowed: (record: { messageId: string; sessionId: string }) => boolean = () =>
+    true;
+  private dispatchAdmission: (record: {
+    messageId: string;
+    sessionId: string;
+  }) => Promise<boolean> = async () => true;
   private selectionGate: Promise<void> = Promise.resolve();
   private readonly activeConversations = new Set<string>();
   private closed = false;
@@ -112,7 +124,11 @@ export class ChatGPTDeliveryQueue {
   private readonly notifyExhausted: (record: PublicRecord) => void;
 
   /** `notifyExhausted` fires once when a message gives up (desktop notification). */
-  constructor(directory: string, send: Sender, notifyExhausted: (record: PublicRecord) => void = () => {}) {
+  constructor(
+    directory: string,
+    send: Sender,
+    notifyExhausted: (record: PublicRecord) => void = () => {},
+  ) {
     this.notifyExhausted = notifyExhausted;
     this.send = send;
     NodeFS.mkdirSync(directory, { recursive: true });
@@ -121,6 +137,7 @@ export class ChatGPTDeliveryQueue {
     if (NodeFS.existsSync(this.file)) {
       const loaded: unknown = JSON.parse(NodeFS.readFileSync(this.file, "utf8"));
       if (!Array.isArray(loaded)) throw new Error("ChatGPT delivery journal is not an array.");
+      const pruneBefore = Date.now() - TERMINAL_RETENTION_MS;
       for (const value of loaded) {
         const r = value as DeliveryRecord;
         if (
@@ -133,8 +150,12 @@ export class ChatGPTDeliveryQueue {
           !r.status
         )
           throw new Error("ChatGPT delivery journal contains an invalid record.");
+        if (terminal(r.status) && (r.updatedAt ?? r.createdAt) < pruneBefore) continue;
         // A crash mid-send leaves "sending": it may have landed, check and resend.
-        this.records.set(r.messageId, { ...r, status: r.status === "sending" ? "uncertain" : r.status });
+        this.records.set(r.messageId, {
+          ...r,
+          status: r.status === "sending" ? "uncertain" : r.status,
+        });
       }
     }
     this.save();
@@ -166,7 +187,9 @@ export class ChatGPTDeliveryQueue {
   setDispatchPermission(check: (record: { messageId: string; sessionId: string }) => boolean) {
     this.dispatchAllowed = check;
   }
-  setDispatchAdmission(check: (record: { messageId: string; sessionId: string }) => Promise<boolean>) {
+  setDispatchAdmission(
+    check: (record: { messageId: string; sessionId: string }) => Promise<boolean>,
+  ) {
     this.dispatchAdmission = check;
   }
   resumeAllowed() {
@@ -225,8 +248,13 @@ export class ChatGPTDeliveryQueue {
     if (this.closed || !isUuid(event.conversationId)) return false;
     let ready = false;
     for (const record of this.records.values()) {
-      if (record.sessionId !== event.sessionId || record.conversationId !== event.conversationId ||
-          terminal(record.status) || !record.awaitingGuest) continue;
+      if (
+        record.sessionId !== event.sessionId ||
+        record.conversationId !== event.conversationId ||
+        terminal(record.status) ||
+        !record.awaitingGuest
+      )
+        continue;
       record.awaitingGuest = false;
       this.nextTry.delete(record.messageId);
       this.update(record, record.status);
@@ -259,7 +287,13 @@ export class ChatGPTDeliveryQueue {
     if (this.timer) clearTimeout(this.timer);
   }
 
-  enqueue(input: { messageId: string; sessionId: string; conversationId: string; body: string; caffyWake?: boolean }) {
+  enqueue(input: {
+    messageId: string;
+    sessionId: string;
+    conversationId: string;
+    body: string;
+    caffyWake?: boolean;
+  }) {
     if (
       !isUuid(input.messageId) ||
       !isUuid(input.conversationId) ||
@@ -367,20 +401,27 @@ export class ChatGPTDeliveryQueue {
     );
     const head = unresolved[0];
     if (!head)
-      return { conversationId, blocked: false as const, queuedBehind: 0, pending: 0, needsAttention: 0 };
+      return {
+        conversationId,
+        blocked: false as const,
+        queuedBehind: 0,
+        pending: 0,
+        needsAttention: 0,
+      };
     // Never expose body, renderer stack/error detail, or any composer content.
     const error = head.lastError ?? "";
-    const reason = head.awaitingGuest || unmounted(error)
-      ? "guest_unmounted"
-      : /existing draft/i.test(error)
-        ? "recipient_draft_present"
-        : /not confirmed idle|Cannot send while/i.test(error)
-          ? "recipient_not_confirmed_idle"
-          : /User-focused composer/i.test(error)
-            ? "composer_user_focused"
-            : head.status === "uncertain"
-              ? "sent_not_yet_observed"
-              : "awaiting_dispatch";
+    const reason =
+      head.awaitingGuest || unmounted(error)
+        ? "guest_unmounted"
+        : /existing draft/i.test(error)
+          ? "recipient_draft_present"
+          : /not confirmed idle|Cannot send while/i.test(error)
+            ? "recipient_not_confirmed_idle"
+            : /User-focused composer/i.test(error)
+              ? "composer_user_focused"
+              : head.status === "uncertain"
+                ? "sent_not_yet_observed"
+                : "awaiting_dispatch";
     return {
       conversationId,
       blocked: true as const,
@@ -400,8 +441,13 @@ export class ChatGPTDeliveryQueue {
   cancel(messageId: string) {
     const record = this.records.get(messageId);
     if (!record) throw new Error("Unknown delivery messageId.");
-    this.retireRecipient([record.sessionId], record.conversationId,
-      "Delivery cancelled.", false, record.messageId);
+    this.retireRecipient(
+      [record.sessionId],
+      record.conversationId,
+      "Delivery cancelled.",
+      false,
+      record.messageId,
+    );
     return this.publicRecord(record);
   }
 
@@ -417,10 +463,13 @@ export class ChatGPTDeliveryQueue {
     const retired: DeliveryRecord[] = [];
     for (const row of this.records.values()) {
       if (messageId && row.messageId !== messageId) continue;
-      if (!ids.has(row.sessionId) ||
-          (conversationId && row.conversationId !== conversationId) ||
-          (caffyOnly && !isCaffyRecord(row)) ||
-          terminal(row.status)) continue;
+      if (
+        !ids.has(row.sessionId) ||
+        (conversationId && row.conversationId !== conversationId) ||
+        (caffyOnly && !isCaffyRecord(row)) ||
+        terminal(row.status)
+      )
+        continue;
       row.status = "cancelled";
       row.updatedAt = Date.now();
       row.lastError = reason;
@@ -453,8 +502,21 @@ export class ChatGPTDeliveryQueue {
     this.save();
     if (previousStatus !== status || previousError !== record.lastError) {
       try {
-        NodeFS.appendFileSync(this.eventFile, JSON.stringify({ at: record.updatedAt, messageId: record.messageId, sessionId: record.sessionId, from: previousStatus, to: status, attempts: record.attempts, reason: record.lastError ?? null }) + "\n");
-      } catch { /* diagnostics must not prevent delivery */ }
+        NodeFS.appendFileSync(
+          this.eventFile,
+          JSON.stringify({
+            at: record.updatedAt,
+            messageId: record.messageId,
+            sessionId: record.sessionId,
+            from: previousStatus,
+            to: status,
+            attempts: record.attempts,
+            reason: record.lastError ?? null,
+          }) + "\n",
+        );
+      } catch {
+        /* diagnostics must not prevent delivery */
+      }
     }
     this.notifyTransition(record);
   }
@@ -462,12 +524,20 @@ export class ChatGPTDeliveryQueue {
   /** Terminal give-up: notify once and free the lane. */
   private giveUp(record: DeliveryRecord) {
     const sends = record.duplicateResends ?? 0;
-    this.update(record, "needs_attention", sends > 0
-      ? `Gave up after ${Math.round(GIVE_UP_MS / 60_000)} minutes; sent ${sends} time(s) but never observed. ${record.lastError ?? ""}`.trim()
-      : `Gave up after ${Math.round(GIVE_UP_MS / 60_000)} minutes without being able to send. ${record.lastError ?? ""}`.trim());
+    this.update(
+      record,
+      "needs_attention",
+      sends > 0
+        ? `Gave up after ${Math.round(GIVE_UP_MS / 60_000)} minutes; sent ${sends} time(s) but never observed. ${record.lastError ?? ""}`.trim()
+        : `Gave up after ${Math.round(GIVE_UP_MS / 60_000)} minutes without being able to send. ${record.lastError ?? ""}`.trim(),
+    );
     this.nextTry.delete(record.messageId);
     this.headSince.delete(record.messageId);
-    try { this.notifyExhausted(this.publicRecord(record)); } catch { /* notification is best effort */ }
+    try {
+      this.notifyExhausted(this.publicRecord(record));
+    } catch {
+      /* notification is best effort */
+    }
   }
 
   /** Only an exact-conversation, actually-observed user turn counts as delivered. */
@@ -488,8 +558,12 @@ export class ChatGPTDeliveryQueue {
   /** The renderer proved nothing was submitted (callback never ran). */
   private notSubmitted(response: DesktopAppActivationResponse): boolean {
     const data = response.ok && "data" in response ? response.data : null;
-    return !!data && typeof data === "object" && "delivery" in data &&
-      data.delivery === "pre_submit_aborted";
+    return (
+      !!data &&
+      typeof data === "object" &&
+      "delivery" in data &&
+      data.delivery === "pre_submit_aborted"
+    );
   }
 
   /** One delivery pass: send (the renderer skips the send if the marker is
@@ -524,9 +598,15 @@ export class ChatGPTDeliveryQueue {
       return;
     }
     const detail = response.ok
-      ? ("data" in response && response.data && typeof response.data === "object" &&
-          "reason" in response.data && typeof response.data.reason === "string"
-          ? response.data.reason : "Send not observed yet.")
+      ? "data" in response &&
+        response.data &&
+        typeof response.data === "object" &&
+        "reason" in response.data &&
+        typeof response.data.reason === "string"
+        ? response.data.reason
+        : this.notSubmitted(response)
+          ? "Submit aborted before sending; no message sent."
+          : "Send not observed yet."
       : response.message;
     const settled: DeliveryState = wasSentBefore ? "uncertain" : "queued";
     if (this.notSubmitted(response) || refusedBeforeSubmission(response)) {
@@ -553,7 +633,9 @@ export class ChatGPTDeliveryQueue {
     // Serialize lane selection only, not the browser round trip.
     const previousSelection = this.selectionGate;
     let releaseSelection!: () => void;
-    this.selectionGate = new Promise<void>(resolve => { releaseSelection = resolve; });
+    this.selectionGate = new Promise<void>((resolve) => {
+      releaseSelection = resolve;
+    });
     await previousSelection;
     const work: Promise<void>[] = [];
     try {
@@ -575,7 +657,8 @@ export class ChatGPTDeliveryQueue {
         group.push(record);
         conversations.set(record.conversationId, group);
       }
-      const due = (record: DeliveryRecord) => (this.nextTry.get(record.messageId) ?? 0) <= Date.now();
+      const due = (record: DeliveryRecord) =>
+        (this.nextTry.get(record.messageId) ?? 0) <= Date.now();
       const lanes = [...conversations];
       const lastIndex = lanes.findIndex(([id]) => id === this.lastScheduledConversation);
       const ordered =
@@ -587,7 +670,11 @@ export class ChatGPTDeliveryQueue {
         if (!head || !this.dispatchAllowed(head) || !due(head)) continue;
         // Capacity is rechecked right before sending (manual sessions may have started).
         let admitted = false;
-        try { admitted = await this.dispatchAdmission(head); } catch { admitted = false; }
+        try {
+          admitted = await this.dispatchAdmission(head);
+        } catch {
+          admitted = false;
+        }
         if (!admitted || terminal(head.status) || !this.dispatchAllowed(head)) {
           this.nextTry.set(head.messageId, Date.now() + 10_000);
           continue;

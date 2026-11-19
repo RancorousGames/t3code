@@ -149,11 +149,10 @@ export default defineConfig({
       : {}),
   },
   staged: {
-    // In order, so lint reads the formatted file. CI lint failures cost a full round trip.
-    "*": ["vp fmt --no-error-on-unmatched-pattern", "vp lint --no-error-on-unmatched-pattern"],
-    // knip checks the whole repo, so it takes no file list. Any code or manifest change can leave
-    // a file, export, or dependency unused.
-    "{*.{js,jsx,ts,tsx,mjs,cjs,mts,cts},package.json,knip.jsonc}": () => "vp run knip:check",
+    // Pre-commit only auto-formats. Lint and knip were removed from the hook (user decision,
+    // 2026-11-19) because pre-existing repo-wide failures blocked every commit; run
+    // `vp lint` / `vp run knip:check` manually when wanted.
+    "*": ["vp fmt --no-error-on-unmatched-pattern"],
   },
   fmt: {
     ignorePatterns: [
