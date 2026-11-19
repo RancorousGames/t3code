@@ -69,7 +69,7 @@ import {
   isChatGPTSessionPreviewTab,
   RENAME_CHATGPT_SESSION_MENU_ACTION,
 } from "../window/ChatGPTCloseShortcut.ts";
-import { chatGPTAttentionShortcutAction } from "./NativeChatGPTGuestShortcut.ts";
+import { chatGPTAttentionShortcutAction } from "./ChatGPTGuestShortcut.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -1550,9 +1550,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         // Use the same renderer link dispatcher as popup links, so exact
         // TaskBoard, T3 session and presentation targets can be routed to
         // their native owners instead of opening an unhelpful 404 in Firefox.
-        runFork(emitOpenLink({
-          tabId, url: safeUrl.value, sourceUrl: wc.getURL(), background: false,
-        }));
+        runFork(
+          emitOpenLink({
+            tabId,
+            url: safeUrl.value,
+            sourceUrl: wc.getURL(),
+            background: false,
+          }),
+        );
         lastDirectGestureAt = -Infinity;
       }
     };
@@ -1597,12 +1602,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }
         return;
       }
-      const attentionShortcut = selectedChatGPTGuest
-        ? chatGPTAttentionShortcutAction(input) : null;
+      const attentionShortcut = selectedChatGPTGuest ? chatGPTAttentionShortcutAction(input) : null;
       if (attentionShortcut) {
         event.preventDefault();
-        if (!input.isAutoRepeat)
-          main?.webContents.send(MENU_ACTION_CHANNEL, attentionShortcut);
+        if (!input.isAutoRepeat) main?.webContents.send(MENU_ACTION_CHANNEL, attentionShortcut);
         return;
       }
       if (selectedChatGPTGuest && isChatGPTRenameShortcut(input)) {
@@ -1733,12 +1736,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             ) {
               const safeUrl = parseSafeExternalUrl(details.url);
               if (Option.isSome(safeUrl))
-                runFork(emitOpenLink({
-                  tabId,
-                  url: safeUrl.value,
-                  sourceUrl: wc.getURL(),
-                  background: details.disposition === "background-tab",
-                }));
+                runFork(
+                  emitOpenLink({
+                    tabId,
+                    url: safeUrl.value,
+                    sourceUrl: wc.getURL(),
+                    background: details.disposition === "background-tab",
+                  }),
+                );
               return { action: "deny" };
             }
             runFork(

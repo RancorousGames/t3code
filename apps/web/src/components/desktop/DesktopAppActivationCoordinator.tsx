@@ -27,8 +27,6 @@ import {
   resolveExternalBootstrapRequest,
   retryExternalBootstrapRequest,
 } from "../../chatGPTExternalBootstrapDiscovery";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
-import { warmMissingNativeChatGPT } from "../../browser/nativeChatGPTWarmSession";
 import { resolveWarmChatGPTConversationUrl } from "../../omniwork/chatGPTWarmConversationUrl";
 import { rebootChatGPTDesktop } from "../../chatGPTSameBrowserRebootDesktop";
 import {
@@ -72,7 +70,6 @@ import {
 } from "../../chatGPTSidebarReboot";
 import { restoreChatGPTSessionUrl } from "../../chatGPTSessionUrlRestore";
 import { publicChatGPTSessionId, publicChatGPTParentId } from "../../chatGPTBootstrapIdentity";
-import { inspectPersistentChatGPTPage } from "../../browser/inspectPersistentChatGPTPage";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import {
@@ -409,21 +406,6 @@ export function DesktopAppActivationCoordinator() {
           if (!held.has(session.id)) {
             requestChatGPTDeliveryMount(idleEnvironmentId, session.id);
             held.add(session.id);
-          }
-          // Native Chromium is not mounted by legacy preview retention. A
-          // queued Caffy message must revive its own exact recipient even when
-          // background warming is paused or at zero capacity. Never navigate
-          // an existing native page; attach only after an authoritative miss.
-          if (isPersistentChatGPTSessionOptedIn(session.id)) {
-            const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-            const saved = getLocalStorageItem(
-              chatGPTBrowserLastUrlKey(idleEnvironmentId, session.id),
-              Schema.String,
-            );
-            const url = resolveWarmChatGPTConversationUrl(session, saved);
-            if (bridge && url && chatGPTConversationIdFromUrl(url) === item.conversationId) {
-              await warmMissingNativeChatGPT(bridge, idleEnvironmentId, session.id, url);
-            }
           }
           // Report a mounted recipient even if the normal warm scheduler is
           // disabled. An idle partial/user-only turn is safe to *release* to
@@ -1280,49 +1262,6 @@ export function DesktopAppActivationCoordinator() {
               normalized.length <= 80 &&
               !/[\[\]\x00-\x1f\x7f]/u.test(normalized);
             if (accepted) suggestBootstrapTitle(id, normalized);
-            // For a preassigned T3 seat, Bootstrap itself is the first
-            // registration receipt. Its native guest already owns the live
-            // conversation, so no assistant echo is needed.
-            if (
-              accepted &&
-              target?.bootstrapIdentity?.state === "awaiting_marker" &&
-              !target.hidden &&
-              isPersistentChatGPTSessionOptedIn(id)
-            ) {
-              const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-              if (bridge) {
-                const identity = {
-                  sessionId: id,
-                  environmentId,
-                  profileId: chatGPTSessionProfileId(target),
-                };
-                try {
-                  const before = (await bridge({ operation: "snapshot", identity })) as {
-                    url?: string;
-                    destroyed?: boolean;
-                  };
-                  const conversationId =
-                    !before.destroyed && before.url
-                      ? chatGPTConversationIdFromUrl(before.url)
-                      : null;
-                  if (conversationId) {
-                    const after = (await bridge({ operation: "snapshot", identity })) as {
-                      url?: string;
-                      destroyed?: boolean;
-                    };
-                    if (!after.destroyed && before.url === after.url) {
-                      registerBootstrapMarker(id, {
-                        conversationId,
-                        markerId: id,
-                        proposedTitle: normalized,
-                      });
-                    }
-                  }
-                } catch {
-                  // If the guest is not ready, the tool-result/assistant probe remains.
-                }
-              }
-            }
             return {
               version: 1,
               requestId: request.requestId,
@@ -1776,24 +1715,6 @@ export function DesktopAppActivationCoordinator() {
                         }
                       }
                       clearThreadPreviewState(threadRef);
-                      if (isPersistentChatGPTSessionOptedIn(id)) {
-                        const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-                        if (!bridge) throw new Error("Native Chromium close bridge unavailable.");
-                        // The closed-session preflight above already double-
-                        // inspected its empty draft and exact conversation.
-                        await bridge({
-                          operation: "close",
-                          identity: {
-                            environmentId,
-                            sessionId: id,
-                            profileId: chatGPTSessionProfileId(
-                              readChatGPTBrowserSessions(environmentId).find(
-                                (session) => session.id === id,
-                              ),
-                            ),
-                          },
-                        });
-                      }
                       flushSync(() => removeSession(id, "desktop-IPC-request"));
                       removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id));
                       removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, id));
@@ -1970,22 +1891,6 @@ export function DesktopAppActivationCoordinator() {
               }
             }
             clearThreadPreviewState(threadRef);
-            if (isPersistentChatGPTSessionOptedIn(confirmation.sessionId)) {
-              const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-              if (!bridge) throw new Error("Native Chromium archive close bridge unavailable.");
-              await bridge({
-                operation: "close",
-                identity: {
-                  environmentId,
-                  sessionId: confirmation.sessionId,
-                  profileId: chatGPTSessionProfileId(
-                    readChatGPTBrowserSessions(environmentId).find(
-                      (session) => session.id === confirmation.sessionId,
-                    ),
-                  ),
-                },
-              });
-            }
             return {
               version: 1,
               requestId: request.requestId,
@@ -2437,8 +2342,6 @@ export function DesktopAppActivationCoordinator() {
       // One verified desktop scheduler snapshot for the entire catalog (no per-row IPC).
       const caffyEntries = readVerifiedT3CaffyOverview()?.entries ?? [];
       const observedMs = Date.now();
-      // Native Chromium has no preview-state WebContents. Publish reachability
-      // from the Electron owner registry (bounded read-only snapshots) instead.
       const sessions: AgentProviderV1Session[] = [];
       for (let offset = 0; offset < catalog.length; offset += 6) {
         sessions.push(
@@ -2454,37 +2357,9 @@ export function DesktopAppActivationCoordinator() {
                   !entry.hidden && nav?._tag === "Success"
                     ? chatGPTConversationIdFromUrl(nav.url)
                     : null;
-                // Mount capability does not imply idle. The receiver still validates
-                // the actual guest URL and activity before reading or sending.
-                let nativeUrl: string | null = null;
-                if (!entry.hidden && isPersistentChatGPTSessionOptedIn(entry.id)) {
-                  const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-                  if (bridge) {
-                    try {
-                      const live = (await bridge({
-                        operation: "snapshot",
-                        identity: {
-                          environmentId,
-                          sessionId: entry.id,
-                          profileId: chatGPTSessionProfileId(entry),
-                        },
-                      })) as { url?: string; destroyed?: boolean };
-                      if (
-                        !live.destroyed &&
-                        /^https:\/\/chatgpt\.com(?:[/?#]|$)/i.test(live.url ?? "")
-                      )
-                        nativeUrl = live.url!;
-                    } catch {
-                      // Missing/unavailable owner is UNKNOWN, not falsely reachable.
-                    }
-                  }
-                }
-                const liveConversationId = nativeUrl
-                  ? chatGPTConversationIdFromUrl(nativeUrl)
-                  : conversationId;
-                const loaded = isPersistentChatGPTSessionOptedIn(entry.id)
-                  ? nativeUrl !== null
-                  : !!conversationId && isLoadedChatGPTBrowserGuest(environmentId, entry);
+                const loaded =
+                  !!conversationId && isLoadedChatGPTBrowserGuest(environmentId, entry);
+                const liveConversationId = conversationId;
                 const detail = loaded
                   ? readChatGPTProviderActivityDetail(environmentId, entry.id)
                   : { activity: "unknown" as const, since: null };
@@ -2686,26 +2561,16 @@ export function DesktopAppActivationCoordinator() {
                     stop.click(); return true;
                   })()`;
                   let stopped = false;
-                  if (isPersistentChatGPTSessionOptedIn(id)) {
+                  const ref = chatGPTBrowserThreadRef(environmentId, id);
+                  const preview = readThreadPreviewState(ref);
+                  const tabId = preview.activeTabId;
+                  const runtimeId =
+                    tabId && preview.serverEpoch
+                      ? previewRuntimeTabId(ref, preview.serverEpoch, tabId)
+                      : null;
+                  if (runtimeId && !isChatGPTGuestHibernated(runtimeId))
                     stopped =
-                      (await inspectPersistentChatGPTPage<boolean>(
-                        environmentId,
-                        id,
-                        expression,
-                      )) === true;
-                  } else {
-                    const ref = chatGPTBrowserThreadRef(environmentId, id);
-                    const preview = readThreadPreviewState(ref);
-                    const tabId = preview.activeTabId;
-                    const runtimeId =
-                      tabId && preview.serverEpoch
-                        ? previewRuntimeTabId(ref, preview.serverEpoch, tabId)
-                        : null;
-                    if (runtimeId && !isChatGPTGuestHibernated(runtimeId))
-                      stopped =
-                        (await chatGPTWebviewAutomation.evaluate(runtimeId, { expression })) ===
-                        true;
-                  }
+                      (await chatGPTWebviewAutomation.evaluate(runtimeId, { expression })) === true;
                   if (!stopped)
                     throw new Error("No active Stop generation button on this session.");
                 };
@@ -3050,30 +2915,17 @@ export function DesktopAppActivationCoordinator() {
                     throw new Error(
                       "Unload requires an empty composer and verified draft snapshot.",
                     );
-                  if (isPersistentChatGPTSessionOptedIn(id)) {
-                    const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-                    if (!bridge) throw new Error("Native browser unavailable.");
-                    await bridge({
-                      operation: "close",
-                      identity: {
-                        environmentId,
-                        sessionId: id,
-                        profileId: chatGPTSessionProfileId(entry),
-                      },
-                    });
-                  } else {
-                    const ref = chatGPTBrowserThreadRef(environmentId, id);
-                    const preview = readThreadPreviewState(ref);
-                    const runtimeId =
-                      preview.activeTabId && preview.serverEpoch
-                        ? previewRuntimeTabId(ref, preview.serverEpoch, preview.activeTabId)
-                        : null;
-                    if (!runtimeId) throw new Error("No loaded preview for this session.");
-                    hibernateChatGPTGuest(runtimeId, true);
-                  }
+                  const ref = chatGPTBrowserThreadRef(environmentId, id);
+                  const preview = readThreadPreviewState(ref);
+                  const runtimeId =
+                    preview.activeTabId && preview.serverEpoch
+                      ? previewRuntimeTabId(ref, preview.serverEpoch, preview.activeTabId)
+                      : null;
+                  if (!runtimeId) throw new Error("No loaded preview for this session.");
+                  hibernateChatGPTGuest(runtimeId, true);
                 } else if (command === "close") {
-                  // Phone close mirrors the sidebar close: tear down previews and the
-                  // native view best-effort, then always remove the session. ChatGPT
+                  // Phone close mirrors the sidebar close: tear down webview previews
+                  // best-effort, then always remove the session. ChatGPT
                   // keeps the conversation server-side, so nothing local is at stake.
                   if (!closingSessionsRef.current.has(id)) {
                     closingSessionsRef.current.add(id);
@@ -3089,18 +2941,6 @@ export function DesktopAppActivationCoordinator() {
                         }),
                       );
                       clearThreadPreviewState(ref);
-                      if (isPersistentChatGPTSessionOptedIn(id)) {
-                        await window.desktopBridge
-                          ?.stableChatGPTViewRequest?.({
-                            operation: "close",
-                            identity: {
-                              environmentId,
-                              sessionId: id,
-                              profileId: chatGPTSessionProfileId(entry),
-                            },
-                          })
-                          .catch(() => undefined);
-                      }
                       flushSync(() => removeSession(id, "desktop-IPC-request"));
                       removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, id));
                       removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, id));
@@ -3307,24 +3147,6 @@ export function DesktopAppActivationCoordinator() {
                         // switch tabs, reload a resident page, or send any message.
                         requestChatGPTDeliveryMount(environmentId, id);
                         try {
-                          if (isPersistentChatGPTSessionOptedIn(id)) {
-                            const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-                            if (!bridge) throw new Error("Native ChatGPT browser unavailable");
-                            const saved = getLocalStorageItem(
-                              chatGPTBrowserLastUrlKey(environmentId, id),
-                              Schema.String,
-                            );
-                            const recovered = resolveWarmChatGPTConversationUrl(entry, saved);
-                            const expected = work.expectedConversationId;
-                            // The T3 provider already checked the selected
-                            // session's authoritative /c/ binding. Never attach
-                            // a different saved URL when it differs from that ID.
-                            const url =
-                              expected && chatGPTConversationIdFromUrl(recovered) !== expected
-                                ? `https://chatgpt.com/c/${expected}`
-                                : (recovered ?? "https://chatgpt.com/");
-                            await warmMissingNativeChatGPT(bridge, environmentId, id, url);
-                          }
                           for (const ms of [500, 2_000, 5_000, 10_000, 20_000, 40_000, 75_000])
                             window.setTimeout(
                               () => window.dispatchEvent(new Event("t3:agent-provider-refresh")),
@@ -3369,21 +3191,6 @@ export function DesktopAppActivationCoordinator() {
                           if (work.visibility.hidden === false) {
                             requestChatGPTDeliveryMount(environmentId, id);
                             try {
-                              if (isPersistentChatGPTSessionOptedIn(id)) {
-                                const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-                                if (!bridge) throw new Error("Native ChatGPT bridge unavailable");
-                                const saved = getLocalStorageItem(
-                                  chatGPTBrowserLastUrlKey(environmentId, id),
-                                  Schema.String,
-                                );
-                                const recovered = resolveWarmChatGPTConversationUrl(entry, saved);
-                                const url =
-                                  recovered ??
-                                  (/^https:\/\/chatgpt\.com(?:[/?#]|$)/i.test(saved ?? "")
-                                    ? saved!
-                                    : "https://chatgpt.com/");
-                                await warmMissingNativeChatGPT(bridge, environmentId, id, url);
-                              }
                             } catch (cause) {
                               releaseChatGPTDeliveryMount(environmentId, id);
                               return {

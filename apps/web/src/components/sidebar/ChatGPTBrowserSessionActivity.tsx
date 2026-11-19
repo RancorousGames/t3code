@@ -15,8 +15,6 @@ import {
   useChatGPTGuestHibernation,
 } from "../../browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
-import { usePersistentChatGPTSidebarActivity } from "./usePersistentChatGPTSidebarActivity";
 import {
   hasHostedBrowserGuestTab,
   subscribeHostedBrowserGuestPresence,
@@ -108,16 +106,6 @@ export function useChatGPTBrowserSessionActivity(
     chatGPTBrowserLastWorkingKey(environmentId, sessionId),
     0,
     Schema.Number,
-  );
-  const isPersistentChromium = isPersistentChatGPTSessionOptedIn(sessionId);
-  const chromiumActivity = usePersistentChatGPTSidebarActivity(
-    sessionId,
-    environmentId,
-    isPersistentChromium,
-    snoozed,
-    lastWorkingAt,
-    setLastWorkingAt,
-    selected,
   );
   const lastWorkingAtRef = useRef(lastWorkingAt);
   const previousDisplayedAge = useRef<ChatGPTActivityAge | null>(null);
@@ -212,7 +200,7 @@ export function useChatGPTBrowserSessionActivity(
     lastHeartbeatAt.current = 0;
     // Snooze blocks automatic loading, but an already-attached page can still
     // receive external messages. Observe that existing guest without waking it.
-    if (isPersistentChromium || !runtimeTabId || (snoozed && !attached)) return;
+    if (!runtimeTabId || (snoozed && !attached)) return;
     const firstObservedAt = Date.now();
 
     const isOnConversation = () => {
@@ -619,23 +607,14 @@ export function useChatGPTBrowserSessionActivity(
       if (indexTimer !== undefined) clearTimeout(indexTimer);
       if (idleConfirmTimer !== undefined) clearTimeout(idleConfirmTimer);
     };
-  }, [
-    isPersistentChromium,
-    runtimeTabId,
-    setLastWorkingAt,
-    snoozed,
-    attached,
-    tabId,
-    threadRef,
-    ingestTranscript,
-  ]);
+  }, [runtimeTabId, setLastWorkingAt, snoozed, attached, tabId, threadRef, ingestTranscript]);
 
   useEffect(() => {
     // Attachment, wake and navigation can happen after the initial probe, without
     // a DOM mutation or a user click. Feed them through the same serialized reader.
     const changed = lifecycle.some((value, index) => value !== previousLifecycle.current[index]);
     previousLifecycle.current = lifecycle;
-    if (changed && runtimeTabId && !isPersistentChromium) {
+    if (changed && runtimeTabId) {
       window.dispatchEvent(
         new CustomEvent("t3:chatgpt-page-push", {
           detail: { runtimeTabId },
@@ -676,7 +655,7 @@ export function useChatGPTBrowserSessionActivity(
       : chatGPTActivityAge(activity, lastWorkingAt, now);
   useEffect(() => {
     const previous = previousDisplayedAge.current;
-    if (isPersistentChromium || previous === age) return;
+    if (previous === age) return;
     previousDisplayedAge.current = age;
     recordChatGPTActivityTrace(
       environmentId,
@@ -684,7 +663,7 @@ export function useChatGPTBrowserSessionActivity(
       "display",
       `${previous ?? "mounted"}->${age} guestHibernated=${unloaded} attached=${attached} loading=${loading} observed=${activity}`,
     );
-  }, [environmentId, sessionId, age, unloaded, attached, loading, activity, isPersistentChromium]);
+  }, [environmentId, sessionId, age, unloaded, attached, loading, activity]);
   const reason = result.tabId === runtimeTabId ? result.reason : null;
   const label =
     age === "snoozed"
@@ -716,7 +695,7 @@ export function useChatGPTBrowserSessionActivity(
     !snoozed && !notResident && result.tabId === runtimeTabId
       ? chatGPTRecoveryProblem(activity === "invalid" ? `invalid: ${reason ?? ""}` : activity)
       : null;
-  return isPersistentChromium ? chromiumActivity : { age, label, lastWorkingAt, recoveryProblem };
+  return { age, label, lastWorkingAt, recoveryProblem };
 }
 
 /** Shared status glyph. Its containing button is also the drag handle. */

@@ -1,8 +1,6 @@
 import type { AgentProviderV1DesktopWork, AgentProviderV1HistoryPage } from "@t3tools/contracts";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
-import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
-import { nativeChatGPTPageStatus } from "./browser/nativeChatGPTWarmSession";
 import { readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
 import { queueChatGPTSessionMessage } from "./chatGPTSessionMessageQueue";
 import {
@@ -25,29 +23,25 @@ export async function executeAgentProviderBrowserWork(
 ): Promise<WorkResult> {
   if (work.environmentId !== environmentId)
     return { ok: false, code: "Unavailable", message: "Desktop environment changed." };
-  if (work.action === "create" || !work.browserSessionId ||
-      (work.action !== "submit" || !["WhenIdle", "WaitForSlot"].includes(work.delivery ?? "")) && !work.expectedConversationId)
-    return { ok: false, code: "InvalidInput", message: "Browser history/submit requires exact session and conversation." };
+  if (
+    work.action === "create" ||
+    !work.browserSessionId ||
+    ((work.action !== "submit" || !["WhenIdle", "WaitForSlot"].includes(work.delivery ?? "")) &&
+      !work.expectedConversationId)
+  )
+    return {
+      ok: false,
+      code: "InvalidInput",
+      message: "Browser history/submit requires exact session and conversation.",
+    };
   const sessions = readChatGPTBrowserSessions(environmentId);
   // Only exact original T3 browser session UUIDs resolve here. Never create,
   // navigate, infer from conversation IDs, or wake an unloaded guest.
   const entry = sessions.find((session) => session.id === work.browserSessionId);
-  const queuedSubmit = work.action === "submit" &&
-    (work.delivery === "WaitForSlot" || work.delivery === "WhenIdle");
-  if (!entry)
-    return { ok: false, code: "Unavailable", message: "Unknown browser session." };
-  // Native Chromium has no DOM webview. Query its exact Electron owner rather
-  // than the legacy preview guest predicate (which always returns false).
-  const isNative = isPersistentChatGPTSessionOptedIn(entry.id);
-  const native = isNative && !queuedSubmit
-    ? await (async () => {
-        const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-        return bridge ? nativeChatGPTPageStatus(bridge, environmentId, entry.id) : null;
-      })()
-    : null;
-  const awake = isNative
-    ? native?.residency === "resident" && native.loading === false
-    : isLoadedChatGPTBrowserGuest(environmentId, entry);
+  const queuedSubmit =
+    work.action === "submit" && (work.delivery === "WaitForSlot" || work.delivery === "WhenIdle");
+  if (!entry) return { ok: false, code: "Unavailable", message: "Unknown browser session." };
+  const awake = isLoadedChatGPTBrowserGuest(environmentId, entry);
   if (!queuedSubmit && !awake)
     return {
       ok: false,
@@ -56,18 +50,40 @@ export async function executeAgentProviderBrowserWork(
     };
   try {
     if (queuedSubmit) {
-      if (!work.text?.trim() || !work.clientRequestId ||
-          !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(work.clientRequestId))
-        return {ok:false,code:"InvalidInput",message:"Queued submission requires text and exact request ID."};
+      if (
+        !work.text?.trim() ||
+        !work.clientRequestId ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(work.clientRequestId)
+      )
+        return {
+          ok: false,
+          code: "InvalidInput",
+          message: "Queued submission requires text and exact request ID.",
+        };
       // Both WhenIdle and WaitForSlot use the same durable T3 Session Queue.
       // No Enter click is attempted by the provider request, even while busy.
-      const id=queueChatGPTSessionMessage(environmentId,entry.id,work.text,
-        work.expectedConversationId ?? null,work.clientRequestId,
-        {condition:work.delivery === "WaitForSlot" ? "wait_for_slot" : "when_idle",
-          ...(work.maxActiveWorkers && work.delivery === "WaitForSlot" ?
-            {maxActiveWorkers:work.maxActiveWorkers} : {})});
-      return {ok:true,data:{messageSent:false,delivery:"queued",messageId:id,
-        verifiedConversationId:work.expectedConversationId ?? null}};
+      const id = queueChatGPTSessionMessage(
+        environmentId,
+        entry.id,
+        work.text,
+        work.expectedConversationId ?? null,
+        work.clientRequestId,
+        {
+          condition: work.delivery === "WaitForSlot" ? "wait_for_slot" : "when_idle",
+          ...(work.maxActiveWorkers && work.delivery === "WaitForSlot"
+            ? { maxActiveWorkers: work.maxActiveWorkers }
+            : {}),
+        },
+      );
+      return {
+        ok: true,
+        data: {
+          messageSent: false,
+          delivery: "queued",
+          messageId: id,
+          verifiedConversationId: work.expectedConversationId ?? null,
+        },
+      };
     }
     const inspected = await inspectBrowserSession(environmentId, entry, "end", 1, false);
     if (chatGPTConversationIdFromUrl(inspected.observedGuestUrl) !== work.expectedConversationId)
@@ -143,10 +159,11 @@ export async function executeAgentProviderBrowserWork(
         expectedConversationId: work.expectedConversationId,
         neverWake: true,
       })) as { session: { status: string; activity: string } };
-      if (work.delivery !== "Steer" && (
-        previous.session.activity !== "idle" ||
-        !["done_or_idle", "waiting_for_input"].includes(previous.session.status)
-      ))
+      if (
+        work.delivery !== "Steer" &&
+        (previous.session.activity !== "idle" ||
+          !["done_or_idle", "waiting_for_input"].includes(previous.session.status))
+      )
         return { ok: false, code: "Busy", message: "Exact ChatGPT guest is not confirmed idle." };
       const sent = (await runChatGPTSessionControl({
         environmentId,

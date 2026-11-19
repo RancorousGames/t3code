@@ -10,7 +10,6 @@ import {
 
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { clearChatGPTGuestUserOpened } from "./browser/chatGPTGuestHibernation";
-import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import {
   nextChatGPTBootstrapGeneration,
   registerChatGPTBootstrapMarker,
@@ -971,9 +970,6 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
                 element.dataset.previewTab ===
                 previewRuntimeTabId(threadRef, state.serverEpoch, tabId),
             );
-          // A native spare is owned by Electron, not a preview-tab webview.
-          // Only a ready, unconsumed spare is eligible for manual new chats.
-          const nativeSpare = isPersistentChatGPTSessionOptedIn(spareId);
           const legacySpareReady =
             nav?._tag === "Success" &&
             isChatGPTHomeUrl(nav.url) &&
@@ -982,7 +978,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             attached;
           if (
             !sessions.some((session) => session.id === spareId) &&
-            (nativeSpare || legacySpareReady) &&
+            legacySpareReady &&
             takeChatGPTSpare(environmentId, spareId)
           ) {
             id = spareId;

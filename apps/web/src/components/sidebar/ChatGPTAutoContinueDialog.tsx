@@ -42,7 +42,6 @@ export type CaffyScheduleTarget =
       intent: "once" | "recurring";
       config: AutoContinueConfig | null;
       beginAt?: number;
-      legacyMonitors: Array<{ id: string; targetId: string; status: string }>;
     }
   | { kind: "new" }
   | { kind: "scheduled"; job: ScheduledChatGPTJob; prompt: string };
@@ -66,7 +65,6 @@ export function ChatGPTCaffyScheduleDialog({
   close,
   submit,
   cancelJob,
-  cancelLegacy,
   allowAutoReboot = true,
 }: {
   target: CaffyScheduleTarget;
@@ -74,7 +72,6 @@ export function ChatGPTCaffyScheduleDialog({
   close: () => void;
   submit: (input: CaffyScheduleRequest) => Promise<void>;
   cancelJob: (id: string) => Promise<void>;
-  cancelLegacy?: (id: string, targetId: string) => Promise<void>;
   /** Native threads retain their context and do not use ChatGPT conversation reboot. */
   allowAutoReboot?: boolean;
 }) {
@@ -162,11 +159,6 @@ export function ChatGPTCaffyScheduleDialog({
   const [rebootEveryUnit, setRebootEveryUnit] = useState<TimeUnit>(rebootUnit);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cancelledLegacy, setCancelledLegacy] = useState<ReadonlySet<string>>(new Set());
-  const legacy =
-    target.kind === "session"
-      ? target.legacyMonitors.filter((item) => !cancelledLegacy.has(item.id))
-      : [];
   const recurring = frequency !== "once";
   // An existing session's Keep running mode starts immediately. Caffy itself
   // determines whether the agent is already idle and arms the first wake.
@@ -232,19 +224,6 @@ export function ChatGPTCaffyScheduleDialog({
         autoRebootMinutes: rebootMinutes,
         autoRebootEveryRuns: rebootRuns,
       });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const cancelOldMonitor = async (id: string, targetId: string) => {
-    if (!cancelLegacy || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await cancelLegacy(id, targetId);
-      setCancelledLegacy((current) => new Set([...current, id]));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -378,29 +357,6 @@ export function ChatGPTCaffyScheduleDialog({
                   {prompt.length.toLocaleString()} / 29,800
                 </span>
               </label>
-            )}
-            {legacy.length > 0 && (
-              <div
-                role="alert"
-                className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm"
-              >
-                <p>
-                  An older OmniHub monitor owns this session. Stop it before saving to avoid
-                  duplicate wakes.
-                </p>
-                {legacy.map((item) => (
-                  <Button
-                    key={item.id}
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={busy || !cancelLegacy}
-                    onClick={() => void cancelOldMonitor(item.id, item.targetId)}
-                  >
-                    Stop legacy monitor ({item.status})
-                  </Button>
-                ))}
-              </div>
             )}
             {effectiveStart === "later" && (
               <div className="space-y-2 rounded-lg border border-border p-3">
@@ -641,7 +597,7 @@ export function ChatGPTCaffyScheduleDialog({
             <Button type="button" variant="outline" disabled={busy} onClick={close}>
               {target.kind === "scheduled" ? "Close" : "Cancel"}
             </Button>
-            <Button type="submit" disabled={!valid || busy || legacy.length > 0}>
+            <Button type="submit" disabled={!valid || busy}>
               {busy
                 ? "Saving…"
                 : target.kind === "scheduled"

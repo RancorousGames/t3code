@@ -1,8 +1,7 @@
 import { type EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
-import { useEffect, useState } from "react";
-import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
+import { useState } from "react";
 import { inspectBrowserSession } from "../../chatGPTSessionControl";
 import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -12,8 +11,6 @@ import { removeLocalStorageItem } from "../../hooks/useLocalStorage";
 
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import { hasHostedBrowserGuest } from "../../browser/hostedBrowserGuestPresence";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
-import { nativeChatGPTResidency } from "../../browser/nativeChatGPTWarmSession";
 import {
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserLastUrlKey,
@@ -71,42 +68,7 @@ export function ChatGPTDuplicateConversationBanner({
   const { sessions, setSessionHidden, setSessionSnooze, removeSession } =
     useChatGPTBrowserSessions(environmentId);
   const nav = state.snapshot?.navStatus;
-  const [nativeUrl, setNativeUrl] = useState<string | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Poll the Electron-owned URL while this native view is mounted.
-  useEffect(() => {
-    if (!isPersistentChatGPTSessionOptedIn(sessionId)) return;
-    const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-    if (!bridge) return;
-    let disposed = false;
-    const read = async () => {
-      try {
-        const result = (await bridge({
-          operation: "snapshot",
-          identity: {
-            environmentId,
-            sessionId,
-            profileId: chatGPTSessionProfileId(
-              readChatGPTBrowserSessions(environmentId).find((entry) => entry.id === sessionId),
-            ),
-          },
-        })) as { url?: string; destroyed?: boolean };
-        if (!disposed) setNativeUrl(!result.destroyed ? (result.url ?? null) : null);
-      } catch {
-        if (!disposed) setNativeUrl(null);
-      }
-    };
-    void read();
-    const timer = window.setInterval(() => void read(), 2_000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [environmentId, sessionId]);
-  const observedUrl = isPersistentChatGPTSessionOptedIn(sessionId)
-    ? nativeUrl
-    : nav?._tag === "Success"
-      ? nav.url
-      : null;
+  const observedUrl = nav?._tag === "Success" ? nav.url : null;
   const owner = findDuplicateChatGPTConversationOwner(sessions, sessionId, observedUrl, (id) =>
     lastKnownConversationUrl(environmentId, id),
   );
@@ -137,29 +99,6 @@ export function ChatGPTDuplicateConversationBanner({
   };
 
   const goBack = () => {
-    if (isPersistentChatGPTSessionOptedIn(sessionId)) {
-      const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-      if (!bridge) {
-        setReason("Native Chromium browser unavailable.");
-        return;
-      }
-      const identity = {
-        environmentId,
-        sessionId,
-        profileId: chatGPTSessionProfileId(sessions.find((entry) => entry.id === sessionId)),
-      };
-      void bridge({ operation: "snapshot", identity })
-        .then(async (result) => {
-          const snapshot = result as { canGoBack?: boolean };
-          if (!snapshot.canGoBack) {
-            setReason("This native page has no previous history.");
-            return;
-          }
-          await bridge({ operation: "back", identity });
-        })
-        .catch(() => setReason("Could not navigate back in the exact native browser."));
-      return;
-    }
     const tabId = state.activeTabId;
     if (!tabId || !state.serverEpoch || !state.desktopByTabId[tabId]?.canGoBack || !previewBridge) {
       setReason("This guest has no available previous page. Use Switch to it instead.");
@@ -172,19 +111,6 @@ export function ChatGPTDuplicateConversationBanner({
   };
 
   const closeRedundantSession = async (discardId: string) => {
-    if (isPersistentChatGPTSessionOptedIn(discardId)) {
-      const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-      if (bridge) {
-        const identity = {
-          environmentId,
-          sessionId: discardId,
-          profileId: chatGPTSessionProfileId(sessions.find((entry) => entry.id === discardId)),
-        };
-        await settleMergeBestEffort(bridge({ operation: "close", identity }), undefined);
-      }
-      return;
-    }
-
     const discardRef = chatGPTBrowserThreadRef(environmentId, discardId);
     const preview = readThreadPreviewState(discardRef);
     await Promise.all(
@@ -224,20 +150,8 @@ export function ChatGPTDuplicateConversationBanner({
 
       // Status probes are a preference, never a veto. A broken/unresponsive
       // renderer must not stop an explicitly requested duplicate-URL merge.
-      const nativeLoaded = (id: string): Promise<boolean> => {
-        if (!isPersistentChatGPTSessionOptedIn(id)) {
-          return Promise.resolve(hasHostedBrowserGuest(chatGPTBrowserThreadRef(environmentId, id)));
-        }
-        const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-        return bridge
-          ? settleMergeBestEffort(
-              nativeChatGPTResidency(bridge, environmentId, id).then(
-                (state) => state === "resident",
-              ),
-              false,
-            )
-          : Promise.resolve(false);
-      };
+      const webviewLoaded = (id: string): Promise<boolean> =>
+        Promise.resolve(hasHostedBrowserGuest(chatGPTBrowserThreadRef(environmentId, id)));
       const [currentStatus, originalStatus, currentLoaded, originalLoaded] = await Promise.all([
         settleMergeBestEffort(
           inspectBrowserSession(environmentId, current).then((health) => health.status),
@@ -247,8 +161,8 @@ export function ChatGPTDuplicateConversationBanner({
           inspectBrowserSession(environmentId, original).then((health) => health.status),
           "unavailable",
         ),
-        nativeLoaded(current.id),
-        nativeLoaded(original.id),
+        webviewLoaded(current.id),
+        webviewLoaded(original.id),
       ]);
       const keepCurrent =
         duplicateMergeHealthRank(currentStatus, currentLoaded) >=

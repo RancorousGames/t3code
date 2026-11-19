@@ -1,6 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
-import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import {
   chatGPTBrowserLastUrlKey,
   chatGPTBrowserThreadRef,
@@ -41,30 +40,6 @@ export async function resolveT3RebootPredecessor(input: {
           "T3 reboot request is bound to a different session or invalid conversation.",
         );
       return item.priorConversationId!;
-    }
-  }
-  if (isPersistentChatGPTSessionOptedIn(session.id)) {
-    const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-    if (!bridge) throw new Error("Native Chromium bridge unavailable for Agent Reboot.");
-    try {
-      // Prefer the live native page over a persisted URL that may be one chat
-      // behind. A missing owner is allowed: the last known URL remains useful.
-      const snapshot = (await bridge({
-        operation: "snapshot",
-        identity: { environmentId, sessionId: session.id, profileId: "default" },
-      })) as { url?: string; destroyed?: boolean };
-      if (!snapshot.destroyed && snapshot.url) {
-        const current = chatGPTConversationIdFromUrl(snapshot.url);
-        if (current) return current;
-        // An existing *home* page is the present predecessor, even if T3 has
-        // a saved older conversation URL; do not mislabel that old URL as live.
-        if (/^https:\/\/chatgpt\.com\/?(?:[?#].*)?$/i.test(snapshot.url)) return "";
-      }
-    } catch (error) {
-      // Only a definitively missing owner may use persisted history. An IPC
-      // outage or identity mismatch must not guess which conversation to reboot.
-      if (!/unknown embedded chatgpt session|chatgpt view identity or environment\/profile binding mismatch/i.test(String(error)))
-        throw new Error("Cannot verify native predecessor for Agent Reboot.", { cause: error });
     }
   }
   const thread = chatGPTBrowserThreadRef(environmentId, session.id);

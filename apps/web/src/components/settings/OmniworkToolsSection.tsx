@@ -11,8 +11,8 @@ import { RecoveryAttemptsDialog } from "./RecoveryAttemptsDialog";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 
 /**
- * Settings > Omniwork tool links: Diagnostics and Caffy. The
- * pages keep their own routes (`/settings/diagnostics`, `/settings/keep-awake`);
+ * Settings > Omniwork tool links: Diagnostics. The
+ * diagnostics page keeps its own route (`/settings/diagnostics`);
  * this section is only where they are discovered.
  */
 export function OmniworkToolsSection() {
@@ -46,17 +46,6 @@ export function OmniworkToolsSection() {
       />
       {isElectron ? (
         <SettingsRow
-          {...searchableSetting("omnihub-keep-awake")}
-          description="Caffy: timed wakes and managed resume-on-idle status. Ordinary when-idle messages remain in T3 Queue."
-          control={
-            <Button render={<Link to="/settings/keep-awake" />} size="sm" variant="outline">
-              Open Caffy
-            </Button>
-          }
-        />
-      ) : null}
-      {isElectron ? (
-        <SettingsRow
           id="omniwork-messaging-diagnostics"
           title="Messaging diagnostics"
           description="See the live durable ChatGPT message-delivery pipeline, including queued, pending and blocked sends."
@@ -80,8 +69,11 @@ export function OmniworkToolsSection() {
         />
       ) : null}
       <MessagingDiagnosticsDialog open={messagingOpen} onOpenChange={setMessagingOpen} />
-      <RecoveryAttemptsDialog open={recoveryLogOpen} onOpenChange={setRecoveryLogOpen}
-        environmentId={primaryEnvironmentId} />
+      <RecoveryAttemptsDialog
+        open={recoveryLogOpen}
+        onOpenChange={setRecoveryLogOpen}
+        environmentId={primaryEnvironmentId}
+      />
     </SettingsSection>
   );
 }

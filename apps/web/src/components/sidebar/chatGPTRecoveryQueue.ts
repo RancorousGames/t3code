@@ -1,5 +1,4 @@
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
 import { readChatGPTRecoverySettings } from "../../chatGPTRecoverySettings";
 import { recordChatGPTRecoveryAttemptLog } from "../../chatGPTRecoveryAttemptLog";
 import {
@@ -14,7 +13,7 @@ import {
 export const MAX_RECOVERY_TARGETS = 3;
 const FAILURE_BURST_LIMIT = 20;
 const FAILURE_BURST_PAUSE_MS = 10 * 60_000;
-const backendFor = (id: string) => isPersistentChatGPTSessionOptedIn(id) ? "native" : "webview";
+const backendFor = (_id: string): "webview" => "webview";
 
 export interface RecoveryQueueEntry {
   id: string;
@@ -476,15 +475,7 @@ export function noteRecoveryVerified(environment: string, id: string): void {
   state.failureStreak = Math.max(state.redFailureStreak, state.orangeFailureStreak);
   state.backoffUntil = Math.max(state.redBackoffUntil, state.orangeBackoffUntil);
   state.targets = state.targets.filter((target) => target !== id);
-  const redReloadAcknowledged = entry.red && state.history.some((event) =>
-    event.id === id && event.at >= entry.firstSeenAt && event.kind === "outcome" &&
-    event.detail.startsWith("Red native Chromium reload acknowledged"),
-  );
-  const detail = redReloadAcknowledged
-    ? `Red recovery: native page reload was acknowledged and independent DOM health is now verified after ${entry.attempts} attempt(s).`
-    : entry.red
-      ? `Red failure cleared by independent health check; no acknowledged native Chromium page reload in this episode (attempts: ${entry.attempts}).`
-      : `Independent health check passed; recovery resolved after ${entry.attempts} attempt(s).`;
+  const detail = `Independent webview health check passed; recovery resolved after ${entry.attempts} attempt(s).`;
   append(state, id, "recovered", detail);
   logChatGPTRecoveryTimeline(environment, backendFor(id), "health", detail, { sessionId: id });
   save(environment, state);
@@ -548,8 +539,11 @@ export function finishRecoveryAttempt(environment: string, id: string, outcome: 
   state.failures[id]!.lastOutcome = outcome;
   append(state, id, "outcome", outcome);
   recordChatGPTRecoveryAttemptLog(environment, {
-    at: Date.now(), kind: "outcome", sessionId: id,
-    attemptNumber: state.failures[id]!.attempts, detail: outcome,
+    at: Date.now(),
+    kind: "outcome",
+    sessionId: id,
+    attemptNumber: state.failures[id]!.attempts,
+    detail: outcome,
   });
   logChatGPTRecoveryTimeline(
     environment,

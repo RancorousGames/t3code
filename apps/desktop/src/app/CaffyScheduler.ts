@@ -179,29 +179,6 @@ interface CaffyStore {
   terminalConversations?: Array<{ sessionId: string; conversationId: string }>;
 }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
-const LEGACY_TERMINAL_STATES = new Set([
-  "cancelled",
-  "canceled",
-  "completed",
-  "exhausted",
-  "mandate_finished",
-  "blocked",
-  "expired",
-  "failed",
-]);
-
-/** A legacy monitor remains a separate scheduler owner until its state is terminal. */
-export function legacyMonitorOwnsConversation(
-  monitor: { state?: string; target?: { sessionId?: string; expectedConversationId?: string } },
-  sessionId: string,
-  conversationId: string,
-): boolean {
-  return (
-    !LEGACY_TERMINAL_STATES.has(monitor.state ?? "") &&
-    (monitor.target?.sessionId === sessionId ||
-      monitor.target?.expectedConversationId === conversationId)
-  );
-}
 const WAKE_TEXT =
   "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
 const CLOCK = 20_000;
@@ -477,34 +454,6 @@ export class CaffyScheduler {
     this.syncPower();
   }
 
-  /** Existing OmniHub monitors remain owned by their old scheduler until
-   * a verified cancellation/transfer. Never silently start a parallel wake. */
-  private legacyConflict(sessionId: string, conversationId: string): boolean {
-    const root = process.env.LOCALAPPDATA;
-    if (!root) return false;
-    try {
-      const store = JSON.parse(
-        NodeFS.readFileSync(NodePath.join(root, "OmniHub", "temporary-keep-awake-v1.json"), "utf8"),
-      ) as {
-        monitors?: Record<
-          string,
-          {
-            state?: string;
-            target?: {
-              sessionId?: string;
-              expectedConversationId?: string;
-            };
-          }
-        >;
-      };
-      return Object.values(store.monitors ?? {}).some((monitor) =>
-        legacyMonitorOwnsConversation(monitor, sessionId, conversationId),
-      );
-    } catch {
-      return false;
-    }
-  }
-
   private syncPower() {
     const active = [...this.entries.values()].some(
       (row) =>
@@ -539,12 +488,6 @@ export class CaffyScheduler {
     this.backupConfiguration();
     let changed = false;
     for (const row of this.entries.values()) {
-      if (row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId)) {
-        row.paused = true;
-        row.lastError =
-          "A legacy OmniHub wake still owns this session; cancel/reconcile it before enabling T3 Caffy.";
-        changed = true;
-      }
       if (
         row.startup &&
         !row.paused &&
@@ -1507,13 +1450,6 @@ export class CaffyScheduler {
       )
     )
       throw new Error("Another T3 Caffy monitor already owns this ChatGPT conversation.");
-    if (
-      this.legacyConflict(canonicalId, input.conversationId) ||
-      this.legacyConflict(input.sessionId, input.conversationId)
-    )
-      throw new Error(
-        "Legacy OmniHub Caffy monitor still owns this session; cancel it before scheduling T3 Caffy.",
-      );
     const now = Date.now();
     if (
       input.beginAt !== undefined &&
@@ -2069,12 +2005,6 @@ export class CaffyScheduler {
       throw new Error("Delayed start requires the same registered conversation.");
     if (row.rebootOperationId) throw new Error("A reboot is awaiting reconciliation.");
     if (
-      at !== null &&
-      row.targetKind !== "t3" &&
-      this.legacyConflict(row.sessionId, row.conversationId)
-    )
-      throw new Error("Legacy OmniHub monitor owns this session; cannot resume T3 Caffy.");
-    if (
       at === null &&
       row.onceOnly &&
       row.mode === "idle" &&
@@ -2311,14 +2241,6 @@ export class CaffyScheduler {
   pause(sessionId: string, paused: boolean, auditRequestId?: string) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
-    if (
-      !paused &&
-      row.targetKind !== "t3" &&
-      this.legacyConflict(row.sessionId, row.conversationId)
-    )
-      throw new Error(
-        "Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.",
-      );
     const wasPaused = row.paused;
     row.paused = paused;
     // A command-driven resume must not leave an already-idle recurring
@@ -2362,8 +2284,6 @@ export class CaffyScheduler {
   wake(sessionId: string) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
-    if (row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId))
-      throw new Error("Legacy OmniHub monitor still owns this session; cancel it before waking.");
     row.pendingWake = true;
     row.pendingReason = "manual";
     this.save();
@@ -3000,13 +2920,6 @@ export class CaffyScheduler {
           this.save();
         }
         if (!row.pendingWake) continue;
-        if (this.legacyConflict(row.sessionId, row.conversationId)) {
-          row.paused = true;
-          row.lastError =
-            "Legacy OmniHub monitor owns this session; T3 Caffy suspended to avoid duplicate waking.";
-          this.save();
-          continue;
-        }
         const wakeTicket = `wake:${row.sessionId}:${row.conversationId}`;
         const bypassCapacity = !row.respectSlots;
         if (

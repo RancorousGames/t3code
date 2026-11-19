@@ -64,8 +64,6 @@ export function buildChatGPTSessionContextMenu(input: {
   working: boolean;
   hasTask: boolean;
   hasConversationUrl?: boolean;
-  /** Older OmniHub-owned monitors are separate from T3 Caffy state. */
-  legacyCaffyIds?: readonly string[];
   caffy?: {
     mode: "idle" | "periodic" | "startup";
     startup: boolean;
@@ -84,7 +82,6 @@ export function buildChatGPTSessionContextMenu(input: {
   const role = chatGPTSessionDisplayRole(session, managerIds.has(session.id));
   const activeCaffy = input.caffy;
   const exhausted = !!session.conversationFullId;
-  const legacyIds = input.legacyCaffyIds ?? [];
 
   const snoozed = (session.snoozedUntil ?? 0) > now;
   const ancestors = new Set([session.id]);
@@ -178,7 +175,6 @@ export function buildChatGPTSessionContextMenu(input: {
       caffy: activeCaffy ?? null,
       now,
       exhausted,
-      legacyCaffyIds: legacyIds,
     }),
     item("highlight", "Highlight", {
       children: [

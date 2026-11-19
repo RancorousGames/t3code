@@ -13,7 +13,6 @@ export * from "./desktopBrowser.ts";
 export * from "./desktopAppActivation.ts";
 export * from "./remoteAccess.ts";
 export * from "./ipc.ts";
-export * from "./omniHubKeepAwake.ts";
 export * from "./caffyManagedIdle.ts";
 export * from "./caffyStatusPresentation.ts";
 export * from "./chatGPTCapacityMessage.ts";

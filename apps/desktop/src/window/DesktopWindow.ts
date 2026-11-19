@@ -32,7 +32,7 @@ import { PASSKEY_BRIDGE_ARGUMENT } from "../preview/GuestProtocol.ts";
 import {
   chatGPTAttentionShortcutAction,
   isFourHourCaffyShortcut,
-} from "../preview/NativeChatGPTGuestShortcut.ts";
+} from "../preview/ChatGPTGuestShortcut.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";

@@ -1,5 +1,4 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef } from "react";
 import {
@@ -12,11 +11,11 @@ import {
 import { aiInterfaceCloseDue, isAIInterfaceSession } from "../../chatGPTAIInterfaceSessions";
 import { getLocalStorageItem, removeLocalStorageItem } from "../../hooks/useLocalStorage";
 import {
-  hasUncertainChatGPTSend, inspectBrowserSession, runChatGPTSessionControl,
+  hasUncertainChatGPTSend,
+  inspectBrowserSession,
+  runChatGPTSessionControl,
 } from "../../chatGPTSessionControl";
 import { readThreadPreviewState } from "../../previewStateStore";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
-import { nativeChatGPTResidency } from "../../browser/nativeChatGPTWarmSession";
 import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { closePreviewSession } from "../preview/closePreviewSession";
@@ -26,7 +25,9 @@ import { closePreviewSession } from "../preview/closePreviewSession";
  * Never delete ChatGPT's remote conversation or replay unknown delivery.
  */
 export function ChatGPTAIInterfaceCleanup({
-  environmentId, activeSessionId, now,
+  environmentId,
+  activeSessionId,
+  now,
 }: {
   environmentId: EnvironmentId;
   activeSessionId: string | undefined;
@@ -47,15 +48,19 @@ export function ChatGPTAIInterfaceCleanup({
         if (disposed) return;
         if (!isAIInterfaceSession(original)) continue;
         const lastWorking = getLocalStorageItem(
-          chatGPTBrowserLastWorkingKey(environmentId, original.id), Schema.Number,
+          chatGPTBrowserLastWorkingKey(environmentId, original.id),
+          Schema.Number,
         );
-        const lastActivityAt = Math.max(
-          original.createdAt ?? 0, original.lastDirectInteractionAt ?? 0,
-          lastWorking ?? 0,
-        ) || null;
-        if (!aiInterfaceCloseDue(original, lastActivityAt, now,
-          activeSessionId === original.id) ||
-          hasUncertainChatGPTSend(environmentId, original.id))
+        const lastActivityAt =
+          Math.max(
+            original.createdAt ?? 0,
+            original.lastDirectInteractionAt ?? 0,
+            lastWorking ?? 0,
+          ) || null;
+        if (
+          !aiInterfaceCloseDue(original, lastActivityAt, now, activeSessionId === original.id) ||
+          hasUncertainChatGPTSend(environmentId, original.id)
+        )
           continue;
         const thread = chatGPTBrowserThreadRef(environmentId, original.id);
         const preview = readThreadPreviewState(thread);
@@ -64,56 +69,53 @@ export function ChatGPTAIInterfaceCleanup({
         const snapshot = tabs[0] ?? null;
         try {
           const inspected = await inspectBrowserSession(environmentId, original);
-          if (disposed || inspected.activity !== "idle" ||
+          if (
+            disposed ||
+            inspected.activity !== "idle" ||
             inspected.uiColor === "interrupted" ||
             inspected.status === "working" ||
-            inspected.status === "pending_or_stalled")
+            inspected.status === "pending_or_stalled"
+          )
             continue;
           const current = readChatGPTBrowserSessions(environmentId).find(
             (entry) => entry.id === original.id,
           );
-          if (!current || JSON.stringify(current) !== JSON.stringify(original) ||
-              hasUncertainChatGPTSend(environmentId, original.id) ||
-              window.location.pathname.includes(`/browser/${original.id}`))
+          if (
+            !current ||
+            JSON.stringify(current) !== JSON.stringify(original) ||
+            hasUncertainChatGPTSend(environmentId, original.id) ||
+            window.location.pathname.includes(`/browser/${original.id}`)
+          )
             continue;
           // The existing close control refuses drafts, uncertain sends and
           // active composers. Cold guests without a preview are safe to remove.
-          const native = isPersistentChatGPTSessionOptedIn(original.id);
-          const nativeBridge = native ? window.desktopBridge?.stableChatGPTViewRequest : undefined;
-          const nativeState = nativeBridge
-            ? await nativeChatGPTResidency(nativeBridge, environmentId, original.id)
-            : native ? "unknown" : null;
-          if (native && nativeState === "unknown") continue;
-          if (native && nativeState === "missing") {
-            // A missing native owner is not evidence that a background
-            // composer was empty; leave its record for explicit review.
-            continue;
-          }
-          if (native || snapshot !== null || inspected.status !== "unloaded") {
+          if (snapshot !== null || inspected.status !== "unloaded") {
             await runChatGPTSessionControl({
-              environmentId, sessions: readChatGPTBrowserSessions(environmentId),
-              action: "change_state", sessionId: original.id,
-              state: "closed", neverWake: true,
+              environmentId,
+              sessions: readChatGPTBrowserSessions(environmentId),
+              action: "change_state",
+              sessionId: original.id,
+              state: "closed",
+              neverWake: true,
             });
           }
           if (snapshot !== null) {
             const latest = readThreadPreviewState(thread);
             if (latest.sessions[snapshot.tabId] !== snapshot) continue;
             const closed = await closePreviewSession({
-              closePreview: close, snapshot, tabId: snapshot.tabId, threadRef: thread,
+              closePreview: close,
+              snapshot,
+              tabId: snapshot.tabId,
+              threadRef: thread,
             });
             if (closed._tag === "Failure") continue;
           }
-          if (disposed || hasUncertainChatGPTSend(environmentId, original.id) ||
-              window.location.pathname.includes(`/browser/${original.id}`))
+          if (
+            disposed ||
+            hasUncertainChatGPTSend(environmentId, original.id) ||
+            window.location.pathname.includes(`/browser/${original.id}`)
+          )
             continue;
-          if (nativeBridge && nativeState === "resident") {
-            // The guarded change_state preflight above verified the exact
-            // conversation and empty composer; remove its actual owner too.
-            await nativeBridge({ operation: "close", identity: {
-              environmentId, sessionId: original.id, profileId: chatGPTSessionProfileId(original),
-            } });
-          }
           removeSession(original.id, "completed-worker");
           removeLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, original.id));
           removeLocalStorageItem(chatGPTBrowserLastWorkingKey(environmentId, original.id));
@@ -123,8 +125,12 @@ export function ChatGPTAIInterfaceCleanup({
         }
       }
     };
-    void scan().finally(() => { scanning.current = false; });
-    return () => { disposed = true; };
+    void scan().finally(() => {
+      scanning.current = false;
+    });
+    return () => {
+      disposed = true;
+    };
   }, [environmentId, activeSessionId, now, close, removeSession]);
   return null;
 }

@@ -70,8 +70,6 @@ import * as PreviewIpc from "./methods/preview.ts";
 import { installOpenRigIpcHandlers } from "./installOpenRigIpcHandlers.ts";
 import { savePrivateChatGPTDraftSnapshotIpc } from "./methods/chatGPTDraftSnapshot.ts";
 import { prepareChatGPTRebootTranscriptIpc } from "./methods/chatGPTRebootTranscript.ts";
-import { persistentChatGPTRequestIpc } from "./methods/persistentChatGPTBrowser.ts";
-import { stableChatGPTViewRequestIpc } from "./methods/stableChatGPTView.ts";
 import { readChatGPTBootstrapTitleIpc } from "./methods/chatGPTBootstrapTitle.ts";
 import { readTaskBoardWorkerClaimsIpc } from "./methods/taskBoardWorkerClaims.ts";
 import { readTaskBoardProjectsIpc } from "./methods/taskBoardProjectCatalog.ts";
@@ -91,11 +89,6 @@ import {
   readTaskBoardHumanInboxIpc,
   openTaskBoardHumanItemIpc,
 } from "./methods/taskBoardHumanInboxIpc.ts";
-import {
-  controlOmniHubKeepAwakeMonitorIpc,
-  readOmniHubKeepAwakeMonitorsIpc,
-  startOmniHubKeepAwakeMonitorIpc,
-} from "./methods/omniHubKeepAwake.ts";
 import { readCaffyManagedIdleIpc, cancelCaffyManagedIdleIpc } from "./methods/caffyManagedIdle.ts";
 import { chatGPTCapacityMessageIpc } from "./methods/chatGPTCapacityMessage.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
@@ -142,8 +135,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(savePrivateChatGPTDraftSnapshotIpc);
   yield* ipc.handle(prepareChatGPTRebootTranscriptIpc);
   yield* ipc.handle(readChatGPTBootstrapTitleIpc);
-  yield* ipc.handle(persistentChatGPTRequestIpc);
-  yield* ipc.handle(stableChatGPTViewRequestIpc);
   yield* ipc.handle(readTaskBoardWorkerClaimsIpc);
   yield* ipc.handle(readTaskBoardProjectsIpc);
   yield* ipc.handle(readPrepfileStatusIpc);
@@ -159,9 +150,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(chatGPTCapacityMessageIpc);
   yield* ipc.handle(readCaffyManagedIdleIpc);
   yield* ipc.handle(cancelCaffyManagedIdleIpc);
-  yield* ipc.handle(readOmniHubKeepAwakeMonitorsIpc);
-  yield* ipc.handle(controlOmniHubKeepAwakeMonitorIpc);
-  yield* ipc.handle(startOmniHubKeepAwakeMonitorIpc);
   yield* installOpenRigIpcHandlers();
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getSnapShotState);

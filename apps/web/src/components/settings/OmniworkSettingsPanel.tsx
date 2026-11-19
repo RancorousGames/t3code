@@ -13,11 +13,6 @@ import {
   useChatGPTRecoverySettings,
 } from "../../chatGPTRecoverySettings";
 import type { ChatGPTOrangeRecoveryStrategy } from "../../chatGPTOrangeRecoveryStrategy";
-import {
-  CHATGPT_BROWSER_ENGINE_KEY,
-  configuredChatGPTBrowserEngine,
-  type ChatGPTBrowserEngine,
-} from "../../browser/persistentChatGPTSessionMode";
 import { OmniworkToolsSection } from "./OmniworkToolsSection";
 import { CaffyV2Settings } from "./CaffyV2Settings";
 import { ChatGPTRecoverySettingsControls } from "../sidebar/ChatGPTRecoverySettingsControls";
@@ -101,9 +96,6 @@ export function OmniworkSettingsPanel() {
   } = useOmniworkPreferences();
   const desktop = isDesktop();
   const [messageDiagnosticsOpen, setMessageDiagnosticsOpen] = useState(false);
-  const [browserEngine, setBrowserEngine] = useState<ChatGPTBrowserEngine>(
-    configuredChatGPTBrowserEngine,
-  );
   const [defaultChatGPTView, setDefaultChatGPTView] = useChatGPTDefaultView();
   const [activitySortPreference, setActivitySortPreference] = useChatGPTSessionSortPreference();
   const [resumeManagedAfterRestart, setResumeManagedAfterRestart] =
@@ -228,34 +220,6 @@ export function OmniworkSettingsPanel() {
           <ChatGPTRecoverySettingsControls />
         </div>
       </SettingsSection>
-      <SettingsSection title="ChatGPT browser engine">
-        <SettingsRow
-          id="omniwork-chatgpt-browser-engine"
-          title="ChatGPT browser engine"
-          description="Native Chromium preserves browser pages during safe UI rebuilds. Original Webviews restores the previous Electron webview integration. Changing engines requires a hard T3 restart and reloads ChatGPT pages."
-          control={
-            <Select
-              value={browserEngine}
-              disabled={!desktop}
-              onValueChange={(value) => {
-                if (value !== "native" && value !== "webview") return;
-                localStorage.setItem(CHATGPT_BROWSER_ENGINE_KEY, value);
-                setBrowserEngine(value);
-              }}
-            >
-              <SelectTrigger size="sm" aria-label="ChatGPT browser engine">
-                <SelectValue>
-                  {browserEngine === "native" ? "Native Chromium (default)" : "Original Webviews"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup>
-                <SelectItem value="native">Native Chromium (default)</SelectItem>
-                <SelectItem value="webview">Original Webviews</SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-      </SettingsSection>
       <SettingsSection title="ChatGPT session view">
         <SettingsRow
           id="omniwork-chatgpt-sidebar-sort-preference"
@@ -270,7 +234,9 @@ export function OmniworkSettingsPanel() {
             >
               <SelectTrigger size="sm" aria-label="ChatGPT sidebar activity sorting">
                 <SelectValue>
-                  {activitySortPreference === "activity" ? "Working → Last activity" : "Working → Creation date"}
+                  {activitySortPreference === "activity"
+                    ? "Working → Last activity"
+                    : "Working → Creation date"}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup>
@@ -440,7 +406,9 @@ export function OmniworkSettingsPanel() {
                 <SelectValue>{String(chatGPTMaxAutoSessionCount)}</SelectValue>
               </SelectTrigger>
               <SelectPopup>
-                {CHATGPT_WARM_SESSION_COUNTS.filter((count) => count >= chatGPTWarmSessionCount).map((count) => (
+                {CHATGPT_WARM_SESSION_COUNTS.filter(
+                  (count) => count >= chatGPTWarmSessionCount,
+                ).map((count) => (
                   <SelectItem key={count} value={String(count)}>
                     {count === 12 ? "12 (default)" : String(count)}
                   </SelectItem>
@@ -485,10 +453,22 @@ export function OmniworkSettingsPanel() {
       </SettingsSection>
       {desktop && (
         <SettingsSection title="Messaging">
-          <SettingsRow id="omniwork-message-diagnostics" title="Message diagnostics" description="Inspect delivery outcomes, retries, and blocked messages." control={<Button variant="outline" size="sm" onClick={() => setMessageDiagnosticsOpen(true)}>View diagnostics</Button>} />
+          <SettingsRow
+            id="omniwork-message-diagnostics"
+            title="Message diagnostics"
+            description="Inspect delivery outcomes, retries, and blocked messages."
+            control={
+              <Button variant="outline" size="sm" onClick={() => setMessageDiagnosticsOpen(true)}>
+                View diagnostics
+              </Button>
+            }
+          />
         </SettingsSection>
       )}
-      <MessagingDiagnosticsDialog open={messageDiagnosticsOpen} onOpenChange={setMessageDiagnosticsOpen} />
+      <MessagingDiagnosticsDialog
+        open={messageDiagnosticsOpen}
+        onOpenChange={setMessageDiagnosticsOpen}
+      />
       <OmniworkToolsSection />
     </SettingsPageContainer>
   );

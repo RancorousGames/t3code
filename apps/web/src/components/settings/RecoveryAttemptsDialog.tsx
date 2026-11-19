@@ -91,8 +91,7 @@ export function RecoveryAttemptsDialog({
           <DialogDescription>
             Real attempts, confirmed outcomes, and explicit reasons why recovery was deferred.
             Deferred entries are not attempts. Records survive restarts (up to 5,000 entries);
-            export includes scheduling, attempts, retries and verified health for native Chromium
-            and legacy webviews.
+            export includes scheduling, attempts, retries and verified webview health.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
@@ -132,11 +131,21 @@ export function RecoveryAttemptsDialog({
                       </div>
                     </td>
                     <td className="px-3 py-2 tabular-nums align-top">
-                      {entry.kind === "backoff" ? "Backoff" : entry.kind === "deferred" ? "Waiting" : entry.kind === "outcome" ? `Result #${entry.attemptNumber}` : `Attempt #${entry.attemptNumber}`}
+                      {entry.kind === "backoff"
+                        ? "Backoff"
+                        : entry.kind === "deferred"
+                          ? "Waiting"
+                          : entry.kind === "outcome"
+                            ? `Result #${entry.attemptNumber}`
+                            : `Attempt #${entry.attemptNumber}`}
                     </td>
                     <td className="px-3 py-2 align-top">
                       <div
-                        className={entry.kind === "backoff" || entry.kind === "deferred" ? "text-amber-500" : ""}
+                        className={
+                          entry.kind === "backoff" || entry.kind === "deferred"
+                            ? "text-amber-500"
+                            : ""
+                        }
                       >
                         {entry.kind === "backoff" ? "10-minute pause" : entry.detail}
                       </div>

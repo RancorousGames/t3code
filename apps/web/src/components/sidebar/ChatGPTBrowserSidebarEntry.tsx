@@ -124,10 +124,6 @@ import { useChatGPTLiveTasks, visibleReadyChatGPTLiveTasks } from "../../chatGPT
 import { useChatGPTReadyNudge } from "../../chatGPTReadyNudge";
 import { beginSidebarReboot } from "../../chatGPTSidebarReboot";
 import { scheduleCaffyBegin } from "../../omniwork/chatGPTCaffyPauseResume";
-import {
-  readOmniHubKeepAwakeForT3,
-  controlOmniHubKeepAwakeForT3,
-} from "../../omniwork/omniHubKeepAwakeClient";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
 import {
   hibernateChatGPTGuest,
@@ -140,9 +136,6 @@ import {
   type ChatGPTSessionMenuDialogState,
 } from "./ChatGPTSessionMenuDialog";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
-import { nativeChatGPTResidency } from "../../browser/nativeChatGPTWarmSession";
-import { inspectPersistentChatGPTPage } from "../../browser/inspectPersistentChatGPTPage";
 import * as Schema from "effect/Schema";
 import { readThreadPreviewState } from "../../previewStateStore";
 import { useProjects } from "../../state/entities";
@@ -265,23 +258,14 @@ async function stopChatGPTGenerationForSchedule(
     stop.click();
     return true;
   })()`;
-  if (isPersistentChatGPTSessionOptedIn(sessionId)) {
-    const stopped = await inspectPersistentChatGPTPage<boolean>(
-      environmentId,
-      sessionId,
-      expression,
-    );
-    if (stopped !== true) throw new Error("No active native ChatGPT generation control.");
-  } else {
-    const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
-    const state = readThreadPreviewState(thread);
-    const tabId = state.activeTabId;
-    const runtimeId =
-      tabId && state.serverEpoch ? previewRuntimeTabId(thread, state.serverEpoch, tabId) : null;
-    if (!runtimeId || isChatGPTGuestHibernated(runtimeId)) throw new Error("Session is unloaded.");
-    const stopped = await chatGPTWebviewAutomation.evaluate(runtimeId, { expression });
-    if (stopped !== true) throw new Error("No active Stop generation control was found.");
-  }
+  const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
+  const state = readThreadPreviewState(thread);
+  const tabId = state.activeTabId;
+  const runtimeId =
+    tabId && state.serverEpoch ? previewRuntimeTabId(thread, state.serverEpoch, tabId) : null;
+  if (!runtimeId || isChatGPTGuestHibernated(runtimeId)) throw new Error("Session is unloaded.");
+  const stopped = await chatGPTWebviewAutomation.evaluate(runtimeId, { expression });
+  if (stopped !== true) throw new Error("No active Stop generation control was found.");
 }
 
 export function ChatGPTBrowserNewSessionAction() {
@@ -709,26 +693,6 @@ export function ChatGPTBrowserSidebarEntry({
   }, [activeSessionId, markDirectInteraction]);
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
-  const [resettingWebviews, setResettingWebviews] = useState(false);
-  const resetWebviews = async () => {
-    const bridge = window.desktopBridge?.persistentChatGPTRequest;
-    if (!bridge || resettingWebviews) return;
-    setResettingWebviews(true);
-    try {
-      // Main shows an OS modal above the separately owned Chromium windows.
-      const result = (await bridge({ operation: "confirm_reset_host" })) as {
-        reset?: boolean;
-      } | null;
-      if (result?.reset !== true) return;
-      window.dispatchEvent(new Event("t3:chatgpt-webviews-reset"));
-      setMenuFeedback("ChatGPT webviews reset. The selected page is reconnecting.");
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      setMenuFeedback(`Reset webviews failed: ${reason}`);
-    } finally {
-      setResettingWebviews(false);
-    }
-  };
   const [clockNow, setClockNow] = useState(() => Date.now());
   const caffyOverview = useT3CaffyOverview();
   const [viewPolicyBusy, setViewPolicyBusy] = useState(false);
@@ -803,7 +767,6 @@ export function ChatGPTBrowserSidebarEntry({
     sessionId: string;
     config: AutoContinueConfig | null;
     initiallyIdle: boolean;
-    legacyMonitors: Array<{ id: string; targetId: string; status: string }>;
   } | null>(null);
   const [keepAwakeFeedback, setKeepAwakeFeedback] = useState<string | null>(null);
   const scheduleDelayedPrompt = async (input: {
@@ -1821,19 +1784,6 @@ export function ChatGPTBrowserSidebarEntry({
     let liveActivity: "working" | "idle" | "unknown" = "unknown";
     try {
       const readLive = async (): Promise<unknown> => {
-        if (isPersistentChatGPTSessionOptedIn(sessionId)) {
-          const observed = await inspectPersistentChatGPTPage<string>(
-            environmentId,
-            sessionId,
-            CHATGPT_ACTIVITY_EXPRESSION,
-          );
-          window.dispatchEvent(
-            new CustomEvent("t3:chromium-sidebar-probe", {
-              detail: { environmentId, sessionId },
-            }),
-          );
-          return observed;
-        }
         const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
         const preview = readThreadPreviewState(thread);
         const tabId = preview.activeTabId;
@@ -1844,9 +1794,7 @@ export function ChatGPTBrowserSidebarEntry({
         const guest =
           runtimeTabId && !isChatGPTGuestHibernated(runtimeTabId)
             ? Array.from(
-                document.querySelectorAll<HTMLElementTagNameMap["webview"]>(
-                  "webview, [data-t3-chromium-guest='true']",
-                ),
+                document.querySelectorAll<HTMLElementTagNameMap["webview"]>("webview"),
               ).find((element) => element.dataset.previewTab === runtimeTabId)
             : null;
         const observed = guest ? await guest.executeJavaScript(CHATGPT_ACTIVITY_EXPRESSION) : null;
@@ -1886,41 +1834,6 @@ export function ChatGPTBrowserSidebarEntry({
     const caffyState = caffyControl
       ? await caffyControl({ action: "status", sessionId }).catch(() => null)
       : null;
-    const legacyRead = await readOmniHubKeepAwakeForT3(environmentId).catch(() => null);
-    const legacySessionIds = new Set([sessionId, publicChatGPTSessionId(session)]);
-    const currentConversationId =
-      chatGPTConversationIdFromUrl(savedUrl) ?? session.bootstrapIdentity?.conversationId;
-    const legacyMonitors =
-      legacyRead?.availability === "ok"
-        ? legacyRead.monitors
-            .filter(
-              (monitor) =>
-                monitor.activeOrPending &&
-                monitor.target.kind === "t3/chatgpt_browser" &&
-                (legacySessionIds.has(monitor.target.id) ||
-                  (currentConversationId &&
-                    monitor.target.expectedConversationId === currentConversationId)),
-            )
-            .map((monitor) => ({
-              id: monitor.id,
-              targetId: monitor.target.id,
-              status: monitor.status,
-            }))
-        : [];
-    const stopLegacyCaffy = async (id: string, targetId: string) => {
-      const receipt = await controlOmniHubKeepAwakeForT3({
-        monitorId: id,
-        action: "cancel",
-        confirmedTargetId: targetId,
-        clientRequestId: randomUUID(),
-      });
-      if (!receipt || receipt.code !== "applied" || !receipt.ok)
-        throw new Error(receipt?.detail ?? "Legacy OmniHub Caffy cancellation unavailable.");
-      setKeepAwakeFeedback(
-        "Legacy OmniHub monitor cancelled. No future wakes will be initiated by it.",
-      );
-      window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
-    };
     const activeCaffy =
       caffyState &&
       typeof caffyState === "object" &&
@@ -1957,7 +1870,6 @@ export function ChatGPTBrowserSidebarEntry({
       hasTask: !!session.binding?.taskRef,
       hasConversationUrl: !!savedUrl,
       caffy: activeCaffy,
-      legacyCaffyIds: legacyMonitors.map((monitor) => monitor.id),
     }).filter((item) => item.id !== "snooze:clear");
     const caffyMenu = sessionMenu.find((item) => item.id === "caffy");
     const action = await api.contextMenu.show(
@@ -2153,24 +2065,10 @@ export function ChatGPTBrowserSidebarEntry({
             sessionId,
             config: activeCaffy,
             initiallyIdle: liveActivity === "idle",
-            legacyMonitors,
           });
-        } else if (action === "caffy:stop" || action.startsWith("caffy:stop-legacy:")) {
-          if (activeCaffy && action === "caffy:stop") {
-            await control({ action: "stop", sessionId, stopInitiator: "user" });
-            setKeepAwakeFeedback("Caffy stopped for this session.");
-          } else {
-            const legacy = action.startsWith("caffy:stop-legacy:")
-              ? legacyMonitors.find(
-                  (monitor) => monitor.id === action.slice("caffy:stop-legacy:".length),
-                )
-              : legacyMonitors.length === 1
-                ? legacyMonitors[0]
-                : null;
-            if (!legacy)
-              throw new Error("Legacy monitor selection is unavailable; refresh the menu.");
-            await stopLegacyCaffy(legacy.id, legacy.targetId);
-          }
+        } else if (action === "caffy:stop") {
+          await control({ action: "stop", sessionId, stopInitiator: "user" });
+          setKeepAwakeFeedback("Caffy stopped for this session.");
         } else if (action.startsWith("caffy:begin:")) {
           const preset = action.slice("caffy:begin:".length);
           const beginAt =
@@ -2274,38 +2172,6 @@ export function ChatGPTBrowserSidebarEntry({
           hasUncertainChatGPTSend(environmentId, sessionId)
         )
           throw new Error("An active generation or unresolved send must finish first.");
-        if (isPersistentChatGPTSessionOptedIn(sessionId)) {
-          const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-          if (!bridge) throw new Error("Native Chromium bridge unavailable.");
-          const identity = {
-            environmentId,
-            sessionId,
-            profileId: chatGPTSessionProfileId(session),
-          };
-          const state = await nativeChatGPTResidency(bridge, environmentId, sessionId);
-          if (state === "unknown") throw new Error("Native Chromium state is uncertain.");
-          if (state === "resident") {
-            const snapshot = await runChatGPTSessionControl({
-              environmentId,
-              sessions,
-              action: "snapshot",
-              sessionId,
-            });
-            if (
-              !snapshot ||
-              typeof snapshot !== "object" ||
-              !("status" in snapshot) ||
-              snapshot.status !== "backed_up_empty"
-            )
-              throw new Error("Cannot unload native session without an empty-composer backup.");
-          }
-          if (activeSessionId === sessionId) {
-            await navigateAfterSessionRemoved([sessionId]);
-          }
-          if (state === "resident") await bridge({ operation: "close", identity });
-          hibernateChatGPTGuest(sessionId, true);
-          return;
-        }
         const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
         const state = readThreadPreviewState(thread);
         const tabId = state.activeTabId;
@@ -2722,7 +2588,6 @@ export function ChatGPTBrowserSidebarEntry({
         title: sessions.find((row) => row.id === autoContinueTarget.sessionId)?.title ?? "ChatGPT",
         intent: "recurring",
         config: autoContinueTarget.config,
-        legacyMonitors: autoContinueTarget.legacyMonitors,
       }
     : delayedPromptTarget?.kind === "existing"
       ? {
@@ -2732,7 +2597,6 @@ export function ChatGPTBrowserSidebarEntry({
           intent: "once",
           beginAt: delayedPromptTarget.beginAt,
           config: null,
-          legacyMonitors: [],
         }
       : (delayedPromptTarget ?? null);
 
@@ -3109,17 +2973,6 @@ export function ChatGPTBrowserSidebarEntry({
                   )}
                 </MenuGroup>
                 <MenuSeparator />
-                <MenuItem
-                  inset
-                  disabled={resettingWebviews}
-                  aria-label="Reset all ChatGPT webviews and restart the persistent Chromium browser host"
-                  title="Kills live ChatGPT pages and starts fresh without restarting T3. Unsent drafts and in-progress replies may be lost."
-                  onClick={() => void resetWebviews()}
-                >
-                  <MenuItemLabel>
-                    {resettingWebviews ? "Resetting webviews…" : "Reset webviews"}
-                  </MenuItemLabel>
-                </MenuItem>
                 <MenuItem
                   inset
                   aria-label="Worker auto-cleanup settings and dry-run preview"
@@ -4087,17 +3940,6 @@ export function ChatGPTBrowserSidebarEntry({
             setDelayedPromptTarget(null);
           }}
           submit={saveCaffySchedule}
-          cancelLegacy={async (id, targetId) => {
-            const receipt = await controlOmniHubKeepAwakeForT3({
-              monitorId: id,
-              action: "cancel",
-              confirmedTargetId: targetId,
-              clientRequestId: randomUUID(),
-            });
-            if (!receipt || receipt.code !== "applied" || !receipt.ok)
-              throw new Error(receipt?.detail ?? "Legacy OmniHub cancellation unavailable.");
-            window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
-          }}
           cancelJob={async (id) => {
             const control = window.desktopBridge?.caffyControl;
             if (!control) throw new Error("T3 desktop scheduler is unavailable.");

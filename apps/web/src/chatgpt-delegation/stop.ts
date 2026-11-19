@@ -1,7 +1,4 @@
-import {
-  chatGPTWebviewAutomation,
-  registerNativeChatGPTAutomationSession,
-} from "../chatGPTWebviewAutomation";
+import { chatGPTWebviewAutomation } from "../chatGPTWebviewAutomation";
 import { CANONICAL_CHATGPT_CONVERSATION_ID } from "../chatGPTConversationIdentity";
 import { delegatedChatGPTStopExpression } from "./stopExpression";
 
@@ -13,7 +10,6 @@ export async function stopDelegatedChatGPTGeneration(
 ) {
   if (!CANONICAL_CHATGPT_CONVERSATION_ID.test(conversationId))
     throw new Error("A ChatGPT conversation ID is required to stop a delegated turn.");
-  registerNativeChatGPTAutomationSession(environmentId, sessionId);
   const stopped = await chatGPTWebviewAutomation.evaluate(runtimeId, {
     expression: delegatedChatGPTStopExpression(conversationId),
   });

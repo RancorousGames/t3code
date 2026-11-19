@@ -3901,7 +3901,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             ...(nativeCaffySchedule.beginAt !== undefined
               ? { beginAt: nativeCaffySchedule.beginAt }
               : {}),
-            legacyMonitors: [],
           }}
           jobs={[]}
           allowAutoReboot={false}

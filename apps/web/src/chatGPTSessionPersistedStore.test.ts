@@ -25,7 +25,10 @@ function storage(entries: Record<string, string> = {}): Storage {
   };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("persistent ChatGPT wake audit", () => {
   it("does not replay years of already-expired snoozes as wake events on startup", () => {
@@ -36,11 +39,10 @@ describe("persistent ChatGPT wake audit", () => {
         { id: sessionId, title: "Old snooze", snoozedUntil: Date.now() - 3_600_000 },
       ]),
     });
-    const audit = vi.fn().mockResolvedValue({ recorded: true });
+    const audit = vi.spyOn(console, "info").mockImplementation(() => {});
     vi.stubGlobal("window", {
       localStorage: local,
       sessionStorage: storage(),
-      desktopBridge: { stableChatGPTViewRequest: audit },
       addEventListener: vi.fn(),
     });
     getChatGPTSessionPersistedStore(environmentId);
@@ -56,11 +58,10 @@ describe("persistent ChatGPT wake audit", () => {
         { id: sessionId, title: "Sleep", snoozedUntil: until },
       ]),
     });
-    const audit = vi.fn().mockResolvedValue({ recorded: true });
+    const audit = vi.spyOn(console, "info").mockImplementation(() => {});
     vi.stubGlobal("window", {
       localStorage: local,
       sessionStorage: storage(),
-      desktopBridge: { stableChatGPTViewRequest: audit },
       addEventListener: vi.fn(),
     });
     const store = getChatGPTSessionPersistedStore(environmentId);
@@ -72,10 +73,10 @@ describe("persistent ChatGPT wake audit", () => {
         ),
     });
     expect(audit).toHaveBeenCalledWith(
+      "[t3-wake-audit]",
       expect.objectContaining({
-        operation: "recovery_event",
-        identity: expect.objectContaining({ environmentId, sessionId }),
-        kind: "wake",
+        environmentId,
+        sessionId,
         detail: expect.stringContaining("reason=store:unsnoozed-early"),
       }),
     );

@@ -1,11 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-// This suite exercises the legacy <webview> implementation, not native Chromium.
-vi.mock("./browser/persistentChatGPTSessionMode", () => ({
-  isPersistentChatGPTSessionOptedIn: () => false,
-}));
-
 const shared = vi.hoisted(() => ({
   url: "https://chatgpt.com/",
   saved: "https://chatgpt.com/c/6ad64bc9-020c-83eb-a38c-85834fa7118b",
@@ -140,7 +135,7 @@ beforeEach(() => {
           : null,
   };
   vi.stubGlobal("localStorage", storage);
-  vi.stubGlobal("window", { localStorage: storage });
+  vi.stubGlobal("window", { localStorage: storage, dispatchEvent: vi.fn() });
   vi.clearAllMocks();
 });
 afterEach(() => vi.unstubAllGlobals());

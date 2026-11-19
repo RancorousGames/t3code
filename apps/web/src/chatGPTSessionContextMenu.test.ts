@@ -77,16 +77,6 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu.find((item) => item.id === "caffy")?.children?.[0]?.id).toBe("caffy:auto");
     expect(menu.find((item) => item.id === "caffy:quick-4h")?.checked).toBe(false);
   });
-  it("shows a legacy OmniHub owner and enables Stop Caffy when no T3 monitor exists", () => {
-    const menu = buildChatGPTSessionContextMenu({
-      ...state,
-      legacyCaffyIds: ["11111111-1111-4111-8111-111111111111"],
-    });
-    expect(menu.find((item) => item.id === "caffy")?.label).toContain("Legacy OmniHub active");
-    expect(
-      menu.find((item) => item.id === "caffy")?.children?.find((item) => item.id === "caffy:stop"),
-    ).toMatchObject({ disabled: false, label: "Stop legacy Caffy" });
-  });
   it("checks only an active 4-hour idle preset, not other schedules", () => {
     const now = Date.now();
     const quick = {

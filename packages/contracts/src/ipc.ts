@@ -1821,98 +1821,35 @@ export interface DesktopChatGPTDeliveryDiagnostics {
 }
 
 export interface DesktopBridge {
-  /**
-   * Experimental stable Electron-owner native view API. Never exposed to
-   * guest ChatGPT webContents; main validates the sender and profile.
-   */
-  stableChatGPTViewRequest?: (
-    input:
-      | {
-          operation: "recovery_event";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-          kind: string;
-          detail: string;
-          attempt?: number;
-        }
-      | {
-          operation: "attach";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-          url: string;
-          /** Preserve the in-process native fallback if detached sign-in transfer fails. */
-          forceNative?: boolean;
-        }
-      | {
-          operation: "present";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-          bounds: { x: number; y: number; width: number; height: number } | null;
-        }
-      | {
-          operation: "tooltip";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-          bounds: { x: number; y: number; width: number; height: number } | null;
-          html: string | null;
-        }
-      | {
-          operation: "navigate";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-          url: string;
-        }
-      | {
-          operation: "evaluate";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-          expression: string;
-        }
-      | {
-          operation: "find";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-          text: string;
-          findNext?: boolean;
-          forward?: boolean;
-        }
-      | {
-          operation: "stop_find";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-        }
-      | {
-          operation: "close";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-          /** Automatic memory eviction must refuse a page currently being viewed. */
-          automatic?: boolean;
-        }
-      | {
-          operation: "probe" | "snapshot" | "reload" | "back" | "forward";
-          identity: { sessionId: string; environmentId: string; profileId: string };
-        },
-  ) => Promise<unknown>;
-  /** Native Chromium lifecycle changes; status must still be verified via snapshot/DOM. */
-  onStableChatGPTViewState?: (
-    listener: (state: {
-      environmentId: string;
-      sessionId: string;
-      phase: "loading" | "loaded" | "failed" | "navigated";
-    }) => void,
-  ) => () => void;
-  /** Only T3's native renderer may control offscreen persistent ChatGPT sessions. */
-  persistentChatGPTRequest?: (input: {
-    operation: "reset_host" | "confirm_reset_host";
-  } | {
-    operation: "attach" | "input" | "evaluate" | "status";
-    sessionId: string;
-    environmentId?: string;
-    profileId?: string;
-    url?: string;
-    width?: number;
-    height?: number;
-    expression?: string;
-    input?: Readonly<Record<string, unknown>>;
-  }) => Promise<unknown>;
   /** Resolve a title saved by OMCPT Bootstrap for an exact public UUID. */
   readChatGPTBootstrapTitle?: (id: string) => Promise<string | null>;
   /** Read-only diagnostics from this desktop's persisted ChatGPT delivery journal. */
   readChatGPTDeliveryDiagnostics?: () => Promise<DesktopChatGPTDeliveryDiagnostics>;
   /** Durable T3-owned Caffy API; no OpenRig dependency. */
   caffyControl?: (input: {
-    action: "set" | "stop" | "pause" | "resume" | "status" | "list" | "wake" | "policy" | "startup" | "capacity" | "tasks" | "throughput" | "working_snapshot" | "retire" | "terminal" | "begin_in" | "auto_reboot" | "schedule_spawn" | "read_spawn" | "edit_spawn" | "cancel_spawn" | "cancel_begin";
+    action:
+      | "set"
+      | "stop"
+      | "pause"
+      | "resume"
+      | "status"
+      | "list"
+      | "wake"
+      | "policy"
+      | "startup"
+      | "capacity"
+      | "tasks"
+      | "throughput"
+      | "working_snapshot"
+      | "retire"
+      | "terminal"
+      | "begin_in"
+      | "auto_reboot"
+      | "schedule_spawn"
+      | "read_spawn"
+      | "edit_spawn"
+      | "cancel_spawn"
+      | "cancel_begin";
     targetKind?: "chatgpt" | "t3";
     environmentId?: string;
     sessionId?: string;
@@ -1965,18 +1902,6 @@ export interface DesktopBridge {
   cancelCaffyManagedIdleSubscription?: (
     id: string,
   ) => Promise<import("./caffyManagedIdle.ts").CaffyManagedIdleCancelResult>;
-  /** One-shot read of OmniHub's locally persisted temporary keep-awake monitors. */
-  readOmniHubKeepAwakeMonitors?: (
-    input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeQuery,
-  ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeReadResult>;
-  /** Applies owner-token-authorized changes through OmniHub Tools; tokens never enter UI. */
-  controlOmniHubKeepAwakeMonitor?: (
-    input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeControlQuery,
-  ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeControlReceipt>;
-  /** Starts one scheduler monitor for the selected, exact browser conversation. */
-  startOmniHubKeepAwakeMonitor?: (
-    input: import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeStartQuery,
-  ) => Promise<import("./omniHubKeepAwake.ts").DesktopOmniHubKeepAwakeStartReceipt>;
   /** Read-only local TaskBoard Done evidence; unavailable on non-desktop clients. */
   /** Open or create exactly one TaskBoard-bound session through the desktop durable task-open CLI. */
   openTaskBoardLiveSession?: (input: {
@@ -2005,11 +1930,13 @@ export interface DesktopBridge {
     modifiedAtMs: number;
   }>;
   /** Registered TaskBoard project identities and their task-ID prefixes. */
-  readTaskBoardProjects?: () => Promise<readonly {
-    key: string;
-    title: string;
-    prefixes: readonly string[];
-  }[]>;
+  readTaskBoardProjects?: () => Promise<
+    readonly {
+      key: string;
+      title: string;
+      prefixes: readonly string[];
+    }[]
+  >;
   readTaskBoardWorkerClaims?: () => Promise<
     readonly {
       taskId: string;

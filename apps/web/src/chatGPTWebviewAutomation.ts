@@ -6,10 +6,8 @@
  * using the public Electron webview API without new privileged IPC endpoints.
  */
 import { findMountedChatGPTGuest } from "./browser/mountedChatGPTGuest";
-import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { chatGPTDirectSubmitExpression, directSubmitOutcome } from "./chatGPTDirectSubmit";
-import { readChatGPTSessionProfileId } from "./chatGPTAccountProfiles";
 
 type ChatGPTWebview = HTMLElementTagNameMap["webview"] & {
   getURL?: () => string;
@@ -17,40 +15,9 @@ type ChatGPTWebview = HTMLElementTagNameMap["webview"] & {
   sendInputEvent?: (event: { type: "keyDown" | "keyUp"; keyCode: string }) => Promise<void>;
 };
 
-// A native Chromium page has no DOM <webview>; its exact Electron owner is
-// addressed by UUID and environment. Never infer this from the selected tab.
-const nativeSessionEnvironments = new Map<string, { environmentId: string; profileId: string }>();
-export function registerNativeChatGPTAutomationSession(environmentId: string, sessionId: string) {
-  if (isPersistentChatGPTSessionOptedIn(sessionId))
-    nativeSessionEnvironments.set(sessionId, {
-      environmentId,
-      profileId: readChatGPTSessionProfileId(environmentId, sessionId),
-    });
-}
 function findWebview(runtimeTabId: string): ChatGPTWebview {
-  // Prefer an explicitly mounted guest over the T3-native engine preference.
-  // Standalone hosts such as Mori mount their own Chromium webview with a
-  // UUID session id, even when the shared module defaults to native mode.
-  const mounted = findMountedChatGPTGuest(runtimeTabId);
-  if (mounted) return mounted as ChatGPTWebview;
-  if (isPersistentChatGPTSessionOptedIn(runtimeTabId)) {
-    const target = nativeSessionEnvironments.get(runtimeTabId);
-    const bridge =
-      typeof window !== "undefined" ? window.desktopBridge?.stableChatGPTViewRequest : undefined;
-    if (!target || !bridge)
-      throw new Error("Native ChatGPT session is not registered or its bridge is unavailable.");
-    const identity = { sessionId: runtimeTabId, ...target };
-    return {
-      executeJavaScript: async (expression: string) => {
-        const response = (await bridge({ operation: "evaluate", identity, expression })) as {
-          result?: unknown;
-        };
-        return response.result;
-      },
-      getURL: () => "",
-      isLoading: () => false,
-    } as unknown as ChatGPTWebview;
-  }
+  const guest = findMountedChatGPTGuest(runtimeTabId);
+  if (guest) return guest as ChatGPTWebview;
   throw new Error("ChatGPT guest webview has not attached.");
 }
 

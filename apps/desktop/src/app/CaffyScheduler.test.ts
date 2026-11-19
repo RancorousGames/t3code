@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import { CaffyScheduler, legacyMonitorOwnsConversation, type CaffyConfig } from "./CaffyScheduler.ts";
+import { CaffyScheduler, type CaffyConfig } from "./CaffyScheduler.ts";
 import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
@@ -38,15 +38,32 @@ const makeConfig = (): CaffyConfig => ({
 function fixture() {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-caffy-persist-"));
   const initial = makeConfig();
-  NodeFS.writeFileSync(NodePath.join(directory, "caffy-v2.json"), JSON.stringify({
-    version: 2, entries: [initial], keepT3Busy: true, maxWorking: 3,
-  }));
+  NodeFS.writeFileSync(
+    NodePath.join(directory, "caffy-v2.json"),
+    JSON.stringify({
+      version: 2,
+      entries: [initial],
+      keepT3Busy: true,
+      maxWorking: 3,
+    }),
+  );
   let roster: Array<{
-    id: string; browserSessionId?: string; conversationId: string; bootstrapIdentity: {
-      state: string; publicId: string; conversationId: string;
-    }; hidden?: boolean; snoozedUntil?: number; status?: string; activity?: string; statusObservedAt?: string;
-    lastRole?: string; binding?: {boundAt?: string};
-    lastIdleTransition?: {conversationId: string; sequence: number};
+    id: string;
+    browserSessionId?: string;
+    conversationId: string;
+    bootstrapIdentity: {
+      state: string;
+      publicId: string;
+      conversationId: string;
+    };
+    hidden?: boolean;
+    snoozedUntil?: number;
+    status?: string;
+    activity?: string;
+    statusObservedAt?: string;
+    lastRole?: string;
+    binding?: { boundAt?: string };
+    lastIdleTransition?: { conversationId: string; sequence: number };
   }> = [];
   let guardedRead = false;
   let idleReadStatus = "done_or_idle";
@@ -54,23 +71,47 @@ function fixture() {
   let idleReadTurns = 3;
   let lastIdle: VerifiedChatGPTIdleTransition | null = null;
   let retirementCount = 0;
-  let onDelivery: ((record: {
-    sessionId: string; conversationId: string; status: "cancelled"; messageId: string;
-  }) => void) | null = null;
+  let onDelivery:
+    | ((record: {
+        sessionId: string;
+        conversationId: string;
+        status: "cancelled";
+        messageId: string;
+      }) => void)
+    | null = null;
   const deliveries = {
-    subscribeTransitions: (listener: typeof onDelivery) => { onDelivery = listener; return () => {}; },
+    subscribeTransitions: (listener: typeof onDelivery) => {
+      onDelivery = listener;
+      return () => {};
+    },
     setDispatchPermission: () => {},
     setDispatchAdmission: () => {},
     resumeAllowed: () => {},
-    status: () => ({messageId: WAKE, sessionId: SESSION, conversationId: ORIGINAL,
-      status: "queued", attempts: 0, updatedAt: Date.now()}),
+    status: () => ({
+      messageId: WAKE,
+      sessionId: SESSION,
+      conversationId: ORIGINAL,
+      status: "queued",
+      attempts: 0,
+      updatedAt: Date.now(),
+    }),
     cancel: () => {
       retirementCount++;
-      onDelivery?.({ sessionId: SESSION, conversationId: ORIGINAL, status: "cancelled", messageId: WAKE });
+      onDelivery?.({
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        status: "cancelled",
+        messageId: WAKE,
+      });
     },
     retireRecipient: () => {
       retirementCount++;
-      onDelivery?.({ sessionId: SESSION, conversationId: ORIGINAL, status: "cancelled", messageId: WAKE });
+      onDelivery?.({
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        status: "cancelled",
+        messageId: WAKE,
+      });
       return 1;
     },
   } as unknown as ConstructorParameters<typeof CaffyScheduler>[1];
@@ -78,33 +119,66 @@ function fixture() {
     version: 1,
     requestId: input.requestId,
     ok: true,
-    data: input.type === "t3.threads" && input.action === "list"
-      ? { environmentId: "native-fixture", threads: [] }
-      : input.type === "chatgpt.spawn"
-      ? { sessionId: REPLACEMENT }
-      : input.action === "read"
-        ? { conversationGuardValidated: guardedRead,
-            verifiedConversationId: guardedRead ? (roster[0]?.conversationId ?? REPLACEMENT) : REPLACEMENT,
-            session: {conversationId: roster[0]?.conversationId ?? REPLACEMENT,
-              status: idleReadStatus, activity: "idle", lastRole: idleReadRole,
-              totalTurns: idleReadTurns} }
-        : { sessions: roster, total: roster.length },
+    data:
+      input.type === "t3.threads" && input.action === "list"
+        ? { environmentId: "native-fixture", threads: [] }
+        : input.type === "chatgpt.spawn"
+          ? { sessionId: REPLACEMENT }
+          : input.action === "read"
+            ? {
+                conversationGuardValidated: guardedRead,
+                verifiedConversationId: guardedRead
+                  ? (roster[0]?.conversationId ?? REPLACEMENT)
+                  : REPLACEMENT,
+                session: {
+                  conversationId: roster[0]?.conversationId ?? REPLACEMENT,
+                  status: idleReadStatus,
+                  activity: "idle",
+                  lastRole: idleReadRole,
+                  totalTurns: idleReadTurns,
+                },
+              }
+            : { sessions: roster, total: roster.length },
   })) as ConstructorParameters<typeof CaffyScheduler>[2];
-  const open = (shutdownPC: () => void = () => { throw new Error("Never call OS shutdown in tests."); }) => {
-    const c = new CaffyScheduler(directory, deliveries, request, {
-      start: () => 1, stop: () => {},
-    }, shutdownPC);
+  const open = (
+    shutdownPC: () => void = () => {
+      throw new Error("Never call OS shutdown in tests.");
+    },
+  ) => {
+    const c = new CaffyScheduler(
+      directory,
+      deliveries,
+      request,
+      {
+        start: () => 1,
+        stop: () => {},
+      },
+      shutdownPC,
+    );
     c.setLatestIdleSource(() => lastIdle);
     return c;
   };
   return {
-    initial, open,
-    setRoster: (rows: typeof roster) => { roster = rows; },
-    verifyRead: () => { guardedRead = true; },
-    setReadStatus: (status: string) => { idleReadStatus = status; },
-    setReadRole: (role: "assistant" | "user") => { idleReadRole = role; },
-    setReadTurns: (turns: number) => { idleReadTurns = turns; },
-    setLatestIdle: (event: VerifiedChatGPTIdleTransition | null) => { lastIdle = event; },
+    initial,
+    open,
+    setRoster: (rows: typeof roster) => {
+      roster = rows;
+    },
+    verifyRead: () => {
+      guardedRead = true;
+    },
+    setReadStatus: (status: string) => {
+      idleReadStatus = status;
+    },
+    setReadRole: (role: "assistant" | "user") => {
+      idleReadRole = role;
+    },
+    setReadTurns: (turns: number) => {
+      idleReadTurns = turns;
+    },
+    setLatestIdle: (event: VerifiedChatGPTIdleTransition | null) => {
+      lastIdle = event;
+    },
     retired: () => retirementCount,
     dispose: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
     directory,
@@ -117,24 +191,34 @@ const monitor = (scheduler: CaffyScheduler) =>
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
   it("permanently retires full conversations and refuses rearming after restart", async () => {
     const f = fixture();
-    f.setRoster([{
-      id: SESSION, conversationId: ORIGINAL,
-      bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
-    }]);
+    f.setRoster([
+      {
+        id: SESSION,
+        conversationId: ORIGINAL,
+        bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+      },
+    ]);
     const c = f.open();
     try {
       expect(monitor(c)).not.toBeNull();
       expect(c.terminal(SESSION, ORIGINAL)).toMatchObject({ terminal: true });
       expect(monitor(c)).toBeNull();
-      await expect(c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" }))
-        .rejects.toThrow("maximum length");
-    } finally { c.close(); }
+      await expect(
+        c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" }),
+      ).rejects.toThrow("maximum length");
+    } finally {
+      c.close();
+    }
     const restored = f.open();
     try {
       expect(monitor(restored)).toBeNull();
-      await expect(restored.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" }))
-        .rejects.toThrow("maximum length");
-    } finally { restored.close(); f.dispose(); }
+      await expect(
+        restored.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" }),
+      ).rejects.toThrow("maximum length");
+    } finally {
+      restored.close();
+      f.dispose();
+    }
   });
   it("runs user-scheduled work at free capacity with TaskBoard autofill off", async () => {
     const f = fixture();
@@ -151,7 +235,10 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       // One-shot and periodic session wakes use the same capacity threshold.
       expect(await c.acquireAutomaticAdmission("wake:queued", SESSION, true)).toBe(true);
       c.releaseAutomaticAdmission("wake:queued");
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
 
     const g = fixture();
     const scheduler = g.open();
@@ -162,15 +249,24 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       scheduler.setTaskReservations([], true);
       scheduler.policy({ keepT3Busy: false, maxWorking: 2 });
       const jobId = "55555555-5555-4555-8555-555555555555";
-      scheduler.scheduleSpawn({ id: jobId, title: "Daily report",
-        prompt: "Produce today’s status report", beginAt: null, onIdle: true });
-      await (scheduler as unknown as {dispatchScheduledSpawn(now: number): Promise<void>})
-        .dispatchScheduledSpawn(Date.now());
+      scheduler.scheduleSpawn({
+        id: jobId,
+        title: "Daily report",
+        prompt: "Produce today’s status report",
+        beginAt: null,
+        onIdle: true,
+      });
+      await (
+        scheduler as unknown as { dispatchScheduledSpawn(now: number): Promise<void> }
+      ).dispatchScheduledSpawn(Date.now());
       expect(scheduler.status()).toMatchObject({
         keepT3Busy: false,
-        scheduledSpawns: [{id: jobId, status: "created", sessionId: REPLACEMENT}],
+        scheduledSpawns: [{ id: jobId, status: "created", sessionId: REPLACEMENT }],
       });
-    } finally { scheduler.close(); g.dispose(); }
+    } finally {
+      scheduler.close();
+      g.dispose();
+    }
   });
   it("attaches Caffy to a scheduled new session after its conversation is verified", async () => {
     const f = fixture();
@@ -180,27 +276,48 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       c.setTaskReservations([], true);
       const jobId = "55555555-5555-4555-8555-555555555555";
       c.scheduleSpawn({
-        id: jobId, title: "New recurring worker", prompt: "Start the assignment",
-        beginAt: null, onIdle: true,
-        caffy: { mode: "idle", intervalMinutes: 20, respectSlots: false,
-          repeatPrompt: "Continue the assignment" },
+        id: jobId,
+        title: "New recurring worker",
+        prompt: "Start the assignment",
+        beginAt: null,
+        onIdle: true,
+        caffy: {
+          mode: "idle",
+          intervalMinutes: 20,
+          respectSlots: false,
+          repeatPrompt: "Continue the assignment",
+        },
       });
-      await (c as unknown as {dispatchScheduledSpawn(now: number): Promise<void>})
-        .dispatchScheduledSpawn(Date.now());
+      await (
+        c as unknown as { dispatchScheduledSpawn(now: number): Promise<void> }
+      ).dispatchScheduledSpawn(Date.now());
       expect(c.status(REPLACEMENT)).toBeNull();
-      f.setRoster([{
-        id: REPLACEMENT, conversationId: SESSION,
-        bootstrapIdentity: {state: "registered", publicId: REPLACEMENT, conversationId: SESSION},
-      }]);
-      await (c as unknown as {activateCreatedSpawnCaffy(): Promise<void>})
-        .activateCreatedSpawnCaffy();
+      f.setRoster([
+        {
+          id: REPLACEMENT,
+          conversationId: SESSION,
+          bootstrapIdentity: {
+            state: "registered",
+            publicId: REPLACEMENT,
+            conversationId: SESSION,
+          },
+        },
+      ]);
+      await (
+        c as unknown as { activateCreatedSpawnCaffy(): Promise<void> }
+      ).activateCreatedSpawnCaffy();
       expect(c.status(REPLACEMENT)).toMatchObject({
-        mode: "idle", repeatPrompt: "Continue the assignment",
-        pendingWake: true, onceOnly: false,
+        mode: "idle",
+        repeatPrompt: "Continue the assignment",
+        pendingWake: true,
+        onceOnly: false,
       });
-      const status = c.status() as { scheduledSpawns: Array<{caffyAppliedAt?: number}> };
+      const status = c.status() as { scheduledSpawns: Array<{ caffyAppliedAt?: number }> };
       expect(status.scheduledSpawns[0]?.caffyAppliedAt).toBeTypeOf("number");
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("starts an idle-mode monitor immediately only with a verified idle guest", async () => {
@@ -212,10 +329,13 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.pendingMessageId = null;
       row.pendingWake = false;
       row.beginAt = null;
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+        },
+      ]);
       f.verifyRead();
       const ready = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
       expect(ready).toMatchObject({ pendingWake: true, pendingReason: "manual" });
@@ -229,15 +349,27 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       again.paused = true;
       const resumed = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
       expect(resumed).toMatchObject({ paused: false, pendingWake: true });
-      const audit = NodeFS.readFileSync(NodePath.join(f.directory, "caffy-state-transitions.ndjson"), "utf8")
-        .trim().split("\n").map(line => JSON.parse(line) as {event: string; cause: string});
-      expect(audit.at(-1)).toMatchObject({event: "resumed", cause: "set:identical-config"});
+      const audit = NodeFS.readFileSync(
+        NodePath.join(f.directory, "caffy-state-transitions.ndjson"),
+        "utf8",
+      )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string; cause: string });
+      expect(audit.at(-1)).toMatchObject({ event: "resumed", cause: "set:identical-config" });
       resumed.pendingWake = false;
       resumed.mode = "periodic";
       f.setReadStatus("pending_or_stalled");
-      const unfinished = await c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" });
+      const unfinished = await c.set({
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        mode: "idle",
+      });
       expect(unfinished.pendingWake).toBe(true); // newly enabled idle Caffy queues a guarded continuation
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("replays only a missed, verified idle transition after renderer recovery", async () => {
@@ -248,30 +380,48 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.pendingMessageId = null;
       row.pendingWake = false;
       row.beginAt = null;
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        // No renderer idle cache: this simulates a hibernated guest after restart.
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          // No renderer idle cache: this simulates a hibernated guest after restart.
+        },
+      ]);
       f.setLatestIdle({
-        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
-        bindingRevision: null, sequence: 2, eventId: `${SESSION}:${ORIGINAL}:2`,
-        observedAt: Date.now(), turnCount: 3, kind: "completed",
+        environmentId: "local",
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        bindingRevision: null,
+        sequence: 2,
+        eventId: `${SESSION}:${ORIGINAL}:2`,
+        observedAt: Date.now(),
+        turnCount: 3,
+        kind: "completed",
       });
       await c.reconcileIdentityAliases(true);
-      expect(row).toMatchObject({lastIdleSequence: 2, pendingWake: true, pendingReason: "idle"});
+      expect(row).toMatchObject({ lastIdleSequence: 2, pendingWake: true, pendingReason: "idle" });
       row.pendingWake = false;
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false); // no duplicate continuation
       row.lastIdleSequence = 2;
       f.setLatestIdle({
-        environmentId: "local", sessionId: SESSION, conversationId: REPLACEMENT,
-        bindingRevision: null, sequence: 3, eventId: `${SESSION}:${REPLACEMENT}:3`,
-        observedAt: Date.now(), turnCount: 1, kind: "completed",
+        environmentId: "local",
+        sessionId: SESSION,
+        conversationId: REPLACEMENT,
+        bindingRevision: null,
+        sequence: 3,
+        eventId: `${SESSION}:${REPLACEMENT}:3`,
+        observedAt: Date.now(),
+        turnCount: 1,
+        kind: "completed",
       });
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false); // wrong conversation cannot authorize delivery
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("rechecks already-idle assistants after restart even if the idle sequence was consumed", async () => {
@@ -286,29 +436,45 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.lastWakeAt = Date.now() - 90_000;
       const repliedAt = new Date(Date.now() - 30_000).toISOString();
       f.setLatestIdle({
-        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
-        bindingRevision: null, sequence: 52, eventId: `${SESSION}:${ORIGINAL}:52`,
-        observedAt: Date.now() - 30_000, turnCount: 3, kind: "completed",
+        environmentId: "local",
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        bindingRevision: null,
+        sequence: 52,
+        eventId: `${SESSION}:${ORIGINAL}:52`,
+        observedAt: Date.now() - 30_000,
+        turnCount: 3,
+        kind: "completed",
       });
       row.lastHandledIdleTurnCount = 3;
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        status: "done_or_idle", activity: "idle", lastRole: "assistant",
-        statusObservedAt: repliedAt,
-        lastIdleTransition: {conversationId: ORIGINAL, sequence: 52},
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          status: "done_or_idle",
+          activity: "idle",
+          lastRole: "assistant",
+          statusObservedAt: repliedAt,
+          lastIdleTransition: { conversationId: ORIGINAL, sequence: 52 },
+        },
+      ]);
       f.verifyRead();
       await c.reconcileIdentityAliases(true);
       expect(row).toMatchObject({
-        lastIdleSequence: 52, pendingWake: true, pendingReason: "idle",
+        lastIdleSequence: 52,
+        pendingWake: true,
+        pendingReason: "idle",
       });
       // After sending the continuation, the same idle state cannot trigger it again.
       row.pendingWake = false;
       row.lastWakeAt = Date.now();
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false);
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("honors a fresh quiescent idle event even if DOM turn count decreased", async () => {
@@ -323,9 +489,15 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.lastHandledIdleTurnCount = 5;
       row.lastWakeAt = Date.now() - 60_000;
       const event: VerifiedChatGPTIdleTransition = {
-        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
-        bindingRevision: null, sequence: 61, eventId: `${SESSION}:${ORIGINAL}:61`,
-        observedAt: Date.now() - 5_000, turnCount: 4, kind: "quiescent",
+        environmentId: "local",
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        bindingRevision: null,
+        sequence: 61,
+        eventId: `${SESSION}:${ORIGINAL}:61`,
+        observedAt: Date.now() - 5_000,
+        turnCount: 4,
+        kind: "quiescent",
       };
       c.onIdle(event);
       expect(row.pendingWake).toBe(true);
@@ -336,9 +508,12 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       c.onIdle(event);
       expect(row.pendingWake).toBe(false); // Same event sequence cannot wake again.
       row.lastWakeAt = Date.now();
-      c.onIdle({...event, sequence: 62, eventId: `${SESSION}:${ORIGINAL}:62`});
+      c.onIdle({ ...event, sequence: 62, eventId: `${SESSION}:${ORIGINAL}:62` });
       expect(row.pendingWake).toBe(false); // Older observation than delivered wake.
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("reconciles a previously consumed quiescent edge despite lower turn count", async () => {
@@ -353,17 +528,28 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.lastHandledIdleTurnCount = 5;
       row.lastWakeAt = Date.now() - 60_000;
       f.setLatestIdle({
-        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
-        bindingRevision: null, sequence: 61, eventId: `${SESSION}:${ORIGINAL}:61`,
-        observedAt: Date.now() - 5_000, turnCount: 4, kind: "quiescent",
+        environmentId: "local",
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        bindingRevision: null,
+        sequence: 61,
+        eventId: `${SESSION}:${ORIGINAL}:61`,
+        observedAt: Date.now() - 5_000,
+        turnCount: 4,
+        kind: "quiescent",
       });
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        status: "pending_or_stalled", activity: "idle", lastRole: "user",
-        statusObservedAt: new Date().toISOString(),
-        lastIdleTransition: {conversationId: ORIGINAL, sequence: 61},
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          status: "pending_or_stalled",
+          activity: "idle",
+          lastRole: "user",
+          statusObservedAt: new Date().toISOString(),
+          lastIdleTransition: { conversationId: ORIGINAL, sequence: 61 },
+        },
+      ]);
       f.verifyRead();
       f.setReadStatus("pending_or_stalled");
       f.setReadRole("user");
@@ -375,7 +561,10 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.lastWakeAt = Date.now();
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false);
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("reports why the idle monitor has not fired after a scheduler check", async () => {
@@ -386,17 +575,25 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.beginAt = null;
       row.pendingMessageId = null;
       row.pendingWake = false;
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        status: "pending_or_stalled", activity: "idle", lastRole: "user",
-        statusObservedAt: new Date().toISOString(),
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          status: "pending_or_stalled",
+          activity: "idle",
+          lastRole: "user",
+          statusObservedAt: new Date().toISOString(),
+        },
+      ]);
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false);
       expect(row.lastCheckedAt).toBeGreaterThan(0);
       expect(row.lastCheckResult).toContain("waiting for verified quiescence");
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("refuses startup idle recovery without newer verified assistant completion", async () => {
@@ -411,19 +608,21 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.lastHandledIdleTurnCount = 3;
       const oldStatus = new Date(Date.now() - 60_000).toISOString();
       const base = {
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        status: "done_or_idle", activity: "idle",
+        id: SESSION,
+        conversationId: ORIGINAL,
+        bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+        status: "done_or_idle",
+        activity: "idle",
       };
       f.verifyRead();
-      f.setRoster([{...base, lastRole: "assistant", statusObservedAt: oldStatus}]);
+      f.setRoster([{ ...base, lastRole: "assistant", statusObservedAt: oldStatus }]);
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false); // Same assistant turn was already handled.
       const recent = new Date(Date.now()).toISOString();
-      f.setRoster([{...base, lastRole: "user", statusObservedAt: recent}]);
+      f.setRoster([{ ...base, lastRole: "user", statusObservedAt: recent }]);
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false); // Unanswered prompt is not a completed run.
-      f.setRoster([{...base, lastRole: "assistant", statusObservedAt: recent}]);
+      f.setRoster([{ ...base, lastRole: "assistant", statusObservedAt: recent }]);
       f.setReadTurns(4);
       f.setReadStatus("pending_or_stalled");
       await c.reconcileIdentityAliases(true);
@@ -435,7 +634,10 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.pendingWake = false;
       await c.reconcileIdentityAliases(true);
       expect(row.pendingWake).toBe(false); // Same turn cannot trigger twice.
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("always arms a new resume-on-idle schedule even when an API caller supplies wakeNow=false", async () => {
@@ -447,21 +649,41 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.pendingMessageId = null;
       row.pendingWake = false;
       row.beginAt = null;
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+        },
+      ]);
       f.setLatestIdle({
-        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
-        bindingRevision: null, sequence: 3, eventId: `${SESSION}:${ORIGINAL}:3`,
-        observedAt: Date.now(), turnCount: 3, kind: "completed",
+        environmentId: "local",
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        bindingRevision: null,
+        sequence: 3,
+        eventId: `${SESSION}:${ORIGINAL}:3`,
+        observedAt: Date.now(),
+        turnCount: 3,
+        kind: "completed",
       });
-      const scheduled = await c.set({sessionId: SESSION, conversationId: ORIGINAL,
-        mode: "idle", wakeNow: false});
-      expect(scheduled).toMatchObject({pendingWake: true, pendingReason: "manual", lastIdleSequence: 3});
+      const scheduled = await c.set({
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        mode: "idle",
+        wakeNow: false,
+      });
+      expect(scheduled).toMatchObject({
+        pendingWake: true,
+        pendingReason: "manual",
+        lastIdleSequence: 3,
+      });
       await c.reconcileIdentityAliases(true);
       expect(scheduled.pendingWake).toBe(true);
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("arms an idle Caffy even when the last observed turn was user-only", async () => {
@@ -473,16 +695,27 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.pendingMessageId = null;
       row.pendingWake = false;
       row.beginAt = null;
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        activity: "idle", status: "done_or_idle", lastRole: "user",
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          activity: "idle",
+          status: "done_or_idle",
+          lastRole: "user",
+        },
+      ]);
       const scheduled = await c.set({
-        sessionId: SESSION, conversationId: ORIGINAL, mode: "idle", wakeNow: false,
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        mode: "idle",
+        wakeNow: false,
       });
-      expect(scheduled).toMatchObject({pendingWake: true, pendingReason: "manual"});
-    } finally { c.close(); f.dispose(); }
+      expect(scheduled).toMatchObject({ pendingWake: true, pendingReason: "manual" });
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("repairs a never-woken resume-on-idle monitor on the next T3 startup", () => {
@@ -496,10 +729,13 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.pendingWake = false;
       row.lastWakeAt = null;
       // The test targets startup policy, not the asynchronous delivery pump.
-      (c as unknown as {pump: () => Promise<void>}).pump = async () => {};
+      (c as unknown as { pump: () => Promise<void> }).pump = async () => {};
       c.start();
-      expect(row).toMatchObject({pendingWake: true, pendingReason: "manual"});
-    } finally { c.close(); f.dispose(); }
+      expect(row).toMatchObject({ pendingWake: true, pendingReason: "manual" });
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("re-arms resume-on-idle when a paused monitor is resumed by command", () => {
@@ -513,40 +749,50 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       row.pendingWake = false;
       row.beginAt = null;
       c.pause(SESSION, false);
-      expect(row).toMatchObject({paused: false, pendingWake: true, pendingReason: "manual"});
-    } finally { c.close(); f.dispose(); }
-  });
-
-  it("rejects live legacy ownership but ignores stale terminal OmniHub monitors", () => {
-    const old = { state: "active", target: { sessionId: SESSION, expectedConversationId: ORIGINAL } };
-    expect(legacyMonitorOwnsConversation(old, SESSION, ORIGINAL)).toBe(true);
-    expect(legacyMonitorOwnsConversation({ ...old, state: "paused_indeterminate" }, SESSION, ORIGINAL))
-      .toBe(true);
-    for (const state of ["cancelled", "canceled", "completed", "exhausted",
-      "mandate_finished", "blocked", "expired", "failed"]) {
-      expect(legacyMonitorOwnsConversation({ ...old, state }, SESSION, ORIGINAL)).toBe(false);
+      expect(row).toMatchObject({ paused: false, pendingWake: true, pendingReason: "manual" });
+    } finally {
+      c.close();
+      f.dispose();
     }
   });
+
   it("lists pending sessions without exposing prompts, and edits or cancels the same durable job", () => {
     const f = fixture();
     const c = f.open();
     const jobId = "77777777-7777-4777-8777-777777777777";
     try {
-      c.scheduleSpawn({ id: jobId, title: "Status report", prompt: "Report today's status",
-        beginAt: null, onIdle: true });
+      c.scheduleSpawn({
+        id: jobId,
+        title: "Status report",
+        prompt: "Report today's status",
+        beginAt: null,
+        onIdle: true,
+      });
       const overview = c.status() as { scheduledSpawns: Array<Record<string, unknown>> };
       expect(overview.scheduledSpawns[0]).toMatchObject({
-        id: jobId, title: "Status report", beginAt: null, onIdle: true, status: "scheduled",
+        id: jobId,
+        title: "Status report",
+        beginAt: null,
+        onIdle: true,
+        status: "scheduled",
       });
       expect(overview.scheduledSpawns[0]).not.toHaveProperty("prompt");
       expect(c.readScheduledSpawn(jobId).prompt).toBe("Report today's status");
 
       const start = Date.now() + 60 * 60_000;
-      c.updateScheduledSpawn({ id: jobId, title: "Weekly report",
-        prompt: "Report on the last 7 days", beginAt: start, onIdle: false });
+      c.updateScheduledSpawn({
+        id: jobId,
+        title: "Weekly report",
+        prompt: "Report on the last 7 days",
+        beginAt: start,
+        onIdle: false,
+      });
       expect(c.readScheduledSpawn(jobId)).toMatchObject({
-        id: jobId, title: "Weekly report", prompt: "Report on the last 7 days",
-        beginAt: start, onIdle: false,
+        id: jobId,
+        title: "Weekly report",
+        prompt: "Report on the last 7 days",
+        beginAt: start,
+        onIdle: false,
       });
       c.close();
       const restored = f.open();
@@ -554,8 +800,13 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
         expect(restored.readScheduledSpawn(jobId).prompt).toBe("Report on the last 7 days");
         expect(restored.cancelScheduledSpawn(jobId)).toMatchObject({ cancelled: true, id: jobId });
         expect(() => restored.readScheduledSpawn(jobId)).toThrow("not found");
-      } finally { restored.close(); }
-    } finally { c.close(); f.dispose(); }
+      } finally {
+        restored.close();
+      }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("counts only verified completed runs and retains a single periodic wake through restart", () => {
     const f = fixture();
@@ -577,9 +828,15 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       expect(c.hasPendingQueuedWakes).toBe(true);
 
       const completed = {
-        environmentId: "local", sessionId: SESSION, conversationId: ORIGINAL,
-        bindingRevision: null, sequence: 2, eventId: `${SESSION}:${ORIGINAL}:2`,
-        observedAt: Date.now(), turnCount: 3, kind: "completed" as const,
+        environmentId: "local",
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        bindingRevision: null,
+        sequence: 2,
+        eventId: `${SESSION}:${ORIGINAL}:2`,
+        observedAt: Date.now(),
+        turnCount: 3,
+        kind: "completed" as const,
       };
       c.onIdle(completed);
       c.onIdle(completed);
@@ -590,12 +847,20 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       const restored = f.open();
       try {
         expect(monitor(restored)).toMatchObject({
-          mode: "periodic", intervalMinutes: 10080, pendingWake: true,
+          mode: "periodic",
+          intervalMinutes: 10080,
+          pendingWake: true,
           repeatPrompt: "Generate the weekly project report.",
-          autoRebootEveryRuns: 3, wakesSinceReboot: 1,
+          autoRebootEveryRuns: 3,
+          wakesSinceReboot: 1,
         });
-      } finally { restored.close(); }
-    } finally { c.close(); f.dispose(); }
+      } finally {
+        restored.close();
+      }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("persists timed Busy, disarms on manual override, and rejects new work after expiration", async () => {
     const f = fixture();
@@ -609,8 +874,14 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       try {
         expect(restored.status()).toMatchObject({ busyUntil: timed.busyUntil, keepT3Busy: true });
         restored.policy({ keepT3Busy: false });
-        expect(restored.status()).toMatchObject({ busyUntil: null, keepT3Busy: false, shutdownWhenIdle: false });
-      } finally { restored.close(); }
+        expect(restored.status()).toMatchObject({
+          busyUntil: null,
+          keepT3Busy: false,
+          shutdownWhenIdle: false,
+        });
+      } finally {
+        restored.close();
+      }
       const path = NodePath.join(f.directory, "caffy-v2.json");
       const expired = JSON.parse(NodeFS.readFileSync(path, "utf8"));
       expired.keepT3Busy = true;
@@ -619,15 +890,26 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       NodeFS.writeFileSync(path, JSON.stringify(expired));
       const resumed = f.open();
       try {
-        expect(resumed.status()).toMatchObject({ busyUntil: null, keepT3Busy: false, shutdownWhenIdle: true });
+        expect(resumed.status()).toMatchObject({
+          busyUntil: null,
+          keepT3Busy: false,
+          shutdownWhenIdle: true,
+        });
         expect(await resumed.acquireAutomaticAdmission("new-job")).toBe(false);
-      } finally { resumed.close(); }
-    } finally { first.close(); f.dispose(); }
+      } finally {
+        resumed.close();
+      }
+    } finally {
+      first.close();
+      f.dispose();
+    }
   });
   it("holds shutdown until the timed window expires and existing work is idle", async () => {
     const f = fixture();
     let shutdowns = 0;
-    const c = f.open(() => { shutdowns++; });
+    const c = f.open(() => {
+      shutdowns++;
+    });
     const internal = c as unknown as {
       checkShutdown: () => Promise<void>;
       busyUntil: number | null;
@@ -656,8 +938,15 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       internal.shutdownIdleSince = Date.now() - 5 * 60_000 - 1;
       await internal.checkShutdown();
       expect(shutdowns).toBe(1);
-      expect(c.status()).toMatchObject({ keepT3Busy: false, shutdownWhenIdle: false, busyUntil: null });
-    } finally { c.close(); f.dispose(); }
+      expect(c.status()).toMatchObject({
+        keepT3Busy: false,
+        shutdownWhenIdle: false,
+        busyUntil: null,
+      });
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("reports exactly the green sidebar count while separately guarding a pending start", async () => {
     const f = fixture();
@@ -666,71 +955,126 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       c.reportWorkingSnapshot([SESSION, ORIGINAL], "browser");
       c.setTaskReservations([{ requestId: WAKE, sessionId: null, holdUntil: Date.now() + 60_000 }]);
       const held = await c.capacity();
-      expect(held).toMatchObject({ limit: 3, working: 2, reserved: 1, used: 2, available: 1, admissible: false });
+      expect(held).toMatchObject({
+        limit: 3,
+        working: 2,
+        reserved: 1,
+        used: 2,
+        available: 1,
+        admissible: false,
+      });
       c.setTaskReservations([{ requestId: WAKE, sessionId: null, holdUntil: Date.now() - 1 }]);
       const expired = await c.capacity();
-      expect(expired).toMatchObject({ limit: 3, working: 2, reserved: 0, used: 2, available: 1, admissible: true });
-    } finally { c.close(); f.dispose(); }
+      expect(expired).toMatchObject({
+        limit: 3,
+        working: 2,
+        reserved: 0,
+        used: 2,
+        available: 1,
+        admissible: true,
+      });
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("ignores registry working signals and ten stale TaskBoard claims when the sidebar has no green sessions", async () => {
     const f = fixture();
     const c = f.open();
     try {
       monitor(c)!.pendingMessageId = null;
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        status: "working", activity: "working", statusObservedAt: new Date().toISOString(),
-      }]);
-      c.policy({keepT3Busy: true, maxWorking: 2});
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          status: "working",
+          activity: "working",
+          statusObservedAt: new Date().toISOString(),
+        },
+      ]);
+      c.policy({ keepT3Busy: true, maxWorking: 2 });
       c.reportWorkingSnapshot([], "sidebar");
-      c.setTaskReservations(Array.from({length: 10}, (_, i) => ({
-        requestId: `stale-${i}`, sessionId: `old-worker-${i}`,
-      })), true);
+      c.setTaskReservations(
+        Array.from({ length: 10 }, (_, i) => ({
+          requestId: `stale-${i}`,
+          sessionId: `old-worker-${i}`,
+        })),
+        true,
+      );
       expect(await c.capacity()).toMatchObject({
-        working: 0, workingIds: [], used: 0, reserved: 0, available: 2,
+        working: 0,
+        workingIds: [],
+        used: 0,
+        reserved: 0,
+        available: 2,
         admissible: true,
       });
       expect(await c.acquireAutomaticAdmission("fresh-task")).toBe(true);
       c.releaseAutomaticAdmission("fresh-task");
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("counts sidebar green workers as authoritative even when an old registry snapshot says idle", async () => {
     const f = fixture();
     const c = f.open();
     try {
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        status: "done_or_idle", activity: "idle", statusObservedAt: new Date().toISOString(),
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          status: "done_or_idle",
+          activity: "idle",
+          statusObservedAt: new Date().toISOString(),
+        },
+      ]);
       c.setTaskReservations([], true);
       c.reportWorkingSnapshot([SESSION], "sidebar");
       expect(await c.capacity()).toMatchObject({
-        working: 1, workingIds: [SESSION], reserved: 0, used: 1,
+        working: 1,
+        workingIds: [SESSION],
+        reserved: 0,
+        used: 1,
       });
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("ignores stale Working ownership but separately guards a genuinely pending startup", async () => {
     const f = fixture();
     const c = f.open();
     try {
       monitor(c)!.pendingMessageId = null;
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-        status: "done_or_idle", activity: "idle", statusObservedAt: new Date().toISOString(),
-        lastRole: "assistant", binding: {boundAt: new Date(Date.now() - 60_000).toISOString()},
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          status: "done_or_idle",
+          activity: "idle",
+          statusObservedAt: new Date().toISOString(),
+          lastRole: "assistant",
+          binding: { boundAt: new Date(Date.now() - 60_000).toISOString() },
+        },
+      ]);
       c.reportWorkingSnapshot([], "sidebar");
-      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION}], true);
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 0, used: 0, available: 3});
-      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION,
-        holdUntil: Date.now() + 90_000}], true);
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 0, available: 3});
+      c.setTaskReservations([{ requestId: WAKE, sessionId: SESSION }], true);
+      expect(await c.capacity()).toMatchObject({ working: 0, reserved: 0, used: 0, available: 3 });
+      c.setTaskReservations(
+        [{ requestId: WAKE, sessionId: SESSION, holdUntil: Date.now() + 90_000 }],
+        true,
+      );
+      expect(await c.capacity()).toMatchObject({ working: 0, reserved: 1, used: 0, available: 3 });
       c.setTaskReservations([], true);
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 0, used: 0});
-    } finally { c.close(); f.dispose(); }
+      expect(await c.capacity()).toMatchObject({ working: 0, reserved: 0, used: 0 });
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("serializes automatic starts and gives Queue on capacity priority even with Keep Busy off", async () => {
     const f = fixture();
@@ -739,63 +1083,107 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       monitor(c)!.pendingMessageId = null;
       c.reportWorkingSnapshot([], "sidebar");
       c.setTaskReservations([], true);
-      c.policy({keepT3Busy: true, maxWorking: 1});
+      c.policy({ keepT3Busy: true, maxWorking: 1 });
       const [first, second] = await Promise.all([
         c.acquireAutomaticAdmission("first"),
         c.acquireAutomaticAdmission("second"),
       ]);
       expect([first, second]).toEqual([true, false]);
       c.releaseAutomaticAdmission("first");
-      c.policy({keepT3Busy: false});
+      c.policy({ keepT3Busy: false });
       const userId = "55555555-5555-4555-8555-555555555555";
       const nextUserId = "66666666-6666-4666-8666-666666666666";
-      const claim = {action: "claim" as const, messageId: userId, sessionId: SESSION,
-        conversationId: ORIGINAL};
-      expect(await c.capacityMessage(claim)).toMatchObject({status: "admitted"});
-      c.policy({keepT3Busy: true});
+      const claim = {
+        action: "claim" as const,
+        messageId: userId,
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+      };
+      expect(await c.capacityMessage(claim)).toMatchObject({ status: "admitted" });
+      c.policy({ keepT3Busy: true });
       expect(await c.acquireAutomaticAdmission("taskboard-reservation")).toBe(false);
-      c.policy({keepT3Busy: false});
-      expect(await c.capacityMessage({...claim, messageId: nextUserId}))
-        .toMatchObject({status: "waiting"});
-      expect(await c.capacity()).toMatchObject({reserved: 1, used: 0});
-      expect(await c.capacityMessage({action: "release", messageId: userId,
-        reason: "pre_submit_aborted"})).toMatchObject({status: "released"});
-      expect(await c.capacityMessage({...claim, messageId: nextUserId}))
-        .toMatchObject({status: "admitted"});
-      expect(await c.capacityMessage({action: "submit", messageId: nextUserId}))
-        .toMatchObject({status: "submitted"});
-      expect(await c.capacityMessage({action: "release", messageId: nextUserId,
-        reason: "pre_submit_aborted"})).toMatchObject({status: "held"});
+      c.policy({ keepT3Busy: false });
+      expect(await c.capacityMessage({ ...claim, messageId: nextUserId })).toMatchObject({
+        status: "waiting",
+      });
+      expect(await c.capacity()).toMatchObject({ reserved: 1, used: 0 });
+      expect(
+        await c.capacityMessage({
+          action: "release",
+          messageId: userId,
+          reason: "pre_submit_aborted",
+        }),
+      ).toMatchObject({ status: "released" });
+      expect(await c.capacityMessage({ ...claim, messageId: nextUserId })).toMatchObject({
+        status: "admitted",
+      });
+      expect(await c.capacityMessage({ action: "submit", messageId: nextUserId })).toMatchObject({
+        status: "submitted",
+      });
+      expect(
+        await c.capacityMessage({
+          action: "release",
+          messageId: nextUserId,
+          reason: "pre_submit_aborted",
+        }),
+      ).toMatchObject({ status: "held" });
       c.close();
       const restarted = f.open();
       try {
         restarted.reportWorkingSnapshot([], "sidebar");
         restarted.setTaskReservations([], true);
-        expect(await restarted.capacityMessage({action: "status", messageId: nextUserId}))
-          .toMatchObject({status: "submitted"});
-        expect(await restarted.capacity()).toMatchObject({used: 0, reserved: 1});
-      } finally { restarted.close(); }
-    } finally { c.close(); f.dispose(); }
+        expect(
+          await restarted.capacityMessage({ action: "status", messageId: nextUserId }),
+        ).toMatchObject({ status: "submitted" });
+        expect(await restarted.capacity()).toMatchObject({ used: 0, reserved: 1 });
+      } finally {
+        restarted.close();
+      }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("does not undercount a still-green sidebar worker based on an older idle registry read", async () => {
     const f = fixture();
     const c = f.open();
     try {
       f.setRoster([
-        { id: SESSION, conversationId: ORIGINAL,
-          bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-          status: "done_or_idle", activity: "idle", statusObservedAt: new Date().toISOString() },
-        { id: REPLACEMENT, conversationId: REPLACEMENT,
-          bootstrapIdentity: {state: "registered", publicId: REPLACEMENT, conversationId: REPLACEMENT},
-          status: "working", activity: "working", statusObservedAt: new Date().toISOString() },
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          status: "done_or_idle",
+          activity: "idle",
+          statusObservedAt: new Date().toISOString(),
+        },
+        {
+          id: REPLACEMENT,
+          conversationId: REPLACEMENT,
+          bootstrapIdentity: {
+            state: "registered",
+            publicId: REPLACEMENT,
+            conversationId: REPLACEMENT,
+          },
+          status: "working",
+          activity: "working",
+          statusObservedAt: new Date().toISOString(),
+        },
       ]);
       c.setTaskReservations([], true);
       c.reportWorkingSnapshot([SESSION, REPLACEMENT], "stale-sidebar");
       const actual = await c.capacity();
       expect(actual).toMatchObject({
-        working: 2, reserved: 0, used: 2, available: 1, admissible: true,
+        working: 2,
+        reserved: 0,
+        used: 2,
+        available: 1,
+        admissible: true,
       });
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("never counts even bootstrapped TaskBoard ownership as green usage", async () => {
     const f = fixture();
@@ -804,57 +1192,94 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       monitor(c)!.pendingMessageId = null;
       const recent = new Date(Date.now() - 4 * 60_000).toISOString();
       f.setRoster([
-        { id: SESSION, conversationId: ORIGINAL,
-          bootstrapIdentity: {state: "awaiting_marker", publicId: SESSION, conversationId: ORIGINAL},
-          status: "new", activity: "idle", statusObservedAt: new Date().toISOString(),
-          binding: {boundAt: recent} },
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: {
+            state: "awaiting_marker",
+            publicId: SESSION,
+            conversationId: ORIGINAL,
+          },
+          status: "new",
+          activity: "idle",
+          statusObservedAt: new Date().toISOString(),
+          binding: { boundAt: recent },
+        },
       ]);
-      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION,
-        holdUntil: Date.now() + 90_000}], true);
+      c.setTaskReservations(
+        [{ requestId: WAKE, sessionId: SESSION, holdUntil: Date.now() + 90_000 }],
+        true,
+      );
       c.reportWorkingSnapshot([], "sidebar");
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 0, available: 3});
+      expect(await c.capacity()).toMatchObject({ working: 0, reserved: 1, used: 0, available: 3 });
       f.setRoster([
-        { id: SESSION, conversationId: ORIGINAL,
-          bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-          status: "done_or_idle", activity: "idle", statusObservedAt: new Date().toISOString(),
-          lastRole: "assistant", binding: {boundAt: recent} },
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+          status: "done_or_idle",
+          activity: "idle",
+          statusObservedAt: new Date().toISOString(),
+          lastRole: "assistant",
+          binding: { boundAt: recent },
+        },
       ]);
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 1, used: 0, available: 3});
-      c.setTaskReservations([{requestId: WAKE, sessionId: SESSION,
-        holdUntil: Date.now() - 1}], true);
-      expect(await c.capacity()).toMatchObject({working: 0, reserved: 0, used: 0, available: 3});
-    } finally { c.close(); f.dispose(); }
+      expect(await c.capacity()).toMatchObject({ working: 0, reserved: 1, used: 0, available: 3 });
+      c.setTaskReservations(
+        [{ requestId: WAKE, sessionId: SESSION, holdUntil: Date.now() - 1 }],
+        true,
+      );
+      expect(await c.capacity()).toMatchObject({ working: 0, reserved: 0, used: 0, available: 3 });
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("shows a durable crossed-out marker only after an agent stop, clearing it on reconfiguration", async () => {
     const f = fixture();
     try {
       const stopped = f.open();
       expect(stopped.stop(SESSION).stopped).toBe(true);
-      expect((stopped.status() as { agentStops: Array<{ sessionId: string; publicSessionId?: string }> }).agentStops)
-        .toMatchObject([{ sessionId: SESSION, publicSessionId: SESSION }]);
+      expect(
+        (stopped.status() as { agentStops: Array<{ sessionId: string; publicSessionId?: string }> })
+          .agentStops,
+      ).toMatchObject([{ sessionId: SESSION, publicSessionId: SESSION }]);
       stopped.close();
 
       const restarted = f.open();
       expect((restarted.status() as { agentStops: unknown[] }).agentStops).toHaveLength(1);
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
-      }]);
-      await restarted.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle", keepAwake: false });
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+        },
+      ]);
+      await restarted.set({
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        mode: "idle",
+        keepAwake: false,
+      });
       expect((restarted.status() as { agentStops: unknown[] }).agentStops).toHaveLength(0);
       restarted.stop(SESSION, "user");
       expect((restarted.status() as { agentStops: unknown[] }).agentStops).toHaveLength(0);
       restarted.close();
-    } finally { f.dispose(); }
+    } finally {
+      f.dispose();
+    }
   });
   it("preserves settings through a mismatched Bootstrap conversation and only rebinds with positive evidence", async () => {
     const f = fixture();
     const c = f.open();
     try {
-      f.setRoster([{
-        id: SESSION, conversationId: REPLACEMENT,
-        bootstrapIdentity: { state: "mismatch", publicId: SESSION, conversationId: ORIGINAL },
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: REPLACEMENT,
+          bootstrapIdentity: { state: "mismatch", publicId: SESSION, conversationId: ORIGINAL },
+        },
+      ]);
       await c.reconcileLifecycle();
       await c.reconcileLifecycle();
       expect(monitor(c)?.conversationId).toBe(ORIGINAL);
@@ -879,8 +1304,13 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
         restarted.start();
         const snapshots = NodeFS.readdirSync(NodePath.join(f.directory, "caffy-snapshots"));
         expect(snapshots.length).toBeGreaterThan(0);
-      } finally { restarted.close(); }
-    } finally { c.close(); f.dispose(); }
+      } finally {
+        restarted.close();
+      }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("saves Caffy immediately even when renderer binding is stale, then reconciles the conversation", async () => {
@@ -888,13 +1318,19 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
     const c = f.open();
     try {
       c.stop(SESSION, "user");
-      f.setRoster([{
-        id: SESSION, conversationId: REPLACEMENT,
-        bootstrapIdentity: { state: "mismatch", publicId: SESSION, conversationId: ORIGINAL },
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: REPLACEMENT,
+          bootstrapIdentity: { state: "mismatch", publicId: SESSION, conversationId: ORIGINAL },
+        },
+      ]);
       const saved = await c.set({
-        sessionId: SESSION, conversationId: ORIGINAL, mode: "idle",
-        onceOnly: false, repeatPrompt: "Continue the assignment.",
+        sessionId: SESSION,
+        conversationId: ORIGINAL,
+        mode: "idle",
+        onceOnly: false,
+        repeatPrompt: "Continue the assignment.",
       });
       expect(saved.pendingWake).toBe(true);
       expect(monitor(c)?.conversationId).toBe(ORIGINAL);
@@ -904,31 +1340,45 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       await c.reconcileLifecycle();
       expect(monitor(c)?.conversationId).toBe(REPLACEMENT);
       expect(monitor(c)?.repeatPrompt).toBe("Continue the assignment.");
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("normalizes a saved public session alias when the browser owner returns", async () => {
     const f = fixture();
     const c = f.open();
     try {
       c.stop(SESSION, "user");
-      f.setRoster([{
-        id: WAKE, browserSessionId: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: { state: "registered", publicId: WAKE, conversationId: ORIGINAL },
-      }]);
+      f.setRoster([
+        {
+          id: WAKE,
+          browserSessionId: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: WAKE, conversationId: ORIGINAL },
+        },
+      ]);
       await c.set({ sessionId: WAKE, conversationId: ORIGINAL, mode: "idle" });
       await c.reconcileIdentityAliases(true);
       expect((c.status(SESSION) as CaffyConfig)?.sessionId).toBe(SESSION);
       expect((c.status(WAKE) as CaffyConfig)?.browserSessionId).toBe(SESSION);
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
   it("keeps Caffy through snooze, but retires a paused monitor", async () => {
     const f = fixture();
     const c = f.open();
     try {
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL, snoozedUntil: Date.UTC(9999, 0, 1),
-        bootstrapIdentity: {state: "registered", publicId: SESSION, conversationId: ORIGINAL},
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          snoozedUntil: Date.UTC(9999, 0, 1),
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+        },
+      ]);
       await c.reconcileLifecycle();
       expect(monitor(c)).not.toBeNull();
       expect(f.retired()).toBe(0);
@@ -937,7 +1387,10 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       await c.reconcileLifecycle();
       expect(monitor(c)).toBeNull();
       expect(f.retired()).toBe(1);
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 
   it("does not confuse a cold startup catalog with a deleted T3 session", async () => {
@@ -948,10 +1401,13 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       await c.reconcileLifecycle();
       expect(monitor(c)).not.toBeNull();
 
-      f.setRoster([{
-        id: SESSION, conversationId: ORIGINAL,
-        bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
-      }]);
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: ORIGINAL,
+          bootstrapIdentity: { state: "registered", publicId: SESSION, conversationId: ORIGINAL },
+        },
+      ]);
       await c.reconcileLifecycle();
       f.setRoster([]);
       await c.reconcileLifecycle();
@@ -959,6 +1415,9 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       expect(monitor(c)).not.toBeNull(); // Renderer inventory loss never proves a durable close.
       c.retire(SESSION, "closed");
       expect(monitor(c)).toBeNull();
-    } finally { c.close(); f.dispose(); }
+    } finally {
+      c.close();
+      f.dispose();
+    }
   });
 });

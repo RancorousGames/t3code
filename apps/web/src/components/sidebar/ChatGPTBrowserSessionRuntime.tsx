@@ -9,7 +9,6 @@ import {
   useChatGPTSessionQueueDriver,
   hasAdmittedCapacityMessage,
 } from "../../chatGPTSessionMessageQueue";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
 import { ensureChatGPTHighEffort } from "../../chatGPTHighEffort";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
 import { isChatGPTGuestHibernated } from "../../browser/chatGPTGuestHibernation";
@@ -125,7 +124,6 @@ export function ChatGPTBrowserSessionRuntime({
     if (recoveredUrl && !isChatGPTConversationUrl(lastUrl)) setLastUrl(recoveredUrl);
   }, [lastUrl, recoveredUrl, setLastUrl]);
 
-  const persistentChromium = isPersistentChatGPTSessionOptedIn(sessionId);
   const pendingHighEffort =
     sessions.find((entry) => entry.id === sessionId)?.initialHighEffortPending === true;
   useEffect(() => {
@@ -136,47 +134,22 @@ export function ChatGPTBrowserSessionRuntime({
       let confirmed = false;
       let conversationObserved = false;
       try {
-        if (persistentChromium) {
-          const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-          if (!bridge) return;
-          const identity = {
-            environmentId,
-            sessionId,
-            profileId: chatGPTSessionProfileId(sessions.find((entry) => entry.id === sessionId)),
-          };
-          const state = (await bridge({ operation: "probe", identity })) as {
-            residency?: string;
-            loading?: boolean;
-            url?: string;
-          };
-          if (
-            disposed ||
-            state.residency !== "resident" ||
-            state.loading ||
-            !state.url ||
-            (!isChatGPTHomeUrl(state.url) && !isChatGPTConversationUrl(state.url))
-          )
-            return;
-          conversationObserved = isChatGPTConversationUrl(state.url);
-          confirmed = await ensureChatGPTHighEffort(async (expression) => {
-            const reply = (await bridge({ operation: "evaluate", identity, expression })) as {
-              result?: unknown;
-            };
-            return reply.result;
-          });
-        } else {
-          const state = readThreadPreviewState(threadRef);
-          const tabId = state.activeTabId;
-          const url = state.snapshot?.navStatus;
-          if (!tabId || !state.serverEpoch || url?._tag !== "Success" || (!isChatGPTHomeUrl(url.url) && !isChatGPTConversationUrl(url.url)))
-            return;
-          const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
-          if (isChatGPTGuestHibernated(runtimeId)) return;
-          conversationObserved = isChatGPTConversationUrl(url.url);
-          confirmed = await ensureChatGPTHighEffort((expression) =>
-            chatGPTWebviewAutomation.evaluate(runtimeId, { expression }),
-          );
-        }
+        const state = readThreadPreviewState(threadRef);
+        const tabId = state.activeTabId;
+        const url = state.snapshot?.navStatus;
+        if (
+          !tabId ||
+          !state.serverEpoch ||
+          url?._tag !== "Success" ||
+          (!isChatGPTHomeUrl(url.url) && !isChatGPTConversationUrl(url.url))
+        )
+          return;
+        const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
+        if (isChatGPTGuestHibernated(runtimeId)) return;
+        conversationObserved = isChatGPTConversationUrl(url.url);
+        confirmed = await ensureChatGPTHighEffort((expression) =>
+          chatGPTWebviewAutomation.evaluate(runtimeId, { expression }),
+        );
         if (confirmed && conversationObserved && !disposed)
           markInitialChatGPTHighEffortApplied(environmentId, sessionId);
       } catch {
@@ -191,18 +164,14 @@ export function ChatGPTBrowserSessionRuntime({
       disposed = true;
       if (timer) clearTimeout(timer);
     };
-  }, [environmentId, sessionId, threadRef, persistentChromium, pendingHighEffort, sessions]);
+  }, [environmentId, sessionId, threadRef, pendingHighEffort, sessions]);
   usePreviewSession(threadRef);
   // Restored webviews load their saved URL on attach. Do not eagerly reload
   // every existing session: large sets of ChatGPT tabs can hit rate limits.
   // The recovery coordinator refreshes only confirmed failures, one at a time.
 
   useEffect(() => {
-    // Native Chrome owns its pages outside the preview-tab lifecycle. Never
-    // open/close a preview tab for one: its transient Idle/missing snapshot is
-    // NOT evidence that the already-live Chrome page needs to load again.
     if (
-      persistentChromium ||
       (suspended && !capacityAdmitted) ||
       startupDeferred ||
       openError !== null ||
@@ -210,8 +179,7 @@ export function ChatGPTBrowserSessionRuntime({
     )
       return;
     const currentSnapshot = previewState.snapshot;
-    if (currentSnapshot && (persistentChromium || currentSnapshot.navStatus._tag !== "Idle"))
-      return;
+    if (currentSnapshot && currentSnapshot.navStatus._tag !== "Idle") return;
 
     // Reconciliation can briefly know about tabs before choosing an active one.
     if (!currentSnapshot && Object.keys(previewState.sessions).length > 0) return;
@@ -227,8 +195,7 @@ export function ChatGPTBrowserSessionRuntime({
       }
       reconcilePreviewServerSessions(threadRef, listed.value);
       const existingSnapshot = readThreadPreviewState(threadRef).snapshot;
-      if (existingSnapshot && (persistentChromium || existingSnapshot.navStatus._tag !== "Idle"))
-        return;
+      if (existingSnapshot && existingSnapshot.navStatus._tag !== "Idle") return;
 
       // An Idle preview renders T3's generic local-server page. Replace it
       // instead of trying to navigate that already-mounted blank webview.
@@ -244,7 +211,7 @@ export function ChatGPTBrowserSessionRuntime({
       const result = await openPreviewSession({
         openPreview: open,
         threadRef,
-        ...(persistentChromium ? {} : { url: openUrl }),
+        url: openUrl,
         viewport: FILL_PREVIEW_VIEWPORT,
         profileId: chatGPTSessionProfileId(sessions.find((session) => session.id === sessionId)),
       });
@@ -266,7 +233,6 @@ export function ChatGPTBrowserSessionRuntime({
     environmentId,
     openError,
     openUrl,
-    persistentChromium,
     previewState.sessions,
     previewState.snapshot,
     suspended,

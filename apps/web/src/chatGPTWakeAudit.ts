@@ -21,8 +21,6 @@ export function recordChatGPTWakeAudit(
   } = {},
 ): void {
   if (typeof window === "undefined") return;
-  const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-  if (!bridge) return;
   const detail = [
     `reason=${reason}`,
     `previousUntil=${options.previousUntil ?? "none"}`,
@@ -31,18 +29,7 @@ export function recordChatGPTWakeAudit(
     `quickStep=${options.quickSnoozeStep ?? "none"}`,
     `now=${Date.now()}`,
   ].join(" ");
-  // The native owner writes this to a rotated NDJSON log. Never block a wake,
-  // snooze, or session-rendering path if the bridge is unavailable.
-  try {
-    void Promise.resolve(
-      bridge({
-        operation: "recovery_event",
-        identity: { environmentId, sessionId, profileId: options.profileId ?? "default" },
-        kind: "wake",
-        detail: detail.slice(0, 220),
-      }),
-    ).catch(() => {});
-  } catch {
-    /* Telemetry must not affect session behavior. */
-  }
+  // Temporary wake diagnostics remain visible in the desktop renderer log
+  // without the removed Native Chromium IPC bridge.
+  console.info("[t3-wake-audit]", { environmentId, sessionId, detail: detail.slice(0, 220) });
 }

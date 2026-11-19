@@ -14,7 +14,6 @@ import {
 import {
   chatGPTBrowserLastWorkingKey,
   chatGPTBrowserLastUrlKey,
-  CHATGPT_DEFAULT_URL,
   readChatGPTBrowserSessions,
   isChatGPTConversationUrl,
   chatGPTBrowserThreadRef,
@@ -34,9 +33,6 @@ import {
   releaseChatGPTDeliveryMount,
 } from "../../chatGPTDeliveryMountRequest";
 import { ChatGPTBrowserSessionRuntime } from "./ChatGPTBrowserSessionRuntime";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
-import { warmMissingNativeChatGPT } from "../../browser/nativeChatGPTWarmSession";
-import { resolveWarmChatGPTConversationUrl } from "../../omniwork/chatGPTWarmConversationUrl";
 import {
   useChatGPTSessionQueue,
   useChatGPTSessionQueueDriver,
@@ -53,8 +49,8 @@ import { useT3CaffyOverview } from "../../hooks/useT3CaffyOverview";
 import { imminentCaffySessionIds } from "../../omniwork/chatGPTCaffyWarmPolicy";
 
 /** Bootstrap identity belongs to the persistent session, not a transient
- * sidebar/preview runtime. Keep monitoring native Chrome pages even when the
- * sidebar, tab or background warm guest isn't mounted in React. */
+ * sidebar/preview runtime. Continue observing the session while its webview
+ * is temporarily unmounted or backgrounded. */
 function ChatGPTBootstrapRegistrationOwner({
   environmentId,
   sessionId,
@@ -113,30 +109,6 @@ function ChatGPTBackgroundQueueOwner({
     // Reuse the one targeted delivery mount owner. This avoids two independent
     // preview runtimes opening the same guest when the sidebar is also visible.
     requestChatGPTDeliveryMount(environmentId, sessionId);
-    // Native Chromium owns its page independently of legacy preview tabs.
-    // A capacity-admitted blank session must acquire its exact native owner
-    // before the queued instruction can inspect the empty composer.
-    if (isPersistentChatGPTSessionOptedIn(sessionId)) {
-      const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-      if (bridge) {
-        const current = readChatGPTBrowserSessions(environmentId).find(
-          (row) => row.id === sessionId,
-        );
-        const savedUrl = getLocalStorageItem(
-          chatGPTBrowserLastUrlKey(environmentId, sessionId),
-          Schema.String,
-        );
-        const url = current ? resolveWarmChatGPTConversationUrl(current, savedUrl) : null;
-        void warmMissingNativeChatGPT(
-          bridge,
-          environmentId,
-          sessionId,
-          url ?? CHATGPT_DEFAULT_URL,
-        ).catch(() => {
-          /* Keep the reservation and retry on the next genuine mount. */
-        });
-      }
-    }
     return () => releaseChatGPTDeliveryMount(environmentId, sessionId);
   }, [needsDeliveryMount, environmentId, sessionId]);
   return null;
@@ -261,9 +233,14 @@ export function ChatGPTGuestRetention({
     const candidates = sessions.flatMap((session) => {
       const thread = chatGPTBrowserThreadRef(environmentId, session.id);
       const key = JSON.stringify([environmentId, thread.threadId]);
-      if (!attentionPriorityIds.has(session.id) && autoEvicted?.[key] && !displayedSessionIds.has(session.id) &&
-          !deliveryRequests[`${environmentId}:${session.id}`] &&
-          !imminentCaffyIds.has(session.id)) return [];
+      if (
+        !attentionPriorityIds.has(session.id) &&
+        autoEvicted?.[key] &&
+        !displayedSessionIds.has(session.id) &&
+        !deliveryRequests[`${environmentId}:${session.id}`] &&
+        !imminentCaffyIds.has(session.id)
+      )
+        return [];
       const recentUseAt = Math.max(
         touchedAt[key] ?? 0,
         session.lastDirectInteractionAt ?? 0,
@@ -289,7 +266,8 @@ export function ChatGPTGuestRetention({
           !(session.snoozedUntil && session.snoozedUntil > now)) ||
         displayedSessionIds.has(session.id) ||
         (userOpened?.[key] === true &&
-          !session.hidden && !(session.snoozedUntil && session.snoozedUntil > now)) ||
+          !session.hidden &&
+          !(session.snoozedUntil && session.snoozedUntil > now)) ||
         (!!session.borderColor && (!longIdle || withinLongIdle)) ||
         (longIdle && withinLongIdle) ||
         hasUncertainChatGPTSend(environmentId, session.id) ||
@@ -322,8 +300,13 @@ export function ChatGPTGuestRetention({
     // remain resident even when they exceed it; snooze/unload releases them.
     const ranked = candidates.toSorted((a, b) => {
       const priority = (key: string) => {
-        const id = sessions.find((session) =>
-          JSON.stringify([environmentId, chatGPTBrowserThreadRef(environmentId, session.id).threadId]) === key)?.id;
+        const id = sessions.find(
+          (session) =>
+            JSON.stringify([
+              environmentId,
+              chatGPTBrowserThreadRef(environmentId, session.id).threadId,
+            ]) === key,
+        )?.id;
         if (id && displayedSessionIds.has(id)) return 0;
         if (id && deliveryRequests[`${environmentId}:${id}`]) return 1;
         if (id && attentionPriorityIds.has(id)) return 2;
@@ -332,23 +315,35 @@ export function ChatGPTGuestRetention({
       return priority(a.key) - priority(b.key) || b.lastUsedAt - a.lastUsedAt;
     });
     const selectedKey = activeSessionId
-      ? JSON.stringify([environmentId, chatGPTBrowserThreadRef(environmentId, activeSessionId).threadId])
+      ? JSON.stringify([
+          environmentId,
+          chatGPTBrowserThreadRef(environmentId, activeSessionId).threadId,
+        ])
       : null;
     const userKeys = ranked
-      .filter(({ key }) => userOpened?.[key] === true || key === selectedKey ||
-        [...displayedSessionIds].some((id) => key === JSON.stringify([
-          environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId,
-        ])))
+      .filter(
+        ({ key }) =>
+          userOpened?.[key] === true ||
+          key === selectedKey ||
+          [...displayedSessionIds].some(
+            (id) =>
+              key ===
+              JSON.stringify([environmentId, chatGPTBrowserThreadRef(environmentId, id).threadId]),
+          ),
+      )
       .map(({ key }) => key);
     const manual = new Set(userKeys);
     const automatic = ranked.filter(({ key }) => !manual.has(key));
-    return [...new Set([
-      ...userKeys,
-      ...recentChatGPTGuestKeys(
-        automatic, protectedKeys,
-        unloadProfile === "never" ? Number.POSITIVE_INFINITY : maxAutoCount,
-      ),
-    ])];
+    return [
+      ...new Set([
+        ...userKeys,
+        ...recentChatGPTGuestKeys(
+          automatic,
+          protectedKeys,
+          unloadProfile === "never" ? Number.POSITIVE_INFINITY : maxAutoCount,
+        ),
+      ]),
+    ];
   }, [
     activeSessionId,
     [...displayedSessionIds].join("|"),
@@ -411,12 +406,13 @@ export function ChatGPTGuestRetention({
               (warmedIds.includes(session.id) || imminentCaffyIds.has(session.id)) &&
               !session.hidden &&
               !(session.snoozedUntil && session.snoozedUntil > now) &&
-              (imminentCaffyIds.has(session.id) || !manuallyUnloaded[
-                JSON.stringify([
-                  environmentId,
-                  chatGPTBrowserThreadRef(environmentId, session.id).threadId,
-                ])
-              ])),
+              (imminentCaffyIds.has(session.id) ||
+                !manuallyUnloaded[
+                  JSON.stringify([
+                    environmentId,
+                    chatGPTBrowserThreadRef(environmentId, session.id).threadId,
+                  ])
+                ])),
         )
         .map((session) => (
           <ChatGPTBrowserSessionRuntime

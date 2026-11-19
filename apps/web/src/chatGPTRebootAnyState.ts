@@ -1,8 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import { wakeChatGPTGuest } from "./browser/chatGPTGuestHibernation";
-import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
-import { nativeChatGPTResidency } from "./browser/nativeChatGPTWarmSession";
 import { resetHostedBrowserGuest } from "./browser/hostedBrowserGuestReset";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
 import { chatGPTBrowserLastUrlKey, chatGPTBrowserThreadRef } from "./chatGPTBrowserSessions";
@@ -12,9 +10,7 @@ import {
 } from "./chatGPTDeliveryMountRequest";
 import { readThreadPreviewState } from "./previewStateStore";
 
-export type RebootBrowserSlot =
-  | { readonly kind: "native"; readonly environmentId: EnvironmentId; readonly sessionId: string }
-  | { readonly kind: "webview"; readonly runtimeId: string };
+export type RebootBrowserSlot = { readonly kind: "webview"; readonly runtimeId: string };
 
 /**
  * Agent Reboot is an explicit change of conversation, not a page reload.
@@ -26,14 +22,6 @@ export async function findRebootBrowserSlot(
   sessionId: string,
   timeoutMs = 20_000,
 ): Promise<RebootBrowserSlot> {
-  if (isPersistentChatGPTSessionOptedIn(sessionId)) {
-    // Native Chromium pages live in Electron, not in a React <webview> or
-    // preview tab. A missing native page is valid for an unloaded session;
-    // actual creation/navigation happens only AFTER reboot intent is durable.
-    if (!window.desktopBridge?.stableChatGPTViewRequest)
-      throw new Error("Native Chromium bridge unavailable for Agent Reboot.");
-    return { kind: "native", environmentId, sessionId };
-  }
   requestChatGPTDeliveryMount(environmentId, sessionId);
   try {
     const ref = chatGPTBrowserThreadRef(environmentId, sessionId);
@@ -87,34 +75,8 @@ export function recordPriorRebootState(
 
 /**
  * Explicit reboot may replace a working or errored page in the SAME session.
- * Existing native pages are navigated, not torn down or allocated a new UUID.
- * A missing native page is attached only after the reboot receipt was saved.
+ * Only the existing exact Electron webview is reset.
  */
 export async function replaceRebootBrowserSlot(slot: RebootBrowserSlot): Promise<void> {
-  const url = "https://chatgpt.com/";
-  if (slot.kind === "webview") {
-    await resetHostedBrowserGuest(slot.runtimeId, url);
-    return;
-  }
-  const bridge = window.desktopBridge?.stableChatGPTViewRequest;
-  if (!bridge) throw new Error("Native Chromium bridge unavailable for Agent Reboot.");
-  const identity = { environmentId: slot.environmentId, sessionId: slot.sessionId, profileId: "default" };
-  const residency = await nativeChatGPTResidency(bridge, slot.environmentId, slot.sessionId);
-  if (residency === "resident") {
-    // Navigation, rather than attach, starts a genuinely new conversation even
-    // when the old native page is itself a home page with a restored draft.
-    await bridge({ operation: "navigate", identity, url });
-  } else if (residency === "missing") {
-    // Native attach creates the absent owner; it does NOT navigate an existing
-    // page if the UI mounted it while this command was in flight.
-    const attached = (await bridge({ operation: "attach", identity, url })) as { url?: string };
-    if (attached.url && attached.url !== url) {
-      // Concurrent attach adopted an existing page. The explicit reboot still
-      // needs to navigate that same owner to the new-chat home.
-      await bridge({ operation: "navigate", identity, url });
-    }
-  } else {
-    // Unknown IPC is not evidence of absence. Never allocate/reload blindly.
-    throw new Error("Native Chromium slot could not be verified for Agent Reboot.");
-  }
+  await resetHostedBrowserGuest(slot.runtimeId, "https://chatgpt.com/");
 }

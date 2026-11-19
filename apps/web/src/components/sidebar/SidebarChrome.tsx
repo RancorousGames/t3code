@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, Globe2Icon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -244,11 +244,8 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/settings" });
   };
 
-  const handleNativeBrowserClick = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/native-browser" });
-  };
-  const handleUsageClick = () => {    if (isMobile) {
+  const handleUsageClick = () => {
+    if (isMobile) {
       setOpenMobile(false);
     }
     void navigate({ to: "/usage" });
@@ -280,13 +277,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               icon={<PullRequestGlyph.pullRequest />}
               label="Pull requests"
               onClick={handlePullRequestsClick}
-            />
-          ) : null}
-          {isElectron ? (
-            <SidebarUtilityItem
-              icon={<Globe2Icon />}
-              label="Native Browser"
-              onClick={handleNativeBrowserClick}
             />
           ) : null}
           <SidebarUtilityItem

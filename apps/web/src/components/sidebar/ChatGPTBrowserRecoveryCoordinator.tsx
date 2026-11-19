@@ -13,7 +13,6 @@ import {
 } from "../../browser/browserSurfaceStore";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
 import { resetHostedBrowserGuest } from "../../browser/hostedBrowserGuestReset";
-import { isPersistentChatGPTSessionOptedIn } from "../../browser/persistentChatGPTSessionMode";
 import { chatGPTBrowserFailure, inspectChatGPTBrowserHealth } from "../../chatGPTBrowserHealth";
 import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 import {
@@ -60,7 +59,6 @@ import { recoveryNextWakeDelayMs } from "../../chatGPTRecoveryWake";
 import { readThreadPreviewState } from "../../previewStateStore";
 import { previewBridge } from "../preview/previewBridge";
 import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
-import { ChatGPTNativeRecoveryCoordinator } from "./ChatGPTNativeRecoveryCoordinator";
 import {
   RECOVERY_REFRESH_TIMEOUT_MS,
   cooldownElapsed,
@@ -587,7 +585,9 @@ export function ChatGPTBrowserRecoveryCoordinator({
       failingIds: currentRedIds(),
       selectedId: currentSelectedId() ?? null,
       managerIds: currentManagerIds(),
-      returnMarkerIds: readChatGPTBrowserSessions(envId).filter((session) => session.returnMarker).map((session) => session.id),
+      returnMarkerIds: readChatGPTBrowserSessions(envId)
+        .filter((session) => session.returnMarker)
+        .map((session) => session.id),
       interruptedIds: currentInterruptedIds(),
       recentClicks: readRecentSessionClicks(envId),
       lastActive: currentLastActive(),
@@ -716,11 +716,7 @@ export function ChatGPTBrowserRecoveryCoordinator({
                 lostRouteFirstSeen.has(id),
             );
         const wakeupSet = new Set(currentWakeupIds());
-        // Native pages do not have legacy paint surfaces. Never spend scarce
-        // webview wake slots on entries handled by the native coordinator.
-        const toWake = candidates.filter(
-          (id) => wakeupSet.has(id) && !isPersistentChatGPTSessionOptedIn(id),
-        );
+        const toWake = candidates.filter((id) => wakeupSet.has(id));
         const wakeNow = new Set<string>();
         for (let n = 0; n < Math.min(BACKGROUND_PROBES_PER_SCAN, toWake.length); n++) {
           wakeNow.add(toWake[(wakeupCursor + n) % toWake.length]!);
@@ -728,9 +724,6 @@ export function ChatGPTBrowserRecoveryCoordinator({
         if (toWake.length) wakeupCursor = (wakeupCursor + wakeNow.size) % toWake.length;
         for (const sessionId of candidates) {
           if (disposed) return;
-          // Native Chrome pages are not preview webviews. Stale preview health
-          // or URL state can never authorize legacy reset/navigation/reload.
-          if (isPersistentChatGPTSessionOptedIn(sessionId)) continue;
           if (!currentSessionIds().includes(sessionId)) continue;
           if (isChatGPTRecoveryMutationPending(envId, sessionId)) {
             recordChatGPTRecoveryEvent(
@@ -1854,14 +1847,5 @@ export function ChatGPTBrowserRecoveryCoordinator({
     );
   }, [environmentId, inputSignature]);
 
-  return (
-    <ChatGPTNativeRecoveryCoordinator
-      environmentId={environmentId}
-      sessionIds={sessionIds}
-      redIds={redIds}
-      interruptedIds={interruptedIds}
-      selectedId={selectedId}
-      managerIds={managerIds}
-    />
-  );
+  return null;
 }

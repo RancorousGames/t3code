@@ -1,15 +1,8 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
-import {
-  CHATGPT_DEFAULT_URL,
-  chatGPTBrowserThreadRef,
-  readChatGPTBrowserSessions,
-} from "./chatGPTBrowserSessions";
+import { chatGPTBrowserThreadRef, readChatGPTBrowserSessions } from "./chatGPTBrowserSessions";
 import { isChatGPTHomeUrl } from "./chatGPTBrowserPrewarm";
-import { isPersistentChatGPTSessionOptedIn } from "./browser/persistentChatGPTSessionMode";
-import { nativeChatGPTInitialPromptAutomation } from "./browser/nativeChatGPTInitialPromptAutomation";
 import { ensureChatGPTHighEffort } from "./chatGPTHighEffort";
-import { readChatGPTSessionProfileId } from "./chatGPTAccountProfiles";
 import { buildChatGPTSessionHandoffPrompt } from "./chatGPTSessionHandoff";
 import { publicChatGPTParentId, publicChatGPTSessionId } from "./chatGPTBootstrapIdentity";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
@@ -48,9 +41,9 @@ export interface ChatGPTPromptAutomation {
 }
 
 /**
- * Submit an initial ChatGPT message through the mounted React callback in
- * its exact reserved native Chromium or legacy guest. Never touch the composer
- * draft and never replay an ambiguous first-message submission.
+ * Submit an initial ChatGPT message through the mounted Electron webview of
+ * its exact reserved session. Never overwrite a draft or replay an ambiguous
+ * first-message submission.
  */
 export async function sendInitialChatGPTPrompt(input: {
   environmentId: EnvironmentId;
@@ -79,17 +72,7 @@ export async function sendInitialChatGPTPrompt(input: {
       sendAttempted: false,
       reason: "ChatGPT guest does not belong to this exact backend spawn reservation.",
     };
-  const nativeBridge =
-    !input.automation && isPersistentChatGPTSessionOptedIn(input.sessionId)
-      ? window.desktopBridge?.stableChatGPTViewRequest
-      : undefined;
-  const automation =
-    input.automation ??
-    (nativeBridge
-      ? nativeChatGPTInitialPromptAutomation(nativeBridge, input.environmentId, input.sessionId)
-      : previewBridge
-        ? chatGPTWebviewAutomation
-        : undefined);
+  const automation = input.automation ?? (previewBridge ? chatGPTWebviewAutomation : undefined);
   if (!automation) throw new Error("ChatGPT automation requires T3 Code desktop.");
   const prompt = buildChatGPTSessionHandoffPrompt(
     input.prompt,
@@ -121,37 +104,16 @@ export async function sendInitialChatGPTPrompt(input: {
   // selected. Temporarily keep this guest composited behind the app so browser
   // automation works without navigating to it or taking the user's focus.
   try {
-    if (nativeBridge) {
-      // A newly reserved native session has no legacy preview tab. Attach its
-      // Electron-owned page directly; an existing page is never navigated.
-      await nativeBridge({
-        operation: "attach",
-        identity: {
-          environmentId: input.environmentId,
-          sessionId: input.sessionId,
-          profileId: readChatGPTSessionProfileId(input.environmentId, input.sessionId),
-        },
-        url: CHATGPT_DEFAULT_URL,
-      });
-    }
     while (now() < deadline) {
-      const state = nativeBridge ? null : readState(threadRef);
-      const tabId = nativeBridge ? input.sessionId : (state!.activeTabId ?? state!.snapshot?.tabId);
-      // The upstream server-hosted browser can mount its Electron guest before
-      // the desktop overlay reports hasWebContents. Resolve readiness from the
-      // actual guest rather than waiting on that eventually consistent overlay.
+      const state = readState(threadRef);
+      const tabId = state.activeTabId ?? state.snapshot?.tabId;
       if (tabId) {
-        const runtimeId = nativeBridge
-          ? input.sessionId
-          : previewRuntimeTabId(threadRef, state!.serverEpoch, tabId);
-        if (!nativeBridge) {
-          // Only the legacy webview needs a preview-runtime wake and activity lease.
-          wakeChatGPTGuest(runtimeId);
-          if (runtimeId !== activeRuntimeId) {
-            releaseActivity?.();
-            releaseActivity = acquireActivity(runtimeId);
-            activeRuntimeId = runtimeId;
-          }
+        const runtimeId = previewRuntimeTabId(threadRef, state.serverEpoch, tabId);
+        wakeChatGPTGuest(runtimeId);
+        if (runtimeId !== activeRuntimeId) {
+          releaseActivity?.();
+          releaseActivity = acquireActivity(runtimeId);
+          activeRuntimeId = runtimeId;
         }
         try {
           const status = await automation.status(runtimeId);

@@ -73,31 +73,6 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
-  persistentChatGPTRequest: (input) =>
-    ipcRenderer.invoke(IpcChannels.PERSISTENT_CHATGPT_REQUEST_CHANNEL, input),
-  stableChatGPTViewRequest: (input) =>
-    ipcRenderer.invoke(IpcChannels.STABLE_CHATGPT_VIEW_REQUEST_CHANNEL, input),
-  onStableChatGPTViewState: (listener) => {
-    const onState = (_event: Electron.IpcRendererEvent, payload: unknown) => {
-      if (!payload || typeof payload !== "object") return;
-      const state = payload as { environmentId?: unknown; sessionId?: unknown; phase?: unknown };
-      if (
-        typeof state.environmentId !== "string" ||
-        typeof state.sessionId !== "string" ||
-        !["loading", "loaded", "failed", "navigated"].includes(String(state.phase))
-      )
-        return;
-      listener(
-        state as {
-          environmentId: string;
-          sessionId: string;
-          phase: "loading" | "loaded" | "failed" | "navigated";
-        },
-      );
-    };
-    ipcRenderer.on(IpcChannels.STABLE_CHATGPT_VIEW_STATE_CHANNEL, onState);
-    return () => ipcRenderer.removeListener(IpcChannels.STABLE_CHATGPT_VIEW_STATE_CHANNEL, onState);
-  },
   readChatGPTBootstrapTitle: (id) =>
     ipcRenderer.invoke(IpcChannels.CHATGPT_BOOTSTRAP_TITLE_LOOKUP_CHANNEL, id),
   readChatGPTDeliveryDiagnostics: () =>
@@ -109,12 +84,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.CAFFY_MANAGED_IDLE_READ_CHANNEL),
   cancelCaffyManagedIdleSubscription: (id) =>
     ipcRenderer.invoke(IpcChannels.CAFFY_MANAGED_IDLE_CANCEL_CHANNEL, id),
-  readOmniHubKeepAwakeMonitors: (input) =>
-    ipcRenderer.invoke(IpcChannels.OMNIHUB_KEEP_AWAKE_READ_CHANNEL, input),
-  controlOmniHubKeepAwakeMonitor: (input) =>
-    ipcRenderer.invoke(IpcChannels.OMNIHUB_KEEP_AWAKE_CONTROL_CHANNEL, input),
-  startOmniHubKeepAwakeMonitor: (input) =>
-    ipcRenderer.invoke(IpcChannels.OMNIHUB_KEEP_AWAKE_START_CHANNEL, input),
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

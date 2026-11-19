@@ -24,8 +24,7 @@ export type CaffyMenuAction =
   | "caffy:auto"
   | "caffy:pause"
   | "caffy:startup"
-  | "caffy:stop"
-  | `caffy:stop-legacy:${string}`;
+  | "caffy:stop";
 
 export const QUICK_CAFFY_MINUTES = 4 * 60;
 
@@ -55,23 +54,19 @@ export function buildCaffyContextMenuItems(input: {
   caffy: CaffyMenuStatus | null;
   now: number;
   exhausted?: boolean;
-  legacyCaffyIds?: readonly string[];
 }): ReadonlyArray<ContextMenuItem<CaffyMenuAction>> {
   const { caffy, now } = input;
   const exhausted = input.exhausted === true;
-  const legacyIds = input.legacyCaffyIds ?? [];
   const wakeMode =
-    !caffy && legacyIds.length > 0
-      ? "Legacy OmniHub active"
-      : caffy?.mode === "idle"
-        ? caffy.onceOnly
-          ? "Continue once"
-          : "Keep running"
-        : caffy?.mode === "periodic"
-          ? "Interval wake"
-          : caffy?.mode === "startup"
-            ? "Startup only"
-            : null;
+    caffy?.mode === "idle"
+      ? caffy.onceOnly
+        ? "Continue once"
+        : "Keep running"
+      : caffy?.mode === "periodic"
+        ? "Interval wake"
+        : caffy?.mode === "startup"
+          ? "Startup only"
+          : null;
   const item = (
     id: CaffyMenuAction,
     label: string,
@@ -81,7 +76,7 @@ export function buildCaffyContextMenuItems(input: {
     item("caffy:quick-4h", "Caffy · Continue on idle for 4h (Ctrl+Alt+I)", {
       separatorBefore: true,
       checked: isQuickFourHourCaffy(caffy, now),
-      disabled: exhausted || (!caffy && legacyIds.length > 0),
+      disabled: exhausted,
     }),
     item("schedule:prompt", "Schedule prompt…", { disabled: exhausted }),
     item(
@@ -106,17 +101,7 @@ export function buildCaffyContextMenuItems(input: {
             checked: caffy?.startup ?? false,
             separatorBefore: true,
           }),
-          item("caffy:stop", !caffy && legacyIds.length > 0 ? "Stop legacy Caffy" : "Stop Caffy", {
-            disabled: !caffy && legacyIds.length === 0,
-            separatorBefore: true,
-            ...(legacyIds.length > 1 && !caffy
-              ? {
-                  children: legacyIds.map((id, index) =>
-                    item(`caffy:stop-legacy:${id}`, `Legacy monitor ${index + 1}`),
-                  ),
-                }
-              : {}),
-          }),
+          item("caffy:stop", "Stop Caffy", { disabled: !caffy, separatorBefore: true }),
         ],
       },
     ),

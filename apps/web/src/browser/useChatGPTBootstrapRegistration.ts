@@ -1,7 +1,5 @@
 import { useEffect } from "react";
 import { findMountedChatGPTGuest } from "./mountedChatGPTGuest";
-import { isPersistentChatGPTSessionOptedIn } from "./persistentChatGPTSessionMode";
-import { chatGPTSessionProfileId } from "../chatGPTAccountProfiles";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
   chatGPTBrowserThreadRef,
@@ -44,10 +42,10 @@ export function readChatGPTBootstrapProbe(sessionId: string) {
 }
 
 /** Registers a session from its completed Bootstrap tool result, falling back
- * to the first assistant [T3_ID:uuid] confirmation. Uses native Chromium evaluation for Chrome
- * views and mounted webview evaluation for legacy sessions. A slow heartbeat
- * covers native pages that do not emit webview push events. The DOM is checked
- * first; the conversation API handles non-rendered tool results or markers. */
+ * to the first assistant [T3_ID:uuid] confirmation. Uses the existing
+ * Electron webview for DOM inspection and a slow heartbeat for sessions whose
+ * guest has not emitted a push event. The conversation API handles markers
+ * that are not yet visible in the rendered page. */
 export function useChatGPTBootstrapRegistration(environmentId: EnvironmentId, sessionId: string) {
   const { sessions, registerBootstrapMarker, resolveBootstrapTitle } =
     useChatGPTBrowserSessions(environmentId);
@@ -83,44 +81,25 @@ export function useChatGPTBootstrapRegistration(environmentId: EnvironmentId, se
           (item) => item.id === sessionId,
         );
         if (disposed || !entry || !needsChatGPTBootstrapMarker(entry)) return;
-        const native = isPersistentChatGPTSessionOptedIn(sessionId);
         const ref = chatGPTBrowserThreadRef(environmentId, sessionId);
         const state = readThreadPreviewState(ref);
-        if (!native && !state.activeTabId) return note("no_active_tab");
-        const runtimeId = state.activeTabId
-          ? previewRuntimeTabId(ref, state.serverEpoch, state.activeTabId)
-          : null;
-        const guest = native || !runtimeId ? null : findMountedChatGPTGuest(runtimeId);
-        if (!native && !guest) return note("no_guest");
-        const bridge = native ? window.desktopBridge?.stableChatGPTViewRequest : undefined;
-        if (native && !bridge) return note("no_native_bridge");
-        const identity = { sessionId, environmentId, profileId: chatGPTSessionProfileId(entry) };
-        const initialPage = native
-          ? ((await bridge!({ operation: "probe", identity })) as {
-              residency?: "resident" | "missing" | "mismatch";
-              url?: string;
-              destroyed?: boolean;
-            })
-          : null;
-        if (native && (initialPage?.residency !== "resident" || initialPage?.destroyed || !initialPage?.url))
-          return note("native_not_ready");
-        const evaluate = async (expression: string): Promise<unknown> => {
-          if (bridge) {
-            const response = (await bridge({ operation: "evaluate", identity, expression })) as {
-              result?: unknown;
-            };
-            return response.result;
-          }
-          return guest!.executeJavaScript(expression);
-        };
+        if (!state.activeTabId) return note("no_active_tab");
+        const runtimeId = previewRuntimeTabId(ref, state.serverEpoch, state.activeTabId);
+        const guest = findMountedChatGPTGuest(runtimeId);
+        if (!guest) return note("no_guest");
+        const evaluate = async (expression: string): Promise<unknown> =>
+          guest.executeJavaScript(expression);
         let result: unknown = await evaluate(`(${inspectChatGPTBootstrapToolResult.toString()})()`);
         if (!isObservation(result))
           result = await evaluate(`(${inspectChatGPTBootstrapMarker.toString()})()`);
         if (disposed) return;
         if (!isObservation(result)) {
           const now = Date.now();
-          if (now < Math.max(globalApiRetryAfter, apiRetryAfterBySession.get(sessionId) ?? 0) ||
-              now - globalLastApiAt < 12_000) return note("dom_no_marker_api_cooldown");
+          if (
+            now < Math.max(globalApiRetryAfter, apiRetryAfterBySession.get(sessionId) ?? 0) ||
+            now - globalLastApiAt < 12_000
+          )
+            return note("dom_no_marker_api_cooldown");
           globalLastApiAt = now;
           result = await evaluate(`(${inspectChatGPTBootstrapMarkerViaApi.toString()})()`);
           if (disposed) return;
@@ -134,26 +113,10 @@ export function useChatGPTBootstrapRegistration(environmentId: EnvironmentId, se
           }
         }
         const observation = result;
-        // Native Chrome views have no DOM webview element. Recheck the exact page
-        // before accepting its assistant marker; never claim another conversation.
-        if (native) {
-          const current = (await bridge!({ operation: "snapshot", identity })) as {
-            url?: string;
-            destroyed?: boolean;
-          };
-          if (
-            current.destroyed ||
-            current.url !== initialPage?.url ||
-            !current.url?.includes(`/c/${observation.conversationId}`)
-          )
-            return note("native_page_changed");
-        }
-        // Ignore results from a legacy guest that navigated or was replaced meanwhile.
         if (
-          !native &&
-          (!guest!.isConnected ||
-            guest!.dataset.previewTab !== runtimeId ||
-            !guest!.getURL().includes(`/c/${observation.conversationId}`))
+          !guest.isConnected ||
+          guest.dataset.previewTab !== runtimeId ||
+          !guest.getURL().includes("/c/" + observation.conversationId)
         )
           return note("guest_changed");
         registerBootstrapMarker(sessionId, {
