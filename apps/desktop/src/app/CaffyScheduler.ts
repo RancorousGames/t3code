@@ -5,8 +5,10 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import type {
-  CapacityMessageReceipt, CapacityMessageRequest,
-  DesktopAppActivationRequest, DesktopAppActivationResponse,
+  CapacityMessageReceipt,
+  CapacityMessageRequest,
+  DesktopAppActivationRequest,
+  DesktopAppActivationResponse,
 } from "@t3tools/contracts";
 import type { ChatGPTDeliveryQueue, DeliveryRecord } from "./ChatGPTDeliveryQueue.ts";
 import type { VerifiedChatGPTIdleTransition } from "./ChatGPTIdleTransitionJournal.ts";
@@ -25,6 +27,9 @@ export interface CaffyConfig {
   nativeThreadId?: string;
   nativeLastRunOrdinal?: number;
   nativeLastSendAttemptAt?: number | null;
+  /** Keep running: a failed/interrupted/cancelled native run re-wakes at this time
+   * (IDLE_FALLBACK_MS later) unless a new run starts first. */
+  nativeRetryAt?: number | null;
   sessionId: string;
   browserSessionId?: string | undefined;
   /** Public Bootstrap / T3_ID alias; never use as the delivery target unless it is the browser ID. */
@@ -93,9 +98,12 @@ export interface AgentStoppedCaffy {
   stoppedAt: number;
 }
 interface LocalCapacityClaim {
-  messageId: string; sessionId: string; conversationId: string | null;
+  messageId: string;
+  sessionId: string;
+  conversationId: string | null;
   state: "waiting" | "admitted" | "submitted" | "uncertain";
-  createdAt: number; submittedAt: number | null;
+  createdAt: number;
+  submittedAt: number | null;
 }
 export interface ScheduledSpawnCaffy {
   mode: "idle" | "periodic";
@@ -125,23 +133,37 @@ interface ScheduledChatGPTSpawn {
   error?: string;
 }
 interface CaffyRosterEntry {
-  id?: string; browserSessionId?: string; publicSessionId?: string;
+  id?: string;
+  browserSessionId?: string;
+  publicSessionId?: string;
   conversationId?: string;
   bootstrapIdentity?: { state?: string; publicId?: string; conversationId?: string };
   lastIdleTransition?: { eventId?: string; conversationId?: string; sequence?: number };
-  activity?: string; status?: string; lastRole?: string; statusObservedAt?: string;
-  hidden?: boolean; snoozedUntil?: number; closedAt?: unknown;
+  activity?: string;
+  status?: string;
+  lastRole?: string;
+  statusObservedAt?: string;
+  hidden?: boolean;
+  snoozedUntil?: number;
+  closedAt?: unknown;
 }
 interface CaffyRoster {
-  sessions: CaffyRosterEntry[]; total?: number; hasMore?: boolean; incomplete?: boolean;
+  sessions: CaffyRosterEntry[];
+  total?: number;
+  hasMore?: boolean;
+  incomplete?: boolean;
 }
 
 /** Ownership is resolved only by T3 IDs. Undefined aliases never match. */
 function matchesCaffyOwner(entry: CaffyRosterEntry, ids: readonly (string | undefined)[]) {
   const wanted = new Set(ids.filter((id): id is string => !!id));
-  return [entry.id, entry.browserSessionId, entry.publicSessionId,
-    entry.bootstrapIdentity?.publicId, entry.lastIdleTransition?.eventId?.split(":")[0]]
-    .some(id => !!id && wanted.has(id));
+  return [
+    entry.id,
+    entry.browserSessionId,
+    entry.publicSessionId,
+    entry.bootstrapIdentity?.publicId,
+    entry.lastIdleTransition?.eventId?.split(":")[0],
+  ].some((id) => !!id && wanted.has(id));
 }
 
 interface CaffyStore {
@@ -158,31 +180,49 @@ interface CaffyStore {
 }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const LEGACY_TERMINAL_STATES = new Set([
-  "cancelled", "canceled", "completed", "exhausted", "mandate_finished",
-  "blocked", "expired", "failed",
+  "cancelled",
+  "canceled",
+  "completed",
+  "exhausted",
+  "mandate_finished",
+  "blocked",
+  "expired",
+  "failed",
 ]);
 
 /** A legacy monitor remains a separate scheduler owner until its state is terminal. */
 export function legacyMonitorOwnsConversation(
   monitor: { state?: string; target?: { sessionId?: string; expectedConversationId?: string } },
-  sessionId: string, conversationId: string,
+  sessionId: string,
+  conversationId: string,
 ): boolean {
-  return !LEGACY_TERMINAL_STATES.has(monitor.state ?? "") &&
+  return (
+    !LEGACY_TERMINAL_STATES.has(monitor.state ?? "") &&
     (monitor.target?.sessionId === sessionId ||
-      monitor.target?.expectedConversationId === conversationId);
+      monitor.target?.expectedConversationId === conversationId)
+  );
 }
-const WAKE_TEXT = "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
+const WAKE_TEXT =
+  "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
 const CLOCK = 20_000;
+/** Stall fallback for idle mode: when no verified idle edge follows a wake
+ * (e.g. the reply was a ChatGPT refusal the edge detector cannot read), wake
+ * anyway once the roster has shown a settled assistant turn this long. */
+const IDLE_FALLBACK_MS = 2 * 60_000;
 const nativeOwner = (environmentId: string, threadId: string) => `t3:${environmentId}:${threadId}`;
 const valid = (row: CaffyConfig): boolean =>
-  !!row && (row.targetKind === "t3"
-    ? !!row.environmentId && !!row.nativeThreadId &&
+  !!row &&
+  (row.targetKind === "t3"
+    ? !!row.environmentId &&
+      !!row.nativeThreadId &&
       row.sessionId === nativeOwner(row.environmentId, row.nativeThreadId) &&
       row.conversationId === row.nativeThreadId
     : UUID.test(row.sessionId) && UUID.test(row.conversationId)) &&
   ["idle", "periodic", "startup"].includes(row.mode) &&
-  Number.isFinite(row.createdAt) && Number.isInteger(row.intervalMinutes) &&
-  row.intervalMinutes >= 1 && row.intervalMinutes <= 525_600 &&
+  Number.isFinite(row.createdAt) &&
+  Number.isInteger(row.intervalMinutes) &&
+  row.intervalMinutes >= 1 &&
+  row.intervalMinutes <= 525_600 &&
   (row.expiresAt === null || Number.isFinite(row.expiresAt)) &&
   (row.pendingMessageId === null || UUID.test(row.pendingMessageId));
 
@@ -208,7 +248,11 @@ export class CaffyScheduler {
   private readonly automaticAdmissions = new Set<string>();
   private readonly capacityClaims = new Map<string, LocalCapacityClaim>();
   private admissionGate: Promise<void> = Promise.resolve();
-  private taskReservations: Array<{requestId: string; sessionId: string | null; holdUntil?: number}> = [];
+  private taskReservations: Array<{
+    requestId: string;
+    sessionId: string | null;
+    holdUntil?: number;
+  }> = [];
   private taskBoardInventoryReady = false;
   private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -216,6 +260,8 @@ export class CaffyScheduler {
   private pumping = false;
   private pumpRequested = false;
   private lastIdentityReconcileAt = 0;
+  /** In-memory: since when each idle-mode row has looked settled with no edge. */
+  private readonly idleFallbackSince = new Map<string, number>();
   private identityReconciliation: Promise<void> | null = null;
   private blockerId: number | null = null;
   private readonly deliveries: ChatGPTDeliveryQueue;
@@ -234,10 +280,14 @@ export class CaffyScheduler {
         throw new Error("Forced shutdown supported only on Windows.");
       // /f forcibly closes unsaved apps; /t 0 requests immediate poweroff.
       const result = NodeChildProcess.spawnSync("shutdown.exe", ["/s", "/f", "/t", "0"], {
-        windowsHide: true, encoding: "utf8", timeout: 5_000,
+        windowsHide: true,
+        encoding: "utf8",
+        timeout: 5_000,
       });
       if (result.error || result.status !== 0)
-        throw new Error(`Shutdown request refused: ${result.error?.message ?? result.stderr ?? result.status}`);
+        throw new Error(
+          `Shutdown request refused: ${result.error?.message ?? result.stderr ?? result.status}`,
+        );
     },
   ) {
     this.shutdownPC = shutdownPC;
@@ -259,17 +309,26 @@ export class CaffyScheduler {
           delete (row as { runWithoutBusy?: unknown }).runWithoutBusy;
           if (!valid(row)) continue;
           // An interval with no deadline and no wake in flight restarts now.
-          if (row.mode === "periodic" && !Number.isFinite(row.nextDueAt) &&
-              !row.pendingWake && !row.pendingMessageId)
+          if (
+            row.mode === "periodic" &&
+            !Number.isFinite(row.nextDueAt) &&
+            !row.pendingWake &&
+            !row.pendingMessageId
+          )
             row.nextDueAt = Date.now() + row.intervalMinutes * 60_000;
           if (row.mode !== "periodic") row.nextDueAt = null;
           this.entries.set(row.sessionId, row);
         }
         for (const job of saved.scheduledSpawns ?? []) {
-          if (!job || !UUID.test(job.id) ||
-              !(job.onIdle === true ? job.beginAt === null : Number.isSafeInteger(job.beginAt)) ||
-              typeof job.title !== "string" || typeof job.prompt !== "string" ||
-              !["scheduled", "dispatching", "created", "uncertain"].includes(job.status)) continue;
+          if (
+            !job ||
+            !UUID.test(job.id) ||
+            !(job.onIdle === true ? job.beginAt === null : Number.isSafeInteger(job.beginAt)) ||
+            typeof job.title !== "string" ||
+            typeof job.prompt !== "string" ||
+            !["scheduled", "dispatching", "created", "uncertain"].includes(job.status)
+          )
+            continue;
           // Dispatch may have reached the renderer before T3 shut down.
           if (job.status === "dispatching") {
             job.status = "uncertain";
@@ -278,10 +337,14 @@ export class CaffyScheduler {
           this.scheduledSpawns.set(job.id, job);
         }
         for (const claim of saved.capacityClaims ?? []) {
-          if (claim && UUID.test(claim.messageId) && UUID.test(claim.sessionId) &&
-              (claim.conversationId === null || UUID.test(claim.conversationId)) &&
-              ["waiting", "admitted", "submitted", "uncertain"].includes(claim.state) &&
-              Number.isFinite(claim.createdAt))
+          if (
+            claim &&
+            UUID.test(claim.messageId) &&
+            UUID.test(claim.sessionId) &&
+            (claim.conversationId === null || UUID.test(claim.conversationId)) &&
+            ["waiting", "admitted", "submitted", "uncertain"].includes(claim.state) &&
+            Number.isFinite(claim.createdAt)
+          )
             this.capacityClaims.set(claim.messageId, claim);
         }
         for (const terminal of saved.terminalConversations ?? []) {
@@ -289,31 +352,40 @@ export class CaffyScheduler {
             this.terminalConversations.set(terminal.sessionId, terminal.conversationId);
         }
         for (const [id, row] of this.entries) {
-          if (this.terminalConversations.get(id) === row.conversationId)
-            this.entries.delete(id);
+          if (this.terminalConversations.get(id) === row.conversationId) this.entries.delete(id);
         }
         for (const mark of saved.agentStops ?? []) {
-          if (mark && UUID.test(mark.sessionId) && Number.isFinite(mark.stoppedAt) &&
-              Date.now() - mark.stoppedAt < 7 * 24 * 60 * 60_000)
+          if (
+            mark &&
+            UUID.test(mark.sessionId) &&
+            Number.isFinite(mark.stoppedAt) &&
+            Date.now() - mark.stoppedAt < 7 * 24 * 60 * 60_000
+          )
             this.agentStops.set(mark.sessionId, mark);
         }
         this.keepT3Busy = saved.keepT3Busy === true;
         this.shutdownWhenIdle = saved.shutdownWhenIdle === true;
-        this.busyUntil = saved.busyUntil != null && Number.isSafeInteger(saved.busyUntil) && saved.busyUntil > 0
-          ? saved.busyUntil : null;
+        this.busyUntil =
+          saved.busyUntil != null && Number.isSafeInteger(saved.busyUntil) && saved.busyUntil > 0
+            ? saved.busyUntil
+            : null;
         if (Number.isInteger(saved.maxWorking) && saved.maxWorking >= 1 && saved.maxWorking <= 100)
           this.maxWorking = saved.maxWorking;
       }
-    } catch { /* Corrupt/missing local state is not evidence for a wake. */ }
-    this.throughput = new AutoworkThroughput(stateDir,
-      this.keepT3Busy && (this.busyUntil === null || this.busyUntil > Date.now()));
-    this.deliveries.subscribeTransitions(record => this.onDelivery(record));
-    this.deliveries.setDispatchPermission(record => {
+    } catch {
+      /* Corrupt/missing local state is not evidence for a wake. */
+    }
+    this.throughput = new AutoworkThroughput(
+      stateDir,
+      this.keepT3Busy && (this.busyUntil === null || this.busyUntil > Date.now()),
+    );
+    this.deliveries.subscribeTransitions((record) => this.onDelivery(record));
+    this.deliveries.setDispatchPermission((record) => {
       const row = this.lookup(record.sessionId);
       // Pausing a schedule also holds its pending wake (it gives up after an hour).
       return !row || row.pendingMessageId !== record.messageId || !row.paused;
     });
-    this.deliveries.setDispatchAdmission(async record => {
+    this.deliveries.setDispatchAdmission(async (record) => {
       const row = this.lookup(record.sessionId);
       if (!row || row.pendingMessageId !== record.messageId) return true;
       const state = this.deliveries.status(record.messageId).status;
@@ -324,8 +396,7 @@ export class CaffyScheduler {
       // An already admitted wake may finish its exact pending send, but a
       // preexisting oversubscription must not authorize additional Caffy
       // activations. TaskBoard and Caffy use the same global cap.
-      return snapshot?.unknown === 0 &&
-        snapshot.used + snapshot.reserved <= snapshot.limit;
+      return snapshot?.unknown === 0 && snapshot.used + snapshot.reserved <= snapshot.limit;
     });
   }
 
@@ -346,17 +417,21 @@ export class CaffyScheduler {
       const filename = `caffy-${new Date().toISOString().replace(/[:.]/g, "-")}-${NodeCrypto.randomUUID()}.json`;
       NodeFS.copyFileSync(this.file, NodePath.join(directory, filename));
       const snapshots = NodeFS.readdirSync(directory)
-        .filter(name => /^caffy-.*\.json$/.test(name)).sort();
+        .filter((name) => /^caffy-.*\.json$/.test(name))
+        .sort();
       for (const stale of snapshots.slice(0, Math.max(0, snapshots.length - 12)))
         NodeFS.rmSync(NodePath.join(directory, stale), { force: true });
-    } catch { /* Snapshot failure must not prevent live Caffy operations. */ }
+    } catch {
+      /* Snapshot failure must not prevent live Caffy operations. */
+    }
   }
 
   /** Log every pause/resume transition, especially implicit resumes from reconfiguration. */
   private logPauseChange(row: CaffyConfig, wasPaused: boolean, cause: string, requestId?: string) {
     if (wasPaused === row.paused) return;
     try {
-      NodeFS.appendFileSync(NodePath.join(NodePath.dirname(this.file), "caffy-state-transitions.ndjson"),
+      NodeFS.appendFileSync(
+        NodePath.join(NodePath.dirname(this.file), "caffy-state-transitions.ndjson"),
         JSON.stringify({
           at: new Date().toISOString(),
           event: row.paused ? "paused" : "resumed",
@@ -367,23 +442,34 @@ export class CaffyScheduler {
           conversationId: row.conversationId,
           mode: row.mode,
           intervalMinutes: row.intervalMinutes,
-        }) + "\n");
-    } catch { /* Audit failures must not stop Caffy. */ }
+        }) + "\n",
+      );
+    } catch {
+      /* Audit failures must not stop Caffy. */
+    }
   }
 
   private save() {
     const tmp = this.file + "." + process.pid + ".tmp";
     try {
-      NodeFS.writeFileSync(tmp, JSON.stringify({
-        version: 2, entries: [...this.entries.values()],
-        scheduledSpawns: [...this.scheduledSpawns.values()],
-        capacityClaims: [...this.capacityClaims.values()],
-        agentStops: [...this.agentStops.values()].slice(-128),
-        terminalConversations: [...this.terminalConversations].map(([sessionId, conversationId]) => ({ sessionId, conversationId })),
-        keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
-        shutdownWhenIdle: this.shutdownWhenIdle,
-        busyUntil: this.busyUntil,
-      } satisfies CaffyStore), { encoding: "utf8", flush: true });
+      NodeFS.writeFileSync(
+        tmp,
+        JSON.stringify({
+          version: 2,
+          entries: [...this.entries.values()],
+          scheduledSpawns: [...this.scheduledSpawns.values()],
+          capacityClaims: [...this.capacityClaims.values()],
+          agentStops: [...this.agentStops.values()].slice(-128),
+          terminalConversations: [...this.terminalConversations].map(
+            ([sessionId, conversationId]) => ({ sessionId, conversationId }),
+          ),
+          keepT3Busy: this.keepT3Busy,
+          maxWorking: this.maxWorking,
+          shutdownWhenIdle: this.shutdownWhenIdle,
+          busyUntil: this.busyUntil,
+        } satisfies CaffyStore),
+        { encoding: "utf8", flush: true },
+      );
       NodeFS.renameSync(tmp, this.file);
     } finally {
       if (NodeFS.existsSync(tmp)) NodeFS.rmSync(tmp, { force: true });
@@ -397,29 +483,53 @@ export class CaffyScheduler {
     const root = process.env.LOCALAPPDATA;
     if (!root) return false;
     try {
-      const store = JSON.parse(NodeFS.readFileSync(
-        NodePath.join(root, "OmniHub", "temporary-keep-awake-v1.json"), "utf8",
-      )) as {monitors?: Record<string, {state?: string; target?: {
-        sessionId?: string; expectedConversationId?: string;
-      }}>};
-      return Object.values(store.monitors ?? {}).some(monitor =>
-        legacyMonitorOwnsConversation(monitor, sessionId, conversationId));
-    } catch { return false; }
+      const store = JSON.parse(
+        NodeFS.readFileSync(NodePath.join(root, "OmniHub", "temporary-keep-awake-v1.json"), "utf8"),
+      ) as {
+        monitors?: Record<
+          string,
+          {
+            state?: string;
+            target?: {
+              sessionId?: string;
+              expectedConversationId?: string;
+            };
+          }
+        >;
+      };
+      return Object.values(store.monitors ?? {}).some((monitor) =>
+        legacyMonitorOwnsConversation(monitor, sessionId, conversationId),
+      );
+    } catch {
+      return false;
+    }
   }
 
   private syncPower() {
-    const active = [...this.entries.values()].some(row => !row.paused && row.keepAwake &&
-      (row.expiresAt === null || row.expiresAt > Date.now()));
+    const active = [...this.entries.values()].some(
+      (row) =>
+        !row.paused && row.keepAwake && (row.expiresAt === null || row.expiresAt > Date.now()),
+    );
     if (active && this.blockerId === null) {
-      try { this.blockerId = this.power.start(); } catch { /* never prevent scheduler progress */ }
+      try {
+        this.blockerId = this.power.start();
+      } catch {
+        /* never prevent scheduler progress */
+      }
     } else if (!active && this.blockerId !== null) {
-      try { this.power.stop(this.blockerId); } finally { this.blockerId = null; }
+      try {
+        this.power.stop(this.blockerId);
+      } finally {
+        this.blockerId = null;
+      }
     }
   }
 
   subscribeHeartbeat(callback: () => void): () => void {
     this.heartbeatSubscribers.add(callback);
-    return () => { this.heartbeatSubscribers.delete(callback); };
+    return () => {
+      this.heartbeatSubscribers.delete(callback);
+    };
   }
 
   start() {
@@ -431,11 +541,16 @@ export class CaffyScheduler {
     for (const row of this.entries.values()) {
       if (row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId)) {
         row.paused = true;
-        row.lastError = "A legacy OmniHub wake still owns this session; cancel/reconcile it before enabling T3 Caffy.";
+        row.lastError =
+          "A legacy OmniHub wake still owns this session; cancel/reconcile it before enabling T3 Caffy.";
         changed = true;
       }
-      if (row.startup && !row.paused && !row.pendingMessageId &&
-          (row.expiresAt === null || row.expiresAt > Date.now())) {
+      if (
+        row.startup &&
+        !row.paused &&
+        !row.pendingMessageId &&
+        (row.expiresAt === null || row.expiresAt > Date.now())
+      ) {
         row.pendingWake = true;
         row.pendingReason = "startup";
         changed = true;
@@ -443,10 +558,16 @@ export class CaffyScheduler {
       // Upgrade never-woken resume-on-idle monitors created by older builds
       // with wakeNow=false. Requeue once on startup, even without a new idle
       // transition; the guarded outbox will wait until sending is safe.
-      if (row.mode === "idle" && !row.onceOnly && !row.paused &&
-          !row.pendingWake && !row.pendingMessageId && row.lastWakeAt === null &&
-          (row.beginAt === null || row.beginAt === undefined || row.beginAt <= Date.now()) &&
-          (row.expiresAt === null || row.expiresAt > Date.now())) {
+      if (
+        row.mode === "idle" &&
+        !row.onceOnly &&
+        !row.paused &&
+        !row.pendingWake &&
+        !row.pendingMessageId &&
+        row.lastWakeAt === null &&
+        (row.beginAt === null || row.beginAt === undefined || row.beginAt <= Date.now()) &&
+        (row.expiresAt === null || row.expiresAt > Date.now())
+      ) {
         row.pendingWake = true;
         row.pendingReason = "manual";
         changed = true;
@@ -473,23 +594,35 @@ export class CaffyScheduler {
     this.workingReports.clear();
     this.shutdownIdleSince = null;
     if (this.blockerId !== null) {
-      try { this.power.stop(this.blockerId); } finally { this.blockerId = null; }
+      try {
+        this.power.stop(this.blockerId);
+      } finally {
+        this.blockerId = null;
+      }
     }
   }
 
   private lookup(sessionId: string): CaffyConfig | undefined {
-    return this.entries.get(sessionId) ??
-      [...this.entries.values()].find(row =>
-        row.browserSessionId === sessionId || row.publicSessionId === sessionId ||
-        (row.targetKind === "t3" && row.nativeThreadId === sessionId));
+    return (
+      this.entries.get(sessionId) ??
+      [...this.entries.values()].find(
+        (row) =>
+          row.browserSessionId === sessionId ||
+          row.publicSessionId === sessionId ||
+          (row.targetKind === "t3" && row.nativeThreadId === sessionId),
+      )
+    );
   }
 
   /** Resolve public Bootstrap aliases to the durable browser owner, never by conversation ID. */
   async reconcileIdentityAliases(force = false): Promise<void> {
     if (this.identityReconciliation) return this.identityReconciliation;
     this.identityReconciliation = this.reconcileOwners(force);
-    try { await this.identityReconciliation; }
-    finally { this.identityReconciliation = null; }
+    try {
+      await this.identityReconciliation;
+    } finally {
+      this.identityReconciliation = null;
+    }
   }
 
   private async reconcileOwners(force: boolean): Promise<void> {
@@ -520,20 +653,30 @@ export class CaffyScheduler {
         : null;
       if (!binding) {
         row.availability = "unavailable";
-        checked(roster
-          ? "T3 session exists but its current conversation is not verified; retaining the schedule."
-          : "T3 roster unavailable; retaining the schedule until the next check.");
+        checked(
+          roster
+            ? "T3 session exists but its current conversation is not verified; retaining the schedule."
+            : "T3 roster unavailable; retaining the schedule until the next check.",
+        );
         continue;
       }
       row.bindingObservedAt = now;
-      row.availability = binding.working ? "working" : binding.status === "stuck"
-        ? "recovering" : binding.activity === "unknown" ? "unavailable" : "ready";
+      row.availability = binding.working
+        ? "working"
+        : binding.status === "stuck"
+          ? "recovering"
+          : binding.activity === "unknown"
+            ? "unavailable"
+            : "ready";
       row.publicSessionId = binding.id;
       row.browserSessionId = binding.browserSessionId;
       // A schedule created using a Bootstrap alias is normalized once the
       // durable browser owner appears. Do not retarget an in-flight delivery.
-      if (!row.pendingMessageId && row.sessionId !== binding.browserSessionId &&
-          !this.entries.has(binding.browserSessionId)) {
+      if (
+        !row.pendingMessageId &&
+        row.sessionId !== binding.browserSessionId &&
+        !this.entries.has(binding.browserSessionId)
+      ) {
         this.entries.delete(row.sessionId);
         row.sessionId = binding.browserSessionId;
         this.entries.set(row.sessionId, row);
@@ -551,26 +694,70 @@ export class CaffyScheduler {
         }
       }
 
-      // Cold renderer recovery publishes through the same idle journal. A
-      // roster label or DOM totalTurns alone never creates a second wake path.
+      // Stall fallback (idle mode only). Verified edges stay the primary path;
+      // this only fires when none arrived after the last wake and a fresh
+      // roster probe has shown a settled assistant turn for IDLE_FALLBACK_MS.
+      // The wake was confirmed by its user turn, so an assistant last turn
+      // observed after it is a new reply. Further wakes still need a new reply.
+      const sinceWake = row.lastWakeAt ?? row.createdAt;
+      const settled =
+        row.mode === "idle" &&
+        !row.paused &&
+        !row.pendingWake &&
+        !row.pendingMessageId &&
+        !binding.working &&
+        binding.activity === "idle" &&
+        binding.lastRole === "assistant" &&
+        ["done_or_idle", "waiting_for_input", "pending_or_stalled"].includes(
+          binding.status ?? "",
+        ) &&
+        Number.isFinite(binding.observedAt) &&
+        now - binding.observedAt < 60_000 &&
+        binding.observedAt > sinceWake &&
+        row.lastIdleSequence < sinceWake;
+      if (!settled) this.idleFallbackSince.delete(row.sessionId);
+      else {
+        const since = this.idleFallbackSince.get(row.sessionId) ?? now;
+        this.idleFallbackSince.set(row.sessionId, since);
+        if (now - since >= IDLE_FALLBACK_MS && now - sinceWake >= IDLE_FALLBACK_MS) {
+          this.idleFallbackSince.delete(row.sessionId);
+          row.pendingWake = true;
+          row.pendingReason = "idle";
+          row.lastCheckResult =
+            "No verified idle edge since the last wake, but the session has stayed idle on an assistant reply; fallback wake requested.";
+          changed = true;
+        }
+      }
+
+      // Cold renderer recovery publishes through the same idle journal.
       if (row.paused) checked("Paused; scheduler will not dispatch.");
       else if (row.pendingMessageId)
         checked(`Delivery ${row.deliveryStatus ?? "queued"}; awaiting exact recipient receipt.`);
       else if (row.pendingWake)
-        checked(row.lastCheckResult?.includes("wake requested")
-          ? row.lastCheckResult : "Wake requested; awaiting safe scheduler dispatch.");
+        checked(
+          row.lastCheckResult?.includes("wake requested")
+            ? row.lastCheckResult
+            : "Wake requested; awaiting safe scheduler dispatch.",
+        );
       else if (binding.status === "stuck")
         checked("Browser guest stuck; recovery needed. No reload will overwrite a draft.");
-      else if (binding.working)
-        checked("Assistant working; awaiting a verified idle transition.");
+      else if (binding.working) checked("Assistant working; awaiting a verified idle transition.");
       else if (row.mode === "idle" && binding.lastRole === "user")
-        checked(idle?.conversationId === row.conversationId
-          ? "User-only turn observed; waiting for a newer verified quiescent edge."
-          : "User-only pending or stalled; waiting for verified quiescence, not a generic idle label.");
+        checked(
+          idle?.conversationId === row.conversationId
+            ? "User-only turn observed; waiting for a newer verified quiescent edge."
+            : "User-only pending or stalled; waiting for verified quiescence, not a generic idle label.",
+        );
       else if (row.mode === "idle")
-        checked("Waiting for a newer verified idle edge or a new guarded assistant reply.");
+        checked(
+          this.idleFallbackSince.has(row.sessionId)
+            ? "Idle on an assistant reply without a verified edge; fallback wake after 2 min settled."
+            : "Waiting for a newer verified idle edge or a new guarded assistant reply.",
+        );
       else if (row.mode === "periodic")
-        checked(`Next interval wake ${row.nextDueAt == null ? "not scheduled" : new Date(row.nextDueAt).toISOString()}.`);
+        checked(
+          `Next interval wake ${row.nextDueAt == null ? "not scheduled" : new Date(row.nextDueAt).toISOString()}.`,
+        );
       else checked(`${row.mode} monitor awaiting its activation conditions.`);
       if (binding.working && !row.lastActivatedAt) {
         row.lastActivatedAt = now;
@@ -588,48 +775,72 @@ export class CaffyScheduler {
   async reconcileLifecycle(roster?: CaffyRoster | null): Promise<void> {
     const data = roster === undefined ? await this.loadRoster().catch(() => null) : roster;
     const entries = data?.sessions;
-    if (!Array.isArray(entries) || data?.hasMore || data?.incomplete ||
-        data?.total === undefined || data.total !== entries.length) return;
+    if (
+      !Array.isArray(entries) ||
+      data?.hasMore ||
+      data?.incomplete ||
+      data?.total === undefined ||
+      data.total !== entries.length
+    )
+      return;
     const now = Date.now();
     // oxlint-disable-next-line unicorn/no-useless-spread -- Retiring a session must not alter this roster iteration.
     for (const row of [...this.entries.values()]) {
       if (row.targetKind === "t3") continue;
-      const ids = [row.sessionId, row.browserSessionId, row.publicSessionId]
-        .filter((id): id is string => !!id);
+      const ids = [row.sessionId, row.browserSessionId, row.publicSessionId].filter(
+        (id): id is string => !!id,
+      );
       // Existence is a property of the stable T3 session, NOT its current
       // conversation. Reboots and restored tabs may change conversation IDs
       // while the Caffy schedule (including its delayed start) must survive.
-      const matches = entries.filter(entry => matchesCaffyOwner(entry, ids));
+      const matches = entries.filter((entry) => matchesCaffyOwner(entry, ids));
       if (matches.length > 1) continue;
       const found = matches[0];
       if (found) {
         // A running Caffy owns its snooze and will unsnooze on real delivery.
         // Paused Caffy cannot deliver, so user snooze removes that schedule.
-        if (found.closedAt != null || found.hidden ||
-            (row.paused && typeof found.snoozedUntil === "number" && found.snoozedUntil > now)) {
-          this.retire(row.sessionId,
-            found.closedAt != null ? "closed" : found.hidden ? "hidden" : "snoozed");
+        if (
+          found.closedAt != null ||
+          found.hidden ||
+          (row.paused && typeof found.snoozedUntil === "number" && found.snoozedUntil > now)
+        ) {
+          this.retire(
+            row.sessionId,
+            found.closedAt != null ? "closed" : found.hidden ? "hidden" : "snoozed",
+          );
           continue;
         }
-        if (row.rebootOperationId || !found.conversationId ||
-            found.conversationId === row.conversationId) continue;
+        if (
+          row.rebootOperationId ||
+          !found.conversationId ||
+          found.conversationId === row.conversationId
+        )
+          continue;
 
         // A new conversation within an existing browser session is not a
         // disappearance. Adopt it only with positive binding evidence; until
         // then preserve Caffy, but never deliver to the stale conversation.
         const nextId = found.conversationId;
-        const registeredNew = UUID.test(nextId) &&
+        const registeredNew =
+          UUID.test(nextId) &&
           found.bootstrapIdentity?.state === "registered" &&
           found.bootstrapIdentity.conversationId === nextId;
-        const proof = registeredNew ? null : UUID.test(nextId) && found.id
-          ? await this.read(row.browserSessionId ?? row.sessionId, nextId).catch(() => null) : null;
-        const verified = registeredNew ||
-          (proof?.conversationGuardValidated === true &&
-            proof.verifiedConversationId === nextId);
+        const proof = registeredNew
+          ? null
+          : UUID.test(nextId) && found.id
+            ? await this.read(row.browserSessionId ?? row.sessionId, nextId).catch(() => null)
+            : null;
+        const verified =
+          registeredNew ||
+          (proof?.conversationGuardValidated === true && proof.verifiedConversationId === nextId);
         if (this.entries.get(row.sessionId) !== row) continue;
         if (!verified) {
-          const detail = "Session switched conversations; Caffy retained until the new conversation is verified.";
-          if (row.lastError !== detail) { row.lastError = detail; this.save(); }
+          const detail =
+            "Session switched conversations; Caffy retained until the new conversation is verified.";
+          if (row.lastError !== detail) {
+            row.lastError = detail;
+            this.save();
+          }
           continue;
         }
         if (row.pendingMessageId) {
@@ -642,7 +853,11 @@ export class CaffyScheduler {
           row.pendingMessageId = null;
           row.pendingMessageBody = null;
           this.save();
-          try { this.deliveries.cancel(oldMessageId); } catch { /* already gone */ }
+          try {
+            this.deliveries.cancel(oldMessageId);
+          } catch {
+            /* already gone */
+          }
         }
         row.conversationId = nextId;
         // Keep the owner cursor. Do not consume the new conversation's first
@@ -656,7 +871,8 @@ export class CaffyScheduler {
         continue;
       }
       row.availability = "unavailable";
-      row.lastCheckResult = "T3 owner absent from renderer inventory; schedule retained until inventory recovers or the session is explicitly closed.";
+      row.lastCheckResult =
+        "T3 owner absent from renderer inventory; schedule retained until inventory recovers or the session is explicitly closed.";
       this.save();
     }
   }
@@ -664,9 +880,14 @@ export class CaffyScheduler {
   private publicStatus(row: CaffyConfig): CaffyConfig {
     let receipt: Omit<DeliveryRecord, "body"> | null = null;
     if (row.pendingMessageId) {
-      try { receipt = this.deliveries.status(row.pendingMessageId); } catch { /* pending journal commit */ }
+      try {
+        receipt = this.deliveries.status(row.pendingMessageId);
+      } catch {
+        /* pending journal commit */
+      }
     }
-    const view = { ...row,
+    const view = {
+      ...row,
       deliveryStatus: receipt?.status ?? row.deliveryStatus ?? null,
       deliveryUpdatedAt: receipt?.updatedAt ?? row.deliveryUpdatedAt ?? null,
       deliveryAwaitingGuest: receipt?.awaitingGuest ?? row.deliveryAwaitingGuest ?? false,
@@ -684,35 +905,59 @@ export class CaffyScheduler {
       if (!length) return [];
       const buffer = Buffer.alloc(length);
       const handle = NodeFS.openSync(file, "r");
-      try { NodeFS.readSync(handle, buffer, 0, length, stat.size - length); }
-      finally { NodeFS.closeSync(handle); }
+      try {
+        NodeFS.readSync(handle, buffer, 0, length, stat.size - length);
+      } finally {
+        NodeFS.closeSync(handle);
+      }
       const lines = buffer.toString("utf8").split("\n");
-      return (stat.size > length ? lines.slice(1) : lines).flatMap((line) => {
-        try {
-          const event = JSON.parse(line) as {
-            at?: string; event?: string; cause?: string; requestId?: string; sessionId?: string;
-          };
-          return event.sessionId === sessionId
-            ? [{ at: event.at, event: event.event, cause: event.cause,
-                requestId: event.requestId ?? null }] : [];
-        } catch { return []; }
-      }).slice(-10);
-    } catch { return []; }
+      return (stat.size > length ? lines.slice(1) : lines)
+        .flatMap((line) => {
+          try {
+            const event = JSON.parse(line) as {
+              at?: string;
+              event?: string;
+              cause?: string;
+              requestId?: string;
+              sessionId?: string;
+            };
+            return event.sessionId === sessionId
+              ? [
+                  {
+                    at: event.at,
+                    event: event.event,
+                    cause: event.cause,
+                    requestId: event.requestId ?? null,
+                  },
+                ]
+              : [];
+          } catch {
+            return [];
+          }
+        })
+        .slice(-10);
+    } catch {
+      return [];
+    }
   }
 
   status(sessionId?: string) {
     this.expireTimedBusy();
     if (sessionId) {
       const row = this.lookup(sessionId);
-      return row ? { ...this.publicStatus(row), recentEvents: this.recentEvents(row.sessionId) } : null;
+      return row
+        ? { ...this.publicStatus(row), recentEvents: this.recentEvents(row.sessionId) }
+        : null;
     }
     return {
-      entries: [...this.entries.values()].map(row => this.publicStatus(row)),
+      entries: [...this.entries.values()].map((row) => this.publicStatus(row)),
       scheduledSpawns: [...this.scheduledSpawns.values()].map(({ prompt: _prompt, ...job }) => job),
       agentStops: [...this.agentStops.values()],
-      capacityClaims: [...this.capacityClaims.values()].map(row => ({
-        messageId: row.messageId, state: row.state,
-        sessionId: row.sessionId, createdAt: row.createdAt,
+      capacityClaims: [...this.capacityClaims.values()].map((row) => ({
+        messageId: row.messageId,
+        state: row.state,
+        sessionId: row.sessionId,
+        createdAt: row.createdAt,
       })),
       keepT3Busy: this.keepT3Busy,
       maxWorking: this.maxWorking,
@@ -729,10 +974,14 @@ export class CaffyScheduler {
    * An unavailable header snapshot fails closed for auto-admission.
    */
   reportWorkingSnapshot(ids: readonly string[], reporterId = "default") {
-    if (!Array.isArray(ids) || ids.length > 20_000 ||
-        typeof reporterId !== "string" || reporterId.length > 128 ||
-        !reporterId ||
-        ids.some(id => typeof id !== "string" || !id.trim() || id.length > 256))
+    if (
+      !Array.isArray(ids) ||
+      ids.length > 20_000 ||
+      typeof reporterId !== "string" ||
+      reporterId.length > 128 ||
+      !reporterId ||
+      ids.some((id) => typeof id !== "string" || !id.trim() || id.length > 256)
+    )
       throw new Error("Invalid working session snapshot.");
     this.workingReports.set(reporterId, { ids: new Set(ids), observedAt: Date.now() });
     if (ids.length > 0) this.shutdownIdleSince = null;
@@ -765,7 +1014,10 @@ export class CaffyScheduler {
       this.shutdownError = null;
     } else {
       // A manual switch replaces the combined schedule rather than leaving a hidden shutdown armed.
-      if (this.busyUntil !== null && (input.keepT3Busy !== undefined || input.shutdownWhenIdle !== undefined)) {
+      if (
+        this.busyUntil !== null &&
+        (input.keepT3Busy !== undefined || input.shutdownWhenIdle !== undefined)
+      ) {
         this.busyUntil = null;
         this.shutdownWhenIdle = false;
         this.keepT3Busy = false;
@@ -787,11 +1039,14 @@ export class CaffyScheduler {
     this.backupConfiguration();
     this.deliveries.resumeAllowed();
     void this.pump();
-    return { keepT3Busy: this.keepT3Busy, maxWorking: this.maxWorking,
-      shutdownWhenIdle: this.shutdownWhenIdle, busyUntil: this.busyUntil,
-      shutdownError: this.shutdownError };
+    return {
+      keepT3Busy: this.keepT3Busy,
+      maxWorking: this.maxWorking,
+      shutdownWhenIdle: this.shutdownWhenIdle,
+      busyUntil: this.busyUntil,
+      shutdownError: this.shutdownError,
+    };
   }
-
 
   /** Native activity is authoritative from the same orchestration projection that powers the T3 thread UI. */
   private async readNative(
@@ -804,37 +1059,67 @@ export class CaffyScheduler {
   } | null> {
     if (!target.environmentId || !target.nativeThreadId) return null;
     const response = await this.request({
-      version: 1, requestId: NodeCrypto.randomUUID(), type: "t3.threads", action: "read",
-      environmentId: target.environmentId, threadId: target.nativeThreadId,
-      count: 1, ...(pendingMessageId ? { clientRequestId: pendingMessageId } : {}),
+      version: 1,
+      requestId: NodeCrypto.randomUUID(),
+      type: "t3.threads",
+      action: "read",
+      environmentId: target.environmentId,
+      threadId: target.nativeThreadId,
+      count: 1,
+      ...(pendingMessageId ? { clientRequestId: pendingMessageId } : {}),
     }).catch(() => null);
-    if (!response?.ok || !("data" in response) || !response.data ||
-        typeof response.data !== "object") return null;
+    if (
+      !response?.ok ||
+      !("data" in response) ||
+      !response.data ||
+      typeof response.data !== "object"
+    )
+      return null;
     const data = response.data as {
-      environmentId?: string; threadId?: string; status?: string;
+      environmentId?: string;
+      threadId?: string;
+      status?: string;
       latestRun?: { ordinal?: number; status?: string } | null;
       messageSeen?: boolean;
     };
-    if (data.environmentId !== target.environmentId ||
-        data.threadId !== target.nativeThreadId || typeof data.status !== "string") return null;
+    if (
+      data.environmentId !== target.environmentId ||
+      data.threadId !== target.nativeThreadId ||
+      typeof data.status !== "string"
+    )
+      return null;
     const latest = data.latestRun;
     return {
       status: data.status,
-      latestRun: latest && Number.isSafeInteger(latest.ordinal) && latest.ordinal! > 0 &&
+      latestRun:
+        latest &&
+        Number.isSafeInteger(latest.ordinal) &&
+        latest.ordinal! > 0 &&
         typeof latest.status === "string"
-          ? { ordinal: latest.ordinal!, status: latest.status } : null,
+          ? { ordinal: latest.ordinal!, status: latest.status }
+          : null,
       messageSeen: data.messageSeen === true,
     };
   }
 
   /** Native T3 threads have no ChatGPT browser session, conversation UUID or guest outbox. */
   private async setNative(input: {
-    sessionId: string; environmentId?: string | undefined; mode: Mode;
-    intervalMinutes?: number | undefined; durationMinutes?: number | undefined; onceOnly?: boolean | undefined;
-    startup?: boolean | undefined; keepAwake?: boolean | undefined; respectSlots?: boolean | undefined;
-    wakeNow?: boolean | undefined; beginAt?: number | null | undefined; delayedPrompt?: string | null | undefined;
-    repeatPrompt?: string | undefined; autoRebootMinutes?: number | null | undefined;
-    autoRebootEveryRuns?: number | null | undefined; auditRequestId?: string | undefined;
+    sessionId: string;
+    environmentId?: string | undefined;
+    mode: Mode;
+    intervalMinutes?: number | undefined;
+    durationMinutes?: number | undefined;
+    onceOnly?: boolean | undefined;
+    startup?: boolean | undefined;
+    keepAwake?: boolean | undefined;
+    respectSlots?: boolean | undefined;
+    wakeNow?: boolean | undefined;
+    beginAt?: number | null | undefined;
+    delayedPrompt?: string | null | undefined;
+    repeatPrompt?: string | undefined;
+    autoRebootMinutes?: number | null | undefined;
+    autoRebootEveryRuns?: number | null | undefined;
+    auditRequestId?: string | undefined;
   }): Promise<CaffyConfig> {
     const threadId = input.sessionId;
     const environmentId = input.environmentId;
@@ -845,44 +1130,67 @@ export class CaffyScheduler {
     const intervalMinutes = input.intervalMinutes ?? 20;
     if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 525_600)
       throw new Error("Interval must be 1..525600 minutes.");
-    if (input.durationMinutes !== undefined &&
-        (!Number.isInteger(input.durationMinutes) || input.durationMinutes < 1 ||
-          input.durationMinutes > 525_600))
+    if (
+      input.durationMinutes !== undefined &&
+      (!Number.isInteger(input.durationMinutes) ||
+        input.durationMinutes < 1 ||
+        input.durationMinutes > 525_600)
+    )
       throw new Error("Duration must be 1..525600 minutes.");
     if (input.repeatPrompt !== undefined && input.repeatPrompt.length > 29_800)
       throw new Error("Repeated prompt exceeds 29800 characters.");
     if (input.delayedPrompt != null && input.delayedPrompt.length > 29_800)
       throw new Error("Delayed prompt exceeds 29800 characters.");
-    if (input.beginAt != null && (!Number.isSafeInteger(input.beginAt) ||
-        input.beginAt <= Date.now() || input.beginAt > Date.now() + 90 * 24 * 60 * 60_000))
+    if (
+      input.beginAt != null &&
+      (!Number.isSafeInteger(input.beginAt) ||
+        input.beginAt <= Date.now() ||
+        input.beginAt > Date.now() + 90 * 24 * 60 * 60_000)
+    )
       throw new Error("Scheduled start must be within the next 90 days.");
     if (input.autoRebootMinutes != null || input.autoRebootEveryRuns != null)
-      throw new Error("Native T3 threads retain their context; ChatGPT-only reboot is unavailable.");
+      throw new Error(
+        "Native T3 threads retain their context; ChatGPT-only reboot is unavailable.",
+      );
     const id = nativeOwner(environmentId, threadId);
     const prior = this.entries.get(id);
     // Confirm exactly the requested target before recording a durable monitor.
     const native = await this.readNative({ environmentId, nativeThreadId: threadId });
-    if (!native) throw new Error("Cannot verify the native T3 thread in its connected environment.");
-    if (prior?.pendingMessageId &&
-        (input.delayedPrompt !== undefined || input.repeatPrompt !== undefined))
+    if (!native)
+      throw new Error("Cannot verify the native T3 thread in its connected environment.");
+    if (
+      prior?.pendingMessageId &&
+      (input.delayedPrompt !== undefined || input.repeatPrompt !== undefined)
+    )
       throw new Error("A native wake is pending; wait for its exact message receipt first.");
     const now = Date.now();
-    const priorDuration = prior?.expiresAt == null ? null :
-      Math.max(1, Math.round((prior.expiresAt - (prior.beginAt ?? prior.createdAt)) / 60_000));
-    const same = !!prior && prior.mode === input.mode &&
+    const priorDuration =
+      prior?.expiresAt == null
+        ? null
+        : Math.max(1, Math.round((prior.expiresAt - (prior.beginAt ?? prior.createdAt)) / 60_000));
+    const same =
+      !!prior &&
+      prior.mode === input.mode &&
       prior.startup === (input.mode === "startup" || input.startup === true) &&
       prior.respectSlots === (input.respectSlots ?? prior.respectSlots) &&
-      prior.intervalMinutes === intervalMinutes && prior.onceOnly === (input.onceOnly ?? false) &&
+      prior.intervalMinutes === intervalMinutes &&
+      prior.onceOnly === (input.onceOnly ?? false) &&
       priorDuration === (input.durationMinutes ?? null) &&
-      (input.repeatPrompt === undefined || prior.repeatPrompt === (input.repeatPrompt.trim() || null)) &&
-      (input.repeatPrompt === undefined || input.delayedPrompt !== undefined || prior.delayedPrompt === null) &&
+      (input.repeatPrompt === undefined ||
+        prior.repeatPrompt === (input.repeatPrompt.trim() || null)) &&
+      (input.repeatPrompt === undefined ||
+        input.delayedPrompt !== undefined ||
+        prior.delayedPrompt === null) &&
       (input.delayedPrompt === undefined || prior.delayedPrompt === input.delayedPrompt) &&
       (input.beginAt === undefined || prior.beginAt === input.beginAt);
     if (same) {
       const wasPaused = prior.paused;
       prior.paused = false;
-      if (input.wakeNow || (prior.mode === "idle" && (wasPaused || (!prior.lastWakeAt &&
-          !prior.pendingWake && !prior.pendingMessageId)))) {
+      if (
+        input.wakeNow ||
+        (prior.mode === "idle" &&
+          (wasPaused || (!prior.lastWakeAt && !prior.pendingWake && !prior.pendingMessageId)))
+      ) {
         prior.pendingWake = true;
         prior.pendingReason = "manual";
       }
@@ -892,31 +1200,53 @@ export class CaffyScheduler {
       return prior;
     }
     const row: CaffyConfig = {
-      targetKind: "t3", environmentId, nativeThreadId: threadId,
-      sessionId: id, conversationId: threadId, mode: input.mode,
+      targetKind: "t3",
+      environmentId,
+      nativeThreadId: threadId,
+      sessionId: id,
+      conversationId: threadId,
+      mode: input.mode,
       respectSlots: input.respectSlots ?? prior?.respectSlots ?? false,
-      intervalMinutes, startup: input.mode === "startup" || input.startup === true,
-      onceOnly: input.onceOnly ?? false, keepAwake: input.keepAwake ?? true,
-      paused: false, createdAt: now,
-      expiresAt: input.durationMinutes === undefined ? null :
-        (input.beginAt ?? now) + input.durationMinutes * 60_000,
+      intervalMinutes,
+      startup: input.mode === "startup" || input.startup === true,
+      onceOnly: input.onceOnly ?? false,
+      keepAwake: input.keepAwake ?? true,
+      paused: false,
+      createdAt: now,
+      expiresAt:
+        input.durationMinutes === undefined
+          ? null
+          : (input.beginAt ?? now) + input.durationMinutes * 60_000,
       beginAt: input.beginAt ?? null,
-      nextDueAt: input.mode === "periodic" ? (input.beginAt ?? now + intervalMinutes * 60_000) : null,
+      nextDueAt:
+        input.mode === "periodic" ? (input.beginAt ?? now + intervalMinutes * 60_000) : null,
       pendingWake: input.wakeNow === true || (input.mode === "idle" && input.beginAt == null),
-      pendingReason: input.wakeNow === true || (input.mode === "idle" && input.beginAt == null)
-        ? "manual" : null,
+      pendingReason:
+        input.wakeNow === true || (input.mode === "idle" && input.beginAt == null)
+          ? "manual"
+          : null,
       pendingMessageId: prior?.pendingMessageId ?? null,
       pendingMessageBody: prior?.pendingMessageBody ?? null,
-      nativeLastRunOrdinal: Math.max(prior?.nativeLastRunOrdinal ?? 0, native.latestRun?.ordinal ?? 0),
+      nativeLastRunOrdinal: Math.max(
+        prior?.nativeLastRunOrdinal ?? 0,
+        native.latestRun?.ordinal ?? 0,
+      ),
       nativeLastSendAttemptAt: prior?.nativeLastSendAttemptAt ?? null,
-      lastIdleSequence: 0, lastWakeAt: prior?.lastWakeAt ?? null,
+      lastIdleSequence: 0,
+      lastWakeAt: prior?.lastWakeAt ?? null,
       // The shared schedule editor can clear the previous prompt: an empty
       // string must not resurrect the old value on a native thread.
       lastError: null,
-      repeatPrompt: input.repeatPrompt === undefined
-        ? (prior?.repeatPrompt ?? null) : (input.repeatPrompt.trim() || null),
-      delayedPrompt: input.delayedPrompt !== undefined ? input.delayedPrompt :
-        input.repeatPrompt !== undefined ? null : (prior?.delayedPrompt ?? null),
+      repeatPrompt:
+        input.repeatPrompt === undefined
+          ? (prior?.repeatPrompt ?? null)
+          : input.repeatPrompt.trim() || null,
+      delayedPrompt:
+        input.delayedPrompt !== undefined
+          ? input.delayedPrompt
+          : input.repeatPrompt !== undefined
+            ? null
+            : (prior?.delayedPrompt ?? null),
     };
     this.entries.set(id, row);
     this.save();
@@ -933,24 +1263,47 @@ export class CaffyScheduler {
     row.nextCheckAt = row.lastCheckedAt + CLOCK;
     if (!snapshot) {
       row.availability = "unavailable";
-      row.lastCheckResult = "Native thread unavailable; preserving scheduled wake and exact message ID.";
+      row.lastCheckResult =
+        "Native thread unavailable; preserving scheduled wake and exact message ID.";
       row.lastError = row.lastCheckResult;
       this.save();
       return;
     }
     row.lastError = null;
-    const working = ["preparing", "queued", "starting", "running", "waiting"].includes(snapshot.status) ||
+    const working =
+      ["preparing", "queued", "starting", "running", "waiting"].includes(snapshot.status) ||
       (snapshot.latestRun !== null &&
-        ["preparing", "queued", "starting", "running", "waiting"].includes(snapshot.latestRun.status));
+        ["preparing", "queued", "starting", "running", "waiting"].includes(
+          snapshot.latestRun.status,
+        ));
     row.availability = working ? "working" : "ready";
     const last = snapshot.latestRun;
-    if (last && last.ordinal > (row.nativeLastRunOrdinal ?? 0) &&
-        ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(last.status)) {
+    if (
+      last &&
+      last.ordinal > (row.nativeLastRunOrdinal ?? 0) &&
+      ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(last.status)
+    ) {
       row.nativeLastRunOrdinal = last.ordinal;
-      if (last.status === "completed" && row.mode === "idle" && !row.paused &&
-          !row.pendingMessageId && !row.pendingWake) {
+      if (row.mode === "idle" && !row.paused && !row.pendingMessageId && !row.pendingWake) {
+        if (last.status === "completed") {
+          row.pendingWake = true;
+          row.pendingReason = "idle";
+        } else if (last.status !== "rolled_back") {
+          // Failed or stopped runs would otherwise end Keep running for good.
+          // Delay the retry so a persistently failing provider cannot loop fast
+          // and a human who interrupted has time to pause or redirect.
+          row.nativeRetryAt = now + IDLE_FALLBACK_MS;
+        }
+      }
+    }
+    if (row.nativeRetryAt != null) {
+      if (working || row.paused || row.mode !== "idle" || row.pendingWake || row.pendingMessageId) {
+        row.nativeRetryAt = null;
+      } else if (now >= row.nativeRetryAt) {
+        row.nativeRetryAt = null;
         row.pendingWake = true;
         row.pendingReason = "idle";
+        row.lastCheckResult = "Last native run did not complete; retry wake requested.";
       }
     }
     if (row.pendingMessageId && snapshot.messageSeen) {
@@ -970,20 +1323,32 @@ export class CaffyScheduler {
         return;
       }
     }
-    if (row.paused) { row.lastCheckResult = "Paused"; this.save(); return; }
+    if (row.paused) {
+      row.lastCheckResult = "Paused";
+      this.save();
+      return;
+    }
     if (!row.pendingMessageId) {
       const due = reduceCaffyWake(row, { type: "due", now });
       this.applyWakeTransition(row, due.patch);
     }
-    if (working) { row.lastCheckResult = "Native assistant is working; waiting for idle."; this.save(); return; }
-    if (!row.pendingWake && !row.pendingMessageId) {
-      row.lastCheckResult = "Native thread idle; awaiting the next run edge or interval.";
+    if (working) {
+      row.lastCheckResult = "Native assistant is working; waiting for idle.";
       this.save();
       return;
     }
-    if (row.respectSlots && !(await this.acquireAutomaticAdmission(
-      "wake:" + row.sessionId, row.sessionId, true,
-    ))) {
+    if (!row.pendingWake && !row.pendingMessageId) {
+      row.lastCheckResult =
+        row.nativeRetryAt != null
+          ? "Last native run did not complete; retry wake after 2 min idle."
+          : "Native thread idle; awaiting the next run edge or interval.";
+      this.save();
+      return;
+    }
+    if (
+      row.respectSlots &&
+      !(await this.acquireAutomaticAdmission("wake:" + row.sessionId, row.sessionId, true))
+    ) {
       row.admissionReason = "Waiting for available capacity.";
       this.save();
       return;
@@ -995,7 +1360,9 @@ export class CaffyScheduler {
     row.admissionReason = null;
     if (!row.pendingMessageId) {
       row.pendingMessageId = NodeCrypto.randomUUID();
-      row.pendingMessageBody = row.delayedPrompt ?? row.repeatPrompt ??
+      row.pendingMessageBody =
+        row.delayedPrompt ??
+        row.repeatPrompt ??
         "Continue working on this native T3 thread. When genuinely finished, stop Caffy for this native thread using its exact thread ID (or the sidebar Stop Caffy control).";
       row.pendingWake = false;
       row.pendingReason = null;
@@ -1009,21 +1376,36 @@ export class CaffyScheduler {
       return;
     }
     row.nativeLastSendAttemptAt = now;
-    row.lastCheckResult = "Submitting pinned native message ID; retry only after read reconciliation.";
+    row.lastCheckResult =
+      "Submitting pinned native message ID; retry only after read reconciliation.";
     this.save();
     try {
       const sent = await this.request({
-        version: 1, requestId: NodeCrypto.randomUUID(),
-        type: "t3.threads", action: "send", environmentId: row.environmentId,
-        threadId: row.nativeThreadId, clientRequestId: messageId, message: body,
+        version: 1,
+        requestId: NodeCrypto.randomUUID(),
+        type: "t3.threads",
+        action: "send",
+        environmentId: row.environmentId,
+        threadId: row.nativeThreadId,
+        clientRequestId: messageId,
+        message: body,
       }).catch(() => null);
       if (this.entries.get(row.sessionId) !== row || row.pendingMessageId !== messageId) return;
-      const receipt = sent?.ok && "data" in sent && sent.data &&
-        typeof sent.data === "object" ? sent.data as {
-          messageId?: string; messageSent?: boolean; threadId?: string; environmentId?: string;
-        } : null;
-      if (receipt?.messageSent === true && receipt.messageId === messageId &&
-          receipt.threadId === row.nativeThreadId && receipt.environmentId === row.environmentId) {
+      const receipt =
+        sent?.ok && "data" in sent && sent.data && typeof sent.data === "object"
+          ? (sent.data as {
+              messageId?: string;
+              messageSent?: boolean;
+              threadId?: string;
+              environmentId?: string;
+            })
+          : null;
+      if (
+        receipt?.messageSent === true &&
+        receipt.messageId === messageId &&
+        receipt.threadId === row.nativeThreadId &&
+        receipt.environmentId === row.environmentId
+      ) {
         row.pendingMessageId = null;
         row.pendingMessageBody = null;
         row.delayedPrompt = null;
@@ -1046,11 +1428,17 @@ export class CaffyScheduler {
   }
 
   async set(input: {
-    sessionId: string; conversationId: string; mode: Mode;
-    targetKind?: "chatgpt" | "t3" | undefined; environmentId?: string | undefined;
+    sessionId: string;
+    conversationId: string;
+    mode: Mode;
+    targetKind?: "chatgpt" | "t3" | undefined;
+    environmentId?: string | undefined;
     respectSlots?: boolean | undefined;
-    durationMinutes?: number | undefined; onceOnly?: boolean | undefined; startup?: boolean | undefined;
-    intervalMinutes?: number | undefined; keepAwake?: boolean | undefined;
+    durationMinutes?: number | undefined;
+    onceOnly?: boolean | undefined;
+    startup?: boolean | undefined;
+    intervalMinutes?: number | undefined;
+    keepAwake?: boolean | undefined;
     wakeNow?: boolean | undefined;
     beginAt?: number | null | undefined;
     delayedPrompt?: string | null | undefined;
@@ -1064,8 +1452,12 @@ export class CaffyScheduler {
       throw new Error("Exact sessionId and conversationId UUIDs required.");
     if (!["idle", "periodic", "startup"].includes(input.mode))
       throw new Error("Caffy mode must be idle (keep running), periodic (interval) or startup.");
-    if (input.durationMinutes !== undefined &&
-        (!Number.isInteger(input.durationMinutes) || input.durationMinutes < 1 || input.durationMinutes > 525_600))
+    if (
+      input.durationMinutes !== undefined &&
+      (!Number.isInteger(input.durationMinutes) ||
+        input.durationMinutes < 1 ||
+        input.durationMinutes > 525_600)
+    )
       throw new Error("Duration must be 1..525600 minutes or omitted for infinite.");
     if (input.mode === "startup" && input.startup === false)
       throw new Error("Startup-only Caffy requires startup=true.");
@@ -1076,11 +1468,19 @@ export class CaffyScheduler {
       throw new Error("Interval must be 1..525600 minutes.");
     if (input.repeatPrompt !== undefined && input.repeatPrompt.length > 29_800)
       throw new Error("Recurring prompt exceeds 29800 characters.");
-    if (input.autoRebootMinutes != null && (!Number.isInteger(input.autoRebootMinutes) ||
-        input.autoRebootMinutes < 1 || input.autoRebootMinutes > 525_600))
+    if (
+      input.autoRebootMinutes != null &&
+      (!Number.isInteger(input.autoRebootMinutes) ||
+        input.autoRebootMinutes < 1 ||
+        input.autoRebootMinutes > 525_600)
+    )
       throw new Error("Reboot interval must be 1..525600 minutes.");
-    if (input.autoRebootEveryRuns != null && (!Number.isInteger(input.autoRebootEveryRuns) ||
-        input.autoRebootEveryRuns < 1 || input.autoRebootEveryRuns > 10_000))
+    if (
+      input.autoRebootEveryRuns != null &&
+      (!Number.isInteger(input.autoRebootEveryRuns) ||
+        input.autoRebootEveryRuns < 1 ||
+        input.autoRebootEveryRuns > 10_000)
+    )
       throw new Error("Reboot run interval must be 1..10000.");
     if (input.autoRebootMinutes != null && input.autoRebootEveryRuns != null)
       throw new Error("Select either a reboot interval or a run count.");
@@ -1090,20 +1490,38 @@ export class CaffyScheduler {
     const known = this.lookup(input.sessionId);
     const browserSessionId = known?.browserSessionId ?? known?.sessionId ?? input.sessionId;
     const canonicalId = browserSessionId;
-    if (this.terminalConversations.get(canonicalId) === input.conversationId ||
-        this.terminalConversations.get(input.sessionId) === input.conversationId)
-      throw new Error("This conversation reached its maximum length. Reboot the session before enabling Caffy.");
-    if ([...this.entries.values()].some(row => row.conversationId === input.conversationId &&
-        row.sessionId !== canonicalId && row.browserSessionId !== input.sessionId &&
-        row.publicSessionId !== input.sessionId))
+    if (
+      this.terminalConversations.get(canonicalId) === input.conversationId ||
+      this.terminalConversations.get(input.sessionId) === input.conversationId
+    )
+      throw new Error(
+        "This conversation reached its maximum length. Reboot the session before enabling Caffy.",
+      );
+    if (
+      [...this.entries.values()].some(
+        (row) =>
+          row.conversationId === input.conversationId &&
+          row.sessionId !== canonicalId &&
+          row.browserSessionId !== input.sessionId &&
+          row.publicSessionId !== input.sessionId,
+      )
+    )
       throw new Error("Another T3 Caffy monitor already owns this ChatGPT conversation.");
-    if (this.legacyConflict(canonicalId, input.conversationId) ||
-        this.legacyConflict(input.sessionId, input.conversationId))
-      throw new Error("Legacy OmniHub Caffy monitor still owns this session; cancel it before scheduling T3 Caffy.");
+    if (
+      this.legacyConflict(canonicalId, input.conversationId) ||
+      this.legacyConflict(input.sessionId, input.conversationId)
+    )
+      throw new Error(
+        "Legacy OmniHub Caffy monitor still owns this session; cancel it before scheduling T3 Caffy.",
+      );
     const now = Date.now();
-    if (input.beginAt !== undefined && input.beginAt !== null &&
-        (!Number.isSafeInteger(input.beginAt) || input.beginAt <= now ||
-          input.beginAt > now + 90 * 24 * 60 * 60_000))
+    if (
+      input.beginAt !== undefined &&
+      input.beginAt !== null &&
+      (!Number.isSafeInteger(input.beginAt) ||
+        input.beginAt <= now ||
+        input.beginAt > now + 90 * 24 * 60 * 60_000)
+    )
       throw new Error("Scheduled start must be in the next 90 days.");
     const prior = this.lookup(input.sessionId);
     // "Resume on idle" means start continuing immediately, including when
@@ -1114,43 +1532,69 @@ export class CaffyScheduler {
     // Re-arming a previously never-woken idle schedule also repairs old
     // configurations created with wakeNow=false.
     const resumeOnIdle = input.mode === "idle" && input.onceOnly !== true;
-    const initialIdleWake = resumeOnIdle &&
-      (!prior || prior.paused || prior.mode !== "idle" || prior.onceOnly ||
+    const initialIdleWake =
+      resumeOnIdle &&
+      (!prior ||
+        prior.paused ||
+        prior.mode !== "idle" ||
+        prior.onceOnly ||
         prior.conversationId !== input.conversationId ||
         (!prior.pendingWake && !prior.pendingMessageId && prior.lastWakeAt === null));
     // A newly configured one-off continuation waits for the next safe idle;
     // no live renderer read is necessary while saving the schedule.
-    const initialOnceWake = input.mode === "idle" && input.onceOnly === true &&
+    const initialOnceWake =
+      input.mode === "idle" &&
+      input.onceOnly === true &&
       input.wakeNow === undefined &&
-      (!prior || prior.paused || prior.mode !== "idle" ||
+      (!prior ||
+        prior.paused ||
+        prior.mode !== "idle" ||
         prior.conversationId !== input.conversationId);
     const armWake = input.wakeNow === true || initialIdleWake || initialOnceWake;
     // A fresh manual Caffy setup supersedes any earlier "agent stopped" marker.
     for (const [key, mark] of this.agentStops) {
-      if ([mark.sessionId, mark.browserSessionId, mark.publicSessionId].some(id =>
-          id === input.sessionId || id === canonicalId))
+      if (
+        [mark.sessionId, mark.browserSessionId, mark.publicSessionId].some(
+          (id) => id === input.sessionId || id === canonicalId,
+        )
+      )
         this.agentStops.delete(key);
     }
     if ((input.delayedPrompt || input.repeatPrompt !== undefined) && prior?.pendingMessageId)
       throw new Error("Existing Caffy delivery is pending; inspect it before changing its prompt.");
-    if (prior?.pendingMessageId &&
-        (prior.conversationId !== input.conversationId || prior.sessionId !== canonicalId))
-      throw new Error("Existing wake delivery needs reconciliation before changing its recipient identity.");
+    if (
+      prior?.pendingMessageId &&
+      (prior.conversationId !== input.conversationId || prior.sessionId !== canonicalId)
+    )
+      throw new Error(
+        "Existing wake delivery needs reconciliation before changing its recipient identity.",
+      );
     const mode = input.mode;
     const respectSlots = input.respectSlots ?? prior?.respectSlots ?? false;
-    const same = !!prior && prior.conversationId === input.conversationId &&
-      prior.mode === mode && prior.respectSlots === respectSlots && prior.expiresAt ===
-        (input.durationMinutes === undefined ? null : prior.createdAt + input.durationMinutes * 60_000) &&
+    const same =
+      !!prior &&
+      prior.conversationId === input.conversationId &&
+      prior.mode === mode &&
+      prior.respectSlots === respectSlots &&
+      prior.expiresAt ===
+        (input.durationMinutes === undefined
+          ? null
+          : prior.createdAt + input.durationMinutes * 60_000) &&
       prior.onceOnly === (input.onceOnly ?? false) &&
-      prior.startup === (input.startup ?? (input.mode === "startup")) &&
+      prior.startup === (input.startup ?? input.mode === "startup") &&
       prior.keepAwake === (input.keepAwake ?? true) &&
       prior.intervalMinutes === intervalMinutes &&
-      (input.repeatPrompt === undefined || (prior.repeatPrompt ?? "") === input.repeatPrompt.trim()) &&
-      (input.autoRebootMinutes === undefined || (prior.autoRebootMinutes ?? null) === input.autoRebootMinutes) &&
-      (input.autoRebootEveryRuns === undefined || (prior.autoRebootEveryRuns ?? null) === input.autoRebootEveryRuns);
+      (input.repeatPrompt === undefined ||
+        (prior.repeatPrompt ?? "") === input.repeatPrompt.trim()) &&
+      (input.autoRebootMinutes === undefined ||
+        (prior.autoRebootMinutes ?? null) === input.autoRebootMinutes) &&
+      (input.autoRebootEveryRuns === undefined ||
+        (prior.autoRebootEveryRuns ?? null) === input.autoRebootEveryRuns);
     if (same) {
-      if ((input.beginAt !== undefined && input.beginAt !== prior.beginAt) ||
-          (input.delayedPrompt !== undefined && input.delayedPrompt !== prior.delayedPrompt)) {
+      if (
+        (input.beginAt !== undefined && input.beginAt !== prior.beginAt) ||
+        (input.delayedPrompt !== undefined && input.delayedPrompt !== prior.delayedPrompt)
+      ) {
         if (input.beginAt !== undefined) prior.beginAt = input.beginAt;
         prior.delayedPrompt = input.delayedPrompt ?? null;
         prior.pendingWake = true;
@@ -1178,37 +1622,66 @@ export class CaffyScheduler {
       return prior;
     }
     const journalIdle = this.latestIdle(browserSessionId);
-    const initialIdleSequence = journalIdle?.conversationId === input.conversationId &&
-      journalIdle.sessionId === browserSessionId ? journalIdle.sequence : 0;
-    const continuingSameMonitor = prior?.mode === mode &&
-      prior.conversationId === input.conversationId;
+    const initialIdleSequence =
+      journalIdle?.conversationId === input.conversationId &&
+      journalIdle.sessionId === browserSessionId
+        ? journalIdle.sequence
+        : 0;
+    const continuingSameMonitor =
+      prior?.mode === mode && prior.conversationId === input.conversationId;
     const row: CaffyConfig = {
-      sessionId: canonicalId, browserSessionId,
+      sessionId: canonicalId,
+      browserSessionId,
       publicSessionId: prior?.publicSessionId ?? input.sessionId,
       conversationId: input.conversationId,
-      mode, respectSlots, intervalMinutes,
-      startup: mode === "startup" ? true : input.startup ?? false, onceOnly: input.onceOnly ?? false,
-      keepAwake: input.keepAwake ?? true, paused: false, createdAt: now,
-      expiresAt: input.durationMinutes === undefined ? null :
-        Math.max(now, input.beginAt ?? prior?.beginAt ?? now) + input.durationMinutes * 60_000,
-      nextDueAt: mode === "periodic" ? input.beginAt ?? now + intervalMinutes * 60_000 : null,
+      mode,
+      respectSlots,
+      intervalMinutes,
+      startup: mode === "startup" ? true : (input.startup ?? false),
+      onceOnly: input.onceOnly ?? false,
+      keepAwake: input.keepAwake ?? true,
+      paused: false,
+      createdAt: now,
+      expiresAt:
+        input.durationMinutes === undefined
+          ? null
+          : Math.max(now, input.beginAt ?? prior?.beginAt ?? now) + input.durationMinutes * 60_000,
+      nextDueAt: mode === "periodic" ? (input.beginAt ?? now + intervalMinutes * 60_000) : null,
       pendingWake: armWake,
       pendingReason: armWake ? "manual" : null,
-      pendingMessageId: prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
-      lastIdleSequence: continuingSameMonitor ? (prior?.lastIdleSequence ?? 0) : initialIdleSequence,
-      lastHandledIdleEventId: (continuingSameMonitor ? prior?.lastHandledIdleEventId : journalIdle?.eventId) ?? null,
-      lastIdleEvidenceKey: (continuingSameMonitor ? prior?.lastIdleEvidenceKey : journalIdle?.evidenceKey) ?? null,
+      pendingMessageId:
+        prior?.conversationId === input.conversationId ? prior.pendingMessageId : null,
+      lastIdleSequence: continuingSameMonitor
+        ? (prior?.lastIdleSequence ?? 0)
+        : initialIdleSequence,
+      lastHandledIdleEventId:
+        (continuingSameMonitor ? prior?.lastHandledIdleEventId : journalIdle?.eventId) ?? null,
+      lastIdleEvidenceKey:
+        (continuingSameMonitor ? prior?.lastIdleEvidenceKey : journalIdle?.evidenceKey) ?? null,
       lastHandledIdleTurnCount: continuingSameMonitor
-        ? prior?.lastHandledIdleTurnCount ?? 0
+        ? (prior?.lastHandledIdleTurnCount ?? 0)
         : journalIdle?.conversationId === input.conversationId &&
-          journalIdle.sessionId === browserSessionId ? journalIdle.turnCount : 0,
-      lastWakeAt: prior?.lastWakeAt ?? null, lastError: null,
-      beginAt: input.beginAt !== undefined ? input.beginAt : prior?.beginAt ?? null,
-      delayedPrompt: input.delayedPrompt !== undefined ? input.delayedPrompt : prior?.delayedPrompt ?? null,
-      repeatPrompt: input.repeatPrompt !== undefined ? input.repeatPrompt.trim() || null : prior?.repeatPrompt ?? null,
+            journalIdle.sessionId === browserSessionId
+          ? journalIdle.turnCount
+          : 0,
+      lastWakeAt: prior?.lastWakeAt ?? null,
+      lastError: null,
+      beginAt: input.beginAt !== undefined ? input.beginAt : (prior?.beginAt ?? null),
+      delayedPrompt:
+        input.delayedPrompt !== undefined ? input.delayedPrompt : (prior?.delayedPrompt ?? null),
+      repeatPrompt:
+        input.repeatPrompt !== undefined
+          ? input.repeatPrompt.trim() || null
+          : (prior?.repeatPrompt ?? null),
       pendingMessageBody: prior?.pendingMessageBody ?? null,
-      autoRebootMinutes: input.autoRebootMinutes !== undefined ? input.autoRebootMinutes : prior?.autoRebootMinutes ?? null,
-      autoRebootEveryRuns: input.autoRebootEveryRuns !== undefined ? input.autoRebootEveryRuns : prior?.autoRebootEveryRuns ?? null,
+      autoRebootMinutes:
+        input.autoRebootMinutes !== undefined
+          ? input.autoRebootMinutes
+          : (prior?.autoRebootMinutes ?? null),
+      autoRebootEveryRuns:
+        input.autoRebootEveryRuns !== undefined
+          ? input.autoRebootEveryRuns
+          : (prior?.autoRebootEveryRuns ?? null),
       wakesSinceReboot: prior?.wakesSinceReboot ?? 0,
       lastCountedWakeAt: prior?.lastCountedWakeAt ?? null,
       lastActivatedAt: prior?.lastActivatedAt ?? null,
@@ -1237,8 +1710,13 @@ export class CaffyScheduler {
   ) {
     const row = this.lookup(sessionId);
     const ids = row
-      ? [...new Set([sessionId, row.sessionId, row.browserSessionId, row.publicSessionId]
-          .filter((id): id is string => !!id))]
+      ? [
+          ...new Set(
+            [sessionId, row.sessionId, row.browserSessionId, row.publicSessionId].filter(
+              (id): id is string => !!id,
+            ),
+          ),
+        ]
       : [sessionId];
     if (row) {
       this.entries.delete(row.sessionId);
@@ -1254,10 +1732,17 @@ export class CaffyScheduler {
       }
     }
     const detail = `Recipient ${reason}; Caffy delivery retired.`;
-    const cancelled = row?.targetKind === "t3" ? 0 : this.deliveries.retireRecipient(ids, row?.conversationId ?? null,
-      detail, reason === "snoozed" || reason === "hidden" || reason === "stopped");
+    const cancelled =
+      row?.targetKind === "t3"
+        ? 0
+        : this.deliveries.retireRecipient(
+            ids,
+            row?.conversationId ?? null,
+            detail,
+            reason === "snoozed" || reason === "hidden" || reason === "stopped",
+          );
     if (row) {
-          this.save();
+      this.save();
     }
     return { stopped: !!row, cancelled };
   }
@@ -1269,8 +1754,12 @@ export class CaffyScheduler {
     this.terminalConversations.set(sessionId, conversationId);
     const row = this.lookup(sessionId);
     if (row?.conversationId === conversationId) this.retire(row.sessionId, "stopped");
-    this.deliveries.retireRecipient([sessionId], conversationId,
-      "ChatGPT conversation reached maximum length; reboot required.", true);
+    this.deliveries.retireRecipient(
+      [sessionId],
+      conversationId,
+      "ChatGPT conversation reached maximum length; reboot required.",
+      true,
+    );
     this.save();
     return { terminal: true, sessionId, conversationId };
   }
@@ -1282,38 +1771,69 @@ export class CaffyScheduler {
 
   private validateScheduledSpawnCaffy(value: ScheduledSpawnCaffy | null | undefined) {
     if (!value) return;
-    if (!["idle", "periodic"].includes(value.mode) ||
-        typeof value.respectSlots !== "boolean" ||
-        !Number.isInteger(value.intervalMinutes) || value.intervalMinutes < 1 ||
-        value.intervalMinutes > 525_600 ||
-        (value.durationMinutes !== undefined && (!Number.isInteger(value.durationMinutes) ||
-          value.durationMinutes < 1 || value.durationMinutes > 525_600)) ||
-        (value.repeatPrompt !== undefined && value.repeatPrompt.length > 29_800) ||
-        (value.autoRebootMinutes != null && (!Number.isInteger(value.autoRebootMinutes) ||
-          value.autoRebootMinutes < 1 || value.autoRebootMinutes > 525_600)) ||
-        (value.autoRebootEveryRuns != null && (!Number.isInteger(value.autoRebootEveryRuns) ||
-          value.autoRebootEveryRuns < 1 || value.autoRebootEveryRuns > 10_000)) ||
-        (value.autoRebootMinutes != null && value.autoRebootEveryRuns != null))
+    if (
+      !["idle", "periodic"].includes(value.mode) ||
+      typeof value.respectSlots !== "boolean" ||
+      !Number.isInteger(value.intervalMinutes) ||
+      value.intervalMinutes < 1 ||
+      value.intervalMinutes > 525_600 ||
+      (value.durationMinutes !== undefined &&
+        (!Number.isInteger(value.durationMinutes) ||
+          value.durationMinutes < 1 ||
+          value.durationMinutes > 525_600)) ||
+      (value.repeatPrompt !== undefined && value.repeatPrompt.length > 29_800) ||
+      (value.autoRebootMinutes != null &&
+        (!Number.isInteger(value.autoRebootMinutes) ||
+          value.autoRebootMinutes < 1 ||
+          value.autoRebootMinutes > 525_600)) ||
+      (value.autoRebootEveryRuns != null &&
+        (!Number.isInteger(value.autoRebootEveryRuns) ||
+          value.autoRebootEveryRuns < 1 ||
+          value.autoRebootEveryRuns > 10_000)) ||
+      (value.autoRebootMinutes != null && value.autoRebootEveryRuns != null)
+    )
       throw new Error("Invalid Caffy continuation settings for scheduled session.");
   }
 
-  scheduleSpawn(input: { id: string; title: string; prompt: string; beginAt: number | null; onIdle?: boolean; project?: string; caffy?: ScheduledSpawnCaffy | null }) {
+  scheduleSpawn(input: {
+    id: string;
+    title: string;
+    prompt: string;
+    beginAt: number | null;
+    onIdle?: boolean;
+    project?: string;
+    caffy?: ScheduledSpawnCaffy | null;
+  }) {
     if (!UUID.test(input.id)) throw new Error("Scheduled job requires a stable UUID.");
-    if (!input.title.trim() || input.title.length > 120 ||
-        !input.prompt.trim() || input.prompt.length > 29_800)
+    if (
+      !input.title.trim() ||
+      input.title.length > 120 ||
+      !input.prompt.trim() ||
+      input.prompt.length > 29_800
+    )
       throw new Error("Provide a title and a prompt (maximum 29800 characters).");
-    if (input.onIdle === true ? input.beginAt !== null :
-        input.beginAt === null || !Number.isSafeInteger(input.beginAt) ||
-        input.beginAt <= Date.now() || input.beginAt > Date.now() + 90 * 24 * 60 * 60_000)
-      throw new Error("Choose either the next available agent slot or a future time within 90 days.");
+    if (
+      input.onIdle === true
+        ? input.beginAt !== null
+        : input.beginAt === null ||
+          !Number.isSafeInteger(input.beginAt) ||
+          input.beginAt <= Date.now() ||
+          input.beginAt > Date.now() + 90 * 24 * 60 * 60_000
+    )
+      throw new Error(
+        "Choose either the next available agent slot or a future time within 90 days.",
+      );
     this.validateScheduledSpawnCaffy(input.caffy);
     const existing = this.scheduledSpawns.get(input.id);
     if (existing) {
-      if (existing.title !== input.title || existing.prompt !== input.prompt ||
-          existing.beginAt !== input.beginAt ||
-          (existing.onIdle === true) !== (input.onIdle === true) ||
-          existing.project !== input.project ||
-          JSON.stringify(existing.caffy ?? null) !== JSON.stringify(input.caffy ?? null))
+      if (
+        existing.title !== input.title ||
+        existing.prompt !== input.prompt ||
+        existing.beginAt !== input.beginAt ||
+        (existing.onIdle === true) !== (input.onIdle === true) ||
+        existing.project !== input.project ||
+        JSON.stringify(existing.caffy ?? null) !== JSON.stringify(input.caffy ?? null)
+      )
         throw new Error("Scheduled job ID belongs to a different request.");
       return { id: existing.id, status: existing.status, beginAt: existing.beginAt };
     }
@@ -1333,21 +1853,39 @@ export class CaffyScheduler {
   }
 
   /** Replace rather than mutate: a concurrently admitted dispatch must recheck identity. */
-  updateScheduledSpawn(input: { id: string; title: string; prompt: string; beginAt: number | null; onIdle?: boolean; caffy?: ScheduledSpawnCaffy | null }) {
+  updateScheduledSpawn(input: {
+    id: string;
+    title: string;
+    prompt: string;
+    beginAt: number | null;
+    onIdle?: boolean;
+    caffy?: ScheduledSpawnCaffy | null;
+  }) {
     const job = this.readScheduledSpawn(input.id);
-    if (!input.title.trim() || input.title.length > 120 ||
-        !input.prompt.trim() || input.prompt.length > 29_800)
+    if (
+      !input.title.trim() ||
+      input.title.length > 120 ||
+      !input.prompt.trim() ||
+      input.prompt.length > 29_800
+    )
       throw new Error("Provide a prompt (maximum 29800 characters).");
     this.validateScheduledSpawnCaffy(input.caffy);
     const now = Date.now();
-    if (input.onIdle === true ? input.beginAt !== null :
-        input.beginAt === null || !Number.isSafeInteger(input.beginAt) ||
-        (input.beginAt <= now && input.beginAt !== job.beginAt) ||
-        input.beginAt > now + 90 * 24 * 60 * 60_000)
+    if (
+      input.onIdle === true
+        ? input.beginAt !== null
+        : input.beginAt === null ||
+          !Number.isSafeInteger(input.beginAt) ||
+          (input.beginAt <= now && input.beginAt !== job.beginAt) ||
+          input.beginAt > now + 90 * 24 * 60 * 60_000
+    )
       throw new Error("Choose a future start within 90 days, or the next available agent slot.");
     this.scheduledSpawns.set(job.id, {
-      ...job, title: input.title.trim(), prompt: input.prompt.trim(),
-      beginAt: input.beginAt, onIdle: input.onIdle === true,
+      ...job,
+      title: input.title.trim(),
+      prompt: input.prompt.trim(),
+      beginAt: input.beginAt,
+      onIdle: input.onIdle === true,
       caffy: input.caffy ?? null,
     });
     this.save();
@@ -1367,15 +1905,17 @@ export class CaffyScheduler {
 
   /** Attach continuation only once the new session's real conversation binding is visible. */
   private async activateCreatedSpawnCaffy(): Promise<void> {
-    const pending = [...this.scheduledSpawns.values()].filter(job =>
-      job.status === "created" && job.caffy && !job.caffyAppliedAt && job.sessionId);
+    const pending = [...this.scheduledSpawns.values()].filter(
+      (job) => job.status === "created" && job.caffy && !job.caffyAppliedAt && job.sessionId,
+    );
     if (!pending.length) return;
     const roster = await this.loadRoster().catch(() => null);
     if (!roster || roster.hasMore || roster.incomplete) return;
     for (const job of pending) {
       if (this.scheduledSpawns.get(job.id) !== job || !job.sessionId || !job.caffy) continue;
-      const matching = roster.sessions.filter(entry =>
-        entry.id === job.sessionId || entry.browserSessionId === job.sessionId);
+      const matching = roster.sessions.filter(
+        (entry) => entry.id === job.sessionId || entry.browserSessionId === job.sessionId,
+      );
       if (matching.length !== 1) continue;
       const owner = matching[0]!;
       if (owner.closedAt != null || owner.hidden) continue;
@@ -1385,15 +1925,19 @@ export class CaffyScheduler {
       if (!bound) continue;
       try {
         await this.set({
-          sessionId: bound.browserSessionId, conversationId,
-          mode: job.caffy.mode, respectSlots: job.caffy.respectSlots,
+          sessionId: bound.browserSessionId,
+          conversationId,
+          mode: job.caffy.mode,
+          respectSlots: job.caffy.respectSlots,
           intervalMinutes: job.caffy.intervalMinutes,
           durationMinutes: job.caffy.durationMinutes,
-          onceOnly: false, keepAwake: false,
+          onceOnly: false,
+          keepAwake: false,
           // Idle mode waits for the initial prompt to finish; periodic mode
           // starts its interval from the verified session attachment.
           wakeNow: job.caffy.mode === "idle",
-          beginAt: null, repeatPrompt: job.caffy.repeatPrompt ?? "",
+          beginAt: null,
+          repeatPrompt: job.caffy.repeatPrompt ?? "",
           autoRebootMinutes: job.caffy.autoRebootMinutes ?? null,
           autoRebootEveryRuns: job.caffy.autoRebootEveryRuns ?? null,
         });
@@ -1412,8 +1956,11 @@ export class CaffyScheduler {
 
   private async dispatchScheduledSpawn(now: number) {
     const job = [...this.scheduledSpawns.values()]
-      .filter(item => item.status === "scheduled" &&
-        (item.onIdle === true || (item.beginAt !== null && item.beginAt <= now)))
+      .filter(
+        (item) =>
+          item.status === "scheduled" &&
+          (item.onIdle === true || (item.beginAt !== null && item.beginAt <= now)),
+      )
       .sort((a, b) => (a.beginAt ?? 0) - (b.beginAt ?? 0))[0];
     if (!job) return;
     const ticket = `scheduled-spawn:${job.id}`;
@@ -1426,14 +1973,22 @@ export class CaffyScheduler {
       this.save();
       try {
         const reply = await this.request({
-          version: 1, requestId: job.id, type: "chatgpt.spawn",
-          title: job.title, prompt: job.prompt,
+          version: 1,
+          requestId: job.id,
+          type: "chatgpt.spawn",
+          title: job.title,
+          prompt: job.prompt,
           ...(job.project ? { project: job.project } : {}),
           role: "personal",
         });
-        if (reply.ok && "data" in reply && reply.data &&
-            typeof reply.data === "object" && "sessionId" in reply.data &&
-            typeof reply.data.sessionId === "string") {
+        if (
+          reply.ok &&
+          "data" in reply &&
+          reply.data &&
+          typeof reply.data === "object" &&
+          "sessionId" in reply.data &&
+          typeof reply.data.sessionId === "string"
+        ) {
           job.status = "created";
           job.sessionId = reply.data.sessionId;
           if (job.onIdle === true) this.throughput.recordSession(`scheduled:${job.id}`);
@@ -1441,8 +1996,7 @@ export class CaffyScheduler {
           delete job.error;
         } else {
           job.status = "uncertain";
-          job.error = reply.ok ? "Spawn receipt did not confirm a session ID." :
-            reply.message;
+          job.error = reply.ok ? "Spawn receipt did not confirm a session ID." : reply.message;
         }
       } catch (error) {
         job.status = "uncertain";
@@ -1461,7 +2015,11 @@ export class CaffyScheduler {
       const messageId = row.pendingMessageId;
       row.pendingMessageId = null;
       row.pendingMessageBody = null;
-      try { this.deliveries.cancel(messageId); } catch { /* already gone */ }
+      try {
+        this.deliveries.cancel(messageId);
+      } catch {
+        /* already gone */
+      }
     }
     if (row.onceOnly && row.mode === "idle") {
       return { cleared: true, stopped: this.stop(sessionId, "user").stopped };
@@ -1476,26 +2034,54 @@ export class CaffyScheduler {
   }
 
   /** One-off prompt at a time; `respectSlots` applies only when this creates the row. */
-  async beginAt(sessionId: string, conversationId: string, at: number | null, prompt?: string, respectSlots = false, auditRequestId?: string) {
+  async beginAt(
+    sessionId: string,
+    conversationId: string,
+    at: number | null,
+    prompt?: string,
+    respectSlots = false,
+    auditRequestId?: string,
+  ) {
     if (prompt !== undefined && (!prompt.trim() || prompt.length > 29_800))
       throw new Error("Delayed prompt must contain 1..29800 characters.");
-    if (at !== null && (!Number.isSafeInteger(at) || at <= Date.now() ||
-        at > Date.now() + 90 * 24 * 60 * 60_000))
+    if (
+      at !== null &&
+      (!Number.isSafeInteger(at) || at <= Date.now() || at > Date.now() + 90 * 24 * 60 * 60_000)
+    )
       throw new Error("Begin working must be within the next 90 days.");
     let row = this.lookup(sessionId);
     if (!row) {
       if (at === null) return { cleared: true };
-      return await this.set({ sessionId, conversationId, mode: "idle", respectSlots,
-        onceOnly: true, keepAwake: false, beginAt: at, delayedPrompt: prompt ?? null, auditRequestId });
+      return await this.set({
+        sessionId,
+        conversationId,
+        mode: "idle",
+        respectSlots,
+        onceOnly: true,
+        keepAwake: false,
+        beginAt: at,
+        delayedPrompt: prompt ?? null,
+        auditRequestId,
+      });
     }
     if (row.targetKind === "t3") conversationId = row.conversationId;
     if (row.conversationId !== conversationId)
       throw new Error("Delayed start requires the same registered conversation.");
     if (row.rebootOperationId) throw new Error("A reboot is awaiting reconciliation.");
-    if (at !== null && row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId))
+    if (
+      at !== null &&
+      row.targetKind !== "t3" &&
+      this.legacyConflict(row.sessionId, row.conversationId)
+    )
       throw new Error("Legacy OmniHub monitor owns this session; cannot resume T3 Caffy.");
-    if (at === null && row.onceOnly && row.mode === "idle" &&
-        row.beginAt !== null && row.beginAt !== undefined && row.lastWakeAt === null) {
+    if (
+      at === null &&
+      row.onceOnly &&
+      row.mode === "idle" &&
+      row.beginAt !== null &&
+      row.beginAt !== undefined &&
+      row.lastWakeAt === null
+    ) {
       return { cleared: true, stopped: this.stop(sessionId).stopped };
     }
     if (row.pendingMessageId) {
@@ -1503,7 +2089,11 @@ export class CaffyScheduler {
       const messageId = row.pendingMessageId;
       row.pendingMessageId = null;
       row.pendingMessageBody = null;
-      try { this.deliveries.cancel(messageId); } catch { /* already gone */ }
+      try {
+        this.deliveries.cancel(messageId);
+      } catch {
+        /* already gone */
+      }
     }
     if (row.expiresAt !== null) {
       const base = row.beginAt ?? row.createdAt;
@@ -1511,7 +2101,7 @@ export class CaffyScheduler {
       row.expiresAt = (at ?? Date.now()) + duration;
     }
     row.beginAt = at;
-    row.delayedPrompt = at === null ? null : prompt ?? null;
+    row.delayedPrompt = at === null ? null : (prompt ?? null);
     row.pendingWake = true;
     row.pendingReason = "manual";
     if (at !== null) {
@@ -1537,13 +2127,17 @@ export class CaffyScheduler {
       if (input.repeatPrompt.length > 29_800)
         throw new Error("Repeated prompt exceeds 29800 characters.");
       if (row.pendingMessageId)
-        throw new Error("An existing wake delivery must settle before changing the repeated prompt.");
+        throw new Error(
+          "An existing wake delivery must settle before changing the repeated prompt.",
+        );
     }
     if (input.respectSlots !== undefined) {
       // Older T3 schedulers used a distinct queued mode and do not have
       // slot-admission policy. Fail closed rather than pretending it changed.
       if (!("respectSlots" in row))
-        throw new Error("The running Caffy scheduler does not support in-place slot policy changes. Upgrade T3 first.");
+        throw new Error(
+          "The running Caffy scheduler does not support in-place slot policy changes. Upgrade T3 first.",
+        );
       row.respectSlots = input.respectSlots;
     }
     if (input.repeatPrompt !== undefined) row.repeatPrompt = input.repeatPrompt.trim() || null;
@@ -1557,7 +2151,9 @@ export class CaffyScheduler {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("Configure Auto-continue before enabling auto-reboot.");
     if (row.targetKind === "t3" && (minutes !== null || everyRuns !== null))
-      throw new Error("Native T3 threads keep their context; ChatGPT-only auto-reboot is unavailable.");
+      throw new Error(
+        "Native T3 threads keep their context; ChatGPT-only auto-reboot is unavailable.",
+      );
     if ((minutes !== null || everyRuns !== null) && row.onceOnly)
       throw new Error("Auto-reboot requires recurring work, not Once only.");
     if (minutes !== null && (!Number.isInteger(minutes) || minutes < 1 || minutes > 525_600))
@@ -1579,25 +2175,42 @@ export class CaffyScheduler {
   private async reconcileReboot(row: CaffyConfig): Promise<void> {
     if (!row.rebootOperationId) return;
     const reply = await this.request({
-      version: 1, requestId: NodeCrypto.randomUUID(),
-      type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
+      version: 1,
+      requestId: NodeCrypto.randomUUID(),
+      type: "chatgpt.sessions",
+      action: "list",
+      which: "all",
+      includeHidden: true,
     }).catch(() => null);
-    if (!reply?.ok || !("data" in reply) || !reply.data ||
-        typeof reply.data !== "object") return;
-    const data = reply.data as {sessions?: Array<{
-      id?: string; browserSessionId?: string; publicSessionId?: string;
-      conversationId?: string; bootstrapIdentity?: {
-        state?: string; publicId?: string; conversationId?: string;
-      }; lastIdleTransition?: {conversationId?: string; sequence?: number};
-    }>};
-    const matches = (data.sessions ?? []).filter(entry => matchesCaffyOwner(entry,
-      [row.sessionId, row.browserSessionId, row.publicSessionId]));
+    if (!reply?.ok || !("data" in reply) || !reply.data || typeof reply.data !== "object") return;
+    const data = reply.data as {
+      sessions?: Array<{
+        id?: string;
+        browserSessionId?: string;
+        publicSessionId?: string;
+        conversationId?: string;
+        bootstrapIdentity?: {
+          state?: string;
+          publicId?: string;
+          conversationId?: string;
+        };
+        lastIdleTransition?: { conversationId?: string; sequence?: number };
+      }>;
+    };
+    const matches = (data.sessions ?? []).filter((entry) =>
+      matchesCaffyOwner(entry, [row.sessionId, row.browserSessionId, row.publicSessionId]),
+    );
     if (matches.length !== 1) return;
     const entry = matches[0]!;
     const nextId = entry.conversationId;
-    if (!nextId || !UUID.test(nextId) || nextId === row.rebootOldConversationId ||
-        entry.bootstrapIdentity?.conversationId !== nextId ||
-        entry.bootstrapIdentity?.state !== "registered") return;
+    if (
+      !nextId ||
+      !UUID.test(nextId) ||
+      nextId === row.rebootOldConversationId ||
+      entry.bootstrapIdentity?.conversationId !== nextId ||
+      entry.bootstrapIdentity?.state !== "registered"
+    )
+      return;
     row.conversationId = nextId;
     row.publicSessionId = entry.bootstrapIdentity.publicId ?? row.publicSessionId;
     row.lastIdleEvidenceKey = null;
@@ -1618,48 +2231,72 @@ export class CaffyScheduler {
     // predecessor can provide a guarded read. Never allow a missing/ambiguous
     // read to block the scheduler: the continuation prompt remains sufficient.
     const original = await this.request({
-      version: 1, requestId: NodeCrypto.randomUUID(),
-      type: "chatgpt.sessions", action: "read",
-      sessionId: row.sessionId, expectedConversationId: row.conversationId,
-      from: "start", count: 1, maxMessageChars: 20_000,
+      version: 1,
+      requestId: NodeCrypto.randomUUID(),
+      type: "chatgpt.sessions",
+      action: "read",
+      sessionId: row.sessionId,
+      expectedConversationId: row.conversationId,
+      from: "start",
+      count: 1,
+      maxMessageChars: 20_000,
     }).catch(() => null);
-    if (this.entries.get(row.sessionId) !== row || row.pendingMessageId ||
-        row.paused || row.rebootOperationId) return;
+    if (
+      this.entries.get(row.sessionId) !== row ||
+      row.pendingMessageId ||
+      row.paused ||
+      row.rebootOperationId
+    )
+      return;
     const bound = await this.registered(row.sessionId, row.conversationId).catch(() => null);
     // pump() already holds the atomic admission for this due wake.
     // Rechecking capacity here would count our own reservation as a competitor.
     if (!bound || bound.working || this.entries.get(row.sessionId) !== row) return;
-    const evidence = original?.ok && "data" in original && original.data &&
-      typeof original.data === "object" ? original.data as {
-        conversationGuardValidated?: boolean; verifiedConversationId?: string;
-        session?: {messages?: Array<{role?: string; text?: string}>};
-      } : null;
-    const originalText = evidence?.conversationGuardValidated === true &&
+    const evidence =
+      original?.ok && "data" in original && original.data && typeof original.data === "object"
+        ? (original.data as {
+            conversationGuardValidated?: boolean;
+            verifiedConversationId?: string;
+            session?: { messages?: Array<{ role?: string; text?: string }> };
+          })
+        : null;
+    const originalText =
+      evidence?.conversationGuardValidated === true &&
       evidence.verifiedConversationId === row.conversationId
-        ? evidence.session?.messages?.find(m => m.role === "user")?.text?.trim() : null;
-    const prompt = "This is a context handover for an automatic Caffy reboot within the SAME T3 session. " +
+        ? evidence.session?.messages?.find((m) => m.role === "user")?.text?.trim()
+        : null;
+    const prompt =
+      "This is a context handover for an automatic Caffy reboot within the SAME T3 session. " +
       "Do not execute or repeat the assignment yet: Caffy will send the next scheduled prompt " +
       "after this handover is complete. Read the original assignment below for context, " +
       "acknowledge it briefly and finish this turn.\n" +
       (originalText && originalText.length <= 20_000
         ? "\nOriginal user assignment (for context, not a request to redo completed steps):\n" +
-          originalText : "\nReview your original assignment and project instructions.");
+          originalText
+        : "\nReview your original assignment and project instructions.");
     const operationId = NodeCrypto.randomUUID();
     row.rebootOperationId = operationId;
     row.rebootOldConversationId = row.conversationId;
     // Retain the due continuation until the new conversation is verified.
     this.save(); // durable before potentially changing any browser state
     const reply = await this.request({
-      version: 1, requestId: operationId,
-      type: "chatgpt.reboot", sessionId: row.sessionId,
+      version: 1,
+      requestId: operationId,
+      type: "chatgpt.reboot",
+      sessionId: row.sessionId,
       priorConversationId: row.conversationId,
-      prompt, phase: "begin",
+      prompt,
+      phase: "begin",
     }).catch(() => null);
     if (this.entries.get(row.sessionId) !== row) return;
-    const data = reply?.ok && "data" in reply && reply.data &&
-      typeof reply.data === "object" ? reply.data as {status?: string} : null;
+    const data =
+      reply?.ok && "data" in reply && reply.data && typeof reply.data === "object"
+        ? (reply.data as { status?: string })
+        : null;
     if (!data || !["submitted", "committed", "restored"].includes(data.status ?? "")) {
-      row.lastError = "Auto-reboot outcome unconfirmed. Operation " + operationId +
+      row.lastError =
+        "Auto-reboot outcome unconfirmed. Operation " +
+        operationId +
         " retained for read-only reconciliation; no duplicate reboot will start.";
       this.save();
       return;
@@ -1674,21 +2311,41 @@ export class CaffyScheduler {
   pause(sessionId: string, paused: boolean, auditRequestId?: string) {
     const row = this.lookup(sessionId);
     if (!row) throw new Error("No Caffy monitor for this session.");
-    if (!paused && row.targetKind !== "t3" && this.legacyConflict(row.sessionId, row.conversationId))
-      throw new Error("Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.");
+    if (
+      !paused &&
+      row.targetKind !== "t3" &&
+      this.legacyConflict(row.sessionId, row.conversationId)
+    )
+      throw new Error(
+        "Legacy OmniHub monitor still owns this session; cancel it before resuming T3 Caffy.",
+      );
     const wasPaused = row.paused;
     row.paused = paused;
     // A command-driven resume must not leave an already-idle recurring
     // monitor waiting indefinitely for a brand-new idle transition.
-    if (wasPaused && !paused && row.mode === "idle" && !row.onceOnly &&
-        !row.pendingWake && !row.pendingMessageId) {
+    if (
+      wasPaused &&
+      !paused &&
+      row.mode === "idle" &&
+      !row.onceOnly &&
+      !row.pendingWake &&
+      !row.pendingMessageId
+    ) {
       row.pendingWake = true;
       row.pendingReason = "manual";
     }
-    this.logPauseChange(row, wasPaused, paused ? "pause:explicit" : "resume:explicit", auditRequestId);
+    this.logPauseChange(
+      row,
+      wasPaused,
+      paused ? "pause:explicit" : "resume:explicit",
+      auditRequestId,
+    );
     this.save();
     this.backupConfiguration();
-    if (!paused) { this.deliveries.resumeAllowed(); void this.pump(); }
+    if (!paused) {
+      this.deliveries.resumeAllowed();
+      void this.pump();
+    }
     return row;
   }
 
@@ -1722,9 +2379,12 @@ export class CaffyScheduler {
     const transition = reduceCaffyWake(row, { type: "idle", idle: event, now: Date.now() });
     if (!Object.keys(transition.patch).length) return;
     this.applyWakeTransition(row, transition.patch);
-    if (event.kind === "completed" && row.lastWakeAt !== null &&
-        event.observedAt > row.lastWakeAt &&
-        row.lastWakeAt > (row.lastCountedWakeAt ?? 0)) {
+    if (
+      event.kind === "completed" &&
+      row.lastWakeAt !== null &&
+      event.observedAt > row.lastWakeAt &&
+      row.lastWakeAt > (row.lastCountedWakeAt ?? 0)
+    ) {
       row.wakesSinceReboot = (row.wakesSinceReboot ?? 0) + 1;
       row.lastCountedWakeAt = row.lastWakeAt;
     }
@@ -1743,51 +2403,83 @@ export class CaffyScheduler {
   private onDelivery(record: Omit<DeliveryRecord, "body">) {
     const row = this.lookup(record.sessionId);
     if (!row || row.targetKind === "t3" || row.pendingMessageId !== record.messageId) return;
-    this.applyWakeTransition(row, reduceCaffyWake(row, {
-      type: "delivery", receipt: record, now: Date.now(),
-    }).patch);
+    this.applyWakeTransition(
+      row,
+      reduceCaffyWake(row, {
+        type: "delivery",
+        receipt: record,
+        now: Date.now(),
+      }).patch,
+    );
     if (record.status === "delivered" && row.onceOnly) this.entries.delete(row.sessionId);
     this.save();
   }
 
   private async loadRoster(): Promise<CaffyRoster | null> {
     const reply = await this.request({
-      version: 1, requestId: NodeCrypto.randomUUID(),
-      type: "chatgpt.sessions", action: "list", which: "all", includeHidden: true,
+      version: 1,
+      requestId: NodeCrypto.randomUUID(),
+      type: "chatgpt.sessions",
+      action: "list",
+      which: "all",
+      includeHidden: true,
     });
-    if (!reply.ok || !("data" in reply) || !reply.data ||
-        typeof reply.data !== "object") return null;
+    if (!reply.ok || !("data" in reply) || !reply.data || typeof reply.data !== "object")
+      return null;
     const data = reply.data as Partial<CaffyRoster>;
-    return Array.isArray(data.sessions) ? data as CaffyRoster : null;
+    return Array.isArray(data.sessions) ? (data as CaffyRoster) : null;
   }
 
   private bindingInRoster(
-    roster: CaffyRoster, sessionId: string, conversationId: string,
-  ): { id: string; browserSessionId: string; working: boolean; idleSequence: number;
-      activity?: string | undefined; status?: string | undefined; lastRole?: string | undefined } | null {
+    roster: CaffyRoster,
+    sessionId: string,
+    conversationId: string,
+  ): {
+    id: string;
+    browserSessionId: string;
+    working: boolean;
+    idleSequence: number;
+    activity?: string | undefined;
+    status?: string | undefined;
+    lastRole?: string | undefined;
+    observedAt: number;
+  } | null {
     const known = this.lookup(sessionId);
-    const matches = roster.sessions.filter(entry => matchesCaffyOwner(entry,
-      [sessionId, known?.browserSessionId, known?.publicSessionId]));
+    const matches = roster.sessions.filter((entry) =>
+      matchesCaffyOwner(entry, [sessionId, known?.browserSessionId, known?.publicSessionId]),
+    );
     const entry = matches.length === 1 ? matches[0] : null;
-    if (!entry?.id || entry.closedAt != null ||
-        // Current T3 roster binding outranks an obsolete Bootstrap identity.
-        (entry.conversationId
-          ? entry.conversationId !== conversationId
-          : entry.bootstrapIdentity?.conversationId !== conversationId)) return null;
-    const browserSessionId = entry.browserSessionId ??
+    if (
+      !entry?.id ||
+      entry.closedAt != null ||
+      // Current T3 roster binding outranks an obsolete Bootstrap identity.
+      (entry.conversationId
+        ? entry.conversationId !== conversationId
+        : entry.bootstrapIdentity?.conversationId !== conversationId)
+    )
+      return null;
+    const browserSessionId =
+      entry.browserSessionId ??
       (entry.lastIdleTransition?.conversationId === conversationId &&
-        UUID.test(entry.lastIdleTransition.eventId?.split(":")[0] ?? "")
+      UUID.test(entry.lastIdleTransition.eventId?.split(":")[0] ?? "")
         ? entry.lastIdleTransition.eventId!.split(":")[0]!
-        : known?.browserSessionId ?? known?.sessionId ?? entry.id);
+        : (known?.browserSessionId ?? known?.sessionId ?? entry.id));
     const observedAt = Date.parse(entry.statusObservedAt ?? "");
     return {
       id: entry.bootstrapIdentity?.publicId ?? entry.publicSessionId ?? entry.id,
       browserSessionId,
-      idleSequence: entry.lastIdleTransition?.conversationId === conversationId &&
+      idleSequence:
+        entry.lastIdleTransition?.conversationId === conversationId &&
         Number.isSafeInteger(entry.lastIdleTransition.sequence)
-          ? Math.max(0, entry.lastIdleTransition.sequence ?? 0) : 0,
-      activity: entry.activity, status: entry.status, lastRole: entry.lastRole,
-      working: Number.isFinite(observedAt) && observedAt <= Date.now() + 1000 &&
+          ? Math.max(0, entry.lastIdleTransition.sequence ?? 0)
+          : 0,
+      activity: entry.activity,
+      status: entry.status,
+      lastRole: entry.lastRole,
+      observedAt,
+      working:
+        Number.isFinite(observedAt) &&
+        observedAt <= Date.now() + 1000 &&
         Date.now() - observedAt < 15_000 &&
         (entry.activity === "working" || entry.status === "working"),
     };
@@ -1800,19 +2492,28 @@ export class CaffyScheduler {
 
   private async read(sessionId: string, conversationId: string) {
     const response = await this.request({
-      version: 1, requestId: NodeCrypto.randomUUID(),
-      type: "chatgpt.sessions", action: "read",
-      sessionId, expectedConversationId: conversationId, count: 1,
+      version: 1,
+      requestId: NodeCrypto.randomUUID(),
+      type: "chatgpt.sessions",
+      action: "read",
+      sessionId,
+      expectedConversationId: conversationId,
+      count: 1,
     });
     return response.ok && "data" in response && response.data && typeof response.data === "object"
-      ? response.data as Record<string, unknown> : null;
+      ? (response.data as Record<string, unknown>)
+      : null;
   }
 
   setTaskReservations(
-    reservations: ReadonlyArray<{requestId: string; sessionId: string | null; holdUntil?: number}>,
+    reservations: ReadonlyArray<{
+      requestId: string;
+      sessionId: string | null;
+      holdUntil?: number;
+    }>,
     inventoryReady = true,
   ) {
-    this.taskReservations = reservations.map(row => ({
+    this.taskReservations = reservations.map((row) => ({
       requestId: row.requestId,
       sessionId: row.sessionId,
       ...(row.holdUntil === undefined ? {} : { holdUntil: row.holdUntil }),
@@ -1825,25 +2526,45 @@ export class CaffyScheduler {
     if (cached && Date.now() - cached.observedAt < 5_000)
       return { ids: cached.ids, known: cached.known };
     const reply = await this.request({
-      version: 1, requestId: NodeCrypto.randomUUID(), type: "t3.threads", action: "list",
+      version: 1,
+      requestId: NodeCrypto.randomUUID(),
+      type: "t3.threads",
+      action: "list",
     }).catch(() => null);
-    const data = reply?.ok && "data" in reply && reply.data &&
-      typeof reply.data === "object" ? reply.data as {
-        environmentId?: string; threads?: Array<{ id?: string; status?: string }>;
-      } : null;
+    const data =
+      reply?.ok && "data" in reply && reply.data && typeof reply.data === "object"
+        ? (reply.data as {
+            environmentId?: string;
+            threads?: Array<{ id?: string; status?: string }>;
+          })
+        : null;
     const known = !!data?.environmentId && Array.isArray(data.threads);
-    const ids = known ? data.threads!.filter(thread =>
-      typeof thread.id === "string" &&
-      ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status ?? "")
-    ).map(thread => nativeOwner(data.environmentId!, thread.id!)) : [];
+    const ids = known
+      ? data
+          .threads!.filter(
+            (thread) =>
+              typeof thread.id === "string" &&
+              ["preparing", "queued", "starting", "running", "waiting"].includes(
+                thread.status ?? "",
+              ),
+          )
+          .map((thread) => nativeOwner(data.environmentId!, thread.id!))
+      : [];
     this.nativeCapacityCache = { observedAt: Date.now(), ids, known };
     return { ids, known };
   }
 
   async capacity(extraReserved = 0): Promise<{
-    observedAt: string; limit: number; working: number; reserved: number;
-    workingIds: string[]; unknown: number; used: number; available: number;
-    admissible: boolean; reason: string | null;
+    observedAt: string;
+    limit: number;
+    working: number;
+    reserved: number;
+    workingIds: string[];
+    unknown: number;
+    used: number;
+    available: number;
+    admissible: boolean;
+    reason: string | null;
   }> {
     this.expireTimedBusy();
     const policy = this.keepT3Busy;
@@ -1860,24 +2581,33 @@ export class CaffyScheduler {
     for (const id of nativeInventory.ids) workingIds.add(id);
     const used = workingIds.size;
     const observed = {
-      observedAt: new Date(now).toISOString(), limit: this.maxWorking,
-      working: used, workingIds: [...workingIds], used,
+      observedAt: new Date(now).toISOString(),
+      limit: this.maxWorking,
+      working: used,
+      workingIds: [...workingIds],
+      used,
       available: Math.max(0, this.maxWorking - used),
     };
-    if (this.workingReports.size === 0 || !nativeInventory.known) return {
-      ...observed, reserved: 0, unknown: 1, admissible: false,
-      reason: this.workingReports.size === 0
-        ? "Live ChatGPT sidebar green-session count unavailable"
-        : "Native T3 working-thread inventory unavailable",
-    };
+    if (this.workingReports.size === 0 || !nativeInventory.known)
+      return {
+        ...observed,
+        reserved: 0,
+        unknown: 1,
+        admissible: false,
+        reason:
+          this.workingReports.size === 0
+            ? "Live ChatGPT sidebar green-session count unavailable"
+            : "Native T3 working-thread inventory unavailable",
+      };
 
     // Native + ChatGPT working threads contribute to the same cap.
     // Pending messages, TaskBoard reservations and startup attempts are not workers.
     return {
-      ...observed, reserved: 0, unknown: 0,
+      ...observed,
+      reserved: 0,
+      unknown: 0,
       admissible: policy && used < this.maxWorking,
-      reason: !policy ? "Keep T3 Busy disabled" :
-        used >= this.maxWorking ? "At capacity" : null,
+      reason: !policy ? "Keep T3 Busy disabled" : used >= this.maxWorking ? "At capacity" : null,
     };
   }
   /** Do not force a shutdown on a transient zero or stale observation.
@@ -1885,7 +2615,8 @@ export class CaffyScheduler {
    * No fallback to guessed zero when the live header or inventory is missing. */
   private async checkShutdown(): Promise<void> {
     this.expireTimedBusy();
-    if (!this.started || !this.shutdownWhenIdle || this.busyUntil !== null || this.shutdownChecking) return;
+    if (!this.started || !this.shutdownWhenIdle || this.busyUntil !== null || this.shutdownChecking)
+      return;
     this.shutdownChecking = true;
     try {
       const snapshot = await this.capacity();
@@ -1893,16 +2624,23 @@ export class CaffyScheduler {
       // A completed queued wake has a two-minute capacity cooldown; it is
       // *not* an active session and must not hold the PC awake indefinitely.
       // Only actual workers, active outbox attempts or pending starts matter.
-      const sending = [...this.entries.values()].some(row => {
+      const sending = [...this.entries.values()].some((row) => {
         if (row.paused || !row.pendingMessageId) return false;
         if (row.targetKind === "t3") return true;
         try {
           const status = this.deliveries.status(row.pendingMessageId).status;
           return status === "sending" || status === "uncertain" || status === "queued";
-        } catch { return false; }
+        } catch {
+          return false;
+        }
       });
-      if (snapshot.unknown > 0 || snapshot.working > 0 || sending ||
-          this.taskReservations.length > 0 || !this.taskBoardInventoryReady) {
+      if (
+        snapshot.unknown > 0 ||
+        snapshot.working > 0 ||
+        sending ||
+        this.taskReservations.length > 0 ||
+        !this.taskBoardInventoryReady
+      ) {
         this.shutdownIdleSince = null;
         return;
       }
@@ -1917,8 +2655,9 @@ export class CaffyScheduler {
       this.shutdownWhenIdle = false;
       this.shutdownIdleSince = null;
       this.save();
-      try { this.shutdownPC(); }
-      catch (error) {
+      try {
+        this.shutdownPC();
+      } catch (error) {
         this.shutdownError = error instanceof Error ? error.message : String(error);
       }
     } catch {
@@ -1931,40 +2670,54 @@ export class CaffyScheduler {
   private async admissionExclusive<T>(check: () => Promise<T>): Promise<T> {
     const previous = this.admissionGate;
     let unlock!: () => void;
-    this.admissionGate = new Promise<void>(resolve => { unlock = resolve; });
+    this.admissionGate = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
     await previous;
-    try { return await check(); }
-    finally { unlock(); }
+    try {
+      return await check();
+    } finally {
+      unlock();
+    }
   }
 
   /** User-queued session-view messages outrank TaskBoard and automatic Caffy.
    * The queue is durable, so this also survives renderer/window restarts.
    */
   hasPriorityCapacityMessage(): boolean {
-    return [...this.capacityClaims.values()].some(row => row.state === "waiting");
+    return [...this.capacityClaims.values()].some((row) => row.state === "waiting");
   }
 
   async capacityMessage(input: CapacityMessageRequest): Promise<CapacityMessageReceipt> {
     if (!UUID.test(input.messageId)) throw new Error("Invalid capacity message UUID");
     return await this.admissionExclusive(async () => {
       const messageId = input.messageId;
-      const receipt = (status: CapacityMessageReceipt["status"], reason?: string): CapacityMessageReceipt =>
-        ({ messageId, status, ...(reason ? {reason} : {}) });
+      const receipt = (
+        status: CapacityMessageReceipt["status"],
+        reason?: string,
+      ): CapacityMessageReceipt => ({ messageId, status, ...(reason ? { reason } : {}) });
       let claim = this.capacityClaims.get(messageId);
       if (input.action === "claim") {
-        if (!UUID.test(input.sessionId) ||
-            (input.conversationId !== null && !UUID.test(input.conversationId)))
+        if (
+          !UUID.test(input.sessionId) ||
+          (input.conversationId !== null && !UUID.test(input.conversationId))
+        )
           throw new Error("Invalid capacity claim identity.");
         // Historical Session-view messages may have a per-message OpenRig
         // limit. T3 ignores it; the global T3 limit is now the sole policy.
-        if (claim && (claim.sessionId !== input.sessionId ||
-            claim.conversationId !== input.conversationId))
+        if (
+          claim &&
+          (claim.sessionId !== input.sessionId || claim.conversationId !== input.conversationId)
+        )
           throw new Error("Capacity message UUID already belongs to another session.");
         if (!claim) {
           claim = {
-            messageId, sessionId: input.sessionId,
+            messageId,
+            sessionId: input.sessionId,
             conversationId: input.conversationId,
-            state: "waiting", createdAt: Date.now(), submittedAt: null,
+            state: "waiting",
+            createdAt: Date.now(),
+            submittedAt: null,
           };
           this.capacityClaims.set(messageId, claim);
           this.save();
@@ -1972,70 +2725,116 @@ export class CaffyScheduler {
       }
       if (!claim) return receipt("unavailable", "No durable T3 capacity message with this ID.");
       if (input.action === "release") {
-        if (input.reason === "pre_submit_aborted" &&
-            (claim.state === "waiting" || claim.state === "admitted")) {
-          this.capacityClaims.delete(messageId); this.save();
+        if (
+          input.reason === "pre_submit_aborted" &&
+          (claim.state === "waiting" || claim.state === "admitted")
+        ) {
+          this.capacityClaims.delete(messageId);
+          this.save();
           return receipt("released");
         }
-        if (input.reason !== "assistant_idle_verified" ||
-            !["submitted", "uncertain"].includes(claim.state) ||
-            claim.submittedAt === null)
-          return receipt("held", "Capacity lease may have been submitted; exact post-submit idle proof is required.");
+        if (
+          input.reason !== "assistant_idle_verified" ||
+          !["submitted", "uncertain"].includes(claim.state) ||
+          claim.submittedAt === null
+        )
+          return receipt(
+            "held",
+            "Capacity lease may have been submitted; exact post-submit idle proof is required.",
+          );
         const response = await this.request({
-          version: 1, requestId: NodeCrypto.randomUUID(), type: "chatgpt.sessions",
-          action: "list", which: "all", includeHidden: true,
+          version: 1,
+          requestId: NodeCrypto.randomUUID(),
+          type: "chatgpt.sessions",
+          action: "list",
+          which: "all",
+          includeHidden: true,
         }).catch(() => null);
-        const data = response?.ok && "data" in response && response.data &&
-          typeof response.data === "object" ? response.data as {
-            sessions?: Array<{
-              id?: string; conversationId?: string; activity?: string; status?: string;
-              statusObservedAt?: string; lastRole?: string;
-            }>; hasMore?: boolean; incomplete?: boolean;
-          } : null;
-        const session = !data?.hasMore && !data?.incomplete
-          ? data?.sessions?.find(row => row.id === claim.sessionId) : null;
+        const data =
+          response?.ok && "data" in response && response.data && typeof response.data === "object"
+            ? (response.data as {
+                sessions?: Array<{
+                  id?: string;
+                  conversationId?: string;
+                  activity?: string;
+                  status?: string;
+                  statusObservedAt?: string;
+                  lastRole?: string;
+                }>;
+                hasMore?: boolean;
+                incomplete?: boolean;
+              })
+            : null;
+        const session =
+          !data?.hasMore && !data?.incomplete
+            ? data?.sessions?.find((row) => row.id === claim.sessionId)
+            : null;
         const observed = Date.parse(session?.statusObservedAt ?? "");
-        if (!session || session.activity !== "idle" ||
-            !["done_or_idle", "waiting_for_input"].includes(session.status ?? "") ||
-            session.lastRole !== "assistant" ||
-            (claim.conversationId && claim.conversationId !== session.conversationId) ||
-            !Number.isFinite(observed) || observed <= claim.submittedAt ||
-            observed > Date.now() + 1000 || Date.now() - observed > 15_000)
+        if (
+          !session ||
+          session.activity !== "idle" ||
+          !["done_or_idle", "waiting_for_input"].includes(session.status ?? "") ||
+          session.lastRole !== "assistant" ||
+          (claim.conversationId && claim.conversationId !== session.conversationId) ||
+          !Number.isFinite(observed) ||
+          observed <= claim.submittedAt ||
+          observed > Date.now() + 1000 ||
+          Date.now() - observed > 15_000
+        )
           return receipt("held", "Awaiting verified assistant idle in the exact conversation.");
-        this.capacityClaims.delete(messageId); this.save();
+        this.capacityClaims.delete(messageId);
+        this.save();
         return receipt("released");
       }
       if (input.action === "submit") {
         if (claim.state === "submitted") return receipt("submitted");
-        if (claim.state !== "admitted") return receipt("held", "This message has not been admitted.");
-        claim.state = "submitted"; claim.submittedAt = Date.now(); this.save();
+        if (claim.state !== "admitted")
+          return receipt("held", "This message has not been admitted.");
+        claim.state = "submitted";
+        claim.submittedAt = Date.now();
+        this.save();
         return receipt("submitted");
       }
       if (input.action === "uncertain") {
         if (claim.state === "submitted" || claim.state === "admitted") {
-          claim.state = "uncertain"; this.save();
+          claim.state = "uncertain";
+          this.save();
         }
         return receipt("uncertain");
       }
       if (claim.state === "admitted" || claim.state === "submitted" || claim.state === "uncertain")
-        return receipt(claim.state === "admitted" ? "admitted" :
-          claim.state === "submitted" ? "submitted" : "uncertain");
+        return receipt(
+          claim.state === "admitted"
+            ? "admitted"
+            : claim.state === "submitted"
+              ? "submitted"
+              : "uncertain",
+        );
       if (input.action === "status") return receipt("waiting");
       // FIFO: once an older user's message is queued, other capacity requests
       // cannot jump ahead, and no TaskBoard/Caffy admission can race this gate.
       const oldest = [...this.capacityClaims.values()]
-        .filter(row => row.state === "waiting")
+        .filter((row) => row.state === "waiting")
         .sort((a, b) => a.createdAt - b.createdAt)[0];
       if (oldest !== claim) return receipt("waiting", "An earlier user message has priority.");
-      if ([...this.capacityClaims.values()].some(row =>
-        row.messageId !== claim.messageId && row.sessionId === claim.sessionId &&
-        row.state !== "waiting"))
+      if (
+        [...this.capacityClaims.values()].some(
+          (row) =>
+            row.messageId !== claim.messageId &&
+            row.sessionId === claim.sessionId &&
+            row.state !== "waiting",
+        )
+      )
         return receipt("waiting", "Another message is already using this session.");
       const snapshot = await this.capacity().catch(() => null);
-      if (!snapshot || snapshot.unknown !== 0 ||
-          snapshot.used + snapshot.reserved >= snapshot.limit)
+      if (
+        !snapshot ||
+        snapshot.unknown !== 0 ||
+        snapshot.used + snapshot.reserved >= snapshot.limit
+      )
         return receipt("waiting", snapshot?.reason ?? "Waiting for T3 capacity.");
-      claim.state = "admitted"; this.save();
+      claim.state = "admitted";
+      this.save();
       return receipt("admitted");
     });
   }
@@ -2044,25 +2843,37 @@ export class CaffyScheduler {
    * For an already-held queued session, a continuation reuses its existing slot.
    */
   async acquireAutomaticAdmission(
-    ticket: string, sessionId?: string, allowWhenBusyDisabled = false,
+    ticket: string,
+    sessionId?: string,
+    allowWhenBusyDisabled = false,
     target?: string,
   ): Promise<boolean> {
     return await this.admissionExclusive(async () => {
       this.expireTimedBusy();
-      const alreadyHeld = !!sessionId && (
-        this.taskReservations.some(row => row.sessionId === sessionId &&
-          row.holdUntil !== undefined && row.holdUntil > Date.now()) ||
-        [...this.entries.values()].some(row => row.sessionId === sessionId &&
-          row.pendingMessageId !== null));
+      const alreadyHeld =
+        !!sessionId &&
+        (this.taskReservations.some(
+          (row) =>
+            row.sessionId === sessionId &&
+            row.holdUntil !== undefined &&
+            row.holdUntil > Date.now(),
+        ) ||
+          [...this.entries.values()].some(
+            (row) => row.sessionId === sessionId && row.pendingMessageId !== null,
+          ));
       const available = await this.capacity().catch(() => null);
-      const reason = !this.keepT3Busy && !allowWhenBusyDisabled ? "Keep T3 Busy disabled" :
-        !available || available.unknown !== 0
-          ? available?.reason ?? "Capacity inventory unavailable" :
-        available.used >= available.limit
-          ? available.reason ?? "At capacity" :
-        null;
+      const reason =
+        !this.keepT3Busy && !allowWhenBusyDisabled
+          ? "Keep T3 Busy disabled"
+          : !available || available.unknown !== 0
+            ? (available?.reason ?? "Capacity inventory unavailable")
+            : available.used >= available.limit
+              ? (available.reason ?? "At capacity")
+              : null;
       this.automaticAdmissionJournal.record({
-        ticket, ...(target ? { target } : {}), alreadyHeld,
+        ticket,
+        ...(target ? { target } : {}),
+        alreadyHeld,
         decision: reason ? "deferred" : "admitted",
         reason: reason ?? (alreadyHeld ? "Existing pending slot" : "Capacity available"),
         capacity: available,
@@ -2074,12 +2885,17 @@ export class CaffyScheduler {
   }
 
   releaseAutomaticAdmission(ticket: string): void {
-    if (this.automaticAdmissions.delete(ticket))
-      this.automaticAdmissionJournal.released(ticket);
+    if (this.automaticAdmissions.delete(ticket)) this.automaticAdmissionJournal.released(ticket);
   }
 
-  get policyEnabled(): boolean { this.expireTimedBusy(); return this.keepT3Busy; }
-  throughputStatus() { this.expireTimedBusy(); return this.throughput.snapshot(); }
+  get policyEnabled(): boolean {
+    this.expireTimedBusy();
+    return this.keepT3Busy;
+  }
+  throughputStatus() {
+    this.expireTimedBusy();
+    return this.throughput.snapshot();
+  }
 
   /**
    * TaskBoard yields to waiting slot-respecting Caffy recipients, including unloaded
@@ -2090,32 +2906,51 @@ export class CaffyScheduler {
     this.expireTimedBusy();
     const now = Date.now();
     return (
-      [...this.scheduledSpawns.values()].some(job => job.status === "scheduled" &&
-        (job.onIdle === true || (job.beginAt !== null && job.beginAt <= now))) ||
-      [...this.entries.values()].some(row =>
-        row.respectSlots && row.pendingWake && !row.paused &&
-        !row.pendingMessageId && row.lastError === null &&
-        // A queued wake intentionally delayed by the user does not reserve
-        // priority/capacity until its activation deadline.
-        (row.beginAt == null || row.beginAt <= now) &&
-        (row.expiresAt === null || row.expiresAt > now)) ||
-      [...this.entries.values()].some(row => row.delayedPrompt && row.pendingWake &&
-        !row.paused && (row.beginAt === null || row.beginAt === undefined || row.beginAt <= now)));
+      [...this.scheduledSpawns.values()].some(
+        (job) =>
+          job.status === "scheduled" &&
+          (job.onIdle === true || (job.beginAt !== null && job.beginAt <= now)),
+      ) ||
+      [...this.entries.values()].some(
+        (row) =>
+          row.respectSlots &&
+          row.pendingWake &&
+          !row.paused &&
+          !row.pendingMessageId &&
+          row.lastError === null &&
+          // A queued wake intentionally delayed by the user does not reserve
+          // priority/capacity until its activation deadline.
+          (row.beginAt == null || row.beginAt <= now) &&
+          (row.expiresAt === null || row.expiresAt > now),
+      ) ||
+      [...this.entries.values()].some(
+        (row) =>
+          row.delayedPrompt &&
+          row.pendingWake &&
+          !row.paused &&
+          (row.beginAt === null || row.beginAt === undefined || row.beginAt <= now),
+      )
+    );
   }
 
   private async pump() {
     this.expireTimedBusy();
     if (!this.started) return;
-    if (this.pumping) { this.pumpRequested = true; return; }
+    if (this.pumping) {
+      this.pumpRequested = true;
+      return;
+    }
     this.pumping = true;
     try {
       await this.reconcileIdentityAliases().catch(() => {});
       const now = Date.now();
       await this.dispatchScheduledSpawn(now);
       await this.activateCreatedSpawnCaffy();
-      const rows = [...this.entries.values()].sort((a,b) =>
-        Number(b.respectSlots && b.pendingWake && !b.paused) -
-        Number(a.respectSlots && a.pendingWake && !a.paused));
+      const rows = [...this.entries.values()].sort(
+        (a, b) =>
+          Number(b.respectSlots && b.pendingWake && !b.paused) -
+          Number(a.respectSlots && a.pendingWake && !a.paused),
+      );
       for (const row of rows) {
         if (this.entries.get(row.sessionId) !== row) continue;
         if (row.rebootOperationId) {
@@ -2145,11 +2980,16 @@ export class CaffyScheduler {
             // Crash between persisting the ID and enqueuing it: reuse that ID.
             try {
               this.deliveries.enqueue({
-                messageId: row.pendingMessageId, sessionId: row.sessionId,
-                conversationId: row.conversationId, body: row.pendingMessageBody ?? WAKE_TEXT,
+                messageId: row.pendingMessageId,
+                sessionId: row.sessionId,
+                conversationId: row.conversationId,
+                body: row.pendingMessageBody ?? WAKE_TEXT,
                 caffyWake: true,
               });
-            } catch (error) { row.lastError = String(error); this.save(); }
+            } catch (error) {
+              row.lastError = String(error);
+              this.save();
+            }
           }
           continue;
         }
@@ -2162,54 +3002,65 @@ export class CaffyScheduler {
         if (!row.pendingWake) continue;
         if (this.legacyConflict(row.sessionId, row.conversationId)) {
           row.paused = true;
-          row.lastError = "Legacy OmniHub monitor owns this session; T3 Caffy suspended to avoid duplicate waking.";
+          row.lastError =
+            "Legacy OmniHub monitor owns this session; T3 Caffy suspended to avoid duplicate waking.";
           this.save();
           continue;
         }
         const wakeTicket = `wake:${row.sessionId}:${row.conversationId}`;
         const bypassCapacity = !row.respectSlots;
-        if (!bypassCapacity && !(await this.acquireAutomaticAdmission(
-          wakeTicket, row.sessionId, true,
-        ))) {
+        if (
+          !bypassCapacity &&
+          !(await this.acquireAutomaticAdmission(wakeTicket, row.sessionId, true))
+        ) {
           row.admissionReason = "Waiting for available capacity / admission inventory.";
           this.save();
           continue;
         }
         row.admissionReason = null;
         try {
-        // Do not gate queued work on a separate roster lookup. The delivery
-        // queue verifies the exact conversation and safe idle before sending;
-        // an unavailable or stale roster must not prevent trying that path.
-        if (this.entries.get(row.sessionId) !== row || row.paused) continue;
-        const rebootAnchor = row.lastRebootAt ?? row.createdAt;
-        if (!row.onceOnly && ((row.autoRebootMinutes &&
-            now - rebootAnchor >= row.autoRebootMinutes * 60_000) ||
-            (row.autoRebootEveryRuns && (row.wakesSinceReboot ?? 0) >= row.autoRebootEveryRuns))) {
-          await this.beginAutoReboot(row);
-          continue;
-        }
-        if (row.lastError) { row.lastError = null; this.save(); }
-        // Persist the exact stable message ID before enqueue; an ambiguous
-        // result is reconciled by this ID rather than generating another wake.
-        const messageId = NodeCrypto.randomUUID();
-        const claimed = reduceCaffyWake(row, {
-          type: "claim", messageId, body: row.delayedPrompt ?? row.repeatPrompt ?? WAKE_TEXT,
-          now: Date.now(),
-        });
-        if (!Object.keys(claimed.patch).length) continue;
-        this.applyWakeTransition(row, claimed.patch);
-        this.save();
-        try {
-          this.deliveries.enqueue({
-            messageId, sessionId: row.sessionId,
-            conversationId: row.conversationId, body: row.pendingMessageBody ?? WAKE_TEXT,
-            caffyWake: true,
+          // Do not gate queued work on a separate roster lookup. The delivery
+          // queue verifies the exact conversation and safe idle before sending;
+          // an unavailable or stale roster must not prevent trying that path.
+          if (this.entries.get(row.sessionId) !== row || row.paused) continue;
+          const rebootAnchor = row.lastRebootAt ?? row.createdAt;
+          if (
+            !row.onceOnly &&
+            ((row.autoRebootMinutes && now - rebootAnchor >= row.autoRebootMinutes * 60_000) ||
+              (row.autoRebootEveryRuns && (row.wakesSinceReboot ?? 0) >= row.autoRebootEveryRuns))
+          ) {
+            await this.beginAutoReboot(row);
+            continue;
+          }
+          if (row.lastError) {
+            row.lastError = null;
+            this.save();
+          }
+          // Persist the exact stable message ID before enqueue; an ambiguous
+          // result is reconciled by this ID rather than generating another wake.
+          const messageId = NodeCrypto.randomUUID();
+          const claimed = reduceCaffyWake(row, {
+            type: "claim",
+            messageId,
+            body: row.delayedPrompt ?? row.repeatPrompt ?? WAKE_TEXT,
+            now: Date.now(),
           });
-        } catch (error) {
-          // Keep the ID pinned; the journal might already contain it.
-          row.lastError = String(error);
+          if (!Object.keys(claimed.patch).length) continue;
+          this.applyWakeTransition(row, claimed.patch);
           this.save();
-        }
+          try {
+            this.deliveries.enqueue({
+              messageId,
+              sessionId: row.sessionId,
+              conversationId: row.conversationId,
+              body: row.pendingMessageBody ?? WAKE_TEXT,
+              caffyWake: true,
+            });
+          } catch (error) {
+            // Keep the ID pinned; the journal might already contain it.
+            row.lastError = String(error);
+            this.save();
+          }
         } finally {
           if (!bypassCapacity) this.releaseAutomaticAdmission(wakeTicket);
         }
@@ -2219,7 +3070,9 @@ export class CaffyScheduler {
       this.syncPower();
       if (this.pumpRequested) {
         this.pumpRequested = false;
-        queueMicrotask(() => { void this.pump(); });
+        queueMicrotask(() => {
+          void this.pump();
+        });
       }
     }
   }
