@@ -82,6 +82,7 @@ import {
 } from "react";
 import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import { OpenRigAgentsSidebarEntry } from "./sidebar/OpenRigAgentsSidebarEntry";
+import { SwarmSidebarWorkspace } from "./swarm/SwarmSidebarWorkspace";
 import { ChatGPTRegistryRemoteSidebarEntry } from "./sidebar/ChatGPTRegistryRemoteSidebarEntry";
 import { NewPrepfileAction } from "./NewPrepfileAction";
 import { OpenRigOperatorInbox } from "./sidebar/OpenRigOperatorInbox";
@@ -3428,6 +3429,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               <ChatGPTRegistryRemoteSidebarEntry />
             )}
           </TooltipProvider>
+          {isElectron && <SwarmSidebarWorkspace />}
           <OpenRigAgentsSidebarEntry />
           {isElectron && (
             <div
