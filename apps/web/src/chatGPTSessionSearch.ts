@@ -1,4 +1,6 @@
+import type { ChatGPTRegistrySession } from "@t3tools/contracts";
 import type { BrowserSession } from "./chatGPTBrowserSessions";
+import { registryBrowserSession } from "./chatGPTRegistryProjection";
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import type { ChatGPTSidebarGroup } from "./chatGPTSessionGrouping";
 
@@ -67,22 +69,33 @@ export function searchChatGPTSessionCatalog(input: {
   const regular = searchChatGPTSessionGroups(input.groups, term);
   const alreadyShown = new Set(regular.flatMap((group) => group.rows.map((row) => row.session.id)));
   const extra: Record<"hidden" | "snoozed" | "workers" | "other", BrowserSession[]> = {
-    hidden: [], snoozed: [], workers: [], other: [],
+    hidden: [],
+    snoozed: [],
+    workers: [],
+    other: [],
   };
 
   for (const session of input.sessions) {
     if (alreadyShown.has(session.id)) continue;
     const url = input.conversationUrl?.(session.id) ?? session.archive?.conversationUrl ?? null;
-    const conversationId = session.bootstrapIdentity?.conversationId ?? chatGPTConversationIdFromUrl(url);
+    const conversationId =
+      session.bootstrapIdentity?.conversationId ?? chatGPTConversationIdFromUrl(url);
     const fields = [
-      session.title, session.id, session.bootstrapIdentity?.publicId,
-      conversationId, url,
+      session.title,
+      session.id,
+      session.bootstrapIdentity?.publicId,
+      conversationId,
+      url,
     ];
     if (!fields.some((field) => field?.toLocaleLowerCase().includes(term))) continue;
 
-    const category = session.hidden ? "hidden"
-      : (session.snoozedUntil ?? 0) > input.now ? "snoozed"
-      : input.hiddenWorkerIds?.has(session.id) ? "workers" : "other";
+    const category = session.hidden
+      ? "hidden"
+      : (session.snoozedUntil ?? 0) > input.now
+        ? "snoozed"
+        : input.hiddenWorkerIds?.has(session.id)
+          ? "workers"
+          : "other";
     extra[category].push(session);
   }
 
@@ -94,12 +107,85 @@ export function searchChatGPTSessionCatalog(input: {
   } as const;
   const supplements = (Object.keys(titles) as Array<keyof typeof titles>).flatMap((category) =>
     extra[category].length
-      ? [{
-          key: `search:${category}`,
-          title: titles[category],
-          rows: extra[category].map((session) => ({ session, depth: 0, childCount: 0 })),
-        }]
+      ? [
+          {
+            key: `search:${category}`,
+            title: titles[category],
+            rows: extra[category].map((session) => ({ session, depth: 0, childCount: 0 })),
+          },
+        ]
       : [],
   );
   return [...regular, ...supplements];
+}
+
+export type ChatGPTSessionHistoryHit = {
+  readonly id: string;
+  readonly title: string;
+  readonly status: "closed" | "registry-only";
+  readonly conversationUrl: string | null;
+};
+
+function canonicalConversationUrl(
+  url: string | null | undefined,
+  id?: string | null,
+): string | null {
+  const conversationId =
+    chatGPTConversationIdFromUrl(url ?? null) ??
+    (id ? chatGPTConversationIdFromUrl(`https://chatgpt.com/c/${id}`) : null);
+  return conversationId ? `https://chatgpt.com/c/${conversationId}` : null;
+}
+
+/** Closed workers are absent from the live session index; the registry and
+ * local removal journal can still locate their IDs without loading a guest. */
+export function searchChatGPTSessionHistory(input: {
+  sessions: readonly BrowserSession[];
+  registry: readonly ChatGPTRegistrySession[];
+  removals: readonly { sessionId: string; title: string; conversationId: string | null }[];
+  query: string;
+}): ChatGPTSessionHistoryHit[] {
+  const term = input.query.trim().toLocaleLowerCase();
+  if (!term) return [];
+  const activeIds = new Set(input.sessions.map((session) => session.id));
+  const hits = new Map<string, ChatGPTSessionHistoryHit>();
+  for (const row of input.registry) {
+    if (activeIds.has(row.sessionId)) continue;
+    const session = registryBrowserSession(row);
+    if (!session) continue;
+    const url = canonicalConversationUrl(
+      row.snapshot?.url ?? session.archive?.conversationUrl,
+      row.snapshot?.conversationId ?? session.bootstrapIdentity?.conversationId,
+    );
+    const fields = [
+      row.sessionId,
+      row.publicSessionId,
+      session.bootstrapIdentity?.publicId,
+      session.title,
+      session.project,
+      url,
+    ];
+    if (!fields.some((value) => value?.toLocaleLowerCase().includes(term))) continue;
+    hits.set(row.sessionId, {
+      id: row.publicSessionId ?? session.bootstrapIdentity?.publicId ?? row.sessionId,
+      title: session.title,
+      status: row.closedAt !== null ? "closed" : "registry-only",
+      conversationUrl: url,
+    });
+  }
+  for (const removal of input.removals) {
+    if (activeIds.has(removal.sessionId) || hits.has(removal.sessionId)) continue;
+    if (
+      ![removal.sessionId, removal.title, removal.conversationId].some((value) =>
+        value?.toLocaleLowerCase().includes(term),
+      )
+    )
+      continue;
+    hits.set(removal.sessionId, {
+      id: removal.sessionId,
+      title: removal.title,
+      status: "closed",
+      conversationUrl: canonicalConversationUrl(null, removal.conversationId),
+    });
+  }
+  return [...hits.values()];
 }

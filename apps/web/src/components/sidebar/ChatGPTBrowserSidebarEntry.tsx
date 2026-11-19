@@ -40,6 +40,7 @@ import {
 import {
   chatGPTBrowserLastUrlKey,
   chatGPTBrowserLastWorkingKey,
+  chatGPTBrowserRemovalAuditKey,
   chatGPTBrowserThreadRef,
   chatGPTSessionCreationOrigin,
   readChatGPTBrowserSessions,
@@ -80,7 +81,10 @@ import { useChatGPTDeliveryMountRequests } from "../../chatGPTDeliveryMountReque
 import { shortcutLabelForCommand } from "../../keybindings";
 import { registerCommands, registerMenuAction } from "../../shortcuts/dispatcher";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
-import { searchChatGPTSessionCatalog } from "../../chatGPTSessionSearch";
+import {
+  searchChatGPTSessionCatalog,
+  searchChatGPTSessionHistory,
+} from "../../chatGPTSessionSearch";
 import {
   freshManualSessionIds,
   prioritizeFreshManualSession,
@@ -143,6 +147,8 @@ import { usePrimaryEnvironmentId } from "../../state/environments";
 import { previewEnvironment } from "../../state/preview";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { readChatGPTRegistry } from "../../state/chatGPTSessionRegistry";
+import type { ChatGPTRegistrySession } from "@t3tools/contracts";
 import { closePreviewSession } from "../preview/closePreviewSession";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -640,10 +646,49 @@ export function ChatGPTBrowserSidebarEntry({
   );
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const readSessionRegistry = useAtomCommand(readChatGPTRegistry, { reportFailure: false });
+  const readSessionRegistryEvent = useEffectEvent((id: NonNullable<typeof environmentId>) =>
+    readSessionRegistry({ environmentId: id, input: { environmentId: id } }),
+  );
+  const [registrySearch, setRegistrySearch] = useState<{
+    environmentId: string;
+    rows: readonly ChatGPTRegistrySession[];
+  } | null>(null);
+  const [registrySearchPending, setRegistrySearchPending] = useState(false);
+  const [registrySearchFailed, setRegistrySearchFailed] = useState(false);
   const [llmSearchPending, setLlmSearchPending] = useState(false);
   const llmSearchInFlight = useRef(false);
   const [llmSearchFeedback, setLlmSearchFeedback] = useState<string | null>(null);
   const isSearching = searchQuery.trim().length > 0;
+  // Query the durable server catalog once per search activation. It retains
+  // closed workers after they leave the local sidebar and does not wake guests.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize the remote search index with an opened search.
+  useEffect(() => {
+    if (!environmentId || !searchOpen || !isSearching) return;
+    let cancelled = false;
+    setRegistrySearchPending(true);
+    setRegistrySearchFailed(false);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await readSessionRegistryEvent(environmentId);
+          if (!cancelled) {
+            if (result._tag === "Success")
+              setRegistrySearch({ environmentId, rows: result.value.sessions });
+            else setRegistrySearchFailed(true);
+          }
+        } catch {
+          if (!cancelled) setRegistrySearchFailed(true);
+        } finally {
+          if (!cancelled) setRegistrySearchPending(false);
+        }
+      })();
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [environmentId, searchOpen, isSearching]);
   const [sortMode, setSortMode] = useLocalStorage(
     `t3code:chatgpt-browser:sort:${environmentId ?? "unconnected"}`,
     "started" as ChatGPTSessionSortMode,
@@ -1639,6 +1684,40 @@ export function ChatGPTBrowserSidebarEntry({
     () => new Set(searchResults.flatMap((group) => group.rows.map(({ session }) => session.id))),
     [searchResults],
   );
+  const historicalMatches = useMemo(() => {
+    if (!isSearching || !environmentId) return [];
+    let removals: Array<{ sessionId: string; title: string; conversationId: string | null }> = [];
+    try {
+      const saved: unknown = JSON.parse(
+        window.localStorage.getItem(chatGPTBrowserRemovalAuditKey(environmentId)) ?? "[]",
+      );
+      if (Array.isArray(saved))
+        removals = saved.flatMap((row: unknown) => {
+          if (!row || typeof row !== "object") return [];
+          const item = row as Record<string, unknown>;
+          return item.version === 1 &&
+            typeof item.sessionId === "string" &&
+            typeof item.title === "string" &&
+            (typeof item.conversationId === "string" || item.conversationId === null)
+            ? [
+                {
+                  sessionId: item.sessionId,
+                  title: item.title,
+                  conversationId: item.conversationId as string | null,
+                },
+              ]
+            : [];
+        });
+    } catch {
+      // Corrupt removal history must not hide the live search results.
+    }
+    return searchChatGPTSessionHistory({
+      sessions,
+      registry: registrySearch?.environmentId === environmentId ? registrySearch.rows : [],
+      removals,
+      query: searchQuery,
+    });
+  }, [environmentId, isSearching, registrySearch, searchQuery, sessions]);
   const [closingId, setClosingId] = useState<string | null>(null);
   const closingRef = useRef<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -3913,15 +3992,90 @@ export function ChatGPTBrowserSidebarEntry({
               </Fragment>
             ))}
           </SortableContext>
-          {isSearching && searchResults.length === 0 && (
-            <SidebarMenuItem>
-              <p role="status" className="px-2 py-2 text-xs text-muted-foreground">
-                No matching ChatGPT sessions
-              </p>
-            </SidebarMenuItem>
-          )}
         </DndContext>
       )}
+      {!sectionCollapsed && isSearching && historicalMatches.length > 0 && (
+        <SidebarMenuItem>
+          <p className="px-2 pt-2 text-xs font-semibold text-muted-foreground">
+            Saved session history ({historicalMatches.length})
+          </p>
+        </SidebarMenuItem>
+      )}
+      {!sectionCollapsed &&
+        isSearching &&
+        historicalMatches.map((hit) => (
+          <SidebarMenuItem key={`history:${hit.id}`}>
+            <div className="flex min-w-0 items-center gap-1 rounded px-2 py-1 text-xs">
+              <div className="min-w-0 flex-1">
+                <div className="truncate" title={hit.title}>
+                  {hit.title}
+                </div>
+                <div
+                  className="truncate font-mono text-[10px] text-muted-foreground"
+                  title={hit.id}
+                >
+                  {hit.id}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {hit.status === "closed"
+                    ? "Closed / expired"
+                    : "Registry only (not in local sessions)"}
+                </div>
+              </div>
+              {hit.conversationUrl && (
+                <Button
+                  size="xs"
+                  variant="ghost-muted"
+                  title="Open the saved ChatGPT conversation in a new T3 session"
+                  onClick={() =>
+                    void navigate({
+                      to: "/browser/$browserSessionId",
+                      params: {
+                        browserSessionId: createSession(undefined, {
+                          initialConversationUrl: hit.conversationUrl!,
+                        }),
+                      },
+                    })
+                  }
+                >
+                  Open
+                </Button>
+              )}
+              <Button
+                size="xs"
+                variant="ghost-muted"
+                title={`Copy session ID ${hit.id}`}
+                onClick={() => void navigator.clipboard.writeText(hit.id)}
+              >
+                Copy
+              </Button>
+            </div>
+          </SidebarMenuItem>
+        ))}
+      {!sectionCollapsed &&
+        isSearching &&
+        searchResults.length === 0 &&
+        historicalMatches.length === 0 && (
+          <SidebarMenuItem>
+            <p role="status" className="px-2 py-2 text-xs text-muted-foreground">
+              {registrySearchPending
+                ? "Searching saved session history…"
+                : registrySearchFailed
+                  ? "No local matches; remote session history unavailable"
+                  : "No matching ChatGPT sessions"}
+            </p>
+          </SidebarMenuItem>
+        )}
+      {!sectionCollapsed &&
+        isSearching &&
+        registrySearchFailed &&
+        (searchResults.length > 0 || historicalMatches.length > 0) && (
+          <SidebarMenuItem>
+            <p role="status" className="px-2 py-1 text-[10px] text-muted-foreground">
+              Remote session history unavailable; local results only.
+            </p>
+          </SidebarMenuItem>
+        )}
       {scheduleTarget && (
         <ChatGPTCaffyScheduleDialog
           key={

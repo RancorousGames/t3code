@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ChatGPTSidebarGroup } from "./chatGPTSessionGrouping";
-import { searchChatGPTSessionCatalog, searchChatGPTSessionGroups } from "./chatGPTSessionSearch";
+import {
+  searchChatGPTSessionCatalog,
+  searchChatGPTSessionGroups,
+  searchChatGPTSessionHistory,
+} from "./chatGPTSessionSearch";
 
 const groups: ChatGPTSidebarGroup[] = [
   {
@@ -66,24 +70,39 @@ describe("ChatGPT sidebar session search", () => {
 describe("full ChatGPT session catalog search", () => {
   const catalog = [
     { id: "regular", title: "Main session" },
-    { id: "hidden-t3-guid", title: "Hidden one", hidden: true,
-      bootstrapIdentity: { state: "registered" as const, publicId: "public-session-guid",
-        conversationId: "chatgpt-conversation-guid" } },
+    {
+      id: "hidden-t3-guid",
+      title: "Hidden one",
+      hidden: true,
+      bootstrapIdentity: {
+        state: "registered" as const,
+        publicId: "public-session-guid",
+        conversationId: "chatgpt-conversation-guid",
+      },
+    },
     { id: "snooze-guid", title: "Snoozed one", snoozedUntil: 2000 },
     { id: "worker-guid", title: "Hidden worker" },
   ];
 
   it("searches hidden and snoozed and filtered worker records without showing unrelated sessions", () => {
     const results = searchChatGPTSessionCatalog({
-      groups: [], sessions: catalog, query: "one", now: 1000,
+      groups: [],
+      sessions: catalog,
+      query: "one",
+      now: 1000,
       hiddenWorkerIds: new Set(["worker-guid"]),
     });
-    expect(results.map((group) => [group.title, group.rows.map(({ session }) => session.id)])).toEqual([
+    expect(
+      results.map((group) => [group.title, group.rows.map(({ session }) => session.id)]),
+    ).toEqual([
       ["Hidden sessions", ["hidden-t3-guid"]],
       ["Snoozed sessions", ["snooze-guid"]],
     ]);
     const workerResults = searchChatGPTSessionCatalog({
-      groups: [], sessions: catalog, query: "worker-guid", now: 1000,
+      groups: [],
+      sessions: catalog,
+      query: "worker-guid",
+      now: 1000,
       hiddenWorkerIds: new Set(["worker-guid"]),
     });
     expect(workerResults[0]?.title).toBe("Hidden workers");
@@ -91,16 +110,106 @@ describe("full ChatGPT session catalog search", () => {
 
   it("finds both T3 public IDs and ChatGPT conversation IDs and avoids duplicate visible hits", () => {
     for (const query of ["hidden-t3-guid", "public-session-guid", "chatgpt-conversation-guid"]) {
-      expect(searchChatGPTSessionCatalog({
-        groups: [], sessions: catalog, query, now: 1000,
-      })[0]?.rows.map(({ session }) => session.id)).toEqual(["hidden-t3-guid"]);
+      expect(
+        searchChatGPTSessionCatalog({
+          groups: [],
+          sessions: catalog,
+          query,
+          now: 1000,
+        })[0]?.rows.map(({ session }) => session.id),
+      ).toEqual(["hidden-t3-guid"]);
     }
-    const groupsWithRegular: ChatGPTSidebarGroup[] = [{
-      key: "main", title: "Main",
-      rows: [{ session: catalog[0]!, depth: 0, childCount: 0 }],
-    }];
-    expect(searchChatGPTSessionCatalog({
-      groups: groupsWithRegular, sessions: catalog, query: "main", now: 1000,
-    }).flatMap((group) => group.rows).map(({ session }) => session.id)).toEqual(["regular"]);
+    const groupsWithRegular: ChatGPTSidebarGroup[] = [
+      {
+        key: "main",
+        title: "Main",
+        rows: [{ session: catalog[0]!, depth: 0, childCount: 0 }],
+      },
+    ];
+    expect(
+      searchChatGPTSessionCatalog({
+        groups: groupsWithRegular,
+        sessions: catalog,
+        query: "main",
+        now: 1000,
+      })
+        .flatMap((group) => group.rows)
+        .map(({ session }) => session.id),
+    ).toEqual(["regular"]);
+  });
+});
+
+describe("historical ChatGPT session search", () => {
+  const workerId = "b21c8731-b29b-46d6-b7af-1876e3a8ddda";
+  const chatId = "6afe9e38-20e4-83eb-9254-5cf6fdb531ec";
+  const registry = [
+    {
+      environmentId: "local",
+      sessionId: "internal-browser-worker",
+      publicSessionId: workerId,
+      record: {
+        id: "internal-browser-worker",
+        title: "G-05 and G-08 animation worker",
+        bootstrapIdentity: { state: "registered", publicId: workerId, conversationId: chatId },
+      },
+      snapshot: null,
+      timeline: null,
+      metadataRevision: 0,
+      metadataPatch: {},
+      closedAt: 1795100000000,
+      updatedAt: 1795100000000,
+    },
+  ];
+
+  it("locates a closed worker by its public T3 GUID even after its browser session was removed", () => {
+    const results = searchChatGPTSessionHistory({
+      sessions: [],
+      registry,
+      removals: [],
+      query: workerId.toUpperCase(),
+    });
+    expect(results).toEqual([
+      {
+        id: workerId,
+        title: "G-05 and G-08 animation worker",
+        status: "closed",
+        conversationUrl: `https://chatgpt.com/c/${chatId}`,
+      },
+    ]);
+  });
+
+  it("does not duplicate live hidden or snoozed sessions, including unloaded browser guests", () => {
+    const results = searchChatGPTSessionHistory({
+      sessions: [
+        {
+          id: "internal-browser-worker",
+          title: "G-05 and G-08 animation worker",
+          hidden: true,
+          snoozedUntil: 1795200000000,
+        },
+      ],
+      registry,
+      removals: [],
+      query: workerId,
+    });
+    expect(results).toEqual([]);
+  });
+
+  it("falls back to the local close journal when the registry is offline", () => {
+    expect(
+      searchChatGPTSessionHistory({
+        sessions: [],
+        registry: [],
+        removals: [{ sessionId: workerId, title: "Historic G-08 worker", conversationId: null }],
+        query: "b21c8731",
+      }),
+    ).toEqual([
+      {
+        id: workerId,
+        title: "Historic G-08 worker",
+        status: "closed",
+        conversationUrl: null,
+      },
+    ]);
   });
 });
