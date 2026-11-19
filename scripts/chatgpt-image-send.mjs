@@ -4,7 +4,12 @@ import * as Path from "node:path";
 import * as Crypto from "node:crypto";
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
-const MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
+const MIME = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+};
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const CHUNK_CHARS = 6000;
 const UPLOAD_POLL_MS = 350;
@@ -25,47 +30,73 @@ function acquireImageLock(home, sessionId, requestId) {
   const owner = JSON.stringify({ pid: process.pid, requestId, createdAt: Date.now() });
   const create = () => {
     const fd = FS.openSync(path, "wx");
-    try { FS.writeFileSync(fd, owner, { flush: true }); }
-    catch (error) { FS.closeSync(fd); try { FS.unlinkSync(path); } catch {} throw error; }
+    try {
+      FS.writeFileSync(fd, owner, { flush: true });
+    } catch (error) {
+      FS.closeSync(fd);
+      try {
+        FS.unlinkSync(path);
+      } catch {}
+      throw error;
+    }
     return fd;
   };
-  try { return { fd: create(), path }; }
-  catch (error) { if (error?.code !== "EEXIST") throw error; }
+  try {
+    return { fd: create(), path };
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
 
   // Serialize orphan recovery separately from the actual session lock.
   const recoveryPath = path + ".recovery";
   let recovery;
-  try { recovery = FS.openSync(recoveryPath, "wx"); }
-  catch { throw new Error("An image send or orphan-lock recovery is already active for this session."); }
+  try {
+    recovery = FS.openSync(recoveryPath, "wx");
+  } catch {
+    throw new Error("An image send or orphan-lock recovery is already active for this session.");
+  }
   try {
     let stat;
-    try { stat = FS.statSync(path); }
-    catch (error) {
+    try {
+      stat = FS.statSync(path);
+    } catch (error) {
       if (error?.code === "ENOENT") return { fd: create(), path };
       throw error;
     }
     let old = null;
-    try { old = JSON.parse(FS.readFileSync(path, "utf8")); }
-    catch { /* Legacy empty lock, or a sender interrupted before writing metadata. */ }
+    try {
+      old = JSON.parse(FS.readFileSync(path, "utf8"));
+    } catch {
+      /* Legacy empty lock, or a sender interrupted before writing metadata. */
+    }
     const ownerPid = Number.isSafeInteger(old?.pid) && old.pid > 0 ? old.pid : null;
     if (ownerPid) {
-      try { process.kill(ownerPid, 0); throw new Error("Image send owner process is still alive."); }
-      catch (error) {
+      try {
+        process.kill(ownerPid, 0);
+        throw new Error("Image send owner process is still alive.");
+      } catch (error) {
         if (error?.code !== "ESRCH") throw error;
       }
     } else if (Date.now() - stat.mtimeMs < 10 * 60_000) {
-      throw new Error("Image send lock has no owner metadata and is not yet old enough to reclaim.");
+      throw new Error(
+        "Image send lock has no owner metadata and is not yet old enough to reclaim.",
+      );
     }
     // While recovery guard is held, only reclaim the exact file inspected.
     const current = FS.statSync(path);
-    if (current.ino !== stat.ino || current.mtimeMs !== stat.mtimeMs ||
-        FS.readFileSync(path, "utf8") !== (old ? JSON.stringify(old) : ""))
+    if (
+      current.ino !== stat.ino ||
+      current.mtimeMs !== stat.mtimeMs ||
+      FS.readFileSync(path, "utf8") !== (old ? JSON.stringify(old) : "")
+    )
       throw new Error("Image send lock changed during stale-owner inspection.");
     FS.unlinkSync(path);
     return { fd: create(), path };
   } finally {
     FS.closeSync(recovery);
-    try { FS.unlinkSync(recoveryPath); } catch {}
+    try {
+      FS.unlinkSync(recoveryPath);
+    } catch {}
   }
 }
 
@@ -73,13 +104,19 @@ function persist(home, record) {
   FS.mkdirSync(receiptDir(home), { recursive: true });
   const target = receiptPath(home, record.requestId);
   const temporary = target + "." + process.pid + ".tmp";
-  FS.writeFileSync(temporary, JSON.stringify({ ...record, updatedAt: Date.now() }), { flag: "w", flush: true });
+  FS.writeFileSync(temporary, JSON.stringify({ ...record, updatedAt: Date.now() }), {
+    flag: "w",
+    flush: true,
+  });
   FS.renameSync(temporary, target);
 }
 function publicReceipt(record) {
   return {
-    action: "send", requestId: record.requestId, sessionId: record.sessionId,
-    verifiedConversationId: record.conversationId, conversationGuardValidated: true,
+    action: "send",
+    requestId: record.requestId,
+    sessionId: record.sessionId,
+    verifiedConversationId: record.conversationId,
+    conversationGuardValidated: true,
     status: record.status,
     delivery: record.status === "delivered" ? "user_turn_observed" : "unconfirmed",
     messageSent: record.status === "delivered",
@@ -92,7 +129,8 @@ function publicReceipt(record) {
   };
 }
 export function imageSendReceipt(home, requestId) {
-  if (!UUID.test(requestId ?? "")) throw new Error("Image receipt requires an exact requestId UUID.");
+  if (!UUID.test(requestId ?? ""))
+    throw new Error("Image receipt requires an exact requestId UUID.");
   const file = receiptPath(home, requestId);
   if (!FS.existsSync(file)) return null;
   const r = JSON.parse(FS.readFileSync(file, "utf8"));
@@ -102,8 +140,11 @@ export function imageSendReceipt(home, requestId) {
 async function guardedEval(control, id, sessionId, expressionText) {
   if (expressionText.length > 8000) throw new Error("Guest expression exceeds 8000 characters.");
   const result = await control({
-    action: "experimental_evaluate", sessionId, expectedConversationId: id,
-    expression: expressionText, allowComposerDraft: true,
+    action: "experimental_evaluate",
+    sessionId,
+    expectedConversationId: id,
+    expression: expressionText,
+    allowComposerDraft: true,
   });
   if (result?.result?.ok !== true)
     throw new Error("Guest evaluation failed: " + JSON.stringify(result?.result ?? result));
@@ -190,21 +231,19 @@ function imagePreflight(id) {
       view.dispatch(transaction);
       return true;
     };
+    // Removes only the attachment bound to this request's uploadId. Removing by
+    // uploadId never touches the draft text or other attachments, so it is safe
+    // even after a human edit. Returns true when nothing of ours remains.
     state.dismissOwnAttachment=()=>{
       const p=state.findProps();
-      const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
-      const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
-      const changed=state.composerView?.state?.doc&&state.originalDoc
-        ? !state.composerView.state.doc.eq(state.originalDoc) : draft!==state.originalDraft;
-      if(!state.uploadId||changed||p?.isSubmitting||p?.isWaitingForFileUploads
-          ||p?.attachments?.length!==1||p.attachments[0].uploadId!==state.uploadId
-          ||p.attachments[0].name?.replace(/\\(\\d+\\)(?=\\.[^.]+$)/, "")!==state.file?.name)
-        return false;
+      if(!state.uploadId)return true;
+      if(!p||p.isSubmitting)return false;
+      if(!p.attachments?.some(a=>a.uploadId===state.uploadId))return true;
       p.onAttachmentRemove(state.uploadId,"user");
       return true;
     };
     // A killed CLI or lost IPC response must not reveal a stranded T3 image
-    // after the temporary hiding style expires. Never touch an altered draft.
+    // after the temporary hiding style expires.
     state.styleTimeout=setTimeout(()=>{
       style.remove();
       if(state.phase!=="finished"){
@@ -230,12 +269,12 @@ function attachmentStatus(id) {
       ? !view.state.doc.eq(s.originalDoc) : draft!==s.originalDraft;
     const attachments=Array.isArray(p.attachments)?p.attachments:[];
     const attachment=attachments.length===1?attachments[0]:null;
-    // React may re-encode an image, and ChatGPT may suffix duplicate names.
-    // The initially empty composer and upload ID bind the staged attachment.
-    const owned=!!attachment&&attachment.source==="local"&&attachment.name?.replace(/\\(\\d+\\)(?=\\.[^.]+$)/, "")===s.file?.name&&
-      (!attachment.mimeType||attachment.mimeType===s.file?.type)&&
-      (!s.uploadId||attachment.uploadId===s.uploadId);
-    if(owned&&attachment?.uploadId&&!s.uploadId)s.uploadId=attachment.uploadId;
+    // Preflight and staging both require an empty composer, so the single
+    // attachment that appears after staging is ours. ChatGPT re-encodes,
+    // resizes and renames images, so name/size/mime are NOT identity: bind the
+    // first uploadId seen and use only that from then on (also for cleanup).
+    if(attachment?.uploadId&&!s.uploadId)s.uploadId=attachment.uploadId;
+    const owned=!!attachment&&!!s.uploadId&&attachment.uploadId===s.uploadId;
     return {ok:true,draftChanged:changed,uploads:document.querySelectorAll('[aria-label^="Uploading "]').length,
       attachments:attachments.length,attachmentStatus:attachment?.status||null,
       owned,uploadId:attachment?.uploadId||null,hasFileId:!!attachment?.id,
@@ -290,9 +329,7 @@ function resetUploadExpression(id) {
     if(!p||p.isSubmitting)return {ok:false,reason:"submit_in_progress"};
     const a=p.attachments||[];
     if(!a.length)return {ok:true,empty:true};
-    if(a.length!==1||!a[0].uploadId||a[0].status==="ready"||
-        a[0].name?.replace(/\\(\\d+\\)(?=\\.[^.]+$)/, "")!==s.file?.name||
-        (a[0].mimeType&&a[0].mimeType!==s.file?.type))
+    if(a.length!==1||!a[0].uploadId||a[0].status==="ready")
       return {ok:false,reason:"cannot_safely_reset",status:a[0]?.status,attachments:a.length};
     // Cancel only the image from this request. A newly added human
     // attachment is never removed.
@@ -311,9 +348,7 @@ function sendExpression(id, message, conversationId) {
     const p=s.findProps();
     if(!p||!Array.isArray(p.attachments)||p.attachments.length!==1||p.isWaitingForFileUploads||p.isSubmitting
         ||p.attachments[0]?.status!=="ready"||!p.attachments[0]?.id||!p.attachments[0]?.uploadId
-        ||p.attachments[0]?.name?.replace(/\\(\\d+\\)(?=\\.[^.]+$)/, "")!==s.file?.name||
-          (p.attachments[0]?.mimeType&&p.attachments[0]?.mimeType!==s.file?.type)||
-          (s.uploadId&&p.attachments[0]?.uploadId!==s.uploadId))
+        ||!s.uploadId||p.attachments[0]?.uploadId!==s.uploadId)
       return {ok:false,reason:"attachment_not_ready"};
     const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
     const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
@@ -370,11 +405,18 @@ function deliveryProbe(marker) {
 /** One-shot, precisely guarded browser image send. An UNKNOWN is never replayed. */
 export async function sendChatGPTImage(input, { home, control, wait = delay } = {}) {
   const { sessionId, message, imagePath } = input;
-  if (!UUID.test(sessionId ?? "") ||
-      (input.expectedConversationId !== undefined && !UUID.test(input.expectedConversationId)) ||
-      typeof message !== "string" || !message.trim() || message.length > 8000 ||
-      typeof imagePath !== "string" || !Path.isAbsolute(imagePath))
-    throw new Error("Image send requires a T3 session UUID, optional conversation UUID, nonempty message and absolute imagePath.");
+  if (
+    !UUID.test(sessionId ?? "") ||
+    (input.expectedConversationId !== undefined && !UUID.test(input.expectedConversationId)) ||
+    typeof message !== "string" ||
+    !message.trim() ||
+    message.length > 8000 ||
+    typeof imagePath !== "string" ||
+    !Path.isAbsolute(imagePath)
+  )
+    throw new Error(
+      "Image send requires a T3 session UUID, optional conversation UUID, nonempty message and absolute imagePath.",
+    );
   const requestId = input.requestId ?? Crypto.randomUUID();
   if (!UUID.test(requestId)) throw new Error("Image send requestId must be a stable UUID.");
 
@@ -388,22 +430,32 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
   if (!expectedConversationId) {
     const observed = await control({ action: "read", sessionId, count: 1, wakeForSend: true });
     const candidate = observed?.session?.conversationId;
-    if (!UUID.test(candidate ?? "") ||
-        observed?.session?.observedGuestUrl !== "https://chatgpt.com/c/" + candidate)
+    if (
+      !UUID.test(candidate ?? "") ||
+      observed?.session?.observedGuestUrl !== "https://chatgpt.com/c/" + candidate
+    )
       throw new Error("No current exact conversation binding for image send.");
     expectedConversationId = candidate;
   }
-  const guard = await control({ action: "read", sessionId, count: 1, wakeForSend: true,
-    expectedConversationId });
-  if (!UUID.test(expectedConversationId ?? "") ||
-      guard?.verifiedConversationId !== expectedConversationId ||
-      guard?.conversationGuardValidated !== true ||
-      guard?.session?.conversationId !== expectedConversationId ||
-      guard?.session?.observedGuestUrl !== "https://chatgpt.com/c/" + expectedConversationId)
+  const guard = await control({
+    action: "read",
+    sessionId,
+    count: 1,
+    wakeForSend: true,
+    expectedConversationId,
+  });
+  if (
+    !UUID.test(expectedConversationId ?? "") ||
+    guard?.verifiedConversationId !== expectedConversationId ||
+    guard?.conversationGuardValidated !== true ||
+    guard?.session?.conversationId !== expectedConversationId ||
+    guard?.session?.observedGuestUrl !== "https://chatgpt.com/c/" + expectedConversationId
+  )
     throw new Error("The mounted ChatGPT conversation was not verified; image not sent.");
   const sha256 = Crypto.createHash("sha256").update(image).digest("hex");
   const payloadHash = Crypto.createHash("sha256")
-    .update(JSON.stringify([sessionId, expectedConversationId, message, sha256])).digest("hex");
+    .update(JSON.stringify([sessionId, expectedConversationId, message, sha256]))
+    .digest("hex");
   const previous = imageSendReceipt(home, requestId);
   if (previous) {
     const source = JSON.parse(FS.readFileSync(receiptPath(home, requestId), "utf8"));
@@ -416,9 +468,15 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       return { ...previous, reconciled: true };
   }
   const record = {
-    requestId, sessionId, conversationId: expectedConversationId,
-    imageName: Path.basename(imagePath), payloadHash, status: "reserved",
-    imageCount: 0, sendAttempted: false, reason: null,
+    requestId,
+    sessionId,
+    conversationId: expectedConversationId,
+    imageName: Path.basename(imagePath),
+    payloadHash,
+    status: "reserved",
+    imageCount: 0,
+    sendAttempted: false,
+    reason: null,
   };
   FS.mkdirSync(receiptDir(home), { recursive: true });
   const lock = acquireImageLock(home, sessionId, requestId);
@@ -436,22 +494,26 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     const before = await experiment(imagePreflight(requestId));
     if (!before?.ok) {
       Object.assign(record, { status: "not_sent", reason: before?.reason ?? "Preflight refused" });
-      persist(home, record); return publicReceipt(record);
+      persist(home, record);
+      return publicReceipt(record);
     }
     const encoded = image.toString("base64");
     for (let pos = 0, i = 0; pos < encoded.length; pos += CHUNK_CHARS, i++) {
       const chunk = encoded.slice(pos, pos + CHUNK_CHARS);
-      const r = await experiment(expression(`
+      const r = await experiment(
+        expression(`
         const s=window.__t3ChatGPTImageSend;
         if(s?.id!==${JSON.stringify(requestId)}||s.phase!=="transfer"||s.chunks.length!==${i})
           return {ok:false,reason:"transfer_mismatch"};
         s.chunks.push(${JSON.stringify(chunk)});
         return {ok:true};
-      `));
+      `),
+      );
       if (!r?.ok) throw new Error("Image transfer failed before upload: " + JSON.stringify(r));
     }
-    let stage = await experiment(stageUploadExpression(
-      requestId, 0, Path.basename(imagePath), mime, image.length));
+    let stage = await experiment(
+      stageUploadExpression(requestId, 0, Path.basename(imagePath), mime, image.length),
+    );
     if (!stage?.ok) throw new Error("Image attachment failed: " + JSON.stringify(stage));
     record.stageRoute = stage.route;
     record.fileInputCountAfterChange = stage.fileInputCount;
@@ -465,38 +527,67 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     for (let i = 0; i < UPLOAD_MAX_POLLS; i++) {
       const s = await experiment(attachmentStatus(requestId));
       lastUpload = s;
-      if (!s?.ok || s.draftChanged || s.submitting || s.attachments > 1 ||
-          (s.attachments === 1 && !s.owned))
+      if (
+        !s?.ok ||
+        s.draftChanged ||
+        s.submitting ||
+        s.attachments > 1 ||
+        (s.attachments === 1 && !s.owned)
+      )
         throw new Error("Attachment became unsafe: " + JSON.stringify(s));
-      if (s.ready && !s.uploads && !s.pending) { ready = true; break; }
+      if (s.ready && !s.uploads && !s.pending) {
+        ready = true;
+        break;
+      }
       pollsOnStage++;
       const missing = s.attachments === 0 && pollsOnStage >= UPLOAD_MISSING_RETRY_POLLS;
-      const stalled = s.attachments === 1 &&
+      const stalled =
+        s.attachments === 1 &&
         (["error", "failed"].includes(s.attachmentStatus) ||
           pollsOnStage >= UPLOAD_STALLED_RETRY_POLLS);
       if (currentAttempt < 2 && (missing || stalled)) {
         // No user turn was sent. Re-stage through a different React handler
         // only after the prior attachment is absent or explicitly cancelled.
         const reset = await experiment(resetUploadExpression(requestId));
-        if (!reset?.ok) throw new Error("Upload retry could not safely cancel: "
-          + JSON.stringify({ reset, lastUpload: s }));
+        if (!reset?.ok)
+          throw new Error(
+            "Upload retry could not safely cancel: " + JSON.stringify({ reset, lastUpload: s }),
+          );
         let cleared = false;
         for (let n = 0; n < 12; n++) {
           const state = await experiment(attachmentStatus(requestId));
-          if (!state?.ok || state.draftChanged || state.submitting || state.attachments > 1 ||
-              (state.attachments === 1 && !state.owned))
+          if (
+            !state?.ok ||
+            state.draftChanged ||
+            state.submitting ||
+            state.attachments > 1 ||
+            (state.attachments === 1 && !state.owned)
+          )
             throw new Error("Upload changed during retry: " + JSON.stringify(state));
-          if (state.attachments === 0 && !state.pending) { cleared = true; break; }
+          if (state.attachments === 0 && !state.pending) {
+            cleared = true;
+            break;
+          }
           await wait(UPLOAD_POLL_MS);
         }
-        if (!cleared) throw new Error("Previous upload did not clear before retry: "
-          + JSON.stringify(lastUpload));
+        if (!cleared)
+          throw new Error(
+            "Previous upload did not clear before retry: " + JSON.stringify(lastUpload),
+          );
         currentAttempt++;
-        stage = await experiment(stageUploadExpression(
-          requestId, currentAttempt, Path.basename(imagePath), mime, image.length));
+        stage = await experiment(
+          stageUploadExpression(
+            requestId,
+            currentAttempt,
+            Path.basename(imagePath),
+            mime,
+            image.length,
+          ),
+        );
         if (!stage?.ok) throw new Error("Retry image attachment failed: " + JSON.stringify(stage));
         record.stageAttempts.push({
-          attempt: currentAttempt, label: stage.label,
+          attempt: currentAttempt,
+          label: stage.label,
           recoveredFrom: missing ? "missing_attachment" : s.attachmentStatus || "stalled_upload",
         });
         persist(home, record);
@@ -506,19 +597,26 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       await wait(UPLOAD_POLL_MS);
     }
     record.lastUploadStatus = lastUpload;
-    if (!ready) throw new Error("Image upload did not finish before deadline: "
-      + JSON.stringify({ stageAttempts: record.stageAttempts, lastUpload }));
+    if (!ready)
+      throw new Error(
+        "Image upload did not finish before deadline: " +
+          JSON.stringify({ stageAttempts: record.stageAttempts, lastUpload }),
+      );
     record.uploadReadyObserved = true;
     // The browser callback may submit even if IPC acknowledgment is lost.
     record.status = "submitting";
     record.sendAttempted = true;
     persist(home, record);
     const marker = "[T3-IMAGE:" + requestId + "]";
-    const sent = await experiment(sendExpression(requestId, marker + " " + message, expectedConversationId));
+    const sent = await experiment(
+      sendExpression(requestId, marker + " " + message, expectedConversationId),
+    );
     if (!sent?.ok) {
-      record.status = "not_sent"; record.sendAttempted = false;
+      record.status = "not_sent";
+      record.sendAttempted = false;
       record.reason = sent?.reason ?? "Submit callback not invoked";
-      persist(home, record); return publicReceipt(record);
+      persist(home, record);
+      return publicReceipt(record);
     }
     let lastObserved = null;
     for (let i = 0; i < 70; i++) {
@@ -529,19 +627,28 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       if (observed?.found && (observed.imageCount > 0 || i >= 12)) {
         record.imageCount = observed.imageCount;
         record.status = observed.imageCount > 0 ? "delivered" : "text_only";
-        record.reason = observed.imageCount > 0 ? null : "Text observed without the image attachment.";
-        persist(home, record); return publicReceipt(record);
+        record.reason =
+          observed.imageCount > 0 ? null : "Text observed without the image attachment.";
+        persist(home, record);
+        return publicReceipt(record);
       }
       // React can resolve false without sending anything. Wait briefly for
       // a late user turn before reporting failure, but never blindly retry.
       if (i >= 8 && observed?.callbackOutcome === "rejected" && !observed.busy)
-        throw new Error("React submit rejected: " + (observed.callbackError ?? "callback returned false"));
+        throw new Error(
+          "React submit rejected: " + (observed.callbackError ?? "callback returned false"),
+        );
       await wait(400);
     }
-    throw new Error("Callback invoked, but matching user turn was not observed. "
-      + "outcome=" + (lastObserved?.callbackOutcome ?? "unavailable")
-      + ", ownAttachment=" + !!lastObserved?.ownAttachment
-      + ", busy=" + !!lastObserved?.busy);
+    throw new Error(
+      "Callback invoked, but matching user turn was not observed. " +
+        "outcome=" +
+        (lastObserved?.callbackOutcome ?? "unavailable") +
+        ", ownAttachment=" +
+        !!lastObserved?.ownAttachment +
+        ", busy=" +
+        !!lastObserved?.busy,
+    );
   } catch (error) {
     if (record.sendAttempted) {
       record.status = "unknown";
@@ -554,13 +661,22 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     return publicReceipt(record);
   } finally {
     try {
-      await guardedEval(control, expectedConversationId, sessionId, expression(`
+      await guardedEval(
+        control,
+        expectedConversationId,
+        sessionId,
+        expression(`
         const s=window.__t3ChatGPTImageSend;
         if(s?.id===${JSON.stringify(requestId)}){
           // An UNKNOWN is never retried. If React is still submitting, let
           // the guarded orphan timer retry cleanup after the submission settles.
           let deferredCleanup=false;
-          if(${["not_sent", "unknown", "text_only"].includes(record.status)}&&s.uploadId){
+          const failed=${["not_sent", "unknown", "text_only"].includes(record.status)};
+          // An upload that appeared after the last status poll is still ours.
+          const a=s.findProps?.()?.attachments;
+          if(failed&&!s.uploadId&&s.phase==="uploading"&&a?.length===1&&a[0].uploadId)
+            s.uploadId=a[0].uploadId;
+          if(failed&&s.uploadId){
             try{deferredCleanup=!s.dismissOwnAttachment?.();}catch{deferredCleanup=true;}
           }
           s.chunks=[];s.phase=deferredCleanup?"pending_cleanup":"finished";
@@ -568,9 +684,16 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
           s.style?.remove();
         }
         return true;
-      `));
-    } catch { /* The guest may have navigated after submission. */ }
-    try { FS.closeSync(lock.fd); } catch {}
-    try { FS.unlinkSync(lock.path); } catch {}
+      `),
+      );
+    } catch {
+      /* The guest may have navigated after submission. */
+    }
+    try {
+      FS.closeSync(lock.fd);
+    } catch {}
+    try {
+      FS.unlinkSync(lock.path);
+    } catch {}
   }
 }
