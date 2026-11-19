@@ -116,6 +116,9 @@ export const AgentProviderV1Session = Schema.Struct({
       returnMarker: Schema.optional(Schema.Literals(["armed", "working", "ready"])),
       caffyMode: Schema.optional(Schema.Literals(["idle", "periodic", "startup"])),
       caffyPaused: Schema.optional(Schema.Boolean),
+      caffyOnceOnly: Schema.optional(Schema.Boolean),
+      caffyIntervalMinutes: Schema.optional(Schema.Number),
+      caffyBeginAt: Schema.optional(Schema.NullOr(Schema.Number)),
       // Native threads: sidebar section and desktop sort time (epoch ms).
       settled: Schema.optional(Schema.Boolean),
       pinned: Schema.optional(Schema.Boolean),
