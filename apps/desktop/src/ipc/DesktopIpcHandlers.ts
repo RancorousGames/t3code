@@ -89,7 +89,6 @@ import {
   readTaskBoardHumanInboxIpc,
   openTaskBoardHumanItemIpc,
 } from "./methods/taskBoardHumanInboxIpc.ts";
-import { readCaffyManagedIdleIpc, cancelCaffyManagedIdleIpc } from "./methods/caffyManagedIdle.ts";
 import { chatGPTCapacityMessageIpc } from "./methods/chatGPTCapacityMessage.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
@@ -148,8 +147,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(readTaskBoardHumanInboxIpc);
   yield* ipc.handle(openTaskBoardHumanItemIpc);
   yield* ipc.handle(chatGPTCapacityMessageIpc);
-  yield* ipc.handle(readCaffyManagedIdleIpc);
-  yield* ipc.handle(cancelCaffyManagedIdleIpc);
   yield* installOpenRigIpcHandlers();
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getSnapShotState);

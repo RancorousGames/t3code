@@ -80,10 +80,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   caffyControl: (input) => ipcRenderer.invoke(IpcChannels.DESKTOP_CAFFY_CONTROL_CHANNEL, input),
   chatGPTCapacityMessage: (input) =>
     ipcRenderer.invoke(IpcChannels.CHATGPT_CAPACITY_MESSAGE_CHANNEL, input),
-  readCaffyManagedIdleSubscriptions: () =>
-    ipcRenderer.invoke(IpcChannels.CAFFY_MANAGED_IDLE_READ_CHANNEL),
-  cancelCaffyManagedIdleSubscription: (id) =>
-    ipcRenderer.invoke(IpcChannels.CAFFY_MANAGED_IDLE_CANCEL_CHANNEL, id),
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

@@ -1890,18 +1890,10 @@ export interface DesktopBridge {
     rebootEveryRuns?: number | null;
     repeatPrompt?: string;
   }) => Promise<unknown>;
-  /** Read-only OpenRig Caffy managed idle subscriptions (not T3 queued messages). */
   /** Shared OpenRig capacity admission for T3 Wait for slot messages. */
   chatGPTCapacityMessage?: (
     input: import("./chatGPTCapacityMessage.ts").CapacityMessageRequest,
   ) => Promise<import("./chatGPTCapacityMessage.ts").CapacityMessageReceipt>;
-  readCaffyManagedIdleSubscriptions?: () => Promise<
-    import("./caffyManagedIdle.ts").CaffyManagedIdleReadResult
-  >;
-  /** Cancels exactly one managed idle subscription; no user turn or wake is sent. */
-  cancelCaffyManagedIdleSubscription?: (
-    id: string,
-  ) => Promise<import("./caffyManagedIdle.ts").CaffyManagedIdleCancelResult>;
   /** Read-only local TaskBoard Done evidence; unavailable on non-desktop clients. */
   /** Open or create exactly one TaskBoard-bound session through the desktop durable task-open CLI. */
   openTaskBoardLiveSession?: (input: {
