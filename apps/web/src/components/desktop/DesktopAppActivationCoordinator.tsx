@@ -101,6 +101,13 @@ import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedSt
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { AgentAttentionToast } from "./AgentAttentionToast";
+import {
+  acknowledgeNativeThreadAttention,
+  nativeThreadTitle,
+  parseNativeAttentionKey,
+  resolveNativeAttentionKey,
+  skipNextNativeVisitAcknowledgement,
+} from "../../nativeThreadAttention";
 import { resolveSnoozePresets } from "../Sidebar.snooze";
 import {
   requestAgentAttention,
@@ -1325,13 +1332,18 @@ export function DesktopAppActivationCoordinator() {
             };
           }
           if (request.action === "request_attention") {
-            const id = request.sessionId;
             const attentionId = request.attentionId;
+            // Native T3 threads may request one-off attention too (no marker armed).
+            const nativeKey = request.sessionId
+              ? resolveNativeAttentionKey(request.sessionId)
+              : undefined;
+            const id = nativeKey ?? request.sessionId;
             if (
               !id ||
               !attentionId ||
               !request.message ||
-              !sessionSnapshot.some((s) => s.id === id || s.bootstrapIdentity?.publicId === id)
+              (!nativeKey &&
+                !sessionSnapshot.some((s) => s.id === id || s.bootstrapIdentity?.publicId === id))
             )
               throw new Error(
                 "Attention requires an existing exact T3 session, request ID and message.",
@@ -3575,6 +3587,8 @@ export function DesktopAppActivationCoordinator() {
           : Promise.resolve(false);
       }}
       sessionTitle={(sessionId) => {
+        const native = nativeThreadTitle(sessionId);
+        if (native) return native;
         const environmentId = primaryEnvironment?.environmentId;
         return environmentId
           ? readChatGPTBrowserSessions(environmentId).find(
@@ -3584,6 +3598,13 @@ export function DesktopAppActivationCoordinator() {
           : undefined;
       }}
       openSession={(attention) => {
+        const nativeRef = parseNativeAttentionKey(attention.sessionId);
+        if (nativeRef) {
+          if (!acknowledgeNativeThreadAttention(attention.sessionId, attention.id)) return false;
+          skipNextNativeVisitAcknowledgement(attention.sessionId);
+          void navigate({ to: "/$environmentId/$threadId", params: nativeRef });
+          return true;
+        }
         const environmentId = primaryEnvironment?.environmentId;
         if (!environmentId) return false;
         const entry = readChatGPTBrowserSessions(environmentId).find(

@@ -8,23 +8,37 @@ import type { AgentAttention } from "./chatGPTAgentAttention";
  * Persistent Ctrl+D reminders are local UI state; sending an agent a dismissal
  * message for one would be incorrect and can interrupt ongoing work. */
 export async function queueAgentAttentionDismissal(
-  environmentId: string, attention: AgentAttention,
+  environmentId: string,
+  attention: AgentAttention,
 ): Promise<boolean> {
-  if (attention.source === "manual") return true;
-  const session = readChatGPTBrowserSessions(environmentId as Parameters<typeof readChatGPTBrowserSessions>[0])
-    .find((entry) => entry.id === attention.sessionId ||
-      entry.bootstrapIdentity?.publicId === attention.sessionId);
+  // Manual alerts and native T3 threads (`t3:` keys) have no ChatGPT
+  // conversation to notify; dismissing just resolves the entry.
+  if (attention.source === "manual" || attention.sessionId.startsWith("t3:")) return true;
+  const session = readChatGPTBrowserSessions(
+    environmentId as Parameters<typeof readChatGPTBrowserSessions>[0],
+  ).find(
+    (entry) =>
+      entry.id === attention.sessionId || entry.bootstrapIdentity?.publicId === attention.sessionId,
+  );
   if (!session) return false;
-  const conversationId = session.bootstrapIdentity?.conversationId ??
-    chatGPTConversationIdFromUrl(getLocalStorageItem(
-      chatGPTBrowserLastUrlKey(environmentId as Parameters<typeof chatGPTBrowserLastUrlKey>[0], session.id),
-      Schema.String,
-    ));
+  const conversationId =
+    session.bootstrapIdentity?.conversationId ??
+    chatGPTConversationIdFromUrl(
+      getLocalStorageItem(
+        chatGPTBrowserLastUrlKey(
+          environmentId as Parameters<typeof chatGPTBrowserLastUrlKey>[0],
+          session.id,
+        ),
+        Schema.String,
+      ),
+    );
   const enqueue = window.desktopBridge?.appActivation?.enqueueChatGPT;
   if (!conversationId || !enqueue) return false;
   try {
     const receipt = await enqueue({
-      messageId: attention.id, sessionId: session.id, conversationId,
+      messageId: attention.id,
+      sessionId: session.id,
+      conversationId,
       body: `[T3 attention request ${attention.id}] User dismissed the request for direct
 attention: "${attention.message}". Do not notify again. Put the unresolved question
 on the ORIGINAL TaskBoard task using task ask-user, or request verification in

@@ -32,6 +32,7 @@ import {
   AlarmClockIcon,
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
+  BookmarkCheckIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -114,6 +115,10 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } f
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
+import type { T3CaffyEntry } from "../../hooks/useT3CaffyOverview";
+import { CaffyStatusBadge } from "./CaffyStatusBadge";
+import { isCaffyIdleContinuationActive } from "../../chatGPTCaffyAttentionPolicy";
+import { nativeAttentionKey, useNativeThreadAttention } from "../../nativeThreadAttention";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
@@ -574,6 +579,10 @@ type SidebarThreadRowProps = {
   isRenaming: boolean;
   renamingTitle: string;
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
+  /** Native Caffy schedule for this thread (`t3:<env>:<thread>`), from the sidebar's shared poll. */
+  caffyMonitor?: T3CaffyEntry | null | undefined;
+  /** When an agent stopped this thread's Caffy; shown only without an active schedule. */
+  caffyStoppedAt?: number | undefined;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onActionSweepStart: (
     threadRef: ScopedThreadRef,
@@ -708,6 +717,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarThreadStatus(thread);
+  // GMA attention (Ctrl+D marker / queued requests), same visuals as ChatGPT rows.
+  const attention = useNativeThreadAttention(nativeAttentionKey(thread.environmentId, thread.id));
+  const idleAttentionReady =
+    attention.marker === "ready" &&
+    !attention.snoozed &&
+    status !== "working" &&
+    status !== "waiting" &&
+    !(
+      props.caffyMonitor &&
+      isCaffyIdleContinuationActive(
+        { entries: [props.caffyMonitor] },
+        { id: props.caffyMonitor.sessionId },
+      )
+    );
+  const attentionMarked = attention.marker !== undefined || attention.outstanding;
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -964,6 +988,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
     props.sortable?.isDragging &&
       "bg-sidebar bg-linear-to-b from-sidebar-row-active to-sidebar-row-active text-sidebar-foreground opacity-100 shadow-lg",
+    idleAttentionReady && "ring-4 ring-inset ring-yellow-400/90",
   );
   const sortable = props.sortable;
   const sortableRootProps = sortable
@@ -1124,6 +1149,42 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     )
   ) : null;
 
+  // Same coffee-pot badge as ChatGPT rows; its click opens this row's menu (Caffy items live there).
+  const caffyBadge =
+    props.caffyMonitor || props.caffyStoppedAt ? (
+      <NativeCaffyBadge
+        monitor={props.caffyMonitor ?? null}
+        stoppedAt={props.caffyMonitor ? undefined : props.caffyStoppedAt}
+        onQuickMenu={(position) => onContextMenu(threadRef, position)}
+      />
+    ) : null;
+
+  const attentionIndicator = attentionMarked ? (
+    <span
+      role="img"
+      aria-label={
+        idleAttentionReady
+          ? "Attention ready"
+          : attention.marker
+            ? "Persistent attention armed"
+            : "GMA attention requested"
+      }
+      title={
+        idleAttentionReady
+          ? "Attention ready — click to clear"
+          : attention.marker
+            ? "Persistent attention armed — waiting for the next answer"
+            : "One-off GMA attention requested"
+      }
+      className={cn(
+        "inline-flex shrink-0 items-center",
+        idleAttentionReady ? "text-yellow-400" : "text-muted-foreground",
+      )}
+    >
+      <BookmarkCheckIcon aria-hidden className="size-3.5" />
+    </span>
+  ) : null;
+
   const remoteMachineIcon =
     isRemote && !showsScratchMachine ? (
       <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
@@ -1251,6 +1312,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {title}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
+              {caffyBadge}
+              {attentionIndicator}
               {multiline ? null : terminalStatusIcon}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
@@ -1435,6 +1498,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {/* Left of the status slot, the pin would slide when hover swaps the
                 label for the wider row controls. */}
               {pinIndicator}
+              {caffyBadge}
+              {attentionIndicator}
               {props.projectDisplayName ? (
                 <span
                   className={cn("min-w-0 flex-1 truncate font-normal text-secondary-label text-xs")}
@@ -1589,6 +1654,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </li>
   );
 });
+
+/** Wraps the shared badge with a ticking clock so countdowns stay fresh. */
+function NativeCaffyBadge(props: {
+  monitor: T3CaffyEntry | null;
+  stoppedAt: number | undefined;
+  onQuickMenu: (position: { x: number; y: number }) => void;
+}) {
+  const nowSecond = useNowSecond();
+  return (
+    <span
+      className="inline-flex shrink-0"
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+    >
+      <CaffyStatusBadge
+        monitor={props.monitor}
+        stoppedAt={props.stoppedAt}
+        now={nowSecond}
+        // Native threads have no dedicated Caffy hotkeys yet; the popup shows "Unbound".
+        shortcuts={{ controls: "", toggle: "", once: "" }}
+        onQuickMenu={props.onQuickMenu}
+      />
+    </span>
+  );
+}
 
 function latestRunDiff(
   thread: SidebarThreadSummary,

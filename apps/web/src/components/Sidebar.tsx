@@ -107,7 +107,11 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
-import { T3_CAFFY_UPDATED_EVENT } from "../hooks/useT3CaffyOverview";
+import {
+  T3_CAFFY_UPDATED_EVENT,
+  useT3CaffyOverview,
+  type T3CaffyEntry,
+} from "../hooks/useT3CaffyOverview";
 import {
   isQuickFourHourCaffy,
   QUICK_CAFFY_MINUTES,
@@ -953,6 +957,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  // One shared Caffy poll for every native row; rows look up their own
+  // `t3:<environmentId>:<threadId>` scheduler entry or agent-stop mark.
+  const caffyOverview = useT3CaffyOverview();
+  const nativeCaffyByThreadKey = (() => {
+    const monitors = new Map<string, T3CaffyEntry>();
+    const stops = new Map<string, number>();
+    for (const entry of caffyOverview?.entries ?? []) {
+      if (entry.sessionId.startsWith("t3:")) monitors.set(entry.sessionId, entry);
+    }
+    for (const stop of caffyOverview?.agentStops ?? []) {
+      if (stop.sessionId.startsWith("t3:")) stops.set(stop.sessionId, stop.stoppedAt);
+    }
+    return { monitors, stops };
+  })();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -3633,6 +3651,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             isRenaming={renamingThreadKey === threadKey}
                             renamingTitle={renamingThreadKey === threadKey ? renamingTitle : ""}
                             onContextMenu={handleThreadContextMenu}
+                            caffyMonitor={
+                              nativeCaffyByThreadKey.monitors.get(
+                                `t3:${thread.environmentId}:${thread.id}`,
+                              ) ?? null
+                            }
+                            caffyStoppedAt={nativeCaffyByThreadKey.stops.get(
+                              `t3:${thread.environmentId}:${thread.id}`,
+                            )}
                             onSettle={attemptSettle}
                             onActionSweepStart={startActionSweep}
                             onUnsettle={attemptUnsettle}

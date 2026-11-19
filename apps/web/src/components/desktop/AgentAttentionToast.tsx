@@ -4,11 +4,21 @@ import { ChevronUpIcon } from "lucide-react";
 import attentionSoundUrl from "../../assets/agent-attention.ogg?url";
 import { watchPersistentChatGPTSessionSnoozes } from "../../chatGPTPersistentSnoozeAttention";
 import { readChatGPTBrowserSessions } from "../../chatGPTBrowserSessions";
-import { readChatGPTProviderActivity, flushDeferredCaffyAttention } from "../../chatGPTProviderActivity";
+import {
+  readChatGPTProviderActivity,
+  flushDeferredCaffyAttention,
+} from "../../chatGPTProviderActivity";
 import { isCaffyIdleContinuationActive } from "../../chatGPTCaffyAttentionPolicy";
 import { readVerifiedT3CaffyOverview } from "../../hooks/useT3CaffyOverview";
 import { rearmPersistentSessionAttention } from "../../chatGPTPersistentAttention";
-import { captureHiddenAttention, retainHiddenAttention } from "../../chatGPTAttentionToastVisibility";
+import {
+  isNativeAttentionActionable,
+  rearmNativeThreadAttention,
+} from "../../nativeThreadAttention";
+import {
+  captureHiddenAttention,
+  retainHiddenAttention,
+} from "../../chatGPTAttentionToastVisibility";
 import { useClientSettings } from "../../hooks/useSettings";
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
@@ -31,21 +41,36 @@ function availableAttentionIds(
   environmentId: EnvironmentId | undefined,
   now: number,
 ): ReadonlySet<string> {
-  if (!environmentId) return new Set();
-  const sessions = readChatGPTBrowserSessions(environmentId);
+  const sessions = environmentId ? readChatGPTBrowserSessions(environmentId) : [];
   const caffy = readVerifiedT3CaffyOverview();
-  return new Set(items.filter((item) => {
-    const session = sessions.find((entry) =>
-      entry.id === item.sessionId || entry.bootstrapIdentity?.publicId === item.sessionId);
-    return session !== undefined && (session.snoozedUntil ?? 0) <= now &&
-      !(item.source === "manual" && isCaffyIdleContinuationActive(caffy, session, now));
-  }).map((item) => item.sessionId));
+  return new Set(
+    items
+      .filter((item) => {
+        // Native T3 threads use `t3:<environmentId>:<threadId>` keys.
+        if (item.sessionId.startsWith("t3:")) return isNativeAttentionActionable(item, now);
+        const session = sessions.find(
+          (entry) =>
+            entry.id === item.sessionId || entry.bootstrapIdentity?.publicId === item.sessionId,
+        );
+        return (
+          session !== undefined &&
+          (session.snoozedUntil ?? 0) <= now &&
+          !(item.source === "manual" && isCaffyIdleContinuationActive(caffy, session, now))
+        );
+      })
+      .map((item) => item.sessionId),
+  );
 }
 
 /** Open consumes one stack item; snooze and dismiss apply to the entire
  * currently actionable queue, without touching future untriggered requests.
  * Hide is UI-only until the next newly actionable notification. */
-export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, environmentId }: {
+export function AgentAttentionToast({
+  openSession,
+  onDismiss,
+  sessionTitle,
+  environmentId,
+}: {
   openSession: (request: AgentAttention) => boolean;
   onDismiss: (request: AgentAttention) => Promise<boolean>;
   sessionTitle: (sessionId: string) => string | undefined;
@@ -67,7 +92,10 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
       const nextItems = loadAgentAttention();
       const nextNow = Date.now();
       const nextStack = activeAgentAttentionStack(
-        nextItems, availableAttentionIds(nextItems, environmentId, nextNow), nextNow);
+        nextItems,
+        availableAttentionIds(nextItems, environmentId, nextNow),
+        nextNow,
+      );
       // Do not bring back the old queue on polls, receipt updates or reorders.
       // A genuinely new alert (or a snooze reappearance) reveals everything.
       setHiddenAppearances((previous) => retainHiddenAttention(previous, nextStack));
@@ -86,14 +114,16 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
   // Subscribe to the toast's attention events before processing overdue session
   // snoozes, so an alert restored on mount appears immediately.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns one real snooze-expiry timer and store subscription for the desktop alert system
-  useEffect(() => environmentId
-    ? watchPersistentChatGPTSessionSnoozes(environmentId)
-    : undefined, [environmentId]);
+  useEffect(
+    () => (environmentId ? watchPersistentChatGPTSessionSnoozes(environmentId) : undefined),
+    [environmentId],
+  );
   // A sleeping session is not actionable: do not surface it in the toast,
   // publish a phone alert for it, or let queue buttons wake it indirectly.
   const availableIds = availableAttentionIds(items, environmentId, now);
-  const toPublish = items.find((item) => item.status === "pending" &&
-    !item.notifiedAt && availableIds.has(item.sessionId));
+  const toPublish = items.find(
+    (item) => item.status === "pending" && !item.notifiedAt && availableIds.has(item.sessionId),
+  );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronizes actionable attention with the external phone-notification transport.
   useEffect(() => {
     if (!toPublish || publishingIds.current.has(toPublish.id)) return;
@@ -102,12 +132,18 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
     const id = toPublish.id;
     publishingIds.current.add(id);
     // Resolve current T3 title; the reminder may predate a session rename.
-    const message = toPublish.source === "manual"
-      ? (sessionTitle(toPublish.sessionId) ?? toPublish.message) : toPublish.message;
+    const message =
+      toPublish.source === "manual"
+        ? (sessionTitle(toPublish.sessionId) ?? toPublish.message)
+        : toPublish.message;
     void publish({ requestId: id, sessionId: toPublish.sessionId, message })
-      .then((success) => { if (success) markAgentAttentionNotified(id); })
+      .then((success) => {
+        if (success) markAgentAttentionNotified(id);
+      })
       .catch((error: unknown) => console.warn("[Agent attention] Phone notification failed", error))
-      .finally(() => { publishingIds.current.delete(id); });
+      .finally(() => {
+        publishingIds.current.delete(id);
+      });
   }, [toPublish, sessionTitle, publishingIds]);
   const stack = activeAgentAttentionStack(items, availableIds, now);
   const visible = hiddenAppearances === null ? stack[0] : undefined;
@@ -122,27 +158,39 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
     setDismissing(true);
     setDismissError(false);
     try {
-      const results = await Promise.all(targets.map(async (item) => {
-        try { return await onDismiss(item); }
-        catch { return false; }
-      }));
+      const results = await Promise.all(
+        targets.map(async (item) => {
+          try {
+            return await onDismiss(item);
+          } catch {
+            return false;
+          }
+        }),
+      );
       const successful = targets.filter((_, index) => results[index]);
       const changed = resolveAttentionQueueEntries(successful.map((item) => item.id));
       // Persistent Ctrl+D flags stay enabled, but a dismissed yellow alert
       // becomes armed for the next completed turn. Never send a dismissal
       // message to those sessions.
+      for (const item of changed)
+        if (item.source === "manual" && item.sessionId.startsWith("t3:"))
+          rearmNativeThreadAttention(item.sessionId);
       if (environmentId) {
         const sessions = readChatGPTBrowserSessions(environmentId);
         const rearmed = new Set<string>();
         for (const item of changed) {
           if (item.source !== "manual") continue;
-          const session = sessions.find((entry) =>
-            entry.id === item.sessionId ||
-            entry.bootstrapIdentity?.publicId === item.sessionId);
+          const session = sessions.find(
+            (entry) =>
+              entry.id === item.sessionId || entry.bootstrapIdentity?.publicId === item.sessionId,
+          );
           if (!session || rearmed.has(session.id)) continue;
           rearmed.add(session.id);
-          rearmPersistentSessionAttention(environmentId, session,
-            readChatGPTProviderActivity(environmentId, session.id));
+          rearmPersistentSessionAttention(
+            environmentId,
+            session,
+            readChatGPTProviderActivity(environmentId, session.id),
+          );
         }
       }
       if (results.some((success) => !success)) setDismissError(true);
@@ -159,76 +207,120 @@ export function AgentAttentionToast({ openSession, onDismiss, sessionTitle, envi
     if (localStorage.getItem(key) === stamp) return;
     localStorage.setItem(key, stamp);
     if (visible.spokenMessage?.trim()) {
-      void window.desktopBridge?.speakOpenRigPreview?.(visible.spokenMessage).catch((error: unknown) =>
-        console.warn("[Agent attention] Speech unavailable", error),
-      );
+      void window.desktopBridge
+        ?.speakOpenRigPreview?.(visible.spokenMessage)
+        .catch((error: unknown) => console.warn("[Agent attention] Speech unavailable", error));
     } else {
       const audio = new Audio(attentionSoundUrl);
       audio.volume = 0.55;
-      void audio.play().catch((error: unknown) =>
-        console.warn("[Agent attention] Sound unavailable", error),
-      );
+      void audio
+        .play()
+        .catch((error: unknown) => console.warn("[Agent attention] Sound unavailable", error));
     }
   }, [visible]);
   // Hide the high-z notification while the shared custom-snooze dialog is open.
   if (!visible || customSnoozeOpen) return null;
   return (
-    <section role="alertdialog" aria-label="Agent needs your attention"
+    <section
+      role="alertdialog"
+      aria-label="Agent needs your attention"
       data-agent-attention-toast
-      className="fixed bottom-5 right-5 z-[9999] w-[350px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-background p-4 shadow-2xl">
+      className="fixed bottom-5 right-5 z-[9999] w-[350px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-background p-4 shadow-2xl"
+    >
       <div className="mb-2 text-sm font-semibold">
         Agent requests your attention{stack.length > 1 ? ` (${stack.length})` : ""}
       </div>
       <p className="mb-3 whitespace-pre-wrap break-words text-sm">
-        {visible.source === "manual" ? (sessionTitle(visible.sessionId) ?? visible.message) : visible.message}
+        {visible.source === "manual"
+          ? (sessionTitle(visible.sessionId) ?? visible.message)
+          : visible.message}
       </p>
       <div className="flex flex-wrap gap-2 text-xs">
-        <button className="rounded-md bg-primary px-3 py-2 text-primary-foreground" onClick={() => {
-          openSession(visible);
-        }}>Open session</button>
-        <button className="rounded-md border px-2 py-2"
-          onClick={() => snoozeQueue(Date.now() + 10 * 60_000)}>10 min (all)</button>
-        <Menu onOpenChange={(open) => {
-          if (open && environmentId)
-            setSnoozePresets(resolveSnoozePresets(new Date(), timestampFormat, environmentId));
-        }}>
+        <button
+          className="rounded-md bg-primary px-3 py-2 text-primary-foreground"
+          onClick={() => {
+            openSession(visible);
+          }}
+        >
+          Open session
+        </button>
+        <button
+          className="rounded-md border px-2 py-2"
+          onClick={() => snoozeQueue(Date.now() + 10 * 60_000)}
+        >
+          10 min (all)
+        </button>
+        <Menu
+          onOpenChange={(open) => {
+            if (open && environmentId)
+              setSnoozePresets(resolveSnoozePresets(new Date(), timestampFormat, environmentId));
+          }}
+        >
           <MenuTrigger
-            render={<button type="button" disabled={!environmentId}
-              className="flex items-center gap-1 rounded-md border px-2 py-2 disabled:opacity-50" />}
+            render={
+              <button
+                type="button"
+                disabled={!environmentId}
+                className="flex items-center gap-1 rounded-md border px-2 py-2 disabled:opacity-50"
+              />
+            }
           >
             Snooze all <ChevronUpIcon className="size-3" aria-hidden="true" />
           </MenuTrigger>
           <MenuPopup side="top" align="end" positionerClassName="z-[10001]">
             {snoozePresets.map((preset) => (
-              <MenuItem key={preset.id} onClick={() => {
-                if (!environmentId) return;
-                const chosen = pickSnoozePreset(snoozePresets, preset.id, timestampFormat, environmentId);
-                if (chosen) snoozeQueue(Date.parse(chosen.snoozedUntil));
-              }}>
+              <MenuItem
+                key={preset.id}
+                onClick={() => {
+                  if (!environmentId) return;
+                  const chosen = pickSnoozePreset(
+                    snoozePresets,
+                    preset.id,
+                    timestampFormat,
+                    environmentId,
+                  );
+                  if (chosen) snoozeQueue(Date.parse(chosen.snoozedUntil));
+                }}
+              >
                 <MenuItemLabel>{preset.label}</MenuItemLabel>
                 <span className="ml-auto text-xs text-muted-foreground">{preset.whenLabel}</span>
               </MenuItem>
             ))}
-            <MenuItem onClick={() => {
-              setCustomSnoozeOpen(true);
-              void requestCustomSnooze()
-                .then((choice) => {
-                  if (choice) snoozeQueue(Date.parse(choice.snoozedUntil));
-                })
-                .finally(() => setCustomSnoozeOpen(false));
-            }}>Custom…</MenuItem>
+            <MenuItem
+              onClick={() => {
+                setCustomSnoozeOpen(true);
+                void requestCustomSnooze()
+                  .then((choice) => {
+                    if (choice) snoozeQueue(Date.parse(choice.snoozedUntil));
+                  })
+                  .finally(() => setCustomSnoozeOpen(false));
+              }}
+            >
+              Custom…
+            </MenuItem>
           </MenuPopup>
         </Menu>
-        <button disabled={dismissing} className="rounded-md border px-2 py-2 disabled:opacity-50"
-          onClick={() => { void dismissQueue(); }}>
+        <button
+          disabled={dismissing}
+          className="rounded-md border px-2 py-2 disabled:opacity-50"
+          onClick={() => {
+            void dismissQueue();
+          }}
+        >
           {dismissing ? "Dismissing…" : "Dismiss all"}
         </button>
-        <button className="rounded-md border px-2 py-2"
-          onClick={() => setHiddenAppearances(captureHiddenAttention(stack))}>
+        <button
+          className="rounded-md border px-2 py-2"
+          onClick={() => setHiddenAppearances(captureHiddenAttention(stack))}
+        >
           Hide
         </button>
       </div>
-      {dismissError && <p role="alert" className="mt-2 text-xs text-destructive">Some agent requests could not be dismissed. Those alerts remain queued.</p>}
+      {dismissError && (
+        <p role="alert" className="mt-2 text-xs text-destructive">
+          Some agent requests could not be dismissed. Those alerts remain queued.
+        </p>
+      )}
     </section>
   );
 }
