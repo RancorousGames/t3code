@@ -84,9 +84,8 @@ export function parseArguments(args) {
     options.message = NodeFS.readFileSync(NodePath.resolve(options.messageFile), "utf8");
   if (!options.message.trim())
     throw new Error("A nonempty --message or --message-file is required.");
-  // The named pipe cannot identify the calling ChatGPT guest. Agents creating
-  // actual child sessions should opt into fail-closed mode rather than silently
-  // opening a root when their tool transport failed to carry provenance.
+  // The named pipe cannot identify the caller. Strict clients require a
+  // visible, registered parent; ordinary spawns retain unresolved parent IDs.
   if (options.requireParent && !options.parentSessionId.trim())
     throw new Error(
       "--require-parent needs an explicit --parent-session-id (T3 browser UUID). The desktop pipe cannot infer the caller.",
@@ -157,6 +156,7 @@ export function createChatGPTSpawnRequest(options, requestId = NodeCrypto.random
     title: options.title.trim(),
     prompt: options.message,
     ...(options.parentSessionId.trim() ? { parentSessionId: options.parentSessionId.trim() } : {}),
+    ...(options.requireParent ? { requireParent: true } : {}),
     ...(options.autoClose === true ? { autoClose: true } : {}),
     ...(options.project.trim() ? { project: options.project.trim() } : {}),
     ...(options.seatId?.trim() ? { seatId: options.seatId.trim() } : {}),
@@ -174,16 +174,20 @@ export function createChatGPTSpawnRequest(options, requestId = NodeCrypto.random
 export function observedSpawnParent(request, session, observed) {
   const parentSessionId = observed ? (session?.parentSessionId ?? null) : null;
   const expected = request.parentSessionId;
+  const parentLinkStatus = observed ? session?.parentLinkStatus : undefined;
   return {
     parentSessionId,
+    ...(parentLinkStatus ? { parentLinkStatus } : {}),
     ...(expected ? { requestedParentSessionId: expected } : {}),
     parentConfirmation: !expected
       ? "not_requested"
       : !observed
         ? "unconfirmed"
-        : parentSessionId === expected
-          ? "confirmed"
-          : "mismatch",
+        : parentSessionId !== expected
+          ? "mismatch"
+          : parentLinkStatus === "hidden" || parentLinkStatus === "unresolved"
+            ? "dangling"
+            : "confirmed",
   };
 }
 

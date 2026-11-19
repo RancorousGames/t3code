@@ -14,7 +14,17 @@ const mocks = vi.hoisted(() => ({
   guestRef: vi.fn((_environmentId: unknown, id: string) => ({ threadId: id })),
   sendInitial: vi.fn(async () => ({ delivery: "user_turn_observed", sendAttempted: true })),
   recordSpawn: vi.fn(),
-  startSpawn: vi.fn((_environmentId: unknown, _requestId: string, _sessionId: string, send: () => Promise<unknown>) => Promise.resolve().then(send).then(() => {})),
+  startSpawn: vi.fn(
+    (
+      _environmentId: unknown,
+      _requestId: string,
+      _sessionId: string,
+      send: () => Promise<unknown>,
+    ) =>
+      Promise.resolve()
+        .then(send)
+        .then(() => {}),
+  ),
   readSpawn: vi.fn(() => [] as Array<{ sessionId: string; requestId: string }>),
   browserSessions: [] as Array<{
     id: string;
@@ -97,7 +107,11 @@ vi.mock("../../chatGPTBrowserAutomation", () => ({
 vi.mock("../../chatGPTSpawnReceipts", () => ({
   recordChatGPTSpawnCreated: mocks.recordSpawn,
   startChatGPTSpawnDelivery: mocks.startSpawn,
-  chatGPTSpawnDeliveryStatus: () => ({ promptDelivery: "unknown", messageSent: false, sendAttempted: null }),
+  chatGPTSpawnDeliveryStatus: () => ({
+    promptDelivery: "unknown",
+    messageSent: false,
+    sendAttempted: null,
+  }),
   readChatGPTSpawnReceipts: mocks.readSpawn,
 }));
 vi.mock("../../chatGPTBrowserSessions", () => ({
@@ -329,11 +343,18 @@ describe("background ChatGPT activation", () => {
   it("refuses programmatic ChatGPT focus without changing the selected session", async () => {
     const id = "b5fc0249-28e7-48c6-9591-6761b3fa3748";
     mocks.browserSessions = [{ id, title: "Other session", hidden: true }];
-    await act(async () => { renderer = create(<DesktopAppActivationCoordinator />); });
-    await act(async () => onRequest?.({
-      version: 1, type: "chatgpt.sessions", action: "focus",
-      requestId: "focus-other", sessionId: id,
-    }));
+    await act(async () => {
+      renderer = create(<DesktopAppActivationCoordinator />);
+    });
+    await act(async () =>
+      onRequest?.({
+        version: 1,
+        type: "chatgpt.sessions",
+        action: "focus",
+        requestId: "focus-other",
+        sessionId: id,
+      }),
+    );
     expect(complete.mock.lastCall?.[0]).toMatchObject({ ok: false, code: "invalid-request" });
     expect(mocks.navigate).not.toHaveBeenCalled();
     expect(mocks.createSession).not.toHaveBeenCalled();
@@ -589,9 +610,14 @@ describe("background ChatGPT activation", () => {
       requestId: request.requestId,
       ok: true,
       data: {
-        action: "spawn", created: true, sessionId: "spawned-session",
-        parentSessionId: null, messageSent: false,
-        promptDelivery: "pending", sendAttempted: null,
+        action: "spawn",
+        created: true,
+        sessionId: "spawned-session",
+        parentSessionId: null,
+        parentLinkStatus: "not_requested",
+        messageSent: false,
+        promptDelivery: "pending",
+        sendAttempted: null,
       },
     });
   });
@@ -622,6 +648,7 @@ describe("background ChatGPT activation", () => {
         created: true,
         sessionId: "spawned-session",
         parentSessionId: null,
+        parentLinkStatus: "not_requested",
         messageSent: false,
         promptDelivery: "pending",
         sendAttempted: null,
@@ -698,11 +725,17 @@ describe("background ChatGPT activation", () => {
       data: {
         which: "all",
         total: 1,
-        sessions: [{
-          id: "spawned-session", title: "Worker", bootstrapIdentity: null,
-          spawnRequestId: "lost-response", promptDelivery: "unknown",
-          messageSent: false, sendAttempted: null,
-        }],
+        sessions: [
+          {
+            id: "spawned-session",
+            title: "Worker",
+            bootstrapIdentity: null,
+            spawnRequestId: "lost-response",
+            promptDelivery: "unknown",
+            messageSent: false,
+            sendAttempted: null,
+          },
+        ],
       },
     });
     expect(mocks.createSession).not.toHaveBeenCalled();
@@ -737,19 +770,28 @@ describe("background ChatGPT activation", () => {
       requestId: "explicit-parent",
       ok: true,
       data: {
-        action: "spawn", created: true, sessionId: "spawned-session",
-        parentSessionId: parentId, messageSent: false,
-        promptDelivery: "pending", sendAttempted: null,
+        action: "spawn",
+        created: true,
+        sessionId: "spawned-session",
+        parentSessionId: parentId,
+        parentLinkStatus: "resolved",
+        messageSent: false,
+        promptDelivery: "pending",
+        sendAttempted: null,
       },
     });
   });
 
-  it("rejects unknown or hidden explicit parents before session creation or prompt delivery", async () => {
-    mocks.browserSessions = [{ id: "known-hidden", title: "Hidden manager", hidden: true }];
-    await act(async () => {
-      renderer = create(<DesktopAppActivationCoordinator />);
-    });
-    for (const parentSessionId of ["unknown", "known-hidden"]) {
+  it.each([
+    ["unknown", "unresolved"],
+    ["known-hidden", "hidden"],
+  ] as const)(
+    "creates and delivers with a dangling %s parent, without claiming trust",
+    async (parentSessionId, status) => {
+      mocks.browserSessions = [{ id: "known-hidden", title: "Hidden manager", hidden: true }];
+      await act(async () => {
+        renderer = create(<DesktopAppActivationCoordinator />);
+      });
       await act(async () =>
         onRequest?.({
           version: 1,
@@ -758,6 +800,47 @@ describe("background ChatGPT activation", () => {
           title: "Worker",
           prompt: "Do bounded work",
           parentSessionId,
+          role: "worker",
+        }),
+      );
+      expect(mocks.createSession).toHaveBeenCalledExactlyOnceWith(
+        "Worker",
+        expect.objectContaining({
+          spawnRequestId: parentSessionId,
+          parentSessionId,
+          binding: expect.objectContaining({ parentSessionId: null, role: "worker" }),
+        }),
+      );
+      expect(mocks.sendInitial).toHaveBeenCalledTimes(1);
+      expect(complete.mock.lastCall?.[0]).toMatchObject({
+        requestId: parentSessionId,
+        ok: true,
+        data: {
+          created: true,
+          parentSessionId,
+          parentLinkStatus: status,
+          promptDelivery: "pending",
+        },
+      });
+    },
+  );
+
+  it.each(["unknown", "known-hidden"])(
+    "requires a verified %s parent for strict spawns",
+    async (parentSessionId) => {
+      mocks.browserSessions = [{ id: "known-hidden", title: "Hidden manager", hidden: true }];
+      await act(async () => {
+        renderer = create(<DesktopAppActivationCoordinator />);
+      });
+      await act(async () =>
+        onRequest?.({
+          version: 1,
+          requestId: parentSessionId,
+          type: "chatgpt.spawn",
+          title: "Worker",
+          prompt: "Do bounded work",
+          parentSessionId,
+          requireParent: true,
         }),
       );
       expect(complete.mock.lastCall?.[0]).toMatchObject({
@@ -765,10 +848,10 @@ describe("background ChatGPT activation", () => {
         ok: false,
         code: "invalid-request",
       });
-    }
-    expect(mocks.createSession).not.toHaveBeenCalled();
-    expect(mocks.sendInitial).not.toHaveBeenCalled();
-  });
+      expect(mocks.createSession).not.toHaveBeenCalled();
+      expect(mocks.sendInitial).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("managed native provider desktop activation", () => {
@@ -1110,8 +1193,12 @@ describe("managed native provider desktop activation", () => {
   it("refuses programmatic native thread focus without changing selection", async () => {
     prepareExistingThread(opaqueIds[0]!);
     const result = await deliver({
-      version: 1, requestId: "native-focus", type: "t3.threads",
-      action: "focus", threadId: opaqueIds[0]!, environmentId: "local",
+      version: 1,
+      requestId: "native-focus",
+      type: "t3.threads",
+      action: "focus",
+      threadId: opaqueIds[0]!,
+      environmentId: "local",
     });
     expect(result).toMatchObject({ ok: false, code: "invalid-request" });
     expect(mocks.navigate).not.toHaveBeenCalled();

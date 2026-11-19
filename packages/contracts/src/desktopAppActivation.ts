@@ -150,6 +150,8 @@ export const DesktopAppActivationRequest = Schema.Union([
     title: TrimmedNonEmptyString,
     prompt: Schema.String.check(Schema.isNonEmpty()),
     parentSessionId: Schema.optional(TrimmedNonEmptyString),
+    // Strictly require a currently visible parent. Ordinary spawns retain unresolved links.
+    requireParent: Schema.optional(Schema.Boolean),
     autoClose: Schema.optional(Schema.Boolean),
     project: Schema.optional(TrimmedNonEmptyString),
     seatId: Schema.optional(TrimmedNonEmptyString),

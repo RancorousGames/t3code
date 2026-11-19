@@ -7,7 +7,7 @@ import {
 import { chatGPTConversationIdFromUrl } from "./chatGPTConversationIdentity";
 import { recordChatGPTSpawnCreated } from "./chatGPTSpawnReceipts";
 import { browserCreateFingerprint, getBrowserCreateIntent, writeBrowserCreateIntent } from "./agentProviderBrowserCreateReceipts";
-import { resolveExplicitChatGPTParent } from "./chatGPTSessionLineage";
+import { resolveChatGPTSpawnParent } from "./chatGPTSessionLineage";
 import { inspectBrowserSession } from "./chatGPTSessionControl";
 import { readProjects } from "./state/entities";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
@@ -44,22 +44,22 @@ export async function executeProviderBrowserCreate(
     if (!found)
       return { ok: true, data: { created: false, unknown: true, reason: "Existing created T3 session missing from current inventory; never spawn twice." } };
     const lastUrl = getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, found.id), Schema.String);
+    const parentLink = resolveChatGPTSpawnParent(
+      readChatGPTBrowserSessions(environmentId), work.parentSessionId,
+    );
     return { ok: true, data: {
       created: true, sessionId: found.id,
       conversationId: chatGPTConversationIdFromUrl(lastUrl),
       promptDelivery: "unknown",
-      parentConfirmed: !work.parentSessionId || found.parentSessionId === work.parentSessionId,
+      parentConfirmed: !work.parentSessionId ||
+        (parentLink.status === "resolved" && found.parentSessionId === parentLink.parentSessionId),
       reason: "Previously created. First-prompt result requires manual readback; no replay.",
     } };
   }
-  let parentId: string | undefined;
-  try {
-    parentId = resolveExplicitChatGPTParent(
-      readChatGPTBrowserSessions(environmentId), work.parentSessionId,
-    )?.id;
-  } catch (cause) {
-    return { ok: false, code: "InvalidInput", message: cause instanceof Error ? cause.message : String(cause) };
-  }
+  const parentLink = resolveChatGPTSpawnParent(
+    readChatGPTBrowserSessions(environmentId), work.parentSessionId,
+  );
+  const parentId = parentLink.parentSessionId;
   let project: string | undefined;
   if (work.project) {
     const matched = readProjects().find((p) =>
@@ -113,7 +113,7 @@ export async function executeProviderBrowserCreate(
   }
   return { ok: true, data: {
     created: true, sessionId, conversationId: verifiedConversationId,
-    promptDelivery: delivery, parentConfirmed: !work.parentSessionId || parentId === work.parentSessionId,
+    promptDelivery: delivery, parentConfirmed: !work.parentSessionId || parentLink.status === "resolved",
     ...(reason ? { reason } : {}),
   } };
 }

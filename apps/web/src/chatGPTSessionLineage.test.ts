@@ -8,7 +8,7 @@ import {
   setChatGPTSessionHidden,
   type BrowserSession as Session,
 } from "./chatGPTBrowserSessions";
-import { chatGPTParentIndex, resolveExplicitChatGPTParent } from "./chatGPTSessionLineage";
+import { chatGPTParentIndex, resolveChatGPTSpawnParent } from "./chatGPTSessionLineage";
 import {
   groupChatGPTSessions,
   layoutChatGPTSessions,
@@ -35,24 +35,52 @@ describe("explicit ChatGPT spawn parent identity", () => {
   ];
 
   it("never infers the caller from an active tab, heartbeat, matching title or project", () => {
-    expect(resolveExplicitChatGPTParent(existing, undefined)).toBeNull();
-    expect(resolveExplicitChatGPTParent(existing, parentId)?.id).toBe(parentId);
+    expect(resolveChatGPTSpawnParent(existing, undefined).status).toBe("not_requested");
+    expect(resolveChatGPTSpawnParent(existing, parentId)).toEqual({
+      parentSessionId: parentId,
+      verifiedParent: existing[0],
+      status: "resolved",
+    });
   });
 
-  it("rejects unknown and hidden explicit IDs rather than silently creating another link", () => {
-    expect(() => resolveExplicitChatGPTParent(existing, "missing")).toThrow(/Unknown or hidden/);
-    expect(() =>
-      resolveExplicitChatGPTParent([{ ...existing[0]!, hidden: true }, existing[1]!], parentId),
-    ).toThrow(/Unknown or hidden/);
+  it("keeps unknown and hidden IDs as unresolved lineage, while strict calls fail closed", () => {
+    expect(resolveChatGPTSpawnParent(existing, "missing")).toEqual({
+      parentSessionId: "missing",
+      verifiedParent: null,
+      status: "unresolved",
+    });
+    const hidden = [{ ...existing[0]!, hidden: true }, existing[1]!];
+    expect(resolveChatGPTSpawnParent(hidden, parentId)).toEqual({
+      parentSessionId: parentId,
+      verifiedParent: null,
+      status: "hidden",
+    });
+    expect(() => resolveChatGPTSpawnParent(existing, undefined, true)).toThrow(/required/);
+    expect(() => resolveChatGPTSpawnParent(existing, "missing", true)).toThrow(/Unknown or hidden/);
+    expect(() => resolveChatGPTSpawnParent(hidden, parentId, true)).toThrow(/Unknown or hidden/);
+    expect(resolveChatGPTSpawnParent(existing, parentId, true).status).toBe("resolved");
   });
 
   it("resolves a parent by its registered public Bootstrap ID", () => {
     const publicId = "6d50bdf7-bc79-4a94-a938-657f65ee390e";
     const registered: Session[] = [
-      { ...existing[0]!, bootstrapIdentity: { state: "registered", publicId } }, existing[1]!,
+      { ...existing[0]!, bootstrapIdentity: { state: "registered", publicId } },
+      existing[1]!,
     ];
-    expect(resolveExplicitChatGPTParent(registered, publicId)?.id).toBe(parentId);
-    expect(resolveExplicitChatGPTParent(registered, parentId)?.id).toBe(parentId);
+    expect(resolveChatGPTSpawnParent(registered, publicId).parentSessionId).toBe(parentId);
+    expect(resolveChatGPTSpawnParent(registered, parentId).parentSessionId).toBe(parentId);
+  });
+
+  it("reconciles a dangling public parent ID once the parent appears, without rewriting storage", () => {
+    const publicId = "6d50bdf7-bc79-4a94-a938-657f65ee390e";
+    const child = { id: childId, title: "Child", parentSessionId: publicId };
+    expect(chatGPTParentIndex([child]).get(childId)).toBeNull();
+    const parent = {
+      ...existing[0]!,
+      bootstrapIdentity: { state: "registered" as const, publicId },
+    };
+    expect(chatGPTParentIndex([child, parent]).get(childId)).toBe(parentId);
+    expect(child.parentSessionId).toBe(publicId);
   });
 
   it("records the supplied T3 UUID even if the parent browser hasn't activated yet", () => {
@@ -117,7 +145,7 @@ describe("defensive grouping against inconsistent persisted parents", () => {
       expect(actual).toContainEqual(["a", 0]);
       expect(actual).toContainEqual(["b", 0]);
       expect(actual).toContainEqual(["c", 0]);
-      expect(actual).toContainEqual(["d", 1]);
+      expect(actual).toContainEqual(["d", mode === "started" ? 1 : 0]);
     }
   });
 

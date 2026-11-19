@@ -29,6 +29,7 @@ import {
   buildChatGPTExperimentalExpression,
 } from "./chatGPTExperimentalEvaluate";
 import { findChatGPTSessionByAnyId } from "./chatGPTBootstrapIdentity";
+import { resolveChatGPTSpawnParent } from "./chatGPTSessionLineage";
 import { readChatGPTBootstrapProbe } from "./browser/useChatGPTBootstrapRegistration";
 import {
   chatGPTBrowserThreadRef,
@@ -839,7 +840,16 @@ export async function runChatGPTSessionControl(input: {
           ),
         ),
     );
-    return { which, sessions: result, total: result.length };
+    return {
+      which,
+      sessions: result.map((entry) => ({
+        ...entry,
+        parentLinkStatus: resolveChatGPTSpawnParent(
+          sessions, entry.parentSessionId ?? undefined,
+        ).status,
+      })),
+      total: result.length,
+    };
   }
   if (!input.sessionId)
     throw new Error(

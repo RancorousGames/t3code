@@ -1037,10 +1037,11 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
             !metadata.project
               ? { manualEmptyCandidateCreatedAt: Date.now() }
               : {}),
-            ...(metadata?.binding
-              ? { binding: metadata.binding, parentSessionId: metadata.binding.parentSessionId }
-              : metadata?.parentSessionId
-                ? { parentSessionId: metadata.parentSessionId }
+            ...(metadata?.binding ? { binding: metadata.binding } : {}),
+            ...(metadata?.parentSessionId
+              ? { parentSessionId: metadata.parentSessionId }
+              : metadata?.binding
+                ? { parentSessionId: metadata.binding.parentSessionId }
                 : {}),
             ...(metadata?.project ? { project: metadata.project } : {}),
             ...(metadata?.spawnRequestId && metadata.autoClose === true ? { autoClose: true } : {}),

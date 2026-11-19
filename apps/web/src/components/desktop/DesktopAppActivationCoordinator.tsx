@@ -129,7 +129,7 @@ import {
   subscribeChatGPTIdleTransitions,
 } from "../../chatGPTIdleTransitions";
 import { handleOpenRigHumanInboxActivation } from "./openRigHumanInboxActivation";
-import { resolveExplicitChatGPTParent } from "../../chatGPTSessionLineage";
+import { resolveChatGPTSpawnParent } from "../../chatGPTSessionLineage";
 import {
   applyConfirmedChatGPTSessionMetadata,
   matchRegisteredProject,
@@ -2238,15 +2238,23 @@ export function DesktopAppActivationCoordinator() {
               created: true,
               sessionId: previousSpawn?.sessionId ?? previousSession!.id,
               parentSessionId: previousSession?.parentSessionId ?? null,
+              parentLinkStatus: resolveChatGPTSpawnParent(
+                sessions,
+                previousSession?.parentSessionId ?? undefined,
+              ).status,
               ...(previousSpawn
                 ? chatGPTSpawnDeliveryStatus(environmentId, previousSpawn)
                 : { promptDelivery: "unknown", messageSent: false, sendAttempted: null }),
             },
           };
         }
-        let parent;
+        let parentLink;
         try {
-          parent = resolveExplicitChatGPTParent(sessions, request.parentSessionId);
+          parentLink = resolveChatGPTSpawnParent(
+            sessions,
+            request.parentSessionId,
+            request.requireParent === true,
+          );
         } catch (error) {
           return {
             version: 1,
@@ -2256,7 +2264,7 @@ export function DesktopAppActivationCoordinator() {
             message: error instanceof Error ? error.message : String(error),
           };
         }
-        const parentSessionId = parent?.id;
+        const { parentSessionId, verifiedParent } = parentLink;
         const registered = readProjects().filter(
           (project) => project.environmentId === environmentId,
         );
@@ -2265,9 +2273,9 @@ export function DesktopAppActivationCoordinator() {
           title: project.title,
           workspaceRoot: project.workspaceRoot,
         }));
-        const resolvedParent = parentSessionId
+        const resolvedParent = verifiedParent
           ? applyConfirmedChatGPTSessionMetadata(sessions).find(
-              (session) => session.id === parentSessionId,
+              (session) => session.id === verifiedParent.id,
             )
           : null;
         const projectHint =
@@ -2293,7 +2301,8 @@ export function DesktopAppActivationCoordinator() {
           ? {
               seatId: request.seatId ?? null,
               role: request.role,
-              parentSessionId: parentSessionId ?? null,
+              // Unverified lineage must not create a trusted seat/task parent.
+              parentSessionId: verifiedParent?.id ?? null,
               taskRef: request.taskRef ?? null,
               boundAt: new Date().toISOString(),
               // This describes the local spawn request path, not authenticated identity.
@@ -2348,6 +2357,7 @@ export function DesktopAppActivationCoordinator() {
               created: true,
               sessionId,
               parentSessionId: parentSessionId ?? null,
+              parentLinkStatus: parentLink.status,
               messageSent: false,
               promptDelivery: "pending",
               sendAttempted: null,
@@ -2365,6 +2375,7 @@ export function DesktopAppActivationCoordinator() {
               created: true,
               sessionId,
               parentSessionId: parentSessionId ?? null,
+              parentLinkStatus: parentLink.status,
               messageSent: false,
               promptDelivery: "unknown",
               sendAttempted: null,

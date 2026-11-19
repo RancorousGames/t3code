@@ -79,6 +79,12 @@ NodeTest.test("the OMCP/CLI spawn request carries explicit parent UUID only when
     "request-2",
   );
   NodeAssert.equal(without.parentSessionId, undefined);
+  const strict = createChatGPTSpawnRequest(parseArguments([
+    "--title", "Strict child", "--message", "Implement", "--require-parent",
+    "--parent-session-id", "missing-manager",
+  ]), "strict-request");
+  NodeAssert.equal(strict.requireParent, true);
+  NodeAssert.equal(explicit.requireParent, undefined);
   NodeAssert.equal(without.autoClose, undefined);
   NodeAssert.equal(without.project, "t3code");
   const optIn = createChatGPTSpawnRequest(parseArguments([
@@ -434,6 +440,16 @@ NodeTest.test("explicit parent confirmation requires a downstream observation", 
       request,
     );
   NodeAssert.equal(observed("exact-manager-id").parentConfirmation, "confirmed");
+  const dangling = classifySpawnResponse({
+    ok: true, data: {
+      action: "spawn", created: true, sessionId: "child",
+      parentSessionId: "exact-manager-id", parentLinkStatus: "unresolved",
+      messageSent: false, promptDelivery: "pending",
+    },
+  }, request);
+  NodeAssert.equal(dangling.parentConfirmation, "dangling");
+  NodeAssert.equal(dangling.parentLinkStatus, "unresolved");
+  NodeAssert.equal(dangling.sessionId, "child");
   NodeAssert.equal(observed("exact-manager-id").requestedParentSessionId, "exact-manager-id");
   NodeAssert.equal(observed(null).parentConfirmation, "mismatch");
   NodeAssert.equal(
