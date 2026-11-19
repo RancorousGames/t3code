@@ -35,8 +35,12 @@ describe("native ChatGPT guest accelerator routing", () => {
       "chatgpt.return-marker",
     );
     expect(nativeChatGPTGuestShortcut(ctrlD, "win32", ownerUrl, other)).toBeNull();
-    expect(nativeChatGPTGuestShortcut({ ...ctrlD, alt: true }, "win32", ownerUrl, selected)).toBeNull();
-    expect(nativeChatGPTGuestShortcut({ ...ctrlD, type: "keyUp" }, "win32", ownerUrl, selected)).toBeNull();
+    expect(
+      nativeChatGPTGuestShortcut({ ...ctrlD, alt: true }, "win32", ownerUrl, selected),
+    ).toBeNull();
+    expect(
+      nativeChatGPTGuestShortcut({ ...ctrlD, type: "keyUp" }, "win32", ownerUrl, selected),
+    ).toBeNull();
   });
   it("routes Ctrl+S to the last attention session, but only from the selected guest", () => {
     const ctrlS = { ...ctrlW, key: "s" };
@@ -44,8 +48,23 @@ describe("native ChatGPT guest accelerator routing", () => {
       "chatgpt.open-last-attention",
     );
     expect(nativeChatGPTGuestShortcut(ctrlS, "win32", ownerUrl, other)).toBeNull();
-    expect(nativeChatGPTGuestShortcut({ ...ctrlS, alt: true }, "win32", ownerUrl, selected)).toBeNull();
-    expect(nativeChatGPTGuestShortcut({ ...ctrlS, type: "keyUp" }, "win32", ownerUrl, selected)).toBeNull();
+    expect(
+      nativeChatGPTGuestShortcut({ ...ctrlS, alt: true }, "win32", ownerUrl, selected),
+    ).toBeNull();
+    expect(
+      nativeChatGPTGuestShortcut({ ...ctrlS, type: "keyUp" }, "win32", ownerUrl, selected),
+    ).toBeNull();
+  });
+  it("routes Ctrl+Alt+I to the selected session's 4-hour Caffy toggle", () => {
+    const toggle = { ...ctrlW, key: "i", alt: true };
+    expect(nativeChatGPTGuestShortcut(toggle, "win32", ownerUrl, selected)).toBe("caffy:quick-4h");
+    expect(nativeChatGPTGuestShortcut(toggle, "win32", ownerUrl, other)).toBeNull();
+    expect(
+      nativeChatGPTGuestShortcut({ ...toggle, shift: true }, "win32", ownerUrl, selected),
+    ).toBeNull();
+    expect(
+      nativeChatGPTGuestShortcut({ ...toggle, type: "keyUp" }, "win32", ownerUrl, selected),
+    ).toBeNull();
   });
   it("routes F2 rename only from the selected ChatGPT guest", () => {
     const f2 = { ...ctrlW, key: "F2", control: false };
@@ -53,8 +72,12 @@ describe("native ChatGPT guest accelerator routing", () => {
       "rename-chatgpt-session",
     );
     expect(nativeChatGPTGuestShortcut(f2, "win32", ownerUrl, other)).toBeNull();
-    expect(nativeChatGPTGuestShortcut({ ...f2, shift: true }, "win32", ownerUrl, selected)).toBeNull();
-    expect(nativeChatGPTGuestShortcut({ ...f2, type: "keyUp" }, "win32", ownerUrl, selected)).toBeNull();
+    expect(
+      nativeChatGPTGuestShortcut({ ...f2, shift: true }, "win32", ownerUrl, selected),
+    ).toBeNull();
+    expect(
+      nativeChatGPTGuestShortcut({ ...f2, type: "keyUp" }, "win32", ownerUrl, selected),
+    ).toBeNull();
   });
   it("supports Cmd+W on macOS and native find on the selected guest", () => {
     const cmdW = { ...ctrlW, control: false, meta: true };

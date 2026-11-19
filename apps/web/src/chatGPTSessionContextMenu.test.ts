@@ -24,40 +24,58 @@ describe("ChatGPT native sidebar menu", () => {
     expect(menu[0]?.id).toBe("copy:t3-id");
     expect(menu[0]?.label).toBe("Copy T3 session ID");
     expect(menu.find((item) => item.id === "copy")?.children?.length).toBe(4);
-    expect(menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")?.label)
-      .toBe("ChatGPT URL");
+    expect(
+      menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")
+        ?.label,
+    ).toBe("ChatGPT URL");
     const parent = menu.find((item) => item.id === "parent");
     expect(parent?.children?.map((item) => item.id)).toEqual(["parent:set", "parent:detach"]);
     expect(parent?.children?.[0]?.children?.[0]?.id).toBe("parent:another");
     expect(menu.find((item) => item.id === "stop")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "task:open")?.disabled).toBe(true);
     expect(menu.find((item) => item.id === "reboot")).toBeDefined();
-    expect(menu.find((item) => item.id === "schedule:resume")).toMatchObject({
-      label: "Continue once when idle", disabled: false, checked: false,
+    expect(menu.some((item) => item.id === "schedule:resume")).toBe(false);
+    expect(menu.find((item) => item.id === "caffy:quick-4h")).toMatchObject({
+      checked: false,
+      disabled: false,
     });
-    expect(menu.findIndex((item) => item.id === "schedule:resume")).toBe(
+    expect(menu.findIndex((item) => item.id === "caffy:quick-4h")).toBe(
       menu.findIndex((item) => item.id === "schedule:prompt") - 1,
     );
     expect(menu.find((item) => item.id === "schedule:prompt")).toBeDefined();
     expect(menu.findIndex((item) => item.id === "schedule:prompt")).toBeLessThan(
       menu.findIndex((item) => item.id === "caffy"),
     );
-    expect(menu.find((item) => item.id === "caffy")?.children?.map((item) => item.id))
-      .toEqual(["caffy:auto", "caffy:pause", "caffy:startup", "caffy:stop"]);
+    expect(menu.find((item) => item.id === "caffy")?.children?.map((item) => item.id)).toEqual([
+      "caffy:auto",
+      "caffy:pause",
+      "caffy:startup",
+      "caffy:stop",
+    ]);
   });
   it("disables URL copy when the conversation URL is unavailable", () => {
     const menu = buildChatGPTSessionContextMenu({ ...state, hasConversationUrl: false });
-    expect(menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")?.disabled)
-      .toBe(true);
+    expect(
+      menu.find((item) => item.id === "copy")?.children?.find((item) => item.id === "copy:url")
+        ?.disabled,
+    ).toBe(true);
   });
   it("shows interval wake behind the single configuration dialog", () => {
-    const menu = buildChatGPTSessionContextMenu({ ...state, caffy: {
-      mode: "periodic", startup: false, onceOnly: false, paused: false,
-      createdAt: 1000, expiresAt: 1000 + 3 * 60 * 60_000, intervalMinutes: 1440,
-    } });
+    const menu = buildChatGPTSessionContextMenu({
+      ...state,
+      caffy: {
+        mode: "periodic",
+        startup: false,
+        onceOnly: false,
+        paused: false,
+        createdAt: 1000,
+        expiresAt: 1000 + 3 * 60 * 60_000,
+        intervalMinutes: 1440,
+      },
+    });
     expect(menu.find((item) => item.id === "caffy")?.label).toContain("Interval wake");
     expect(menu.find((item) => item.id === "caffy")?.children?.[0]?.id).toBe("caffy:auto");
-    expect(menu.find((item) => item.id === "schedule:resume")?.disabled).toBe(true);
+    expect(menu.find((item) => item.id === "caffy:quick-4h")?.checked).toBe(false);
   });
   it("shows a legacy OmniHub owner and enables Stop Caffy when no T3 monitor exists", () => {
     const menu = buildChatGPTSessionContextMenu({
@@ -65,18 +83,44 @@ describe("ChatGPT native sidebar menu", () => {
       legacyCaffyIds: ["11111111-1111-4111-8111-111111111111"],
     });
     expect(menu.find((item) => item.id === "caffy")?.label).toContain("Legacy OmniHub active");
-    expect(menu.find((item) => item.id === "caffy")?.children?.find((item) => item.id === "caffy:stop"))
-      .toMatchObject({ disabled: false, label: "Stop legacy Caffy" });
+    expect(
+      menu.find((item) => item.id === "caffy")?.children?.find((item) => item.id === "caffy:stop"),
+    ).toMatchObject({ disabled: false, label: "Stop legacy Caffy" });
   });
-  it("marks a one-shot default resume as already scheduled without replacing another policy", () => {
-    const menu = buildChatGPTSessionContextMenu({ ...state, caffy: {
-      mode: "idle", startup: false, onceOnly: true, paused: false,
-      createdAt: 1000, expiresAt: null, intervalMinutes: 20,
-      repeatPrompt: null, delayedPrompt: null,
-    } });
-    expect(menu.find(item => item.id === "schedule:resume")).toMatchObject({
-      checked: true, disabled: false,
+  it("checks only an active 4-hour idle preset, not other schedules", () => {
+    const now = Date.now();
+    const quick = {
+      mode: "idle" as const,
+      startup: false,
+      onceOnly: false,
+      paused: false,
+      createdAt: now - 10_000,
+      expiresAt: now - 10_000 + 240 * 60_000,
+      intervalMinutes: 20,
+      repeatPrompt: null,
+      delayedPrompt: null,
+      respectSlots: false,
+    };
+    const menu = buildChatGPTSessionContextMenu({ ...state, now, caffy: quick });
+    expect(menu.find((item) => item.id === "caffy:quick-4h")).toMatchObject({
+      checked: true,
+      disabled: false,
     });
+    const paused = buildChatGPTSessionContextMenu({
+      ...state,
+      now,
+      caffy: { ...quick, paused: true },
+    });
+    expect(paused.find((item) => item.id === "caffy:quick-4h")?.checked).toBe(false);
+    const periodic = buildChatGPTSessionContextMenu({
+      ...state,
+      now,
+      caffy: {
+        ...quick,
+        mode: "periodic",
+      },
+    });
+    expect(periodic.find((item) => item.id === "caffy:quick-4h")?.checked).toBe(false);
   });
   it("respects the authoritative manager role and snooze state", () => {
     const menu = buildChatGPTSessionContextMenu({
@@ -104,8 +148,9 @@ describe("ChatGPT native sidebar menu", () => {
 it("offers the same scheduling and auto-continue controls regardless of working state", () => {
   const active = buildChatGPTSessionContextMenu({ ...state, working: true });
   const idle = buildChatGPTSessionContextMenu({ ...state, working: false });
-  expect(active.find(item => item.id === "stop")?.disabled).toBe(false);
-  expect(idle.find(item => item.id === "stop")?.disabled).toBe(true);
-  expect(active.find(item => item.id === "caffy")?.children?.map(item => item.id))
-    .toEqual(idle.find(item => item.id === "caffy")?.children?.map(item => item.id));
+  expect(active.find((item) => item.id === "stop")?.disabled).toBe(false);
+  expect(idle.find((item) => item.id === "stop")?.disabled).toBe(true);
+  expect(active.find((item) => item.id === "caffy")?.children?.map((item) => item.id)).toEqual(
+    idle.find((item) => item.id === "caffy")?.children?.map((item) => item.id),
+  );
 });

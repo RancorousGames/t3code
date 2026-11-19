@@ -108,7 +108,11 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { T3_CAFFY_UPDATED_EVENT } from "../hooks/useT3CaffyOverview";
-import type { CaffyMenuStatus } from "../caffyContextMenu";
+import {
+  isQuickFourHourCaffy,
+  QUICK_CAFFY_MINUTES,
+  type CaffyMenuStatus,
+} from "../caffyContextMenu";
 import {
   ChatGPTCaffyScheduleDialog,
   type AutoContinueConfig,
@@ -2602,6 +2606,44 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
+  const toggleNativeFourHourCaffy = useStableCallback(async (threadRef: ScopedThreadRef) => {
+    const control = window.desktopBridge?.caffyControl;
+    if (!control) return;
+    if (!checkThreadOperations([{ environmentId: threadRef.environmentId }])) return;
+    const owner = `t3:${threadRef.environmentId}:${threadRef.threadId}`;
+    try {
+      const current = await control({ action: "status", sessionId: owner });
+      if (isQuickFourHourCaffy(current)) {
+        await control({ action: "stop", sessionId: owner, stopInitiator: "user" });
+      } else {
+        await control({
+          action: "set",
+          targetKind: "t3",
+          environmentId: threadRef.environmentId,
+          sessionId: threadRef.threadId,
+          mode: "idle",
+          durationMinutes: QUICK_CAFFY_MINUTES,
+          intervalMinutes: 20,
+          onceOnly: false,
+          keepAwake: true,
+          startup: false,
+          respectSlots: false,
+          beginAt: null,
+          repeatPrompt: "",
+        });
+      }
+      window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "4-hour Caffy toggle failed",
+          description: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  });
+
   const handleThreadContextMenu = useStableCallback(
     (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       void (async () => {
@@ -2731,6 +2773,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           return;
         }
         switch (clicked.value) {
+          case "caffy:quick-4h":
+            await toggleNativeFourHourCaffy(threadRef);
+            return;
           case "schedule:prompt":
           case "caffy:auto": {
             setNativeCaffySchedule({
@@ -2742,38 +2787,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             });
             return;
           }
-          case "schedule:resume":
           case "caffy:pause":
           case "caffy:startup":
           case "caffy:stop": {
             if (!caffyControl) return;
             try {
-              if (clicked.value === "schedule:resume") {
-                if (nativeCaffy) {
-                  const alreadyScheduled =
-                    nativeCaffy.mode === "idle" &&
-                    nativeCaffy.onceOnly &&
-                    !nativeCaffy.paused &&
-                    !nativeCaffy.beginAt &&
-                    !nativeCaffy.repeatPrompt &&
-                    !nativeCaffy.delayedPrompt;
-                  if (!alreadyScheduled)
-                    throw new Error("Caffy already has a schedule. Edit its schedule first.");
-                  return;
-                }
-                await caffyControl({
-                  action: "set",
-                  targetKind: "t3",
-                  environmentId: threadRef.environmentId,
-                  sessionId: threadRef.threadId,
-                  mode: "idle",
-                  onceOnly: true,
-                  keepAwake: false,
-                  startup: false,
-                  respectSlots: false,
-                  repeatPrompt: "",
-                });
-              } else if (clicked.value === "caffy:pause") {
+              if (clicked.value === "caffy:pause") {
                 if (!nativeCaffy) throw new Error("No active Caffy schedule.");
                 await caffyControl({
                   action: nativeCaffy.paused ? "resume" : "pause",
@@ -3032,6 +3051,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         }
       })();
     },
+  );
+
+  // Electron also forwards this chord from focused ChatGPT guests.
+  useEffect(
+    () =>
+      window.desktopBridge?.onMenuAction?.((action) => {
+        if (action !== "caffy:quick-4h") return;
+        const key = readRouteThreadKey(router);
+        const thread = key ? threadByKeyRef.current.get(key) : null;
+        if (thread) void toggleNativeFourHourCaffy(scopeThreadRef(thread.environmentId, thread.id));
+      }),
+    [router, toggleNativeFourHourCaffy],
   );
 
   const routeTerminalOpen = useTerminalUiStateStore((state) =>

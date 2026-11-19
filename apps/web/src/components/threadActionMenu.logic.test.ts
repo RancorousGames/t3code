@@ -69,9 +69,12 @@ describe("buildThreadActionMenuItems", () => {
   it("uses the ChatGPT Caffy menu options and the same live scheduler state", () => {
     const setup = buildThreadActionMenuItems({ ...baseState, caffy: null });
     expect(setup.filter((item) => item.id.startsWith("schedule:")).map((item) => item.id)).toEqual([
-      "schedule:resume",
       "schedule:prompt",
     ]);
+    expect(setup.find((item) => item.id === "caffy:quick-4h")).toMatchObject({
+      checked: false,
+      disabled: false,
+    });
     expect(setup.find((item) => item.id === "caffy")?.children?.map((item) => item.id)).toEqual([
       "caffy:auto",
       "caffy:pause",
@@ -100,7 +103,7 @@ describe("buildThreadActionMenuItems", () => {
       hasTask: false,
       caffy: liveCaffy,
     });
-    const sharedIds = ["schedule:resume", "schedule:prompt", "caffy"];
+    const sharedIds = ["caffy:quick-4h", "schedule:prompt", "caffy"];
     expect(running.filter((item) => sharedIds.includes(item.id))).toEqual(
       chatgpt.filter((item) => sharedIds.includes(item.id)),
     );

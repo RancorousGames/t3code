@@ -179,6 +179,7 @@ import { isAIInterfaceSession } from "../../chatGPTAIInterfaceSessions";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
 import { useT3CaffyOverview, T3_CAFFY_UPDATED_EVENT } from "../../hooks/useT3CaffyOverview";
 import { CaffyStatusBadge } from "./CaffyStatusBadge";
+import { isQuickFourHourCaffy, QUICK_CAFFY_MINUTES } from "../../caffyContextMenu";
 import { type DelayedPromptTarget, type ScheduledChatGPTJob } from "./ChatGPTDelayedPromptDialog";
 import { ChatGPTCaffyScheduleDialog, type AutoContinueConfig, type CaffyScheduleRequest, type CaffyScheduleTarget } from "./ChatGPTAutoContinueDialog";
 import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
@@ -888,6 +889,22 @@ export function ChatGPTBrowserSidebarEntry({
     );
     window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
   };
+  const toggleFourHourCaffy = async (sessionId: string) => {
+    const control = window.desktopBridge?.caffyControl;
+    if (!control) throw new Error("T3 Caffy scheduler is unavailable.");
+    const current = await control({ action: "status", sessionId });
+    if (isQuickFourHourCaffy(current)) {
+      await control({ action: "stop", sessionId, stopInitiator: "user" });
+      setKeepAwakeFeedback("4-hour Caffy disabled.");
+    } else {
+      await configureCaffy(sessionId, "idle", QUICK_CAFFY_MINUTES, false, 20, {
+        respectSlots: false, repeatPrompt: "", autoRebootMinutes: null,
+        autoRebootEveryRuns: null, beginAt: null,
+      });
+    }
+    window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+  };
+
   useEffect(() => {
     if (!keepAwakeFeedback) return;
     const timer = setTimeout(() => setKeepAwakeFeedback(null), 12_000);
@@ -1762,7 +1779,7 @@ export function ChatGPTBrowserSidebarEntry({
     const action = await api.contextMenu.show(
       caffyOnly
         ? [
-            ...sessionMenu.filter((item) => item.id === "schedule:resume" || item.id === "schedule:prompt"),
+            ...sessionMenu.filter((item) => item.id === "caffy:quick-4h" || item.id === "schedule:prompt"),
             ...(caffyMenu?.children ?? []).map((item, index) => ({
               ...item,
               ...(index === 0 ? { separatorBefore: true } : {}),
@@ -1924,7 +1941,9 @@ export function ChatGPTBrowserSidebarEntry({
       } else if (action.startsWith("caffy:")) {
         const control = window.desktopBridge?.caffyControl;
         if (!control) throw new Error("T3 Caffy v2 is unavailable; rebuild and restart T3.");
-        if (action === "caffy:auto") {
+        if (action === "caffy:quick-4h") {
+          await toggleFourHourCaffy(sessionId);
+        } else if (action === "caffy:auto") {
           setAutoContinueTarget({ sessionId, config: activeCaffy, initiallyIdle: liveActivity === "idle", legacyMonitors });
         } else if (action === "caffy:stop" || action.startsWith("caffy:stop-legacy:")) {
           if (activeCaffy && action === "caffy:stop") {
@@ -2097,6 +2116,15 @@ export function ChatGPTBrowserSidebarEntry({
     );
   });
 
+  const toggleSelectedQuickCaffy = useEffectEvent(async () => {
+    if (!activeSessionId || isCommandPaletteOpen()) return;
+    try {
+      await toggleFourHourCaffy(activeSessionId);
+    } catch (error) {
+      setMenuFeedback(`4-hour Caffy toggle failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
   const toggleSelectedCaffy = useEffectEvent(async () => {
     if (!activeSessionId || isCommandPaletteOpen()) return;
     const control = window.desktopBridge?.caffyControl;
@@ -2182,6 +2210,9 @@ export function ChatGPTBrowserSidebarEntry({
         }),
       },
     );
+    const removeQuick = registerMenuAction("caffy:quick-4h", () => {
+      void toggleSelectedQuickCaffy();
+    });
     const removeControls = registerMenuAction("chatgpt.caffyControls", openSelectedCaffy);
     const removeToggle = registerMenuAction("chatgpt.caffyToggle", () => {
       void toggleSelectedCaffy();
@@ -2191,6 +2222,7 @@ export function ChatGPTBrowserSidebarEntry({
     });
     return () => {
       unregister();
+      removeQuick();
       removeControls();
       removeToggle();
       removeOnce();

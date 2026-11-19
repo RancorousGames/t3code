@@ -10,17 +10,46 @@ export interface CaffyMenuStatus {
   beginAt?: number | null;
   repeatPrompt?: string | null;
   delayedPrompt?: string | null;
+  createdAt?: number;
+  expiresAt?: number | null;
+  respectSlots?: boolean;
+  autoRebootMinutes?: number | null;
+  autoRebootEveryRuns?: number | null;
 }
 
 export type CaffyMenuAction =
-  | "schedule:resume"
   | "schedule:prompt"
+  | "caffy:quick-4h"
   | "caffy"
   | "caffy:auto"
   | "caffy:pause"
   | "caffy:startup"
   | "caffy:stop"
   | `caffy:stop-legacy:${string}`;
+
+export const QUICK_CAFFY_MINUTES = 4 * 60;
+
+/** The checked state belongs to this exact preset, not an unrelated Caffy schedule. */
+export function isQuickFourHourCaffy(value: unknown, now = Date.now()): boolean {
+  if (!value || typeof value !== "object") return false;
+  const caffy = value as Partial<CaffyMenuStatus>;
+  return (
+    caffy.mode === "idle" &&
+    !caffy.onceOnly &&
+    !caffy.paused &&
+    !caffy.startup &&
+    !caffy.beginAt &&
+    !caffy.repeatPrompt &&
+    !caffy.delayedPrompt &&
+    !caffy.autoRebootMinutes &&
+    !caffy.autoRebootEveryRuns &&
+    !caffy.respectSlots &&
+    typeof caffy.createdAt === "number" &&
+    typeof caffy.expiresAt === "number" &&
+    caffy.expiresAt > now &&
+    Math.abs(caffy.expiresAt - caffy.createdAt - QUICK_CAFFY_MINUTES * 60_000) < 1_000
+  );
+}
 
 export function buildCaffyContextMenuItems(input: {
   caffy: CaffyMenuStatus | null;
@@ -31,15 +60,6 @@ export function buildCaffyContextMenuItems(input: {
   const { caffy, now } = input;
   const exhausted = input.exhausted === true;
   const legacyIds = input.legacyCaffyIds ?? [];
-  const quickResumeScheduled = Boolean(
-    caffy &&
-    caffy.mode === "idle" &&
-    caffy.onceOnly &&
-    !caffy.paused &&
-    !caffy.beginAt &&
-    !caffy.repeatPrompt &&
-    !caffy.delayedPrompt,
-  );
   const wakeMode =
     !caffy && legacyIds.length > 0
       ? "Legacy OmniHub active"
@@ -58,10 +78,10 @@ export function buildCaffyContextMenuItems(input: {
     extra: Partial<ContextMenuItem<CaffyMenuAction>> = {},
   ): ContextMenuItem<CaffyMenuAction> => ({ id, label, ...extra });
   return [
-    item("schedule:resume", "Continue once when idle", {
+    item("caffy:quick-4h", "Caffy · Continue on idle for 4h (Ctrl+Alt+I)", {
       separatorBefore: true,
-      checked: quickResumeScheduled,
-      disabled: exhausted || Boolean(caffy && !quickResumeScheduled),
+      checked: isQuickFourHourCaffy(caffy, now),
+      disabled: exhausted || (!caffy && legacyIds.length > 0),
     }),
     item("schedule:prompt", "Schedule prompt…", { disabled: exhausted }),
     item(

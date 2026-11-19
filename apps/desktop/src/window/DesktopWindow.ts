@@ -29,7 +29,10 @@ import {
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import { PASSKEY_BRIDGE_ARGUMENT } from "../preview/GuestProtocol.ts";
-import { chatGPTAttentionShortcutAction } from "../preview/NativeChatGPTGuestShortcut.ts";
+import {
+  chatGPTAttentionShortcutAction,
+  isFourHourCaffyShortcut,
+} from "../preview/NativeChatGPTGuestShortcut.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -668,12 +671,18 @@ export const make = Effect.gen(function* () {
       },
     });
     window.webContents.on("before-input-event", (event, input) => {
-      const attentionShortcut = chatGPTAttentionShortcutAction(input);
-      if (attentionShortcut &&
-          activeChatGPTBrowserSessionId(window.webContents.getURL()) !== null) {
+      if (isFourHourCaffyShortcut(input)) {
         event.preventDefault();
-        if (!input.isAutoRepeat)
-          window.webContents.send(MENU_ACTION_CHANNEL, attentionShortcut);
+        if (!input.isAutoRepeat) window.webContents.send(MENU_ACTION_CHANNEL, "caffy:quick-4h");
+        return;
+      }
+      const attentionShortcut = chatGPTAttentionShortcutAction(input);
+      if (
+        attentionShortcut &&
+        activeChatGPTBrowserSessionId(window.webContents.getURL()) !== null
+      ) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) window.webContents.send(MENU_ACTION_CHANNEL, attentionShortcut);
         return;
       }
       // When focus is retained by the host, open the same find UI as a guest
