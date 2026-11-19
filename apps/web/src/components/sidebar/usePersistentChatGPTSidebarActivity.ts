@@ -206,13 +206,15 @@ export function usePersistentChatGPTSidebarActivity(
           previousActivity !== "working") {
         const session = getChatGPTSessionPersistedStore(environmentId)
           .getState().sessions.find((entry) => entry.id === sessionId);
-        recordChatGPTWakeAudit(environmentId, sessionId,
-          "activity:native:" + previousActivity + "->working", {
-            profileId: session?.profileId,
-            previousUntil: session?.snoozedUntil,
-            snoozedAt: session?.snoozedAt,
-            quickSnoozeStep: session?.quickSnoozeStep,
-          });
+        if (session?.snoozedUntil && session.snoozedUntil > Date.now()) {
+          recordChatGPTWakeAudit(environmentId, sessionId,
+            "activity:native:" + previousActivity + "->working", {
+              profileId: session.profileId,
+              previousUntil: session.snoozedUntil,
+              snoozedAt: session.snoozedAt,
+              quickSnoozeStep: session.quickSnoozeStep,
+            });
+        }
       }
       if (changed && observed.resident === true) {
         recordWarmActivityObservation(environmentId, sessionId, observed.activity);

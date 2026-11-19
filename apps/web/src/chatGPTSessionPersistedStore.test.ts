@@ -28,6 +28,25 @@ function storage(entries: Record<string, string> = {}): Storage {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("persistent ChatGPT wake audit", () => {
+  it("does not replay years of already-expired snoozes as wake events on startup", () => {
+    const environmentId = "wake-audit-historical-expirations";
+    const sessionId = "11111111-1111-4111-8111-222222222222";
+    const local = storage({
+      [`t3code:chatgpt-browser:sessions:${environmentId}`]: JSON.stringify([
+        { id: sessionId, title: "Old snooze", snoozedUntil: Date.now() - 3_600_000 },
+      ]),
+    });
+    const audit = vi.fn().mockResolvedValue({ recorded: true });
+    vi.stubGlobal("window", {
+      localStorage: local,
+      sessionStorage: storage(),
+      desktopBridge: { stableChatGPTViewRequest: audit },
+      addEventListener: vi.fn(),
+    });
+    getChatGPTSessionPersistedStore(environmentId);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it("records a premature snooze clear regardless of which session-store writer caused it", () => {
     const environmentId = "wake-audit-test";
     const sessionId = "11111111-1111-4111-8111-111111111111";

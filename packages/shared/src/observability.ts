@@ -161,6 +161,7 @@ export interface TraceSinkOptions {
   readonly maxFiles: number;
   readonly batchWindowMs: number;
   readonly onFlush?: (stats: TraceSinkFlushStats) => Effect.Effect<void>;
+  readonly shouldRecord?: (record: TraceRecord) => boolean;
 }
 
 export interface TraceSinkFlushStats {
@@ -410,6 +411,13 @@ const URL_CREDENTIAL_PARAMS = /(^|[?&"\s])(wsTicket|dpop)=[^&#"\\\s]*/g;
 const redactUrlCredentials = (text: string) =>
   text.replace(URL_CREDENTIAL_PARAMS, "$1$2=<redacted>");
 
+/** Local incident traces retain failures and slow operations, not routine successful polling. */
+export function actionableLocalTrace(record: TraceRecord): boolean {
+  if (record.durationMs >= 100) return true;
+  if (record.type === "effect-span") return record.exit._tag !== "Success";
+  return record.status?.code === "2" || record.events.some((event) => event.name === "exception");
+}
+
 export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: TraceSinkOptions) {
   const sink = yield* makeAsyncRotatingFileSink({
     filePath: options.filePath,
@@ -527,6 +535,7 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
     filePath: options.filePath,
     push(record) {
       try {
+        if (options.shouldRecord && !options.shouldRecord(record)) return;
         const text = `${redactUrlCredentials(JSON.stringify(record))}\n`;
         const bytes = Buffer.byteLength(text);
         if (bytes > options.maxBytes) return;

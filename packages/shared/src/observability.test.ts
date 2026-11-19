@@ -17,6 +17,7 @@ import * as Tracer from "effect/Tracer";
 import type { OtlpTracer } from "effect/observability";
 
 import {
+  actionableLocalTrace,
   causeErrorTag,
   compactTraceAttributes,
   decodeOtlpTraceRecords,
@@ -92,6 +93,17 @@ const makeRecord = (name: string, suffix = ""): TraceRecord => ({
   exit: {
     _tag: "Success",
   },
+});
+
+describe("actionable local traces", () => {
+  it("drops routine successful spans but preserves errors and slow work", () => {
+    const fast = makeRecord("poll");
+    expect(actionableLocalTrace(fast)).toBe(false);
+    expect(actionableLocalTrace({ ...fast, durationMs: 150 })).toBe(true);
+    expect(actionableLocalTrace({ ...fast, exit: { _tag: "Failure", cause: "failed" } })).toBe(
+      true,
+    );
+  });
 });
 
 const readTraceRecords = Effect.fn("readTraceRecords")(function* (tracePath: string) {

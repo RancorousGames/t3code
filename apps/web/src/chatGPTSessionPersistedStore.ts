@@ -272,7 +272,7 @@ export function getChatGPTSessionPersistedStore(
   // PERSISTENT TEMPORARY WAKE AUDIT: remove on/after 2026-12-01.
   // Observe every writer to this store, including out-of-band renderer updates:
   // a generic transition is useful evidence even when the caller is unknown.
-  const expiredLogged = new Map<string, number>();
+  const armedExpirations = new Map<string, number>();
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   const auditExpirations = () => {
     if (expiryTimer !== undefined) clearTimeout(expiryTimer);
@@ -283,9 +283,10 @@ export function getChatGPTSessionPersistedStore(
       const until = row.snoozedUntil;
       if (until === undefined || !Number.isFinite(until)) continue;
       if (until > now) {
+        armedExpirations.set(row.id, until);
         nextExpiry = Math.min(nextExpiry, until);
-      } else if (expiredLogged.get(row.id) !== until) {
-        expiredLogged.set(row.id, until);
+      } else if (armedExpirations.get(row.id) === until) {
+        armedExpirations.delete(row.id);
         recordChatGPTWakeAudit(environmentId, row.id, "timer:snooze-expired-eligible", {
           profileId: row.profileId,
           previousUntil: until,

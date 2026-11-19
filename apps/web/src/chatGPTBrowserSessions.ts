@@ -1215,6 +1215,7 @@ export function useChatGPTBrowserSessions(environmentId: EnvironmentId | null) {
       if (environmentId) {
         for (const session of readChatGPTBrowserSessions(environmentId)) {
           if (!targets.has(session.id)) continue;
+          if (until === null && (session.snoozedUntil ?? 0) <= snoozedAt) continue;
           recordChatGPTWakeAudit(
             environmentId,
             session.id,

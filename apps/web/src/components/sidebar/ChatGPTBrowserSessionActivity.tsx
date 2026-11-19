@@ -487,12 +487,19 @@ export function useChatGPTBrowserSessionActivity(
           const session = readChatGPTBrowserSessions(environmentId).find(
             (entry) => entry.id === sessionId,
           );
-          recordChatGPTWakeAudit(environmentId, sessionId, `activity:legacy:${previous}->working`, {
-            profileId: session?.profileId,
-            previousUntil: session?.snoozedUntil,
-            snoozedAt: session?.snoozedAt,
-            quickSnoozeStep: session?.quickSnoozeStep,
-          });
+          if (session?.snoozedUntil && session.snoozedUntil > observedAt) {
+            recordChatGPTWakeAudit(
+              environmentId,
+              sessionId,
+              `activity:legacy:${previous}->working`,
+              {
+                profileId: session.profileId,
+                previousUntil: session.snoozedUntil,
+                snoozedAt: session.snoozedAt,
+                quickSnoozeStep: session.quickSnoozeStep,
+              },
+            );
+          }
         }
         if (snoozed && !hibernated && previous !== "unknown" && next !== "unknown") {
           wakeChatGPTBrowserSession(environmentId, sessionId, "activity");
