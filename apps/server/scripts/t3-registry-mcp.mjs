@@ -10,6 +10,7 @@ import * as Path from "node:path";
 import * as URL from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { readRegistryList, isExactConversationUrl } from "../../../scripts/t3-registry-read.mjs";
+import { sendMcpMessage, readDesktopMessageReceipt } from "./t3-mcp-message-route.mjs";
 
 const ROOT = Path.resolve(Path.dirname(URL.fileURLToPath(import.meta.url)), "../../..");
 const DEFAULT_HOME = Path.join(ROOT, ".t3");
@@ -320,7 +321,14 @@ if (process.argv[1] && Path.resolve(process.argv[1]) === URL.fileURLToPath(impor
     if (payload.length > 60_000) throw new Error("MCP request exceeds 60 KiB.");
   }
   try {
-    process.stdout.write(JSON.stringify(await runRegistryMcpAction(JSON.parse(payload))));
+    const input = JSON.parse(payload);
+    const result =
+      input.action === "send"
+        ? await sendMcpMessage(input)
+        : input.action === "receipt"
+          ? ((await readDesktopMessageReceipt(input)) ?? (await runRegistryMcpAction(input)))
+          : await runRegistryMcpAction(input);
+    process.stdout.write(JSON.stringify(result));
   } catch (error) {
     process.stderr.write(String(error?.message ?? error));
     process.exitCode = 1;
