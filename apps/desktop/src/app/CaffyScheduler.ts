@@ -328,9 +328,6 @@ export class CaffyScheduler {
           if (UUID.test(terminal.sessionId) && UUID.test(terminal.conversationId))
             this.terminalConversations.set(terminal.sessionId, terminal.conversationId);
         }
-        for (const [id, row] of this.entries) {
-          if (this.terminalConversations.get(id) === row.conversationId) this.entries.delete(id);
-        }
         for (const mark of saved.agentStops ?? []) {
           if (
             mark &&
@@ -802,6 +799,8 @@ export class CaffyScheduler {
             /* already gone */
           }
         }
+        if (this.terminalConversations.get(row.sessionId) === row.conversationId)
+          this.terminalConversations.delete(row.sessionId);
         row.conversationId = nextId;
         // Keep the owner cursor. Do not consume the new conversation's first
         // idle event during rebinding; the reducer must decide eligibility.
@@ -1434,13 +1433,6 @@ export class CaffyScheduler {
     const browserSessionId = known?.browserSessionId ?? known?.sessionId ?? input.sessionId;
     const canonicalId = browserSessionId;
     if (
-      this.terminalConversations.get(canonicalId) === input.conversationId ||
-      this.terminalConversations.get(input.sessionId) === input.conversationId
-    )
-      throw new Error(
-        "This conversation reached its maximum length. Reboot the session before enabling Caffy.",
-      );
-    if (
       [...this.entries.values()].some(
         (row) =>
           row.conversationId === input.conversationId &&
@@ -1683,20 +1675,35 @@ export class CaffyScheduler {
     return { stopped: !!row, cancelled };
   }
 
-  /** Permanently retire every wake for this exhausted conversation, until a new chat is booted. */
+  /** Keep the Caffy policy, but never deliver another wake to an exhausted chat.
+   * Its next due wake performs a context-preserving reboot in the same T3 slot. */
   terminal(sessionId: string, conversationId: string) {
     if (!UUID.test(sessionId) || !UUID.test(conversationId))
       throw new Error("Exact ChatGPT session and conversation IDs required.");
-    this.terminalConversations.set(sessionId, conversationId);
     const row = this.lookup(sessionId);
-    if (row?.conversationId === conversationId) this.retire(row.sessionId, "stopped");
+    this.terminalConversations.set(row?.sessionId ?? sessionId, conversationId);
     this.deliveries.retireRecipient(
-      [sessionId],
+      row?.conversationId === conversationId
+        ? [row.sessionId, row.browserSessionId, row.publicSessionId].filter(
+            (id): id is string => !!id,
+          )
+        : [sessionId],
       conversationId,
-      "ChatGPT conversation reached maximum length; reboot required.",
+      "ChatGPT conversation reached maximum length; Caffy will reboot with context.",
       true,
     );
+    if (row?.conversationId === conversationId) {
+      // The retirement receipt re-arms pending messages. Also recover idle
+      // monitors whose final ChatGPT reply had no usable idle transition.
+      if (row.mode === "idle" && !row.onceOnly && !row.pendingMessageId) {
+        row.pendingWake = true;
+        row.pendingReason ??= "idle";
+      }
+      row.lastError = null;
+      row.lastCheckResult = "Conversation full; context reboot required before next wake.";
+    }
     this.save();
+    if (row?.conversationId === conversationId && row.pendingWake && !row.paused) void this.pump();
     return { terminal: true, sessionId, conversationId };
   }
 
@@ -2141,6 +2148,8 @@ export class CaffyScheduler {
       entry.bootstrapIdentity?.state !== "registered"
     )
       return;
+    if (this.terminalConversations.get(row.sessionId) === row.conversationId)
+      this.terminalConversations.delete(row.sessionId);
     row.conversationId = nextId;
     row.publicSessionId = entry.bootstrapIdentity.publicId ?? row.publicSessionId;
     row.lastIdleEvidenceKey = null;
@@ -2215,6 +2224,7 @@ export class CaffyScheduler {
       type: "chatgpt.reboot",
       sessionId: row.sessionId,
       priorConversationId: row.conversationId,
+      contextMode: "handoff",
       prompt,
       phase: "begin",
     }).catch(() => null);
@@ -2937,10 +2947,16 @@ export class CaffyScheduler {
           // an unavailable or stale roster must not prevent trying that path.
           if (this.entries.get(row.sessionId) !== row || row.paused) continue;
           const rebootAnchor = row.lastRebootAt ?? row.createdAt;
+          const fullConversation =
+            this.terminalConversations.get(row.sessionId) === row.conversationId ||
+            (row.browserSessionId != null &&
+              this.terminalConversations.get(row.browserSessionId) === row.conversationId);
           if (
-            !row.onceOnly &&
-            ((row.autoRebootMinutes && now - rebootAnchor >= row.autoRebootMinutes * 60_000) ||
-              (row.autoRebootEveryRuns && (row.wakesSinceReboot ?? 0) >= row.autoRebootEveryRuns))
+            fullConversation ||
+            (!row.onceOnly &&
+              ((row.autoRebootMinutes && now - rebootAnchor >= row.autoRebootMinutes * 60_000) ||
+                (row.autoRebootEveryRuns &&
+                  (row.wakesSinceReboot ?? 0) >= row.autoRebootEveryRuns)))
           ) {
             await this.beginAutoReboot(row);
             continue;

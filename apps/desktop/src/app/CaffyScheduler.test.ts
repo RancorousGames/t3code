@@ -71,6 +71,7 @@ function fixture() {
   let idleReadTurns = 3;
   let lastIdle: VerifiedChatGPTIdleTransition | null = null;
   let retirementCount = 0;
+  const rebootRequests: Array<{ sessionId?: string; contextMode?: string; prompt?: string }> = [];
   let onDelivery:
     | ((record: {
         sessionId: string;
@@ -115,30 +116,39 @@ function fixture() {
       return 1;
     },
   } as unknown as ConstructorParameters<typeof CaffyScheduler>[1];
-  const request = (async (input: { requestId: string; type?: string; action?: string }) => ({
+  const request = (async (input: {
+    requestId: string;
+    type?: string;
+    action?: string;
+    sessionId?: string;
+    contextMode?: string;
+    prompt?: string;
+  }) => ({
     version: 1,
     requestId: input.requestId,
     ok: true,
     data:
-      input.type === "t3.threads" && input.action === "list"
-        ? { environmentId: "native-fixture", threads: [] }
-        : input.type === "chatgpt.spawn"
-          ? { sessionId: REPLACEMENT }
-          : input.action === "read"
-            ? {
-                conversationGuardValidated: guardedRead,
-                verifiedConversationId: guardedRead
-                  ? (roster[0]?.conversationId ?? REPLACEMENT)
-                  : REPLACEMENT,
-                session: {
-                  conversationId: roster[0]?.conversationId ?? REPLACEMENT,
-                  status: idleReadStatus,
-                  activity: "idle",
-                  lastRole: idleReadRole,
-                  totalTurns: idleReadTurns,
-                },
-              }
-            : { sessions: roster, total: roster.length },
+      input.type === "chatgpt.reboot"
+        ? (rebootRequests.push(input), { status: "submitted" })
+        : input.type === "t3.threads" && input.action === "list"
+          ? { environmentId: "native-fixture", threads: [] }
+          : input.type === "chatgpt.spawn"
+            ? { sessionId: REPLACEMENT }
+            : input.action === "read"
+              ? {
+                  conversationGuardValidated: guardedRead,
+                  verifiedConversationId: guardedRead
+                    ? (roster[0]?.conversationId ?? REPLACEMENT)
+                    : REPLACEMENT,
+                  session: {
+                    conversationId: roster[0]?.conversationId ?? REPLACEMENT,
+                    status: idleReadStatus,
+                    activity: "idle",
+                    lastRole: idleReadRole,
+                    totalTurns: idleReadTurns,
+                  },
+                }
+              : { sessions: roster, total: roster.length },
   })) as ConstructorParameters<typeof CaffyScheduler>[2];
   const open = (
     shutdownPC: () => void = () => {
@@ -180,6 +190,7 @@ function fixture() {
       lastIdle = event;
     },
     retired: () => retirementCount,
+    reboots: () => rebootRequests,
     dispose: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
     directory,
   };
@@ -189,7 +200,7 @@ const monitor = (scheduler: CaffyScheduler) =>
   (scheduler as unknown as { entries: Map<string, CaffyConfig> }).entries.get(SESSION) ?? null;
 
 describe("Caffy settings survive T3 restart and session lifecycle recovery", () => {
-  it("permanently retires full conversations and refuses rearming after restart", async () => {
+  it("preserves Caffy and reboots a full conversation with context once at its next wake", async () => {
     const f = fixture();
     f.setRoster([
       {
@@ -200,21 +211,46 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
     ]);
     const c = f.open();
     try {
-      expect(monitor(c)).not.toBeNull();
+      const row = monitor(c)!;
+      row.beginAt = null;
+      row.autoRebootMinutes = null;
       expect(c.terminal(SESSION, ORIGINAL)).toMatchObject({ terminal: true });
-      expect(monitor(c)).toBeNull();
-      await expect(
-        c.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" }),
-      ).rejects.toThrow("maximum length");
+      expect(monitor(c)).toBe(row);
+      expect(row.pendingMessageId).toBeNull();
+      expect(row.pendingWake).toBe(true);
+      expect(f.retired()).toBe(1);
+
+      // Exercise the real due-wake path without running the desktop timer.
+      const pump = c as unknown as { started: boolean; pump(): Promise<void> };
+      pump.started = true;
+      await pump.pump();
+      expect(f.reboots()).toMatchObject([{ sessionId: SESSION, contextMode: "handoff" }]);
+      expect(row.rebootOperationId).toBeTruthy();
+      expect(row.pendingWake).toBe(true); // the scheduled continuation was not consumed
     } finally {
       c.close();
     }
+
     const restored = f.open();
     try {
-      expect(monitor(restored)).toBeNull();
-      await expect(
-        restored.set({ sessionId: SESSION, conversationId: ORIGINAL, mode: "idle" }),
-      ).rejects.toThrow("maximum length");
+      const pump = restored as unknown as { started: boolean; pump(): Promise<void> };
+      pump.started = true;
+      await pump.pump();
+      expect(f.reboots()).toHaveLength(1); // an uncertain/unfinished reboot never repeats
+      f.setRoster([
+        {
+          id: SESSION,
+          conversationId: REPLACEMENT,
+          bootstrapIdentity: {
+            state: "registered",
+            publicId: SESSION,
+            conversationId: REPLACEMENT,
+          },
+        },
+      ]);
+      await pump.pump(); // read-only reboot reconciliation adopts the verified successor
+      expect(monitor(restored)?.conversationId).toBe(REPLACEMENT);
+      expect(monitor(restored)?.rebootOperationId).toBeNull();
     } finally {
       restored.close();
       f.dispose();
