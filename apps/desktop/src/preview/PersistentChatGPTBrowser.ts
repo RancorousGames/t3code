@@ -20,7 +20,7 @@ const dataDir = () =>
     "persistent-browser-host-v3",
   );
 // Keep in step with HOST_PROTOCOL in scripts/persistent-chatgpt-offscreen-host.cjs.
-const HOST_PROTOCOL = 5;
+const HOST_PROTOCOL = 6;
 let cachedToken: string | null = null;
 const tokenFor = (directory: string): string => {
   if (cachedToken) return cachedToken;
@@ -139,6 +139,7 @@ const safeRead = async (
 export type PersistentChatGPTHostEvent =
   | { type: "close-requested"; sessionId: string }
   | { type: "interaction"; sessionId: string }
+  | { type: "pane-select"; sessionId: string }
   | {
       type: "key";
       sessionId: string;

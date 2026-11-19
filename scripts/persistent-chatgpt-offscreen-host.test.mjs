@@ -45,12 +45,14 @@ function setup() {
     process: { argv: ["electron", "host", "test-v3"], env: { T3_BROWSER_HOST_TOKEN: "a".repeat(64) }, platform: "win32" },
     module: { exports: {} },
   };
-  runInNewContext(source + "\nmodule.exports = { createDurableNativePage, evaluatePage, sessions };", context);
+  runInNewContext(source + "\nmodule.exports = { createDurableNativePage, evaluatePage, sessions, subscribers };", context);
   const host = context.module.exports;
+  const notifications = [];
+  host.subscribers.add({ write: (line) => notifications.push(JSON.parse(line)) });
   const id = "11111111-1111-1111-1111-111111111111";
   const window = host.createDurableNativePage(id, "test");
   host.sessions.set(id, { window });
-  return { host, window, contents, id, throttling, setLoading: (value) => { loading = value; }, executions: () => executions };
+  return { host, window, contents, notifications, id, throttling, setLoading: (value) => { loading = value; }, executions: () => executions };
 }
 
 test("native carrier visibility preserves Chromium background scheduling", () => {
@@ -60,6 +62,19 @@ test("native carrier visibility preserves Chromium background scheduling", () =>
     window.setCarrierVisible(false);
   }
   assert.deepEqual(throttling, []);
+});
+
+test("only clicking a pane, not guest activity, emits a primary-selection request", () => {
+  const { contents, notifications, id } = setup();
+  contents.emit("before-mouse-event", {}, { type: "mouseMove" });
+  contents.emit("before-mouse-event", {}, { type: "mouseWheel" });
+  contents.emit("before-mouse-event", {}, { type: "mouseDown", button: "right" });
+  contents.emit("before-input-event", {}, { type: "keyDown", key: "a", control: false, meta: false, alt: false });
+  assert.deepEqual(notifications.filter((event) => event.type === "pane-select"), []);
+  contents.emit("before-mouse-event", {}, { type: "mouseDown", button: "left" });
+  assert.deepEqual(notifications.filter((event) => event.type === "pane-select"), [
+    { type: "pane-select", sessionId: id },
+  ]);
 });
 
 test("blocks Ctrl+wheel zoom in persistent ChatGPT pages", () => {

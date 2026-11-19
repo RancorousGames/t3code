@@ -407,29 +407,10 @@ export function DesktopAppActivationCoordinator() {
           };
         }
         if (request.action === "focus") {
-          const thread = readThreadShells().find(
-            (entry) =>
-              entry.environmentId === environmentId &&
-              entry.id === request.threadId &&
-              entry.deletedAt === null,
-          );
-          if (!thread)
-            return {
-              version: 1,
-              requestId: request.requestId,
-              ok: false,
-              code: "invalid-request",
-              message: "Exact native thread not found.",
-            };
-          await navigate({
-            to: "/$environmentId/$threadId",
-            params: { environmentId, threadId: thread.id },
-          });
           return {
-            version: 1,
-            requestId: request.requestId,
-            ok: true,
-            data: { action: "focus", environmentId, threadId: thread.id, acknowledged: true },
+            version: 1, requestId: request.requestId, ok: false,
+            code: "invalid-request",
+            message: "Programmatic session focus is disabled. Select a session manually or use Ctrl+S.",
           };
         }
         if (request.action === "providers") {
@@ -1035,19 +1016,10 @@ export function DesktopAppActivationCoordinator() {
               throw new Error("ChatGPT session registry is not hydrated; no message sent.");
           }
           if (request.action === "focus") {
-            const target = sessionSnapshot.find((session) => session.id === request.sessionId);
-            if (!target) throw new Error("Exact T3 browser session ID not found.");
-            if (target.hidden) setSessionHidden(target.id, false);
-            if (target.snoozedUntil) setSessionSnooze([target.id], null);
-            await navigate({
-              to: "/browser/$browserSessionId",
-              params: { browserSessionId: target.id },
-            });
             return {
-              version: 1,
-              requestId: request.requestId,
-              ok: true,
-              data: { action: "focus", sessionId: target.id, acknowledged: true },
+              version: 1, requestId: request.requestId, ok: false,
+              code: "invalid-request",
+              message: "Programmatic session focus is disabled. Select a session manually or use Ctrl+S.",
             };
           }
           if (request.action === "bootstrap_status") {
@@ -2298,7 +2270,13 @@ export function DesktopAppActivationCoordinator() {
                     ...(entry.snoozedAt != null ? { snoozedAt: entry.snoozedAt } : {}),
                     ...(entry.createdAt != null ? { createdAt: entry.createdAt } : {}),
                     ...(entry.returnMarker ? { returnMarker: entry.returnMarker } : {}),
-                    ...(caffy ? { caffyMode: caffy.mode, caffyPaused: caffy.paused } : {}),
+                    ...(caffy ? {
+                      caffyMode: caffy.mode,
+                      caffyPaused: caffy.paused,
+                      caffyOnceOnly: caffy.onceOnly,
+                      caffyIntervalMinutes: caffy.intervalMinutes,
+                      ...(caffy.beginAt != null ? { caffyBeginAt: caffy.beginAt } : {}),
+                    } : {}),
                   },
                   // Feed the phone's Last active sort from T3's persisted user activity,
                   // not the 30-second catalog publication timestamp.

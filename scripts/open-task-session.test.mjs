@@ -42,14 +42,16 @@ async function context() {
   };
 }
 
-test("opens a hidden claimed session instead of spawning a second", async () => {
+test("reuses a hidden claimed session without focusing it or spawning another", async () => {
   const ctx = await context();
   ctx.task.claimed_by = "t3-browser:abc";
   let spawnCalls = 0;
-  const control = async (request) =>
-    request.action === "list"
-      ? { sessions: [{ id: "abc", hidden: true }] }
-      : { action: "focus", sessionId: "abc" };
+  const calls = [];
+  const control = async (request) => {
+    calls.push(request.action);
+    if (request.action === "list") return { sessions: [{ id: "abc", hidden: true }] };
+    throw Error("A TaskBoard pickup must never request focus");
+  };
   const result = await openTaskSession(ctx.input, {
     home: ctx.home,
     command: ctx.command,
@@ -62,6 +64,7 @@ test("opens a hidden claimed session instead of spawning a second", async () => 
   assert.equal(result.status, "opened");
   assert.equal(result.sessionId, "abc");
   assert.equal(spawnCalls, 0);
+  assert.deepEqual(calls, ["list"]);
   assert.ok(ctx.actions.some((a) => a.join(" ") === "task live start T3-9000"));
 });
 
@@ -81,11 +84,11 @@ test("legacy bare UUID claim uses the same open-task path and does not spawn", a
     exchange: async () => { throw Error("Existing claim must never spawn"); },
   });
   assert.equal(result.sessionId, sessionId);
-  assert.deepEqual(calls, ["list", "focus"]);
+  assert.deepEqual(calls, ["list"]);
   assert.ok(ctx.actions.some((args) => args.join(" ") === "task live start T3-9000"));
 });
 
-test("stable t3: public ChatGPT claim focuses the held session, never a native thread", async () => {
+test("stable t3: public ChatGPT claim reuses the held session without changing selection", async () => {
   const ctx = await context();
   ctx.task.claimed_by = "t3:public-id";
   const calls = [];
@@ -103,7 +106,7 @@ test("stable t3: public ChatGPT claim focuses the held session, never a native t
   });
   assert.equal(result.kind, "chatgpt");
   assert.equal(result.sessionId, "browser-id");
-  assert.deepEqual(calls.map((call) => call.action), ["list", "focus"]);
+  assert.deepEqual(calls.map((call) => call.action), ["list"]);
 });
 
 test("a background pickup reuses the claimed native thread without changing selection", async () => {
@@ -527,7 +530,7 @@ test("missing claimed guest reuses its indexed conversation and never sends a ne
   assert.equal(result.status, "opened");
   assert.equal(result.sessionId, "recovered");
   assert.equal(result.claimRebindRequired, true);
-  assert.deepEqual(calls.map((call) => call.action), ["list", "open", "focus"]);
+  assert.deepEqual(calls.map((call) => call.action), ["list", "open"]);
 });
 
 test("missing claimed session with ambiguous transcript refuses creation", async () => {
@@ -574,6 +577,7 @@ test("native default selects the one matching project and provider without guess
   assert.equal(ctx.task.claimed_by, "t3:" + threadId);
   assert.equal(requests.find((call) => call.action === "create").workspaceRoot, "D:\\Projects\\Board");
   assert.equal(requests.find((call) => call.action === "create").modelSelection.model, "claude-sonnet");
+  assert.equal(requests.some((call) => call.action === "focus"), false);
 });
 
 test("native project ambiguity stops before any thread creation", async () => {

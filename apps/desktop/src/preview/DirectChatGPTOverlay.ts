@@ -119,6 +119,12 @@ function handleHostEvent(event: PersistentChatGPTHostEvent): void {
     owner.close();
     return;
   }
+  if (event.type === "pane-select") {
+    void owner.webContents
+      .executeJavaScript(`window.dispatchEvent(new CustomEvent("t3:chatgpt-page-pointer-select", { detail: ${JSON.stringify(event.sessionId)} }))`, false)
+      .catch(() => undefined);
+    return;
+  }
   if (event.type === "interaction") {
     void owner.webContents
       .executeJavaScript(`window.dispatchEvent(new CustomEvent("t3:chatgpt-page-interaction", { detail: ${JSON.stringify(event.sessionId)} }))`, false)

@@ -29,9 +29,9 @@ export async function controlNativeThreads(
   input,
   { home = NodePath.resolve(import.meta.dirname, "../.t3"), exchange = sendAppControlRequest } = {},
 ) {
-  if (!input || !["list", "read", "send", "focus", "create", "providers"].includes(input.action))
-    throw new Error("action must be list, read, send, create or providers");
-  if (["read", "send", "focus"].includes(input.action) && !readableThreadId(input.threadId))
+  if (!input || !["list", "read", "send", "create", "providers"].includes(input.action))
+    throw new Error("action must be list, read, send, create or providers; programmatic focus is disabled");
+  if (["read", "send"].includes(input.action) && !readableThreadId(input.threadId))
     throw new Error("threadId must be a native T3 UUID or valid opaque MCP thread ID");
   const expectedEnvironmentId = input.expectedEnvironmentId ?? input.environmentId;
   if (
@@ -89,7 +89,6 @@ export async function controlNativeThreads(
     list: ["action", "environmentId", "expectedEnvironmentId"],
     providers: ["action", "environmentId", "expectedEnvironmentId"],
     read: ["action", "environmentId", "expectedEnvironmentId", "threadId", "count", "runAfterOrdinal"],
-    focus: ["action", "environmentId", "expectedEnvironmentId", "threadId"],
     send: ["action", "environmentId", "expectedEnvironmentId", "threadId", "message", "clientRequestId"],
     create: ["action", "environmentId", "expectedEnvironmentId", "workspaceRoot", "projectId",
       "runtime", "providerInstanceId", "modelSelection", "runtimeMode", "title",
@@ -113,7 +112,7 @@ export async function controlNativeThreads(
     type: "t3.threads",
     action: input.action,
     ...(expectedEnvironmentId ? { environmentId: expectedEnvironmentId } : {}),
-    ...(["read", "send", "focus"].includes(input.action) ? { threadId: input.threadId } : {}),
+    ...(["read", "send"].includes(input.action) ? { threadId: input.threadId } : {}),
     ...(input.count ? { count: input.count } : {}),
     ...(input.runAfterOrdinal === undefined ? {} : { runAfterOrdinal: input.runAfterOrdinal }),
     ...(input.message !== undefined ? { message: input.message } : {}),

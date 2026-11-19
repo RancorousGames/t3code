@@ -84,7 +84,6 @@ export async function controlSessions(
     "list",
     "preferences",
     "open",
-    "focus",
     "read",
     "recovery_metrics",
     "marker_probe",
@@ -125,7 +124,7 @@ export async function controlSessions(
     );
   if (!input || !allowed.includes(input.action))
     throw new Error(
-      "action must be list, open, read, send, reconcile_send, reload, complete, archive, restore, change_state, close_status, rollover_finalize or wait.",
+      "action must be list, open, read, send, reconcile_send, reload, complete, archive, restore, change_state, close_status, rollover_finalize or wait; programmatic focus is disabled (use Ctrl+S or select manually).",
     );
   if (
     input.which !== undefined &&

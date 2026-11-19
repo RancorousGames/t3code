@@ -141,23 +141,15 @@ describe("DesktopAppActivationBroker", () => {
     const replies = background.map((entry) => broker.request(entry));
     expect(activate).not.toHaveBeenCalled();
 
-    replies.push(
-      broker.request({
-        version: 1,
-        requestId: "focus-thread",
-        type: "t3.threads",
-        action: "focus",
-      }),
-    );
-    replies.push(
-      broker.request({
-        version: 1,
-        requestId: "focus-session",
-        type: "chatgpt.sessions",
-        action: "focus",
-      }),
-    );
-    expect(activate).toHaveBeenCalledTimes(2);
+    for (const request of [
+      { version: 1 as const, requestId: "focus-thread", type: "t3.threads" as const, action: "focus" as const },
+      { version: 1 as const, requestId: "focus-session", type: "chatgpt.sessions" as const, action: "focus" as const },
+    ]) {
+      await expect(broker.request(request)).resolves.toMatchObject({
+        ok: false, code: "invalid-request",
+      });
+    }
+    expect(activate).not.toHaveBeenCalled();
 
     broker.close();
     await Promise.all(replies);

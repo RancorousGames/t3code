@@ -326,6 +326,19 @@ describe("background ChatGPT activation", () => {
     expect(mocks.runControl).not.toHaveBeenCalled();
   });
 
+  it("refuses programmatic ChatGPT focus without changing the selected session", async () => {
+    const id = "b5fc0249-28e7-48c6-9591-6761b3fa3748";
+    mocks.browserSessions = [{ id, title: "Other session", hidden: true }];
+    await act(async () => { renderer = create(<DesktopAppActivationCoordinator />); });
+    await act(async () => onRequest?.({
+      version: 1, type: "chatgpt.sessions", action: "focus",
+      requestId: "focus-other", sessionId: id,
+    }));
+    expect(complete.mock.lastCall?.[0]).toMatchObject({ ok: false, code: "invalid-request" });
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
   it("resolves deliberate conversation opening without causing any message send", async () => {
     const id = "b5fc0249-28e7-48c6-9591-6761b3fa3748";
     const conversation = "6ada88be-7e48-83eb-a735-75dbd1161d46";
@@ -1093,6 +1106,16 @@ describe("managed native provider desktop activation", () => {
       },
     ];
   };
+
+  it("refuses programmatic native thread focus without changing selection", async () => {
+    prepareExistingThread(opaqueIds[0]!);
+    const result = await deliver({
+      version: 1, requestId: "native-focus", type: "t3.threads",
+      action: "focus", threadId: opaqueIds[0]!, environmentId: "local",
+    });
+    expect(result).toMatchObject({ ok: false, code: "invalid-request" });
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
 
   it("advertises exact running-environment opaque read AND send capability on existing list only", async () => {
     prepareExistingThread(opaqueIds[0]!);

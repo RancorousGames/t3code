@@ -327,11 +327,7 @@ export async function openTaskSession(
       const opened = await control({ action: "open", sessionId: conversationId }, { home, exchange });
       if (opened.conversationId !== conversationId || !opened.sessionId)
         throw Error("T3 did not acknowledge the exact recovered conversation.");
-      if (!input.background) {
-        const focused = await control({ action: "focus", sessionId: opened.sessionId }, { home, exchange });
-        if (focused.sessionId !== opened.sessionId)
-          throw Error("T3 did not acknowledge recovered session focus.");
-      }
+      // TaskBoard recovery never changes the user's selected session.
       // The historical claim remains until TaskBoard can atomically transfer it:
       // releasing it here would allow another dispatcher to steal the task.
       if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
@@ -372,11 +368,6 @@ export async function openTaskSession(
           }, input.reservationId);
           await exchange(controlAddress(home), request, 25_000);
         }
-        if (!input.background) {
-          const focused = await control({ action: "focus", sessionId }, { home, exchange });
-          if (focused.sessionId !== sessionId)
-            throw Error("T3 did not acknowledge the exact claimed session focus.");
-        }
         if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
         return { taskRef, status: "opened", kind: "chatgpt", sessionId, created: false };
       }
@@ -394,13 +385,6 @@ export async function openTaskSession(
         const recovered = await reopenKnownConversation(claimedId);
         if (recovered) return recovered;
         throw Error("Claimed T3 thread missing and no unique saved ChatGPT conversation is known; never create a duplicate.");
-      }
-      if (!input.background) {
-        const focused = await native(
-          { action: "focus", threadId, expectedEnvironmentId: input.environmentId },
-          { home, exchange },
-        );
-        if (focused.threadId !== threadId) throw Error("Native thread focus was not acknowledged.");
       }
       if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
       return { taskRef, status: "opened", kind: "native", threadId, created: false };
@@ -505,8 +489,6 @@ export async function openTaskSession(
         }
         if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
       }
-      if (!input.background)
-        await control({ action: "focus", sessionId: result.sessionId }, { home, exchange });
       return {
         taskRef,
         status: result.promptDelivery === "user_turn_observed" ? "created" : "prompt_unknown",
@@ -558,12 +540,6 @@ export async function openTaskSession(
     if (!created.threadId) throw Error("Native creation outcome unknown; no duplicate creation.");
     await command(board, ["task", "claim", "--agent", `t3:${created.threadId}`, id]);
     if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
-    if (!input.background) {
-      await native(
-        { action: "focus", threadId: created.threadId, expectedEnvironmentId: nativeEnvironmentId },
-        { home, exchange },
-      );
-    }
     return { taskRef, status: "created", kind, threadId: created.threadId, created: true };
   } finally {
     await FSP.rmdir(lock);

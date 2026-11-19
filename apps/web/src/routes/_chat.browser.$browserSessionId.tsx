@@ -64,8 +64,10 @@ function ChatGPTBrowserRoute() {
       const id = (event as CustomEvent<string>).detail;
       if (id && id !== browserSessionId && visibleIds.includes(id)) choose(id);
     };
-    window.addEventListener("t3:chatgpt-page-interaction", onNativeInteraction);
-    return () => window.removeEventListener("t3:chatgpt-page-interaction", onNativeInteraction);
+    // Only an explicit pointer press in a split pane may make it primary.
+    // Generic guest activity (including mouse movement and agent typing) must not.
+    window.addEventListener("t3:chatgpt-page-pointer-select", onNativeInteraction);
+    return () => window.removeEventListener("t3:chatgpt-page-pointer-select", onNativeInteraction);
   }, [browserSessionId, visibleIds.join("|")]);
   const update = (next: SplitNode | null, primary: string) => {
     if (!environmentId) return;

@@ -30,13 +30,10 @@ function independentRead(request: DesktopAppActivationRequest): boolean {
   );
 }
 
-// Socket/API traffic is often polling or background agent work. Only commands
-// explicitly asking to show a user-facing window may restore/focus T3.
+// Background agents must not steal the user's window or selected session.
+// Ctrl+S handles attention navigation locally in the UI.
 function shouldActivateWindow(request: DesktopAppActivationRequest): boolean {
-  if (request.type === "open-workspace") return true;
-  if (request.type === "t3.threads") return request.action === "focus";
-  if (request.type === "chatgpt.sessions") return request.action === "focus";
-  return false;
+  return request.type === "open-workspace";
 }
 
 function failure(
@@ -77,6 +74,13 @@ export class DesktopAppActivationBroker {
   request(request: DesktopAppActivationRequest): Promise<DesktopAppActivationResponse> {
     // The generic pipe authenticates neither an operator nor a catalog model.
     // Refuse before focus, queueing or renderer-side project/thread effects.
+    if ((request.type === "t3.threads" || request.type === "chatgpt.sessions") &&
+        request.action === "focus") {
+      return Promise.resolve(failure(
+        request.requestId, "invalid-request",
+        "Programmatic session focus is disabled. Select a session manually or use Ctrl+S for attention.",
+      ));
+    }
     if (request.type === "t3.threads" && request.action === "create") {
       return Promise.resolve(
         failure(

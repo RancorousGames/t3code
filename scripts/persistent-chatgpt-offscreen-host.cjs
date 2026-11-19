@@ -30,7 +30,7 @@ if (process.platform !== "win32" || !directory.endsWith("-v3"))
 app.setPath("userData", Path.join(directory, "electron-profile"));
 // Bump with any change T3 and this host must make together. T3 replaces a host
 // that reports a different value, so a host can never outlive its protocol.
-const HOST_PROTOCOL = 5;
+const HOST_PROTOCOL = 6;
 // Pages now receive real keystrokes. Without this, Electron's default menu
 // would turn Ctrl+R and Ctrl+W into reloads and window closes inside the page.
 Menu.setApplicationMenu(null);
@@ -108,7 +108,13 @@ function relayPageInput(sessionId, contents) {
     lastInteraction = now;
     emit({ type: "interaction", sessionId });
   };
-  contents.on("before-mouse-event", interacted);
+  contents.on("before-mouse-event", (_event, input) => {
+    interacted();
+    // Hover/scroll and automated keyboard activity must not change the selected session.
+    // Only a direct click inside a visible split pane can select that pane.
+    if (input.type === "mouseDown" && input.button === "left")
+      emit({ type: "pane-select", sessionId });
+  });
   contents.on("before-input-event", (event, input) => {
     interacted();
     if (input.type !== "keyDown" || input.isComposing) return;
