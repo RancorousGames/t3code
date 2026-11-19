@@ -1006,6 +1006,77 @@ export function DesktopAppActivationCoordinator() {
           }
           const sessionSnapshot = readChatGPTBrowserSessions(environmentId);
           if (request.action === "task_agent_status" || request.action === "task_agent_action") {
+            // TaskBoard's create-time Prepfile uses no carrier ChatGPT guest.
+            // The renderer already owns the durable preparation and handoff journal.
+            if (
+              request.action === "task_agent_action" &&
+              !request.sessionId &&
+              request.taskCommand === "prepfile_create"
+            ) {
+              const board = request.taskBoardPath?.trim();
+              const taskId = request.taskId?.trim();
+              const raw = request.taskOptionsJson ?? "";
+              if (
+                !board ||
+                !/^(?:[a-z]:\\|\\\\)/i.test(board) ||
+                !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(taskId ?? "") ||
+                raw.length > 30_000
+              )
+                throw new Error("New prepfile requires an exact existing TaskBoard task.");
+              const parsed: unknown = JSON.parse(raw);
+              if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+                throw new Error("Prepfile options must be an object.");
+              const data = parsed as Record<string, unknown>;
+              const reference = data.taskRef as { board?: string; id?: string } | undefined;
+              const sameBoard = (a: string, b: string) =>
+                a.replaceAll("/", "\\").replace(/\\+$/g, "").toLowerCase() ===
+                b.replaceAll("/", "\\").replace(/\\+$/g, "").toLowerCase();
+              if (
+                typeof data.id !== "string" ||
+                !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(data.id) ||
+                typeof data.request !== "string" ||
+                !data.request.trim() ||
+                data.request.length > 30_000 ||
+                !["light", "medium", "heavy"].includes(String(data.depth)) ||
+                !["chatgpt", "luna", "haiku"].includes(String(data.generator)) ||
+                !reference ||
+                reference.id !== taskId ||
+                !reference.board ||
+                !sameBoard(reference.board, board) ||
+                data.autoHandoff !== true ||
+                typeof data.projectName !== "string" ||
+                !data.projectName.trim() ||
+                !data.implementationModel
+              )
+                throw new Error("New prepfile scope or model handoff is invalid.");
+              const job = startRemotePrepfile({
+                id: data.id,
+                request: data.request,
+                depth: data.depth as RemotePrepfileRequest["depth"],
+                generator: data.generator as RemotePrepfileRequest["generator"],
+                projectId: null,
+                projectName: data.projectName,
+                autoHandoff: true,
+                createTaskboardTask: false,
+                taskRef: { board, id: taskId! },
+                ...(data.generatorModel
+                  ? {
+                      generatorModel: data.generatorModel as NonNullable<
+                        RemotePrepfileRequest["generatorModel"]
+                      >,
+                    }
+                  : {}),
+                implementationModel: data.implementationModel as NonNullable<
+                  RemotePrepfileRequest["implementationModel"]
+                >,
+              });
+              return {
+                version: 1,
+                requestId: request.requestId,
+                ok: true,
+                data: { state: job.state, jobId: job.id, taskRef: job.taskRef },
+              };
+            }
             const browserSession = sessionSnapshot.find((row) => row.id === request.sessionId);
             const taskBoard = request.taskBoardPath?.trim();
             const taskId = request.taskId?.trim();

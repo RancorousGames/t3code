@@ -7,6 +7,8 @@ export interface RemotePrepfileRequest {
   depth: PrepfileDepth;
   generator: "chatgpt" | "luna" | "haiku";
   projectId: string | null;
+  /** Resolve an existing T3 project by its exact TaskBoard project name when projectId is absent. */
+  projectName?: string;
   autoHandoff: boolean;
   createTaskboardTask: boolean;
   /** Optional existing TaskBoard scope; never implicitly creates another task. */
@@ -22,8 +24,14 @@ export interface RemotePrepfileJob {
   request: string;
   outputPath: string | null;
   taskRef?: { board: string; id: string };
-  state: "reserved" | "starting" | "preparing" | "waiting_handoff" |
-    "dispatching" | "completed" | "needs_review";
+  state:
+    | "reserved"
+    | "starting"
+    | "preparing"
+    | "waiting_handoff"
+    | "dispatching"
+    | "completed"
+    | "needs_review";
   createdAt: number;
   generatorSessionId?: string;
   implementationThreadId?: string;
@@ -47,8 +55,10 @@ const imageKey = (id: string, index: number) => `${UPLOAD_PREFIX}${id}:${index}`
 function readImage(id: string, index: number): StagedImage | null {
   try {
     const raw = localStorage.getItem(imageKey(id, index));
-    return raw ? JSON.parse(raw) as StagedImage : null;
-  } catch { return null; }
+    return raw ? (JSON.parse(raw) as StagedImage) : null;
+  } catch {
+    return null;
+  }
 }
 
 function cleanupStaleImages() {
@@ -60,20 +70,38 @@ function cleanupStaleImages() {
       const staged = JSON.parse(localStorage.getItem(key) ?? "") as StagedImage;
       if (!Number.isFinite(staged.createdAt) || now - staged.createdAt > 48 * 3_600_000)
         localStorage.removeItem(key);
-    } catch { localStorage.removeItem(key); }
+    } catch {
+      localStorage.removeItem(key);
+    }
   }
 }
 
 /** Idempotent, bounded parts fit under SignalR's standard 32 KiB message limit. */
 export function stageRemotePrepfileImageChunk(input: {
-  id: string; index: number; part: number; total: number; mime: string; chunk: string;
+  id: string;
+  index: number;
+  part: number;
+  total: number;
+  mime: string;
+  chunk: string;
 }) {
-  if (!UUID.test(input.id) || !Number.isInteger(input.index) || input.index < 0 || input.index >= 8 ||
-    !Number.isInteger(input.part) || input.part < 0 ||
-    !Number.isInteger(input.total) || input.total < 1 || input.total > MAX_IMAGE_CHUNKS ||
-    input.part >= input.total || input.mime !== "image/jpeg" ||
-    typeof input.chunk !== "string" || !/^[A-Za-z0-9+/=]+$/.test(input.chunk) ||
-    input.chunk.length > 12_000 || input.chunk.length < 1)
+  if (
+    !UUID.test(input.id) ||
+    !Number.isInteger(input.index) ||
+    input.index < 0 ||
+    input.index >= 8 ||
+    !Number.isInteger(input.part) ||
+    input.part < 0 ||
+    !Number.isInteger(input.total) ||
+    input.total < 1 ||
+    input.total > MAX_IMAGE_CHUNKS ||
+    input.part >= input.total ||
+    input.mime !== "image/jpeg" ||
+    typeof input.chunk !== "string" ||
+    !/^[A-Za-z0-9+/=]+$/.test(input.chunk) ||
+    input.chunk.length > 12_000 ||
+    input.chunk.length < 1
+  )
     throw new Error("Invalid prepfile image chunk (JPEG, <=12 KB, <=90 chunks).");
   if (readRemotePrepfileJobs().some((job) => job.id === input.id))
     throw new Error("Prepfile job already submitted; images cannot be modified after reservation.");
@@ -86,13 +114,19 @@ export function stageRemotePrepfileImageChunk(input: {
     throw new Error("Image chunk differs from the saved chunk for this request ID.");
   if (previous === undefined) {
     const staged: StagedImage = existing ?? {
-      mime: input.mime, parts: input.total, chunks: {}, createdAt: Date.now(),
+      mime: input.mime,
+      parts: input.total,
+      chunks: {},
+      createdAt: Date.now(),
     };
     staged.chunks[input.part] = input.chunk;
     localStorage.setItem(imageKey(input.id, input.index), JSON.stringify(staged));
   }
-  return { index: input.index, received: Object.keys(readImage(input.id, input.index)?.chunks ?? {}).length,
-    total: input.total };
+  return {
+    index: input.index,
+    received: Object.keys(readImage(input.id, input.index)?.chunks ?? {}).length,
+    total: input.total,
+  };
 }
 
 function materializeImages(request: RemotePrepfileRequest) {
@@ -103,12 +137,12 @@ function materializeImages(request: RemotePrepfileRequest) {
     if (!Number.isInteger(index) || index < 0 || index >= 8 || mime !== "image/jpeg")
       throw new Error("Invalid image upload reference.");
     const image = readImage(request.id, index);
-    if (!image || image.mime !== mime ||
-      Object.keys(image.chunks).length !== image.parts)
-      throw new Error(`Image ${index + 1} is incomplete. Resume uploading with the same request ID.`);
+    if (!image || image.mime !== mime || Object.keys(image.chunks).length !== image.parts)
+      throw new Error(
+        `Image ${index + 1} is incomplete. Resume uploading with the same request ID.`,
+      );
     const raw = Array.from({ length: image.parts }, (_, part) => image.chunks[part] ?? "").join("");
-    if (!raw || raw.length > 1_200_000)
-      throw new Error("Staged image is empty or too large.");
+    if (!raw || raw.length > 1_200_000) throw new Error("Staged image is empty or too large.");
     return { mime, dataUrl: `data:${mime};base64,${raw}` };
   });
 }
@@ -123,28 +157,40 @@ export function readRemotePrepfileJobs(): RemotePrepfileJob[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(KEY) ?? "[]");
     if (!Array.isArray(value)) return [];
-    return value.filter((job): job is RemotePrepfileJob =>
-      !!job && UUID.test(job.id) && typeof job.request === "string" &&
-      typeof job.createdAt === "number" && typeof job.state === "string",
-    ).slice(-MAX_JOBS);
+    return value
+      .filter(
+        (job): job is RemotePrepfileJob =>
+          !!job &&
+          UUID.test(job.id) &&
+          typeof job.request === "string" &&
+          typeof job.createdAt === "number" &&
+          typeof job.state === "string",
+      )
+      .slice(-MAX_JOBS);
   } catch {
     return [];
   }
 }
 
 export function updateRemotePrepfileJob(
-  id: string, update: (row: RemotePrepfileJob) => RemotePrepfileJob,
+  id: string,
+  update: (row: RemotePrepfileJob) => RemotePrepfileJob,
 ): void {
   const records = readRemotePrepfileJobs();
   if (!records.some((row) => row.id === id)) return;
-  localStorage.setItem(KEY, JSON.stringify(records.map((row) => row.id === id ? update(row) : row)));
+  localStorage.setItem(
+    KEY,
+    JSON.stringify(records.map((row) => (row.id === id ? update(row) : row))),
+  );
 }
 
 export function installRemotePrepfileStarter(
   handler: (request: RemotePrepfileRequest) => Promise<void>,
 ): () => void {
   starter = handler;
-  return () => { if (starter === handler) starter = null; };
+  return () => {
+    if (starter === handler) starter = null;
+  };
 }
 
 /**
@@ -155,21 +201,33 @@ export function startRemotePrepfile(request: RemotePrepfileRequest): RemotePrepf
   if (!UUID.test(request.id)) throw new Error("Stable prepfile UUID required.");
   if (!request.request?.trim() || request.request.length > 30_000)
     throw new Error("Prepfile request must be 1–30000 characters.");
-  if (!["light", "medium", "heavy"].includes(request.depth) ||
-    !["chatgpt", "luna", "haiku"].includes(request.generator))
+  if (
+    !["light", "medium", "heavy"].includes(request.depth) ||
+    !["chatgpt", "luna", "haiku"].includes(request.generator)
+  )
     throw new Error("Unsupported prepfile depth or generator.");
-  if (request.taskRef &&
-      (!request.taskRef.board?.trim() || request.taskRef.board.length > 500 ||
-       !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(request.taskRef.id)))
+  if (
+    request.taskRef &&
+    (!request.taskRef.board?.trim() ||
+      request.taskRef.board.length > 500 ||
+      !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(request.taskRef.id))
+  )
     throw new Error("Linked TaskBoard reference invalid.");
-  if (request.images && (request.images.length > 8 || request.images.some((image) =>
-    !/^image\/(png|jpeg|webp|gif)$/.test(image.mime) ||
-    image.dataUrl.length > 11_200_000)))
+  if (
+    request.images &&
+    (request.images.length > 8 ||
+      request.images.some(
+        (image) =>
+          !/^image\/(png|jpeg|webp|gif)$/.test(image.mime) || image.dataUrl.length > 11_200_000,
+      ))
+  )
     throw new Error("Up to 8 PNG/JPEG/WEBP/GIF images (8 MiB each) are supported.");
   const existing = readRemotePrepfileJobs().find((job) => job.id === request.id);
   if (existing) {
-    if (existing.request !== request.request.trim() ||
-        JSON.stringify(existing.taskRef ?? null) !== JSON.stringify(request.taskRef ?? null))
+    if (
+      existing.request !== request.request.trim() ||
+      JSON.stringify(existing.taskRef ?? null) !== JSON.stringify(request.taskRef ?? null)
+    )
       throw new Error("Prepfile ID is already reserved for a different request or task.");
     return existing;
   }
@@ -177,18 +235,27 @@ export function startRemotePrepfile(request: RemotePrepfileRequest): RemotePrepf
   const preparedImages = materializeImages(request);
   const prepared: RemotePrepfileRequest = { ...request, images: preparedImages };
   const reserved: RemotePrepfileJob = {
-    id: request.id, request: request.request.trim(), outputPath: null,
-    ...(request.taskRef ? {taskRef:request.taskRef} : {}),
-    createdAt: Date.now(), state: "reserved",
+    id: request.id,
+    request: request.request.trim(),
+    outputPath: null,
+    ...(request.taskRef ? { taskRef: request.taskRef } : {}),
+    createdAt: Date.now(),
+    state: "reserved",
   };
-  localStorage.setItem(KEY, JSON.stringify([...readRemotePrepfileJobs(), reserved].slice(-MAX_JOBS)));
+  localStorage.setItem(
+    KEY,
+    JSON.stringify([...readRemotePrepfileJobs(), reserved].slice(-MAX_JOBS)),
+  );
   const run = starter;
   // Async work must not outlive its durable receipt; no implicit retry on restart.
-  void run(prepared).catch((cause: unknown) => {
-    updateRemotePrepfileJob(request.id, (job) => ({
-      ...job, state: "needs_review",
-      error: cause instanceof Error ? cause.message : String(cause),
-    }));
-  }).finally(() => clearStagedImages(request));
+  void run(prepared)
+    .catch((cause: unknown) => {
+      updateRemotePrepfileJob(request.id, (job) => ({
+        ...job,
+        state: "needs_review",
+        error: cause instanceof Error ? cause.message : String(cause),
+      }));
+    })
+    .finally(() => clearStagedImages(request));
   return reserved;
 }

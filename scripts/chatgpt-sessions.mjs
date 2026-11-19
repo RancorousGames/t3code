@@ -352,6 +352,11 @@ export async function controlSessions(
       "delivery_list",
       "cancel_delivery",
     ].includes(input.action) &&
+    !(
+      input.action === "task_agent_action" &&
+      input.taskCommand === "prepfile_create" &&
+      input.sessionId === undefined
+    ) &&
     !(typeof input.sessionId === "string" && input.sessionId.trim())
   )
     throw new Error(
