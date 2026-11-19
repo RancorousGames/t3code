@@ -24,6 +24,16 @@ const execFile = promisify(execFileCallback);
 const ROOT = Path.resolve(import.meta.dirname, "..");
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
+/** Resolve saved TaskBoard model preference into a native T3 runtime. */
+export function taskRuntimeFromSelection(selection) {
+  if (!selection) return "chatgpt";
+  const provider = selection.provider;
+  if (provider === "claudeAgent" || provider.startsWith("claudeAgent_")) return "claude";
+  if (provider === "codex" || provider.startsWith("codex_")) return "codex";
+  if (provider === "opencode" || provider.startsWith("opencode_")) return "opencode";
+  throw Error(`Unsupported TaskBoard provider: ${String(provider)}`);
+}
+
 function taskboardExecutable() {
   if (process.env.TASKBOARD_CLI) return process.env.TASKBOARD_CLI;
   const sibling = Path.resolve(ROOT, "../TaskBoard/packages/task-cli/target/release/taskboard.exe");
@@ -62,11 +72,10 @@ function knownConversationForSession(home, sessionId) {
   if (!FS.existsSync(database)) return null;
   const db = new DatabaseSync(database, { readOnly: true });
   try {
-    const rows = db.prepare(
-      "SELECT DISTINCT conversation_id FROM chatgpt_messages WHERE session_id = ? LIMIT 2",
-    ).all(sessionId);
-    return rows.length === 1 && UUID.test(rows[0].conversation_id)
-      ? rows[0].conversation_id : null;
+    const rows = db
+      .prepare("SELECT DISTINCT conversation_id FROM chatgpt_messages WHERE session_id = ? LIMIT 2")
+      .all(sessionId);
+    return rows.length === 1 && UUID.test(rows[0].conversation_id) ? rows[0].conversation_id : null;
   } catch (error) {
     if (/no such table/.test(String(error))) return null;
     throw error;
@@ -80,11 +89,13 @@ function knownNativeProjects(home, boardName) {
   if (!FS.existsSync(database)) return [];
   const db = new DatabaseSync(database, { readOnly: true });
   try {
-    return db.prepare(
-      "SELECT project_id AS projectId, title, workspace_root AS workspaceRoot, " +
-      "default_model_selection_json AS defaultModel FROM projection_projects WHERE deleted_at IS NULL",
-    ).all().filter((project) =>
-      project.title.replace(/[^a-z0-9]/gi, "").toLowerCase() === boardName);
+    return db
+      .prepare(
+        "SELECT project_id AS projectId, title, workspace_root AS workspaceRoot, " +
+          "default_model_selection_json AS defaultModel FROM projection_projects WHERE deleted_at IS NULL",
+      )
+      .all()
+      .filter((project) => project.title.replace(/[^a-z0-9]/gi, "").toLowerCase() === boardName);
   } catch (error) {
     if (/no such table|no such column/.test(String(error))) return [];
     throw error;
@@ -93,56 +104,116 @@ function knownNativeProjects(home, boardName) {
   }
 }
 /** Resolve a native default only when the board maps to one existing T3 project. */
-async function nativeLaunchForBoard(board, kind, environmentId, native, home, exchange) {
-  const desiredDriver = kind === "claude" ? "claudeAgent" : "codex";
+async function nativeLaunchForBoard(
+  board,
+  kind,
+  environmentId,
+  native,
+  home,
+  exchange,
+  explicitModel = null,
+) {
+  const desiredDriver = kind === "claude" ? "claudeAgent" : kind;
   const projects = await native(
-    { action: "list", expectedEnvironmentId: environmentId }, { home, exchange },
+    { action: "list", expectedEnvironmentId: environmentId },
+    { home, exchange },
   );
-  const boardName = Path.basename(Path.dirname(board)).replace(/[^a-z0-9]/gi, "").toLowerCase();
-  const matches = (projects.threads ?? []).filter((thread) =>
-    thread.workspaceRoot && thread.projectId &&
-    thread.project?.replace(/[^a-z0-9]/gi, "").toLowerCase() === boardName,
+  const boardName = Path.basename(Path.dirname(board))
+    .replace(/[^a-z0-9]/gi, "")
+    .toLowerCase();
+  const matches = (projects.threads ?? []).filter(
+    (thread) =>
+      thread.workspaceRoot &&
+      thread.projectId &&
+      thread.project?.replace(/[^a-z0-9]/gi, "").toLowerCase() === boardName,
   );
   const indexedProjects = knownNativeProjects(home, boardName);
-  const roots = [...new Map([
-    ...matches.map((thread) =>
-      [thread.projectId, { projectId: thread.projectId, workspaceRoot: thread.workspaceRoot }]),
-    ...indexedProjects.map((project) =>
-      [project.projectId, { projectId: project.projectId, workspaceRoot: project.workspaceRoot,
-        defaultModel: project.defaultModel }]),
-  ]).values()];
-  if (roots.length !== 1)
-    throw Error("Native task needs one identifiable T3 project for its TaskBoard; choose a workspace explicitly.");
+  const roots = [
+    ...new Map([
+      ...matches.map((thread) => [
+        thread.projectId,
+        { projectId: thread.projectId, workspaceRoot: thread.workspaceRoot },
+      ]),
+      ...indexedProjects.map((project) => [
+        project.projectId,
+        {
+          projectId: project.projectId,
+          workspaceRoot: project.workspaceRoot,
+          defaultModel: project.defaultModel,
+        },
+      ]),
+    ]).values(),
+  ];
+  if (roots.length > 1)
+    throw Error("Native task maps to multiple T3 projects; select one workspace explicitly.");
+  // TaskBoards that have no corresponding T3 project still need a native workspace.
+  // The board parent is stable and exact; native T3 creates its own project there.
+  if (!roots.length) roots.push({ workspaceRoot: Path.dirname(board) });
   const providers = await native(
-    { action: "providers", expectedEnvironmentId: projects.environmentId }, { home, exchange },
+    { action: "providers", expectedEnvironmentId: projects.environmentId },
+    { home, exchange },
   );
-  const ready = (providers.providers ?? []).filter((provider) =>
-    provider.driver === desiredDriver && provider.enabled && provider.installed &&
-    provider.status === "ready" && provider.available !== false,
+  const ready = (providers.providers ?? []).filter(
+    (provider) =>
+      provider.driver === desiredDriver &&
+      provider.enabled &&
+      provider.installed &&
+      provider.status === "ready" &&
+      provider.available !== false,
   );
   const previous = matches.find((thread) =>
-    ready.some((provider) => provider.providerInstanceId === thread.providerInstanceId));
+    ready.some((provider) => provider.providerInstanceId === thread.providerInstanceId),
+  );
   let defaultSelection = null;
-  try { defaultSelection = roots[0].defaultModel ? JSON.parse(roots[0].defaultModel) : null; }
-  catch { /* invalid saved preference must never guess an incompatible provider */ }
-  const selected = previous
-    ? ready.find((provider) => provider.providerInstanceId === previous.providerInstanceId)
-    : ready.find((provider) => provider.providerInstanceId ===
-        (defaultSelection?.instanceId ?? defaultSelection?.provider)) ??
-      (ready.length === 1 ? ready[0] : null);
+  try {
+    defaultSelection = roots[0].defaultModel ? JSON.parse(roots[0].defaultModel) : null;
+  } catch {
+    /* invalid saved preference must never guess an incompatible provider */
+  }
+  const supporting = explicitModel
+    ? ready.filter(
+        (provider) =>
+          provider.models.some((model) => model.slug === explicitModel.model) &&
+          (provider.providerInstanceId === explicitModel.provider ||
+            provider.driver === explicitModel.provider),
+      )
+    : [];
+  const selected = explicitModel
+    ? (supporting.find((provider) => provider.providerInstanceId === explicitModel.provider) ??
+      supporting.find(
+        (provider) =>
+          provider.providerInstanceId ===
+          (defaultSelection?.instanceId ?? defaultSelection?.provider),
+      ) ??
+      (supporting.length === 1 ? supporting[0] : null))
+    : previous
+      ? ready.find((provider) => provider.providerInstanceId === previous.providerInstanceId)
+      : (ready.find(
+          (provider) =>
+            provider.providerInstanceId ===
+            (defaultSelection?.instanceId ?? defaultSelection?.provider),
+        ) ?? (ready.length === 1 ? ready[0] : null));
   if (!selected)
     throw Error("No unique ready native provider for this task; choose a provider explicitly.");
-  const model = selected.models.find((entry) =>
-    entry.slug === previous?.modelSelection?.model)?.slug ??
-    selected.models.find((entry) =>
-      entry.slug === defaultSelection?.model)?.slug ??
+  const model =
+    selected.models.find((entry) => entry.slug === explicitModel?.model)?.slug ??
+    selected.models.find((entry) => entry.slug === previous?.modelSelection?.model)?.slug ??
+    selected.models.find((entry) => entry.slug === defaultSelection?.model)?.slug ??
     selected.models.find((entry) => entry.isDefault)?.slug ??
     (selected.models.length === 1 ? selected.models[0].slug : null);
   if (!model) throw Error("No unambiguous native default model for this task.");
   return {
-    runtime: kind, projectId: roots[0].projectId, workspaceRoot: roots[0].workspaceRoot,
+    runtime: kind,
+    ...(roots[0].projectId ? { projectId: roots[0].projectId } : {}),
+    workspaceRoot: roots[0].workspaceRoot,
     providerInstanceId: selected.providerInstanceId,
-    modelSelection: { instanceId: selected.providerInstanceId, model },
+    modelSelection: {
+      instanceId: selected.providerInstanceId,
+      model,
+      ...(explicitModel
+        ? { options: [{ id: "reasoningEffort", value: explicitModel.effort ?? "medium" }] }
+        : {}),
+    },
     runtimeMode: "approval-required",
     environmentId: projects.environmentId,
   };
@@ -218,29 +289,40 @@ export async function openTaskSession(
       // board lock is the authority for the request ID and lifecycle state.
       const queueIntent = await command(board, ["task", "execution", id, "show"]);
       const reservationId = input.reservationId;
-      const alreadyWorking = queueIntent.queue_state === "working" &&
+      const alreadyWorking =
+        queueIntent.queue_state === "working" &&
         queueIntent.queue_reservation_id === reservationId &&
         typeof queueIntent.queue_session_id === "string" &&
         task.claimed_by === `t3:${queueIntent.queue_session_id}`;
-      const legacyQitem = typeof queueIntent.queue_request === "string"
-        ? `qitem-taskboard-${queueIntent.queue_request}` : null;
+      const legacyQitem =
+        typeof queueIntent.queue_request === "string"
+          ? `qitem-taskboard-${queueIntent.queue_request}`
+          : null;
       const priorReservationAttempt = priorAttempt?.requestId === reservationId;
-      const legacyOpenRig = (queueIntent.queue_attempt || queueIntent.queue_receipt) &&
+      const legacyOpenRig =
+        (queueIntent.queue_attempt || queueIntent.queue_receipt) &&
         queueIntent.queue_retired_receipt !== legacyQitem;
-      const identityInvalid = typeof input.queueRequest !== "string" ||
-        typeof reservationId !== "string" || !UUID.test(reservationId) ||
+      const identityInvalid =
+        typeof input.queueRequest !== "string" ||
+        typeof reservationId !== "string" ||
+        !UUID.test(reservationId) ||
         queueIntent.mode !== "queue" ||
         queueIntent.queue_request !== input.queueRequest ||
         queueIntent.queue_reservation_id !== reservationId ||
-        !["starting", "working"].includes(queueIntent.queue_state) || legacyOpenRig;
-      const taskInvalid = task.archived || task.completed || task.kind !== "task" &&
-        task.kind !== "recurring";
+        !["starting", "working"].includes(queueIntent.queue_state) ||
+        legacyOpenRig;
+      const taskInvalid =
+        task.archived || task.completed || (task.kind !== "task" && task.kind !== "recurring");
       // TaskBoard owns green-column eligibility. A column ID of "ai-ready"
       // is not required: other columns can be green and dispatchable. The
       // reservation and final atomic claim recheck authoritative readiness.
-      const noLongerReady = !alreadyWorking && (task.claimed_by ||
-        task.attention?.some(flag => ["blocked", "needs-user", "question"].includes(flag)) ||
-        task.blocked_reason || task.review_status === "open" || shown.readiness !== "ready");
+      const noLongerReady =
+        !alreadyWorking &&
+        (task.claimed_by ||
+          task.attention?.some((flag) => ["blocked", "needs-user", "question"].includes(flag)) ||
+          task.blocked_reason ||
+          task.review_status === "open" ||
+          shown.readiness !== "ready");
       if (priorAttempt && !priorReservationAttempt) {
         // A TaskBoard queue item may be dispatched again after its previous T3
         // worker was durably marked Working and later released. The board's
@@ -255,7 +337,7 @@ export async function openTaskSession(
           queueIntent.queue_reservation_id === reservationId &&
           !task.claimed_by &&
           priorAttempt.intent === "implement" &&
-          priorAttempt.kind === "chatgpt" &&
+          ["chatgpt", "claude", "codex", "opencode"].includes(priorAttempt.kind) &&
           UUID.test(priorAttempt.requestId ?? "");
         if (supersededQueueAttempt) {
           const saved = JSON.parse(await FSP.readFile(journal, "utf8"));
@@ -265,18 +347,22 @@ export async function openTaskSession(
           priorAttempt = null;
         } else {
           return {
-            taskRef: {board, id}, status: "reconcile_required", created: false,
+            taskRef: { board, id },
+            status: "reconcile_required",
+            created: false,
             definitelyNotCreated: false,
-            message: "The durable T3 spawn journal belongs to a different request ID; preserve this reservation for manual reconciliation.",
+            message:
+              "The durable T3 spawn journal belongs to a different request ID; preserve this reservation for manual reconciliation.",
           };
         }
       }
       if (identityInvalid || taskInvalid || (noLongerReady && !priorReservationAttempt)) {
         const definitelyNotCreated = !priorReservationAttempt;
         return {
-          taskRef: {board, id},
+          taskRef: { board, id },
           status: definitelyNotCreated ? "no_longer_queued" : "reconcile_required",
-          created: false, definitelyNotCreated,
+          created: false,
+          definitelyNotCreated,
           message: priorReservationAttempt
             ? "A prior spawn attempt exists; task eligibility changed, so preserve Starting and reconcile the exact T3 session."
             : "TaskBoard reservation or queue eligibility changed. No session was started.",
@@ -284,31 +370,42 @@ export async function openTaskSession(
       }
     }
 
-
     // Manual Start-now tasks can retain an UNKNOWN spawn journal even after
     // their blank browser was later closed. Re-arm only after a read-only T3
     // registry lookup proves the *exact* old reservation was closed without
     // creating a conversation or receiving a user turn. Missing registry
     // records are not closure evidence.
-    if (priorAttempt?.kind === "chatgpt" && input.requireQueue !== true &&
-        !task.claimed_by && typeof control === "function") {
+    if (
+      priorAttempt?.kind === "chatgpt" &&
+      input.requireQueue !== true &&
+      !task.claimed_by &&
+      typeof control === "function"
+    ) {
       const listed = await control(
         { action: "list", which: "all", includeHidden: true },
         { home, exchange },
       );
-      if (Array.isArray(listed.sessions) && !listed.hasMore && !listed.incomplete &&
-          (listed.total === undefined || listed.total === listed.sessions.length)) {
+      if (
+        Array.isArray(listed.sessions) &&
+        !listed.hasMore &&
+        !listed.incomplete &&
+        (listed.total === undefined || listed.total === listed.sessions.length)
+      ) {
         const matches = listed.sessions.filter(
           (session) => session.spawnRequestId === priorAttempt.requestId,
         );
         const old = matches.length === 1 ? matches[0] : null;
-        if (old?.closedAt != null && !old.conversationId &&
-            old.bootstrapIdentity?.state === "awaiting_marker" &&
-            !old.bootstrapIdentity.conversationId &&
-            old.binding?.taskRef?.id === id &&
-            old.binding?.taskRef?.board &&
-            Path.normalize(old.binding.taskRef.board).toLowerCase() === board.toLowerCase() &&
-            !old.lastRole && (old.totalTurns == null || old.totalTurns === 0)) {
+        if (
+          old?.closedAt != null &&
+          !old.conversationId &&
+          old.bootstrapIdentity?.state === "awaiting_marker" &&
+          !old.bootstrapIdentity.conversationId &&
+          old.binding?.taskRef?.id === id &&
+          old.binding?.taskRef?.board &&
+          Path.normalize(old.binding.taskRef.board).toLowerCase() === board.toLowerCase() &&
+          !old.lastRole &&
+          (old.totalTurns == null || old.totalTurns === 0)
+        ) {
           const saved = JSON.parse(await FSP.readFile(journal, "utf8"));
           if (saved.requestId !== priorAttempt.requestId)
             throw Error("Task spawn journal changed during closed-guest reconciliation.");
@@ -324,30 +421,46 @@ export async function openTaskSession(
       if (!conversationId) return null;
       // T3's open action deduplicates the canonical conversation URL even when
       // the original session is hidden, archived, or no longer mounted.
-      const opened = await control({ action: "open", sessionId: conversationId }, { home, exchange });
+      const opened = await control(
+        { action: "open", sessionId: conversationId },
+        { home, exchange },
+      );
       if (opened.conversationId !== conversationId || !opened.sessionId)
         throw Error("T3 did not acknowledge the exact recovered conversation.");
       // TaskBoard recovery never changes the user's selected session.
       // The historical claim remains until TaskBoard can atomically transfer it:
       // releasing it here would allow another dispatcher to steal the task.
       if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
-      return { taskRef, status: "opened", kind: "chatgpt", sessionId: opened.sessionId,
-        conversationId, created: false, claimRebindRequired: opened.sessionId !== oldSessionId };
+      return {
+        taskRef,
+        status: "opened",
+        kind: "chatgpt",
+        sessionId: opened.sessionId,
+        conversationId,
+        created: false,
+        claimRebindRequired: opened.sessionId !== oldSessionId,
+      };
     };
     // "t3:" is a stable public ChatGPT session ID in newer Bootstrap flows
     // AND the legacy prefix for native threads. Resolve against actual T3
     // registries; the prefix alone must never decide which UI to open.
-    if (typeof claim === "string" &&
-        (claim.startsWith("t3-browser:") || claim.startsWith("t3:") || UUID.test(claim))) {
+    if (
+      typeof claim === "string" &&
+      (claim.startsWith("t3-browser:") || claim.startsWith("t3:") || UUID.test(claim))
+    ) {
       const browserOnly = claim.startsWith("t3-browser:") || UUID.test(claim);
-      const claimedId = UUID.test(claim) ? claim : claim.slice(browserOnly ? "t3-browser:".length : 3);
+      const claimedId = UUID.test(claim)
+        ? claim
+        : claim.slice(browserOnly ? "t3-browser:".length : 3);
       const listed = await control(
         { action: "list", which: "all", includeHidden: true },
         { home, exchange },
       );
-      const browserMatches = (listed.sessions ?? []).filter((session) =>
-        session.id === claimedId || session.publicSessionId === claimedId ||
-        session.browserSessionId === claimedId,
+      const browserMatches = (listed.sessions ?? []).filter(
+        (session) =>
+          session.id === claimedId ||
+          session.publicSessionId === claimedId ||
+          session.browserSessionId === claimedId,
       );
       if (browserMatches.length > 1)
         throw Error("Claimed ChatGPT ID matches multiple sessions; refusing ambiguous focus.");
@@ -356,16 +469,27 @@ export async function openTaskSession(
         // Repair only a provably unsent TaskBoard first prompt, with the exact
         // original durable spawn request. T3 itself checks the persisted
         // not_sent/sendAttempted=false receipt before starting delivery.
-        if (input.requireQueue === true && input.reservationId === priorAttempt?.requestId &&
-            browserMatches[0].spawnRequestId === input.reservationId &&
-            browserMatches[0].promptDelivery === "not_sent" &&
-            browserMatches[0].sendAttempted === false) {
-          const request = createChatGPTSpawnRequest({
-            title: `${task.id} ${task.title}`.slice(0, 80),
-            message: taskPrompt(task, { intent: "implement", board }),
-            parentSessionId: "", project: Path.basename(Path.dirname(board)),
-            seatId: "", role: "worker", autoClose: true, taskBoard: board, taskId: id,
-          }, input.reservationId);
+        if (
+          input.requireQueue === true &&
+          input.reservationId === priorAttempt?.requestId &&
+          browserMatches[0].spawnRequestId === input.reservationId &&
+          browserMatches[0].promptDelivery === "not_sent" &&
+          browserMatches[0].sendAttempted === false
+        ) {
+          const request = createChatGPTSpawnRequest(
+            {
+              title: `${task.id} ${task.title}`.slice(0, 80),
+              message: taskPrompt(task, { intent: "implement", board }),
+              parentSessionId: "",
+              project: Path.basename(Path.dirname(board)),
+              seatId: "",
+              role: "worker",
+              autoClose: true,
+              taskBoard: board,
+              taskId: id,
+            },
+            input.reservationId,
+          );
           await exchange(controlAddress(home), request, 25_000);
         }
         if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
@@ -374,7 +498,9 @@ export async function openTaskSession(
       if (browserOnly) {
         const recovered = await reopenKnownConversation(claimedId);
         if (recovered) return recovered;
-        throw Error("Claimed ChatGPT session not present and no unique saved conversation is known; never create a duplicate.");
+        throw Error(
+          "Claimed ChatGPT session not present and no unique saved conversation is known; never create a duplicate.",
+        );
       }
       const threadId = claimedId;
       const nativeList = await native(
@@ -384,7 +510,9 @@ export async function openTaskSession(
       if (!nativeList.threads?.some((thread) => thread.id === threadId)) {
         const recovered = await reopenKnownConversation(claimedId);
         if (recovered) return recovered;
-        throw Error("Claimed T3 thread missing and no unique saved ChatGPT conversation is known; never create a duplicate.");
+        throw Error(
+          "Claimed T3 thread missing and no unique saved ChatGPT conversation is known; never create a duplicate.",
+        );
       }
       if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
       return { taskRef, status: "opened", kind: "native", threadId, created: false };
@@ -393,13 +521,12 @@ export async function openTaskSession(
     if (input.intent && !["conversation", "implement"].includes(input.intent))
       throw Error("intent must be conversation or implement.");
     const intent = priorAttempt?.intent ?? input.intent ?? "conversation";
-    const kind =
-      priorAttempt?.kind ??
-      input.kind ??
-      (await control({ action: "preferences" }, { home, exchange })).liveTaskStartKind ??
-      "chatgpt";
-    if (!["chatgpt", "claude", "codex"].includes(kind))
-      throw Error("kind must be chatgpt, claude or codex.");
+    // A saved task choice takes precedence over the old Start-now preference.
+    // Missing model_selection is always ChatGPT, including legacy tasks.
+    const selectedModel = task.model_selection ?? null;
+    const kind = priorAttempt?.kind ?? taskRuntimeFromSelection(selectedModel);
+    if (!["chatgpt", "claude", "codex", "opencode"].includes(kind))
+      throw Error("Task model provider is unsupported by T3.");
     if (kind === "chatgpt") {
       const request = createChatGPTSpawnRequest(
         {
@@ -413,7 +540,9 @@ export async function openTaskSession(
           taskBoard: board,
           taskId: id,
         },
-        priorAttempt?.requestId ?? (input.requireQueue === true ? input.reservationId : undefined) ?? Crypto.randomUUID(),
+        priorAttempt?.requestId ??
+          (input.requireQueue === true ? input.reservationId : undefined) ??
+          Crypto.randomUUID(),
       );
       const address = controlAddress(home);
       let response;
@@ -422,7 +551,9 @@ export async function openTaskSession(
         await FSP.writeFile(
           journal,
           JSON.stringify({
-            kind, intent, requestId: request.requestId,
+            kind,
+            intent,
+            requestId: request.requestId,
             taskRef: { board, id },
             queueRequest: input.requireQueue === true ? input.queueRequest : null,
           }),
@@ -450,13 +581,19 @@ export async function openTaskSession(
             // Without removing the exact failed request's journal we cannot
             // accept a fresh reservation ID; keep Starting and reconcile.
             return {
-              taskRef, status: "rejected_reconcile_required", created: false,
-              definitelyNotCreated: false, requestId: request.requestId,
+              taskRef,
+              status: "rejected_reconcile_required",
+              created: false,
+              definitelyNotCreated: false,
+              requestId: request.requestId,
               message: `T3 rejected before creation, but its journal could not be safely reset: ${String(cleanupError)}`,
             };
           }
           return {
-            taskRef, status: "rejected", created: false, definitelyNotCreated: true,
+            taskRef,
+            status: "rejected",
+            created: false,
+            definitelyNotCreated: true,
             requestId: request.requestId,
             message: error instanceof Error ? error.message : String(error),
           };
@@ -479,10 +616,16 @@ export async function openTaskSession(
       if (result.promptDelivery === "user_turn_observed") {
         if (input.requireQueue === true) {
           await command(board, [
-            "task", "queue", "working", id,
-            "--queue-request", input.queueRequest,
-            "--request-id", input.reservationId,
-            "--session-id", result.sessionId,
+            "task",
+            "queue",
+            "working",
+            id,
+            "--queue-request",
+            input.queueRequest,
+            "--request-id",
+            input.reservationId,
+            "--session-id",
+            result.sessionId,
           ]);
         } else {
           await command(board, ["task", "claim", "--agent", `t3:${result.sessionId}`, id]);
@@ -498,9 +641,17 @@ export async function openTaskSession(
         created: true,
       };
     }
-    const configuration = input.native ?? await nativeLaunchForBoard(
-      board, kind, input.environmentId, native, home, exchange,
-    );
+    const configuration =
+      (selectedModel ? null : input.native) ??
+      (await nativeLaunchForBoard(
+        board,
+        kind,
+        input.environmentId,
+        native,
+        home,
+        exchange,
+        selectedModel,
+      ));
     if (configuration.runtime !== kind)
       throw Error("Native task runtime does not match its selected kind.");
     const nativeEnvironmentId = input.environmentId ?? configuration.environmentId;
@@ -538,9 +689,31 @@ export async function openTaskSession(
       );
     }
     if (!created.threadId) throw Error("Native creation outcome unknown; no duplicate creation.");
-    await command(board, ["task", "claim", "--agent", `t3:${created.threadId}`, id]);
+    if (input.requireQueue === true) {
+      await command(board, [
+        "task",
+        "queue",
+        "working",
+        id,
+        "--queue-request",
+        input.queueRequest,
+        "--request-id",
+        input.reservationId,
+        "--session-id",
+        created.threadId,
+      ]);
+    } else {
+      await command(board, ["task", "claim", "--agent", `t3:${created.threadId}`, id]);
+    }
     if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
-    return { taskRef, status: "created", kind, threadId: created.threadId, created: true };
+    return {
+      taskRef,
+      status: "created",
+      kind,
+      threadId: created.threadId,
+      sessionId: created.threadId,
+      created: true,
+    };
   } finally {
     await FSP.rmdir(lock);
   }
