@@ -29,6 +29,8 @@ squashfs-root/
 .plans/
 /audits/
 dist-electron/
+/dist/
+/deploy/wife/*.zip
 .electron-runtime/
 .showcase/
 apps/mobile/.showcase/
