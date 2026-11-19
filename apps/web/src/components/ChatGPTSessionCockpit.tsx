@@ -30,8 +30,6 @@ import { manuallyRetryRecovery, readRecoveryQueue } from "./sidebar/chatGPTRecov
 import { Button } from "./ui/button";
 import { getLocalStorageItem, useLocalStorage } from "../hooks/useLocalStorage";
 import { ChatGPTSessionLiveTaskBrief } from "./ChatGPTSessionLiveTaskBrief";
-import { ChatGPTSessionQuestionPanel } from "./ChatGPTSessionQuestionPanel";
-import { answerChatGPTSessionQuestion, useChatGPTSessionQuestion } from "../chatGPTSessionQuestion";
 import {
   ChatGPTSessionSearchPanel,
   type ChatGPTSessionSearchHit,
@@ -160,7 +158,6 @@ export function ChatGPTSessionCockpit({
   const [actionText, setActionText] = useState("");
   const [actionMode, setActionMode] = useState<"queue" | "steer">("queue");
   const queuedMessages = useChatGPTSessionQueue(environmentId, sessionId);
-  const userQuestion = useChatGPTSessionQuestion(environmentId, sessionId);
   const pendingMessages = queuedMessages.filter((row) => row.state !== "delivered");
   const [sending, setSending] = useState(false);
   const [reading, setReading] = useState(false);
@@ -316,7 +313,8 @@ export function ChatGPTSessionCockpit({
   // runtime, not this view, waits for a verified idle recipient. Steer is the
   // explicit immediate path, using the existing guarded send implementation.
   const canQueue = !conversationFull && !sending && draft.trim().length > 0;
-  const canSteer = !!session && !conversationFull && !sending && !uncertain && draft.trim().length > 0;
+  const canSteer =
+    !!session && !conversationFull && !sending && !uncertain && draft.trim().length > 0;
   const canSend =
     mode === "steer"
       ? canSteer
@@ -462,25 +460,6 @@ export function ChatGPTSessionCockpit({
     } finally {
       setReading(false);
     }
-  };
-  const submitQuestionAnswer = async (answer: string) => {
-    if (!userQuestion || userQuestion.status !== "pending") return;
-    const target = navUrl
-      ? chatGPTConversationIdFromUrl(navUrl)
-      : (snapshot?.conversationId ??
-        chatGPTConversationIdFromUrl(
-          getLocalStorageItem(chatGPTBrowserLastUrlKey(environmentId, sessionId), Schema.String),
-        ));
-    // The existing durable queue preserves the original conversation guard
-    // and UNKNOWN-send fence; answering never overwrites the user's draft.
-    const queuedId = queueChatGPTSessionMessage(
-      environmentId,
-      sessionId,
-      `Answer to your pending question: ${answer}`,
-      target,
-      userQuestion.id,
-    );
-    answerChatGPTSessionQuestion(environmentId, sessionId, userQuestion.id, answer, queuedId);
   };
   const sendAction = async (action: { label: string; text: string; mode: "queue" | "steer" }) => {
     if (sending || !action.text.trim()) return;
@@ -635,13 +614,6 @@ export function ChatGPTSessionCockpit({
           sessions={sessions}
           onClose={() => setSearchOpen(false)}
           onChoose={chooseSearchResult}
-        />
-      )}
-      {userQuestion && (
-        <ChatGPTSessionQuestionPanel
-          key={userQuestion.id}
-          question={userQuestion}
-          onAnswer={submitQuestionAnswer}
         />
       )}
       <ChatGPTSessionLiveTaskBrief
@@ -889,7 +861,10 @@ export function ChatGPTSessionCockpit({
             }}
           >
             {conversationFull && (
-              <p role="alert" className="rounded-md border border-violet-500/70 bg-violet-500/10 p-3 text-sm text-violet-400">
+              <p
+                role="alert"
+                className="rounded-md border border-violet-500/70 bg-violet-500/10 p-3 text-sm text-violet-400"
+              >
                 {CHATGPT_CONVERSATION_FULL_MESSAGE} Right-click the session and select Agent Reboot.
               </p>
             )}
@@ -906,8 +881,11 @@ export function ChatGPTSessionCockpit({
               rows={3}
               className="w-full resize-y rounded-md border border-input bg-background p-3 text-sm"
               placeholder={
-                conversationFull ? "Reboot this exhausted conversation to send again" :
-                uncertain ? "Resolve unconfirmed delivery before sending…" : "Message this session…"
+                conversationFull
+                  ? "Reboot this exhausted conversation to send again"
+                  : uncertain
+                    ? "Resolve unconfirmed delivery before sending…"
+                    : "Message this session…"
               }
               disabled={conversationFull}
               value={draft}
@@ -933,7 +911,11 @@ export function ChatGPTSessionCockpit({
                       size="xs"
                       variant="outline"
                       title={action.text}
-                      disabled={conversationFull || sending || (action.mode === "steer" && (!session || uncertain))}
+                      disabled={
+                        conversationFull ||
+                        sending ||
+                        (action.mode === "steer" && (!session || uncertain))
+                      }
                       onClick={() => void sendAction(action)}
                     >
                       {action.label} · {action.mode === "queue" ? "Queue" : "Steer"}
@@ -1079,8 +1061,8 @@ export function ChatGPTSessionCockpit({
             </div>
             {mode === "capacity" && (
               <p className="text-xs text-muted-foreground">
-                Uses the shared T3 working-agent limit, ahead of TaskBoard and Caffy.
-                Queue on capacity operates even when Keep T3 Busy is off.
+                Uses the shared T3 working-agent limit, ahead of TaskBoard and Caffy. Queue on
+                capacity operates even when Keep T3 Busy is off.
               </p>
             )}
             {pendingMessages.length > 0 && (

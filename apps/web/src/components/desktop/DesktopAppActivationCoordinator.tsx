@@ -99,7 +99,6 @@ import {
 } from "../../chatGPTDeliveryMountRequest";
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
-import { requestChatGPTSessionQuestion } from "../../chatGPTSessionQuestion";
 import { AgentAttentionToast } from "./AgentAttentionToast";
 import {
   acknowledgeNativeThreadAttention,
@@ -1382,36 +1381,6 @@ export function DesktopAppActivationCoordinator() {
               requestId: request.requestId,
               ok: true,
               data: { action: "attention_status", found: !!entry, ...(entry ?? {}) },
-            };
-          }
-          if (request.action === "ask_user") {
-            const id = request.sessionId;
-            const questionId = request.questionId;
-            const prompt = request.question;
-            if (!id || !questionId || !prompt || !sessionSnapshot.some((s) => s.id === id))
-              throw new Error(
-                "Question requires an existing exact T3 session and stable question ID.",
-              );
-            // User input belongs to the T3 session; no ChatGPT guest is inspected
-            // or modified and an UNKNOWN transport reply is safe to reconcile.
-            const question = requestChatGPTSessionQuestion(environmentId, id, {
-              id: questionId,
-              prompt,
-              options: [...(request.options ?? [])],
-              ...(request.allowCustom !== undefined ? { allowCustom: request.allowCustom } : {}),
-            });
-            return {
-              version: 1,
-              requestId: request.requestId,
-              ok: true,
-              data: {
-                action: "ask_user",
-                sessionId: id,
-                questionId: question.id,
-                status: question.status,
-                instruction:
-                  "Present any further questions now, then end your turn and wait for the user's answer in this T3 session.",
-              },
             };
           }
           if (request.action === "open") {
@@ -3515,7 +3484,6 @@ export function DesktopAppActivationCoordinator() {
           request.action === "bootstrap_title" ||
           request.action === "bootstrap_discover" ||
           request.action === "bootstrap_status" ||
-          request.action === "ask_user" ||
           request.action === "request_attention" ||
           request.action === "attention_status")
       ) {

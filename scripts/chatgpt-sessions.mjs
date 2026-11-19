@@ -16,46 +16,119 @@ export async function controlSessions(
 ) {
   if (input?.action === "set_effort") {
     const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
-    if (Object.keys(input).some(key => !["action", "sessionId", "expectedConversationId", "level"].includes(key)) ||
-        !uuid.test(input.sessionId ?? "") || !uuid.test(input.expectedConversationId ?? ""))
+    if (
+      Object.keys(input).some(
+        (key) => !["action", "sessionId", "expectedConversationId", "level"].includes(key),
+      ) ||
+      !uuid.test(input.sessionId ?? "") ||
+      !uuid.test(input.expectedConversationId ?? "")
+    )
       throw new Error("set_effort needs exact sessionId, expectedConversationId and level.");
     const expression = chatGPTEffortExpression(input.level);
-    const result = await controlSessions({ action: "experimental_evaluate", sessionId: input.sessionId,
-      expectedConversationId: input.expectedConversationId, expression }, { home, exchange });
+    const result = await controlSessions(
+      {
+        action: "experimental_evaluate",
+        sessionId: input.sessionId,
+        expectedConversationId: input.expectedConversationId,
+        expression,
+      },
+      { home, exchange },
+    );
     const applied = result?.result;
     if (!applied?.ok || applied.value?.error || applied.value?.level !== input.level)
       throw new Error(`ChatGPT effort not confirmed: ${JSON.stringify(applied ?? result)}`);
-    return { action: "set_effort", sessionId: input.sessionId,
-      verifiedConversationId: input.expectedConversationId, ...applied.value };
+    return {
+      action: "set_effort",
+      sessionId: input.sessionId,
+      verifiedConversationId: input.expectedConversationId,
+      ...applied.value,
+    };
   }
   if (input?.action === "capacity_status") {
     if (Object.keys(input).some((field) => field !== "action"))
-      throw new Error("capacity_status is a read-only global T3 snapshot with no session overrides.");
-    const inventory = await controlSessions({ action: "list", which: "all", includeHidden: true },
-      { home, exchange });
+      throw new Error(
+        "capacity_status is a read-only global T3 snapshot with no session overrides.",
+      );
+    const inventory = await controlSessions(
+      { action: "list", which: "all", includeHidden: true },
+      { home, exchange },
+    );
     return computeChatGPTCapacityStatus(inventory);
   }
   if (input?.action === "caffy") {
-    const actions = new Set(["set", "stop", "pause", "resume", "status", "list", "wake", "policy", "startup", "capacity", "tasks", "configure", "begin_in", "cancel_begin", "auto_reboot"]);
+    const actions = new Set([
+      "set",
+      "stop",
+      "pause",
+      "resume",
+      "status",
+      "list",
+      "wake",
+      "policy",
+      "startup",
+      "capacity",
+      "tasks",
+      "configure",
+      "begin_in",
+      "cancel_begin",
+      "auto_reboot",
+    ]);
     if (!actions.has(input.op)) throw new Error("Unknown Caffy operation.");
-    const fields = ["action", "op", "sessionId", "conversationId", "mode",
-      "durationMinutes", "intervalMinutes", "onceOnly", "startup", "keepAwake",
-      "keepT3Busy", "maxWorking", "shutdownWhenIdle", "busyForMinutes",
-      "respectSlots", "beginAt", "prompt", "repeatPrompt", "rebootMinutes", "rebootEveryRuns", "wakeNow", "requestId"];
-    if (Object.keys(input).some(field => !fields.includes(field)))
+    const fields = [
+      "action",
+      "op",
+      "sessionId",
+      "conversationId",
+      "mode",
+      "durationMinutes",
+      "intervalMinutes",
+      "onceOnly",
+      "startup",
+      "keepAwake",
+      "keepT3Busy",
+      "maxWorking",
+      "shutdownWhenIdle",
+      "busyForMinutes",
+      "respectSlots",
+      "beginAt",
+      "prompt",
+      "repeatPrompt",
+      "rebootMinutes",
+      "rebootEveryRuns",
+      "wakeNow",
+      "requestId",
+    ];
+    if (Object.keys(input).some((field) => !fields.includes(field)))
       throw new Error("Unexpected Caffy fields.");
     if (input.op === "set" && (!input.sessionId || !input.mode))
       throw new Error("Caffy set requires sessionId and mode; T3 resolves the exact conversation.");
-    if (input.prompt !== undefined && (typeof input.prompt !== "string" || input.prompt.length > 8_000))
+    if (
+      input.prompt !== undefined &&
+      (typeof input.prompt !== "string" || input.prompt.length > 8_000)
+    )
       throw new Error("Caffy prompt must be at most 8000 characters.");
-    if (input.repeatPrompt !== undefined && (typeof input.repeatPrompt !== "string" || input.repeatPrompt.length > 29_800))
+    if (
+      input.repeatPrompt !== undefined &&
+      (typeof input.repeatPrompt !== "string" || input.repeatPrompt.length > 29_800)
+    )
       throw new Error("Repeated prompt must be at most 29800 characters.");
-    if (!["list", "policy", "status", "capacity", "tasks"].includes(input.op) && typeof input.sessionId !== "string")
+    if (
+      !["list", "policy", "status", "capacity", "tasks"].includes(input.op) &&
+      typeof input.sessionId !== "string"
+    )
       throw new Error("Caffy action requires sessionId.");
     const { action: _action, op, ...args } = input;
-    const response = await exchange(controlAddress(home), {
-      version: 1, requestId: NodeCrypto.randomUUID(), type: "caffy", action: op, ...args,
-    }, op === "capacity" ? 15_000 : 95_000);
+    const response = await exchange(
+      controlAddress(home),
+      {
+        version: 1,
+        requestId: NodeCrypto.randomUUID(),
+        type: "caffy",
+        action: op,
+        ...args,
+      },
+      op === "capacity" ? 15_000 : 95_000,
+    );
     if (!response.ok) throw new Error(`T3 Caffy ${op} failed: ${response.message}`);
     if (!Object.hasOwn(response, "data")) throw new Error("T3 Caffy result missing.");
     return response.data;
@@ -74,12 +147,16 @@ export async function controlSessions(
   if (input?.action === "image_receipt") {
     const { imageSendReceipt } = await import("./chatgpt-image-send.mjs");
     const receipt = imageSendReceipt(home, input.requestId);
-    return receipt ? { ...receipt, action: "receipt" } : {
-      action: "receipt", requestId: input.requestId, status: "not_found", imageDelivery: true,
-    };
+    return receipt
+      ? { ...receipt, action: "receipt" }
+      : {
+          action: "receipt",
+          requestId: input.requestId,
+          status: "not_found",
+          imageDelivery: true,
+        };
   }
-  if (input?.imagePath !== undefined)
-    throw new Error("imagePath is supported only for send.");
+  if (input?.imagePath !== undefined) throw new Error("imagePath is supported only for send.");
   const allowed = [
     "list",
     "preferences",
@@ -91,7 +168,6 @@ export async function controlSessions(
     "bootstrap_title",
     "bootstrap_discover",
     "bootstrap_status",
-    "ask_user",
     "request_attention",
     "attention_status",
     "task_agent_status",
@@ -135,87 +211,136 @@ export async function controlSessions(
       "which applies only to list and must be visible, recent, working, blocked or all.",
     );
   if (["idle_status", "idle_wait"].includes(input.action)) {
-    if (typeof input.environmentId !== "string" || !input.environmentId.trim() ||
-        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
-        (input.afterSequence !== undefined && (!Number.isSafeInteger(input.afterSequence) || input.afterSequence < 0)) ||
-        (input.timeoutMs !== undefined && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 0 || input.timeoutMs > 30_000)))
-      throw new Error("idle_status/idle_wait require environmentId, exact session UUID, bounded optional sequence/timeout.");
+    if (
+      typeof input.environmentId !== "string" ||
+      !input.environmentId.trim() ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
+      (input.afterSequence !== undefined &&
+        (!Number.isSafeInteger(input.afterSequence) || input.afterSequence < 0)) ||
+      (input.timeoutMs !== undefined &&
+        (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 0 || input.timeoutMs > 30_000))
+    )
+      throw new Error(
+        "idle_status/idle_wait require environmentId, exact session UUID, bounded optional sequence/timeout.",
+      );
   } else if (input.afterSequence !== undefined || input.timeoutMs !== undefined) {
     throw new Error("Idle event fields require idle_status or idle_wait.");
   }
-  if (input.action === "bootstrap_title" &&
+  if (
+    input.action === "bootstrap_title" &&
     (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
       typeof input.proposedTitle !== "string" ||
-      input.proposedTitle.length < 3 || input.proposedTitle.length > 80 ||
-      /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle)))
-    throw new Error("bootstrap_title requires a UUID sessionId and safe 3-80 character proposedTitle.");
-  if (input.action === "bootstrap_status" &&
-      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? ""))
+      input.proposedTitle.length < 3 ||
+      input.proposedTitle.length > 80 ||
+      /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle))
+  )
+    throw new Error(
+      "bootstrap_title requires a UUID sessionId and safe 3-80 character proposedTitle.",
+    );
+  if (
+    input.action === "bootstrap_status" &&
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "")
+  )
     throw new Error("bootstrap_status requires an exact session UUID.");
-  if (input.action === "bootstrap_discover" &&
+  if (
+    input.action === "bootstrap_discover" &&
     (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
       (input.proposedTitle !== undefined &&
-        (typeof input.proposedTitle !== "string" || input.proposedTitle.length > 80 ||
+        (typeof input.proposedTitle !== "string" ||
+          input.proposedTitle.length > 80 ||
           /[\[\]\x00-\x1f\x7f]/u.test(input.proposedTitle))) ||
       (input.conversationUrl !== undefined &&
         (typeof input.conversationUrl !== "string" ||
-          !/^https:\/\/chatgpt\.com\/c\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.conversationUrl)))))
-    throw new Error("bootstrap_discover requires a UUID, optional safe title and exact canonical conversation URL.");
-  if (input.proposedTitle !== undefined && !["bootstrap_title", "bootstrap_discover"].includes(input.action))
+          !/^https:\/\/chatgpt\.com\/c\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(
+            input.conversationUrl,
+          ))))
+  )
+    throw new Error(
+      "bootstrap_discover requires a UUID, optional safe title and exact canonical conversation URL.",
+    );
+  if (
+    input.proposedTitle !== undefined &&
+    !["bootstrap_title", "bootstrap_discover"].includes(input.action)
+  )
     throw new Error("proposedTitle requires bootstrap_title or bootstrap_discover.");
   if (input.conversationUrl !== undefined && input.action !== "bootstrap_discover")
     throw new Error("conversationUrl requires bootstrap_discover.");
-  if (input.action === "request_attention" &&
-      (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
-       !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? "") ||
-       typeof input.message !== "string" || !input.message.trim() || input.message.length > 1000))
-    throw new Error("request_attention requires exact sessionId, attentionId and 1-1000 character message.");
-  if (input.spokenMessage !== undefined &&
-      (input.action !== "request_attention" || typeof input.spokenMessage !== "string" ||
-       !input.spokenMessage.trim() || input.spokenMessage.length > 1000))
-    throw new Error("spokenMessage is optional, but must be 1-1000 characters and used only with request_attention.");
-  if (input.action === "attention_status" &&
-      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? ""))
+  if (
+    input.action === "request_attention" &&
+    (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? "") ||
+      typeof input.message !== "string" ||
+      !input.message.trim() ||
+      input.message.length > 1000)
+  )
+    throw new Error(
+      "request_attention requires exact sessionId, attentionId and 1-1000 character message.",
+    );
+  if (
+    input.spokenMessage !== undefined &&
+    (input.action !== "request_attention" ||
+      typeof input.spokenMessage !== "string" ||
+      !input.spokenMessage.trim() ||
+      input.spokenMessage.length > 1000)
+  )
+    throw new Error(
+      "spokenMessage is optional, but must be 1-1000 characters and used only with request_attention.",
+    );
+  if (
+    input.action === "attention_status" &&
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.attentionId ?? "")
+  )
     throw new Error("attention_status requires exact attentionId.");
-  if (!["request_attention", "attention_status"].includes(input.action) && input.attentionId !== undefined)
+  if (
+    !["request_attention", "attention_status"].includes(input.action) &&
+    input.attentionId !== undefined
+  )
     throw new Error("attentionId requires request_attention or attention_status.");
   if (["task_agent_status", "task_agent_action"].includes(input.action)) {
-    if (typeof input.taskBoardPath !== "string" || input.taskBoardPath.length < 3 || input.taskBoardPath.length > 500 ||
-        typeof input.taskId !== "string" || !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(input.taskId))
+    if (
+      typeof input.taskBoardPath !== "string" ||
+      input.taskBoardPath.length < 3 ||
+      input.taskBoardPath.length > 500 ||
+      typeof input.taskId !== "string" ||
+      !/^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test(input.taskId)
+    )
       throw new Error("Task agent control requires an exact board and task ID.");
-    if (input.action === "task_agent_action" &&
-        (!["attention_open","attention_snooze","attention_dismiss","prepfile_create"].includes(input.taskCommand) ||
-        typeof input.taskOptionsJson !== "string" || input.taskOptionsJson.length > 30_000))
+    if (
+      input.action === "task_agent_action" &&
+      (!["attention_open", "attention_snooze", "attention_dismiss", "prepfile_create"].includes(
+        input.taskCommand,
+      ) ||
+        typeof input.taskOptionsJson !== "string" ||
+        input.taskOptionsJson.length > 30_000)
+    )
       throw new Error("Unsupported task agent command/options.");
-  } else if (input.taskBoardPath !== undefined || input.taskId !== undefined ||
-             input.taskCommand !== undefined || input.taskOptionsJson !== undefined) {
+  } else if (
+    input.taskBoardPath !== undefined ||
+    input.taskId !== undefined ||
+    input.taskCommand !== undefined ||
+    input.taskOptionsJson !== undefined
+  ) {
     throw new Error("Task agent fields require task_agent_status or task_agent_action.");
-  }
-  if (input.action === "ask_user") {
-    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.sessionId ?? "") ||
-        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.questionId ?? "") ||
-        typeof input.question !== "string" || !input.question.trim() || input.question.length > 4000 ||
-        (input.options !== undefined && (!Array.isArray(input.options) || input.options.length > 8 ||
-          input.options.some(s => typeof s !== "string" || !s.trim() || s.length > 180))) ||
-        (input.allowCustom !== undefined && typeof input.allowCustom !== "boolean") ||
-        ((!input.options || !input.options.length) && input.allowCustom === false))
-      throw new Error("ask_user requires exact session/question UUIDs, question text and optional choices.");
-  } else if (input.questionId !== undefined || input.question !== undefined ||
-             input.options !== undefined || input.allowCustom !== undefined) {
-    throw new Error("Question fields apply only to ask_user.");
   }
   if (input.action === "marker_probe" && !/^T3_SELF_[A-F0-9]{32}$/.test(input.marker ?? ""))
     throw new Error("marker_probe requires the exact self-identification token.");
   if (input.marker !== undefined && input.action !== "marker_probe")
     throw new Error("marker applies only to marker_probe.");
-  if (input.action === "experimental_evaluate" &&
-      (typeof input.expression !== "string" || !input.expression.trim() ||
-       input.expression.length > 8_000))
-    throw new Error("experimental_evaluate requires a 1..8000 character JS expression. An expectedConversationId is optional only for verified backend-created fresh chats.");
+  if (
+    input.action === "experimental_evaluate" &&
+    (typeof input.expression !== "string" ||
+      !input.expression.trim() ||
+      input.expression.length > 8_000)
+  )
+    throw new Error(
+      "experimental_evaluate requires a 1..8000 character JS expression. An expectedConversationId is optional only for verified backend-created fresh chats.",
+    );
   if (input.expression !== undefined && input.action !== "experimental_evaluate")
     throw new Error("expression is valid only for experimental_evaluate.");
-  if (input.allowComposerDraft !== undefined &&
-      (input.action !== "experimental_evaluate" || typeof input.allowComposerDraft !== "boolean"))
+  if (
+    input.allowComposerDraft !== undefined &&
+    (input.action !== "experimental_evaluate" || typeof input.allowComposerDraft !== "boolean")
+  )
     throw new Error("allowComposerDraft is a boolean valid only for experimental_evaluate.");
   if (
     ![
@@ -343,7 +468,9 @@ export async function controlSessions(
     throw new Error("senderSessionId is a nonempty source ID used only with send.");
   if (
     input.expectedConversationId !== undefined &&
-    (!(["read", "send", "reconcile_send", "enqueue", "experimental_evaluate"].includes(input.action)) ||
+    (!["read", "send", "reconcile_send", "enqueue", "experimental_evaluate"].includes(
+      input.action,
+    ) ||
       typeof input.expectedConversationId !== "string" ||
       !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.expectedConversationId))
   ) {
@@ -403,29 +530,45 @@ export async function controlSessions(
     action: input.action,
     ...(input.action === "marker_probe" ? { marker: input.marker } : {}),
     ...(["task_agent_status", "task_agent_action"].includes(input.action)
-      ? {taskBoardPath: input.taskBoardPath, taskId: input.taskId,
-        ...(input.action === "task_agent_action" ? {taskCommand:input.taskCommand,
-          taskOptionsJson:input.taskOptionsJson} : {})} : {}),
-    ...(input.action === "experimental_evaluate"
-      ? { expression: input.expression, allowComposerDraft: input.allowComposerDraft === true } : {}),
-    ...(["bootstrap_title", "bootstrap_discover"].includes(input.action) ? { proposedTitle: input.proposedTitle } : {}),
-    ...(input.action === "bootstrap_discover" && input.conversationUrl ? { conversationUrl: input.conversationUrl } : {}),
-    ...(["request_attention", "attention_status"].includes(input.action)
-      ? { attentionId: input.attentionId,
-          ...(input.action === "request_attention" ? { message: input.message,
-            ...(input.spokenMessage ? { spokenMessage: input.spokenMessage } : {}) } : {}) }
+      ? {
+          taskBoardPath: input.taskBoardPath,
+          taskId: input.taskId,
+          ...(input.action === "task_agent_action"
+            ? { taskCommand: input.taskCommand, taskOptionsJson: input.taskOptionsJson }
+            : {}),
+        }
       : {}),
-    ...(input.action === "ask_user" ? { questionId: input.questionId, question: input.question,
-      ...(input.options ? { options: input.options } : {}),
-      ...(input.allowCustom !== undefined ? { allowCustom: input.allowCustom } : {}) } : {}),
+    ...(input.action === "experimental_evaluate"
+      ? { expression: input.expression, allowComposerDraft: input.allowComposerDraft === true }
+      : {}),
+    ...(["bootstrap_title", "bootstrap_discover"].includes(input.action)
+      ? { proposedTitle: input.proposedTitle }
+      : {}),
+    ...(input.action === "bootstrap_discover" && input.conversationUrl
+      ? { conversationUrl: input.conversationUrl }
+      : {}),
+    ...(["request_attention", "attention_status"].includes(input.action)
+      ? {
+          attentionId: input.attentionId,
+          ...(input.action === "request_attention"
+            ? {
+                message: input.message,
+                ...(input.spokenMessage ? { spokenMessage: input.spokenMessage } : {}),
+              }
+            : {}),
+        }
+      : {}),
     ...(input.action === "list"
       ? { which: input.which ?? "visible", includeHidden: input.includeHidden === true }
       : {}),
     ...(input.action === "change_state" ? { state: input.state } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.action === "idle_status" || input.action === "idle_wait"
-      ? { environmentId: input.environmentId, ...(input.afterSequence !== undefined ? { afterSequence: input.afterSequence } : {}),
-          ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}) }
+      ? {
+          environmentId: input.environmentId,
+          ...(input.afterSequence !== undefined ? { afterSequence: input.afterSequence } : {}),
+          ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+        }
       : {}),
     ...(input.action === "rollover_finalize"
       ? {
@@ -486,7 +629,7 @@ export async function controlSessions(
     if (input.action !== "list") {
       throw new Error(
         `T3 desktop pipe is unavailable (${error.code}); no cross-integrity write fallback. ` +
-        "Restore equal-integrity T3 access before retrying; reconcile any uncertain send receipt first.",
+          "Restore equal-integrity T3 access before retrying; reconcile any uncertain send receipt first.",
         { cause: error },
       );
     }
@@ -495,9 +638,9 @@ export async function controlSessions(
     } catch (fallbackError) {
       throw new Error(
         `T3 desktop pipe is unavailable (${error.code}), and authenticated read-only snapshot failed: ` +
-        `${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}. ` +
-        "No identity observation or seat change was made. Update T3 desktop to enable the " +
-        "read-only bridge; keep existing sessions open. Retrying this read is safe.",
+          `${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}. ` +
+          "No identity observation or seat change was made. Update T3 desktop to enable the " +
+          "read-only bridge; keep existing sessions open. Retrying this read is safe.",
         { cause: fallbackError },
       );
     }
