@@ -1501,6 +1501,25 @@ const subagentDeviceInstructions: HookCallback = () =>
     },
   });
 
+/** Only server-generated reset-window hello turns can bypass Claude's normal coding context. */
+export function isMinimalClaudeResetWakeHello(
+  input: Pick<
+    ProviderAdapter.ProviderAdapterV2TurnInput,
+    "appThread" | "message" | "providerTurnOrdinal"
+  >,
+): boolean {
+  return (
+    input.appThread.creationSource === "server" &&
+    (input.appThread.title === "5-hour session wake" ||
+      input.appThread.title === "5-hour wake test") &&
+    input.providerTurnOrdinal === 1 &&
+    input.message.messageId.startsWith("reset-wake:") &&
+    input.message.creationSource === "server" &&
+    input.message.text === "Say 'hello'." &&
+    input.message.attachments.length === 0
+  );
+}
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -1526,8 +1545,34 @@ export function makeClaudeQueryOptions(input: {
   readonly appendSystemPromptFileText?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
   readonly toolSearchOverride?: "true";
+  readonly minimalWakeHello?: boolean;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
+  const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
+    ? { resume: input.nativeThreadId }
+    : { sessionId: input.nativeThreadId };
+  if (input.minimalWakeHello) {
+    // Real Haiku inference must still occur to start the 5-hour usage window.
+    // SDK isolation removes user/project instructions, skills, plugins and MCP tools.
+    return {
+      model: compiledSelection.apiModelId,
+      tools: [],
+      permissionMode: "default",
+      includePartialMessages: true,
+      ...threadIdentity,
+      ...(compiledSelection.effort === undefined
+        ? {}
+        : { effort: compiledSelection.effort as NonNullable<ClaudeQueryOptions["effort"]> }),
+      ...(input.environment === undefined ? {} : { env: input.environment }),
+      ...(input.cwd === null ? {} : { cwd: input.cwd }),
+      settingSources: [],
+      skills: [],
+      plugins: [],
+      mcpServers: {},
+      strictMcpConfig: true,
+      systemPrompt: "Reply with exactly hello.",
+    };
+  }
   const {
     // claudeLaunchArgDirectories reads every --add-dir into additionalDirectories.
     "add-dir": _launchArgAddDir,
@@ -1571,9 +1616,6 @@ export function makeClaudeQueryOptions(input: {
       "Claude native-child workflow policy cannot be enforced with overriding settings arguments.",
     );
   }
-  const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
-    ? { resume: input.nativeThreadId }
-    : { sessionId: input.nativeThreadId };
   const selectedTools = input.tools ?? CLAUDE_CODE_PRESET_TOOLS;
   const selectionSettings =
     Object.keys(compiledSelection.settings).length === 0
@@ -10343,7 +10385,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
           });
-          const queryPolicyKey = claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides);
+          const minimalWakeHello = isMinimalClaudeResetWakeHello(turnInput);
+          const queryPolicyKey =
+            claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides) +
+            (minimalWakeHello ? ":minimal-reset-wake" : "");
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
@@ -10459,6 +10504,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           );
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
+            minimalWakeHello,
             nativeThreadId,
             resume: shouldResume,
             ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
@@ -10476,7 +10522,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : undefined,
             ),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
-            disallowedTools: queryPolicy.disallowedTools,
+            ...(queryPolicy.disallowedTools === undefined
+              ? {}
+              : { disallowedTools: queryPolicy.disallowedTools }),
             ...(mcpOverrides.allowedTools === undefined
               ? {}
               : { allowedTools: mcpOverrides.allowedTools }),

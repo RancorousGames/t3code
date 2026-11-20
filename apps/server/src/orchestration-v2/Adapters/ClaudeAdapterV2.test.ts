@@ -236,6 +236,69 @@ function makeClaudeTestTurnInput(input: {
 }
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
+  it("isolates server-created reset hellos without affecting normal or queued work", () => {
+    const hello = {
+      appThread: { creationSource: "server", title: "5-hour session wake" },
+      providerTurnOrdinal: 1,
+      message: {
+        messageId: MessageId.make("reset-wake:test"),
+        creationSource: "server",
+        text: "Say 'hello'.",
+        attachments: [],
+      },
+    } as unknown as Pick<
+      ProviderAdapter.ProviderAdapterV2TurnInput,
+      "appThread" | "message" | "providerTurnOrdinal"
+    >;
+    assert.isTrue(ClaudeAdapterV2.isMinimalClaudeResetWakeHello(hello));
+    assert.isFalse(
+      ClaudeAdapterV2.isMinimalClaudeResetWakeHello({
+        ...hello,
+        providerTurnOrdinal: 2,
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.isMinimalClaudeResetWakeHello({
+        ...hello,
+        message: { ...hello.message, text: "Do the queued work" },
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.isMinimalClaudeResetWakeHello({
+        ...hello,
+        appThread: { ...hello.appThread, creationSource: "web" },
+      }),
+    );
+
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "claude-haiku-5-5" },
+      nativeThreadId: "minimal-reset-wake",
+      resume: false,
+      cwd: "/workspace",
+      settings: { ...AUTO_COMPACT_CLAUDE_SETTINGS, launchArgs: "--add-dir ../apps" },
+      mcpServers: { unused: { type: "http", url: "http://localhost:7777" } },
+      minimalWakeHello: true,
+    });
+    assert.deepEqual(options.tools, []);
+    assert.deepEqual(options.settingSources, []);
+    assert.deepEqual(options.skills, []);
+    assert.deepEqual(options.plugins, []);
+    assert.deepEqual(options.mcpServers, {});
+    assert.isTrue(options.strictMcpConfig);
+    assert.equal(options.systemPrompt, "Reply with exactly hello.");
+    assert.isUndefined(options.additionalDirectories);
+    assert.isUndefined(options.extraArgs);
+
+    const normal = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "normal-work",
+      resume: false,
+      cwd: "/workspace",
+    });
+    assert.deepEqual(normal.tools, { type: "preset", preset: "claude_code" });
+    assert.notDeepEqual(normal.systemPrompt, options.systemPrompt);
+  });
+
   it("enables hosted Artifact only for explicit publishing requests", () => {
     assert.isFalse(ClaudeAdapterV2.claudeHostedArtifactRequested("Implement an HTML dashboard"));
     assert.isFalse(ClaudeAdapterV2.claudeHostedArtifactRequested("Why is Claude Artifact large?"));
