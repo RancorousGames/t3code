@@ -67,13 +67,15 @@ export function chatGPTRecoveryHoverDetails(input: RecoveryHoverInput): string[]
   const lines = [
     `Observed: ${label}`,
     `Current phase: ${
-      phase === "refreshing"
-        ? "Refreshing"
-        : phase === "checking"
-          ? "Verifying the error"
-          : phase === "queued"
-            ? "Queued for automatic checks"
-            : "No active recovery step reported"
+      phase === "retrying"
+        ? "Pressing ChatGPT Try again"
+        : phase === "refreshing"
+          ? "Refreshing"
+          : phase === "checking"
+            ? "Verifying the error"
+            : phase === "queued"
+              ? "Queued for automatic checks"
+              : "No active recovery step reported"
     }`,
   ];
 

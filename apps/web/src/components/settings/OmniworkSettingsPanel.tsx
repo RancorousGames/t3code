@@ -186,6 +186,30 @@ export function OmniworkSettingsPanel() {
       </SettingsSection>
       <SettingsSection title="ChatGPT recovery">
         <SettingsRow
+          id="omniwork-chatgpt-red-retry-button"
+          title="Use ChatGPT's Retry button for red load errors"
+          description="Experimental (off by default). For the temporary loading-limit message, press an enabled Try again button instead of refreshing the page. When it is greyed out or absent, wait without refreshing. Other recovery types are unchanged."
+          control={
+            <Select
+              value={recoverySettings.retryButtonForRedErrors ? "on" : "off"}
+              onValueChange={(value) =>
+                updateChatGPTRecoverySettings({ retryButtonForRedErrors: value === "on" })
+              }
+              disabled={!desktop}
+            >
+              <SelectTrigger size="sm" aria-label="Use Retry button for red ChatGPT loading errors">
+                <SelectValue>
+                  {recoverySettings.retryButtonForRedErrors ? "On" : "Off (default)"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="off">Off (refresh as before)</SelectItem>
+                <SelectItem value="on">On (Retry button only)</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
           id="omniwork-chatgpt-orange-recovery-strategy"
           title="Recovering (orange) session handling"
           description={`${orangeRecoverySelection?.description ?? "Choose what automatic recovery may do."} Red load failures and draft/UNKNOWN-send safety remain unchanged.`}

@@ -14,6 +14,7 @@ export interface ChatGPTRecoverySettings {
   perSessionSeconds: number;
   orangeGraceMinutes: number;
   orangeStrategy: ChatGPTOrangeRecoveryStrategy;
+  retryButtonForRedErrors: boolean;
   missingComposerSeconds: number;
   targetCount: number;
   ordering: "recent-first" | "managers-first";
@@ -27,6 +28,7 @@ export const DEFAULT_CHATGPT_RECOVERY_SETTINGS: ChatGPTRecoverySettings = {
   perSessionSeconds: 120,
   orangeGraceMinutes: 10,
   orangeStrategy: DEFAULT_CHATGPT_ORANGE_RECOVERY_STRATEGY,
+  retryButtonForRedErrors: false,
   missingComposerSeconds: 60,
   targetCount: 3,
   ordering: "recent-first",
@@ -43,12 +45,16 @@ export const CHATGPT_RECOVERY_INTERVAL_BOUNDS = {
   missingComposerSeconds: [5, 3600],
 } as const;
 const ranges = { ...CHATGPT_RECOVERY_INTERVAL_BOUNDS, targetCount: [1, 3] } as const;
-export function validRecoverySettingNumber(key: keyof typeof ranges, value: unknown): value is number {
+export function validRecoverySettingNumber(
+  key: keyof typeof ranges,
+  value: unknown,
+): value is number {
   const [min, max] = ranges[key];
   return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
 }
 const STORAGE_DENIED_RECOVERY_SETTINGS: ChatGPTRecoverySettings = {
-  ...DEFAULT_CHATGPT_RECOVERY_SETTINGS, paused: true,
+  ...DEFAULT_CHATGPT_RECOVERY_SETTINGS,
+  paused: true,
 };
 let rawCache: string | null | undefined;
 let settingsCache: ChatGPTRecoverySettings = DEFAULT_CHATGPT_RECOVERY_SETTINGS;
@@ -56,8 +62,11 @@ let settingsCache: ChatGPTRecoverySettings = DEFAULT_CHATGPT_RECOVERY_SETTINGS;
 export function readChatGPTRecoverySettings(): ChatGPTRecoverySettings {
   if (typeof window === "undefined") return DEFAULT_CHATGPT_RECOVERY_SETTINGS;
   let raw: string | null;
-  try { raw = window.localStorage.getItem(KEY); }
-  catch { return STORAGE_DENIED_RECOVERY_SETTINGS; }
+  try {
+    raw = window.localStorage.getItem(KEY);
+  } catch {
+    return STORAGE_DENIED_RECOVERY_SETTINGS;
+  }
   if (raw === rawCache) return settingsCache;
   rawCache = raw;
   let input: Record<string, unknown> = {};
@@ -74,11 +83,11 @@ export function readChatGPTRecoverySettings(): ChatGPTRecoverySettings {
     input.watchdogSeconds = Math.max(60, input.scanSeconds * 6);
   const next = { ...DEFAULT_CHATGPT_RECOVERY_SETTINGS };
   for (const field of Object.keys(ranges) as Array<keyof typeof ranges>) {
-    if (validRecoverySettingNumber(field, input[field]))
-      next[field] = input[field] as number;
+    if (validRecoverySettingNumber(field, input[field])) next[field] = input[field] as number;
   }
   next.paused = typeof input.paused === "boolean" ? input.paused : false;
   next.orangeStrategy = normalizeChatGPTOrangeRecoveryStrategy(input.orangeStrategy);
+  next.retryButtonForRedErrors = input.retryButtonForRedErrors === true;
   next.ordering = input.ordering === "managers-first" ? "managers-first" : "recent-first";
   settingsCache = next;
   return next;
@@ -90,11 +99,15 @@ export function updateChatGPTRecoverySettings(patch: Partial<ChatGPTRecoverySett
     const baseline = readChatGPTRecoverySettings();
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ ...baseline, ...Object.fromEntries(
-        Object.entries(patch).filter(([key, value]) =>
-          !(key in ranges) || validRecoverySettingNumber(key as keyof typeof ranges, value),
+      JSON.stringify({
+        ...baseline,
+        ...Object.fromEntries(
+          Object.entries(patch).filter(
+            ([key, value]) =>
+              !(key in ranges) || validRecoverySettingNumber(key as keyof typeof ranges, value),
+          ),
         ),
-      ) }),
+      }),
     );
     window.dispatchEvent(new window.Event(EVENT));
   } catch {

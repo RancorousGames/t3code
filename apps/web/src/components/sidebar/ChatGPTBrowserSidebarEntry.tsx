@@ -3482,19 +3482,21 @@ export function ChatGPTBrowserSidebarEntry({
                               const recoveryLabel =
                                 queued && recoveryBlocked
                                   ? "Marked for recovery; waiting for safe retry or human review"
-                                  : recoveryPhase === "refreshing"
-                                    ? "Refreshing ChatGPT conversation to recover it"
-                                    : recoveryPhase === "checking"
-                                      ? "Confirming a recoverable ChatGPT error"
-                                      : recoveryPhase === "queued"
-                                        ? "Confirmed ChatGPT error; queued for automatic recovery"
-                                        : queued
-                                          ? waitingForPage
-                                            ? "Checking unavailable ChatGPT page for automatic recovery"
-                                            : activity.recoveryProblem === "interrupted"
-                                              ? "Queued for automatic recovery if the connection stays interrupted"
-                                              : "Queued for automatic recovery; waiting for its turn or retry cooldown"
-                                          : null;
+                                  : recoveryPhase === "retrying"
+                                    ? "Pressing ChatGPT Try again to recover it"
+                                    : recoveryPhase === "refreshing"
+                                      ? "Refreshing ChatGPT conversation to recover it"
+                                      : recoveryPhase === "checking"
+                                        ? "Confirming a recoverable ChatGPT error"
+                                        : recoveryPhase === "queued"
+                                          ? "Confirmed ChatGPT error; queued for automatic recovery"
+                                          : queued
+                                            ? waitingForPage
+                                              ? "Checking unavailable ChatGPT page for automatic recovery"
+                                              : activity.recoveryProblem === "interrupted"
+                                                ? "Queued for automatic recovery if the connection stays interrupted"
+                                                : "Queued for automatic recovery; waiting for its turn or retry cooldown"
+                                            : null;
                               const pendingLoad =
                                 loadedWithoutFailure ||
                                 model.recovery.stoppedReason !== null ||

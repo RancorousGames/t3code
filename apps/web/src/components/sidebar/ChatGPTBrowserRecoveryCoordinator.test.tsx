@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   refresh: vi.fn(async (_id: string) => {}),
   navigate: vi.fn(async (_id: string, _url: string) => {}),
   stop: vi.fn(async (_id: string) => {}),
+  retry: vi.fn(async (_id: string) => {}),
   type: vi.fn(async (_id: string, _text: string) => {}),
   press: vi.fn(async (_id: string, _keys: { key: string; expectedConversationId: string }) => {}),
   resetBrowser: vi.fn(async (_id: string, _url?: string) => ({
@@ -66,6 +67,10 @@ import {
   type ChatGPTRecoveryPhase,
 } from "./ChatGPTBrowserRecoveryCoordinator";
 import { recordSessionClick } from "./chatGPTConversationRecovery";
+import {
+  readChatGPTRecoverySettings,
+  updateChatGPTRecoverySettings,
+} from "../../chatGPTRecoverySettings";
 import { getChatGPTSessionPersistedStore } from "../../chatGPTSessionPersistedStore";
 import {
   readChatGPTRecoveryMetrics,
@@ -94,6 +99,10 @@ async function mount(
     });
     Object.defineProperty(webview, "executeJavaScript", {
       value: async (expression: string) => {
+        if (expression.includes('result: state === "clicked" ? "retry_clicked"')) {
+          await mocks.retry(id);
+          return { result: "retry_clicked" };
+        }
         if (expression.includes('result:"stop_clicked"')) {
           await mocks.stop(id);
           return { result: "stop_clicked" };
@@ -169,6 +178,7 @@ beforeEach(() => {
   mocks.refresh.mockReset().mockResolvedValue(undefined);
   mocks.navigate.mockReset().mockResolvedValue(undefined);
   mocks.stop.mockReset().mockResolvedValue(undefined);
+  mocks.retry.mockReset().mockResolvedValue(undefined);
   mocks.type.mockReset().mockResolvedValue(undefined);
   mocks.press.mockReset().mockResolvedValue(undefined);
   mocks.resetBrowser.mockReset().mockResolvedValue({ previousWebContentsId: 1, webContentsId: 2 });
@@ -200,6 +210,49 @@ describe("serialized ChatGPT browser recovery", () => {
       await vi.advanceTimersByTimeAsync(1);
     });
     expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+  });
+
+  it("uses guarded Try again rather than refresh when the persisted experiment is enabled", async () => {
+    updateChatGPTRecoverySettings({ retryButtonForRedErrors: true });
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+      url: `https://chatgpt.com/c/${id}`,
+      retryState: "ready",
+    }));
+    await mount(["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.retry).toHaveBeenCalledExactlyOnceWith("comit");
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(readChatGPTRecoverySettings().retryButtonForRedErrors).toBe(true);
+  });
+
+  it("waits for a disabled Retry instead of refreshing, then clicks when it re-enables", async () => {
+    updateChatGPTRecoverySettings({ retryButtonForRedErrors: true });
+    let retryState = "disabled";
+    mocks.result.mockImplementation(async (id: string) => ({
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+      url: `https://chatgpt.com/c/${id}`,
+      retryState,
+    }));
+    await mount(["comit"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.retry).not.toHaveBeenCalled();
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    retryState = "ready";
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-recovery-state-changed", {
+          detail: { environmentId: "local", sessionId: "comit" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(mocks.retry).toHaveBeenCalledExactlyOnceWith("comit");
+    expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
   it("reacts to a health transition without waiting for the watchdog", async () => {

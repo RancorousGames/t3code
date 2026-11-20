@@ -44,7 +44,7 @@ export type ChatGPTSessionBucket =
   | "completed";
 
 export interface ChatGPTSessionRecovery {
-  phase: "checking" | "refreshing" | "queued" | null;
+  phase: "checking" | "refreshing" | "retrying" | "queued" | null;
   attempts: number;
   nextAttemptAt: number | null;
   lastAttemptAt: number | null;

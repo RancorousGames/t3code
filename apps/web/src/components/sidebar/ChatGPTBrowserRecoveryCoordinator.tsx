@@ -59,6 +59,8 @@ import { recoveryNextWakeDelayMs } from "../../chatGPTRecoveryWake";
 import { readThreadPreviewState } from "../../previewStateStore";
 import { previewBridge } from "../preview/previewBridge";
 import { CHATGPT_ACTIVITY_EXPRESSION } from "./chatGPTActivity";
+import { operateChatGPTRetryControl } from "./chatGPTRetryControl";
+import { hasChatGPTLoadFailure } from "./chatGPTLoadFailureProbe";
 import {
   RECOVERY_REFRESH_TIMEOUT_MS,
   cooldownElapsed,
@@ -83,8 +85,11 @@ const CHATGPT_RECOVERY_PROBE_EXPRESSION = `(() => {
   const permanentReason = /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i.test(alerts) ? "conversation_full"
     : /(?:access denied|do not have access|don't have access|permission denied)/i.test(alerts) ? "access"
     : /(?:sign in|log in|session expired|authentication required)/i.test(alerts) ? "auth" : null;
-  return {...page, activity: ${CHATGPT_ACTIVITY_EXPRESSION}, draftEmpty: draft === null ? null : !draft.trim(),
-    stopVisible: visible(stop), permanentReason};
+  const activity = ${CHATGPT_ACTIVITY_EXPRESSION};
+  const retryState = activity === "invalid: A temporary limit is preventing this chat from loading. Try again later."
+    ? (${operateChatGPTRetryControl.toString()})(false) : null;
+  return {...page, activity, draftEmpty: draft === null ? null : !draft.trim(),
+    stopVisible: visible(stop), permanentReason, retryState};
 })()`;
 
 interface RecoverySnapshot {
@@ -100,6 +105,7 @@ interface RecoverySnapshot {
   draftEmpty?: boolean | null;
   stopVisible?: boolean;
   permanentReason?: string | null;
+  retryState?: "ready" | "disabled" | "missing" | "clicked" | null;
 }
 
 type OrangeStage =
@@ -374,7 +380,19 @@ function stopOrphanExpression(conversationId: string, episode: OrangeEpisode): s
   })()`;
 }
 
-export type ChatGPTRecoveryPhase = "queued" | "checking" | "refreshing";
+function guardedRedRetryButtonExpression(conversationId: string): string {
+  return `(() => {
+    const actual = (${chatGPTConversationIdFromUrl.toString()})(location.href);
+    if (actual !== ${JSON.stringify(conversationId)})
+      return {result: "identity_changed"};
+    if (!(${hasChatGPTLoadFailure.toString()})())
+      return {result: "error_cleared"};
+    const state = (${operateChatGPTRetryControl.toString()})(true);
+    return {result: state === "clicked" ? "retry_clicked" : "retry_" + state};
+  })()`;
+}
+
+export type ChatGPTRecoveryPhase = "queued" | "checking" | "refreshing" | "retrying";
 const BACKGROUND_PROBES_PER_SCAN = 4;
 const BACKGROUND_PROBE_SETTLE_MS = 1_000;
 
@@ -1587,6 +1605,74 @@ export function ChatGPTBrowserRecoveryCoordinator({
                   ))
               )
                 continue;
+
+              if (problem === "load-failure" && settings.retryButtonForRedErrors) {
+                // The provider disables Retry during its own backoff. Never substitute
+                // a refresh while it is greyed out; the next scan observes re-enable.
+                if (second.snapshot.retryState !== "ready") {
+                  recordChatGPTRecoveryEvent(
+                    envId,
+                    sessionId,
+                    "waiting",
+                    `retry-button-${second.snapshot.retryState ?? "unavailable"}`,
+                  );
+                  continue;
+                }
+                if (!begin(sessionId, "retry-button:load-failure")) continue;
+                const attempts = (persistent.red[sessionId]?.attempts ?? 0) + 1;
+                persistent.red[sessionId] = {
+                  attempts,
+                  nextAt: attemptedAt + nextRedRetryDelay(sessionId, attempts),
+                  conversationId,
+                };
+                if (!saveBoundedState(envId, persistent)) {
+                  finishRecoveryAttempt(
+                    envId,
+                    sessionId,
+                    "retry not dispatched: persistence unavailable",
+                  );
+                  continue;
+                }
+                recordRecoveryAttempt(envId, sessionId, attemptedAt, currentSessionIds(), "red");
+                dispatchedLanes.red = true;
+                phase(sessionId, "retrying");
+                recordChatGPTRecoveryAttemptLog(envId, {
+                  at: attemptedAt,
+                  kind: "attempt",
+                  sessionId,
+                  attemptNumber: readRecoveryQueue(envId).failures[sessionId]?.attempts ?? 0,
+                  detail: "red Try again button (guarded)",
+                });
+                try {
+                  const response = await executeGuestRecoveryActionWithDeadline(
+                    webview,
+                    guardedRedRetryButtonExpression(conversationId),
+                    retainBridge(sessionId),
+                  );
+                  const outcome = response?.result ?? "timeout_or_unconfirmed";
+                  recordChatGPTRecoveryEvent(envId, sessionId, "retry-button-result", outcome);
+                  finishRecoveryAttempt(envId, sessionId, `Try again: ${outcome}`);
+                  if (outcome !== "retry_clicked")
+                    recoveryMetric(
+                      envId,
+                      persistent,
+                      sessionId,
+                      conversationId,
+                      second.snapshot,
+                      problem,
+                      "uncertain",
+                    );
+                } catch {
+                  recordChatGPTRecoveryEvent(
+                    envId,
+                    sessionId,
+                    "retry-button-result",
+                    "execution-failed",
+                  );
+                  finishRecoveryAttempt(envId, sessionId, "Try again: execution failed");
+                }
+                continue;
+              }
 
               if (!begin(sessionId, "refresh:" + problem)) continue;
               if (problem === "load-failure") {

@@ -750,6 +750,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["logs traces processes resource history failures spans cpu memory"],
   },
   {
+    id: "omniwork-chatgpt-red-retry-button",
+    title: "ChatGPT Retry button for red loading errors",
+    to: "/settings/omniwork",
+    searchTerms: [
+      "omniwork retry button temporary limit loading error red refresh greyed disabled",
+    ],
+    desktopOnly: true,
+  },
+  {
     id: "omniwork-messaging-diagnostics",
     title: "Messaging diagnostics",
     to: "/settings/omniwork",

@@ -39,8 +39,24 @@ describe("custom ChatGPT recovery intervals", () => {
       orangeGraceMinutes: 7,
       missingComposerSeconds: 83,
     });
-    expect(JSON.parse(window.localStorage.getItem("t3code:chatgpt-browser:recovery-preferences:v1")!))
-      .toMatchObject({ watchdogSeconds: 173, orangeGlobalSeconds: 91 });
+    expect(
+      JSON.parse(window.localStorage.getItem("t3code:chatgpt-browser:recovery-preferences:v1")!),
+    ).toMatchObject({ watchdogSeconds: 173, orangeGlobalSeconds: 91 });
+  });
+
+  it("keeps red Retry-button recovery disabled unless explicitly persisted on", () => {
+    expect(readChatGPTRecoverySettings().retryButtonForRedErrors).toBe(false);
+    updateChatGPTRecoverySettings({ retryButtonForRedErrors: true });
+    expect(readChatGPTRecoverySettings().retryButtonForRedErrors).toBe(true);
+    expect(
+      JSON.parse(window.localStorage.getItem("t3code:chatgpt-browser:recovery-preferences:v1")!)
+        .retryButtonForRedErrors,
+    ).toBe(true);
+    window.localStorage.setItem(
+      "t3code:chatgpt-browser:recovery-preferences:v1",
+      JSON.stringify({ retryButtonForRedErrors: "true" }),
+    );
+    expect(readChatGPTRecoverySettings().retryButtonForRedErrors).toBe(false);
   });
 
   it("rejects zero, negative, fractional, out-of-range and nonfinite values", () => {
@@ -69,14 +85,21 @@ describe("custom ChatGPT recovery intervals", () => {
   });
 
   it("migrates legacy 20-second scans into 120-second watchdogs", () => {
-    window.localStorage.setItem("t3code:chatgpt-browser:recovery-preferences:v1",
-      JSON.stringify({ scanSeconds: 20, globalSeconds: 43 }));
-    expect(readChatGPTRecoverySettings()).toMatchObject({ watchdogSeconds: 120, globalSeconds: 43 });
+    window.localStorage.setItem(
+      "t3code:chatgpt-browser:recovery-preferences:v1",
+      JSON.stringify({ scanSeconds: 20, globalSeconds: 43 }),
+    );
+    expect(readChatGPTRecoverySettings()).toMatchObject({
+      watchdogSeconds: 120,
+      globalSeconds: 43,
+    });
   });
 
   it("returns safe defaults when browser storage itself is denied", () => {
     vi.stubGlobal("window", {
-      get localStorage() { throw new Error("SecurityError"); },
+      get localStorage() {
+        throw new Error("SecurityError");
+      },
     });
     const denied = readChatGPTRecoverySettings();
     expect(denied).toEqual({ ...DEFAULT_CHATGPT_RECOVERY_SETTINGS, paused: true });
@@ -85,8 +108,15 @@ describe("custom ChatGPT recovery intervals", () => {
     expect(() => updateChatGPTRecoverySettings({ paused: false })).not.toThrow();
   });
   it("reverts invalid stored legacy intervals without disabling recovery", () => {
-    window.localStorage.setItem("t3code:chatgpt-browser:recovery-preferences:v1",
-      JSON.stringify({ watchdogSeconds: 0, perSessionSeconds: "abc", paused: true, targetCount: 2 }));
+    window.localStorage.setItem(
+      "t3code:chatgpt-browser:recovery-preferences:v1",
+      JSON.stringify({
+        watchdogSeconds: 0,
+        perSessionSeconds: "abc",
+        paused: true,
+        targetCount: 2,
+      }),
+    );
     expect(readChatGPTRecoverySettings()).toMatchObject({
       watchdogSeconds: DEFAULT_CHATGPT_RECOVERY_SETTINGS.watchdogSeconds,
       perSessionSeconds: DEFAULT_CHATGPT_RECOVERY_SETTINGS.perSessionSeconds,
