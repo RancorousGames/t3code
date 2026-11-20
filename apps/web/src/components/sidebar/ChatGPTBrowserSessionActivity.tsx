@@ -216,6 +216,7 @@ export function useChatGPTBrowserSessionActivity(
       let healthTag = "not-probed";
       let next: ChatGPTActivityState = "unknown";
       let reason: string | null = "the browser page is not attached";
+      let actualGuestUrl: string | null = null;
       // Only real display counts as use: recovery probes also hold surface activity.
       const visible = isChatGPTSessionBeingViewed(environmentId, sessionId);
       const hibernated = isChatGPTGuestHibernated(runtimeTabId);
@@ -245,6 +246,11 @@ export function useChatGPTBrowserSessionActivity(
             ),
           ).find((element) => element.dataset.previewTab === runtimeTabId);
           if (webview) {
+            try {
+              actualGuestUrl = webview.getURL();
+            } catch {
+              // A detached/navigating guest cannot certify a new route.
+            }
             // Guest preload confirms a new rendered user turn after a trusted
             // composer submission. No sidebar visibility or cached URL needed.
             const session = readChatGPTBrowserSessions(environmentId).find(
@@ -342,7 +348,15 @@ export function useChatGPTBrowserSessionActivity(
       const navAfterProbe = tabId
         ? readThreadPreviewState(threadRef).sessions[tabId]?.navStatus
         : null;
-      const observedUrl = navAfterProbe && "url" in navAfterProbe ? navAfterProbe.url : null;
+      const navUrl = navAfterProbe && "url" in navAfterProbe ? navAfterProbe.url : null;
+      // A cached "Loading" overlay may have no URL even while the actual
+      // guest is showing a confirmed error at the original conversation URL.
+      const observedUrl =
+        actualGuestUrl === null
+          ? navUrl
+          : isChatGPTConversationUrl(actualGuestUrl)
+            ? actualGuestUrl
+            : null;
       const confirmedReason =
         reason === "browser-unresponsive" ||
         reason === "A temporary limit is preventing this chat from loading. Try again later.";
@@ -352,13 +366,15 @@ export function useChatGPTBrowserSessionActivity(
         lastConfirmedFailure.current = null; // A fresh page observation cleared the error.
       } else if (
         next === "unknown" &&
-        !attached &&
         lastConfirmedFailure.current?.tabId === runtimeTabId &&
         lastConfirmedFailure.current.url === observedUrl
       ) {
-        // A detached guest cannot disprove its last positively observed error.
+        // Neither an inspection timeout nor a still-mounted shell lacking a
+        // composer disproves a positively observed provider failure.
         next = "invalid";
         reason = lastConfirmedFailure.current.reason;
+      } else if (observedUrl !== null && lastConfirmedFailure.current?.url !== observedUrl) {
+        lastConfirmedFailure.current = null;
       }
       if (disposed) return;
 

@@ -54,10 +54,11 @@ describe("ChatGPT activity recency", () => {
     expect(chatGPTActivityColorClass("unloaded")).toBe("text-zinc-600! dark:text-zinc-600!");
   });
 
-  it("reserves a different grey for unknown, regardless of historical activity", () => {
+  it("uses readable idle grey for resident unknown, without changing unload visibility", () => {
     expect(chatGPTActivityAge("unknown", now - 1_000, now)).toBe("unknown");
     expect(chatGPTActivityAge("unknown", 0, now)).toBe("unknown");
-    expect(chatGPTActivityColorClass("unknown")).toContain("text-sidebar-muted-foreground/60!");
+    expect(chatGPTActivityColorClass("unknown")).toBe(chatGPTActivityColorClass("inactive"));
+    expect(chatGPTActivityColorClass("unknown")).not.toBe(chatGPTActivityColorClass("unloaded"));
   });
 
   it("prioritizes unavailable red and interrupted orange over previous activity", () => {
@@ -124,6 +125,18 @@ describe("ChatGPT composer activity", () => {
   it("recognizes accessible Stop controls without a test id", () => {
     document.body.innerHTML = '<button aria-label="Stop streaming"></button>';
     expect(readActivity()).toBe("working");
+  });
+  it("recognizes a visible Stop even when a stale hidden Stop precedes it", () => {
+    document.body.innerHTML =
+      '<button data-testid="stop-button" hidden>Stop</button>' +
+      '<button aria-label="Stop responding">Stop</button>';
+    expect(readActivity()).toBe("working");
+  });
+  it("recognizes visible text-based Stop controls without treating voice recording as generation", () => {
+    document.body.innerHTML = "<button>Stop response</button>";
+    expect(readActivity()).toBe("working");
+    document.body.innerHTML = '<div id="prompt-textarea"></div><button>Stop recording</button>';
+    expect(readActivity()).toBe("idle");
   });
   it("detects idle when the composer has no Stop control", () => {
     document.body.innerHTML =

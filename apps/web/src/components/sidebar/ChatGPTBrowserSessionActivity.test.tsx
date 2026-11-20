@@ -95,6 +95,7 @@ beforeEach(() => {
   getChatGPTSessionPersistedStore(environmentId).setState({ sessions: [] });
   mocks.execute.mockReset();
   mocks.nav._tag = "Success";
+  mocks.nav.url = "https://chatgpt.com/c/1";
   mocks.overlay.loading = false;
   mocks.activeTabId = "tab-1";
 
@@ -349,6 +350,40 @@ describe("ChatGPT browser session activity persistence", () => {
       renderer!.update(<ActivityObserver />);
     });
     expect(renderer!.root.findByType("span").props.children).toBe("inactive");
+  });
+
+  it("keeps a confirmed red load error during later unknown probes on the same attached conversation", async () => {
+    mocks.nav.url = "https://chatgpt.com/c/6affedbd-bae0-83eb-9e94-ff77b52c762e";
+    mocks.nav._tag = "Loading";
+    mocks.overlay.loading = true;
+    mocks.execute.mockResolvedValue(
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+    );
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    const status = renderer!.root.findByType("span");
+    expect(status.props.children).toBe("invalid");
+
+    mocks.execute.mockResolvedValue("unknown: the ChatGPT composer is unavailable");
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", { detail: { runtimeTabId: runtimeId } }),
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(status.props.children).toBe("invalid");
+
+    mocks.nav._tag = "Success";
+    mocks.overlay.loading = false;
+    mocks.execute.mockResolvedValue("idle");
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", { detail: { runtimeTabId: runtimeId } }),
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(status.props.children).toBe("inactive");
   });
 
   it("does not turn an unverified navigation LoadFailed into a red error", async () => {

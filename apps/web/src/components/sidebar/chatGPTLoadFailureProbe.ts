@@ -29,10 +29,14 @@ export function hasChatGPTLoadFailure(): boolean {
     range.selectNodeContents(element);
     return range.getClientRects().length > 0;
   };
-  const stop = document.querySelector(
-    'button[data-testid="stop-button"], button[data-testid="composer-stop-button"]',
-  );
-  if (stop && visible(stop) && !stop.hasAttribute("disabled")) return false;
+  const generating = Array.from(
+    document.querySelectorAll(
+      'button[data-testid="stop-button"],button[data-testid="composer-stop-button"],' +
+        'button[aria-label="Stop"],button[aria-label="Stop generating"],' +
+        'button[aria-label="Stop streaming"],button[aria-label="Stop responding"]',
+    ),
+  ).some((button) => visible(button) && !button.hasAttribute("disabled"));
+  if (generating) return false;
 
   // Do not mistake a user quoting this error for the site's own load failure.
   const turnSelector =
@@ -67,14 +71,33 @@ export function hasChatGPTLoadFailure(): boolean {
     // Some variants render the retry action as a link/div instead of a button.
     const retryTail = mainText.slice(mainText.indexOf(message) + message.length).trim();
     const hasRetryAction = retry || /^try again$/i.test(retryTail);
-    if (
-      main &&
-      visible(main) &&
-      hasRetryAction &&
-      mainText.length <= 400 &&
-      mainText.includes(message)
-    )
-      return true;
+    if (main && visible(main) && hasRetryAction && mainText.includes(message)) {
+      if (mainText.length <= 400) return true;
+      // Hydrated pages sometimes retain long prompts around the short error card.
+      // Match a *local*, visible panel rather than rejecting the full <main>.
+      const nodes = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = nodes.nextNode())) {
+        if (!node.textContent?.includes("A temporary limit")) continue;
+        const element = node.parentElement;
+        if (!element || !visible(element)) continue;
+        if (
+          element.closest(
+            '[data-message-author-role],[data-content-search-unit-key],[data-testid^="conversation-turn-"],[data-turn-key]',
+          )
+        )
+          continue;
+        for (
+          let panel: Element | null = element, depth = 0;
+          panel && panel !== body && depth < 10;
+          panel = panel.parentElement, depth++
+        ) {
+          const localText = normalize(panel.textContent);
+          if (localText.includes(message) && localText.length <= 500 && visible(panel)) return true;
+          if (localText.length > 800) break;
+        }
+      }
+    }
   }
 
   const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);

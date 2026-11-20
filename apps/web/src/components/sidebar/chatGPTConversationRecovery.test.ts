@@ -51,6 +51,16 @@ describe("ChatGPT conversation failure detection", () => {
     expect(hasChatGPTLoadFailure()).toBe(true);
   });
 
+  it("recognizes a short error panel inside a long hydrated main with a disabled Retry", () => {
+    document.body.innerHTML =
+      "<main><section>" +
+      "x".repeat(900) +
+      "</section>" +
+      '<div class="error-card"><span>A temporary limit is preventing this chat from loading.</span>' +
+      "<span>Try again later.</span><button disabled>Try again</button></div></main>";
+    expect(hasChatGPTLoadFailure()).toBe(true);
+  });
+
   it("does not classify a newly submitted quote as an error, even with changed turn markup", () => {
     document.body.innerHTML =
       '<main><div class="new-turn"><p>A temporary limit is preventing this chat from loading. Try again later.</p></div>' +

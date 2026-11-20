@@ -40,7 +40,9 @@ export function chatGPTActivityColorClass(age: ChatGPTActivityAge): string {
       // Distinctly darker than the light-grey idle label, including in dark mode.
       return "text-zinc-600! dark:text-zinc-600!";
     case "unknown":
-      return "text-sidebar-muted-foreground/60!";
+      // Unknown is not unloaded. A resident page with unfamiliar ChatGPT
+      // markup must remain as readable as an old idle session.
+      return "text-muted-foreground!";
     case "invalid":
       return "text-rose-600/80! dark:text-rose-400/80!";
     case "interrupted":
@@ -183,10 +185,33 @@ function readChatGPTActivity(loadFailure: boolean) {
     }
   }
 
-  const stop = document.querySelector(
-    'button[data-testid="stop-button"], button[data-testid="composer-stop-button"], button[aria-label="Stop"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"]',
-  );
-  if (stop && visible(stop) && !stop.hasAttribute("disabled")) return "working";
+  const stop = Array.from(
+    document.querySelectorAll(
+      'button[data-testid="stop-button"],button[data-testid="composer-stop-button"],' +
+        'button[aria-label="Stop"],button[aria-label="Stop generating"],' +
+        'button[aria-label="Stop streaming"],button[aria-label="Stop responding"],' +
+        'button[title="Stop generating"],button[title="Stop response"]',
+    ),
+  ).find((button) => visible(button) && !button.hasAttribute("disabled"));
+  // Some ChatGPT variants give the active control only accessible/text content.
+  const textStop =
+    !stop &&
+    Array.from(document.querySelectorAll("button")).find((button) => {
+      const name = (
+        button.getAttribute("aria-label") ??
+        button.getAttribute("title") ??
+        button.textContent ??
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      return (
+        /^Stop(?: generating| streaming| responding| response)?$/i.test(name) &&
+        visible(button) &&
+        !button.hasAttribute("disabled")
+      );
+    });
+  if (stop || textStop) return "working";
   const composer = document.querySelector(
     '#prompt-textarea, [data-testid="prompt-textarea"], form textarea, [contenteditable="true"][role="textbox"]',
   );
