@@ -797,6 +797,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
     OmniUsageRoute.layer,
+    OmniUsageRoute.layerDesktopQuotaHistory,
     SwarmHttp.layer.pipe(Layer.provide(ChatGPTDelegationDesktop.layer)),
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,

@@ -7,7 +7,7 @@ import {
   paceOf,
 } from "@t3tools/shared/usageLimits";
 import { GaugeIcon, RotateCcwIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useId, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as Schema from "effect/Schema";
 
@@ -467,6 +467,7 @@ export function QuotaPacingWidget({
   });
   const [now, setNow] = useState(Date.now);
   const [expanded, setExpanded] = useState<boolean | null>(null);
+  const lastPublishedQuotaHistory = useRef<string | null>(null);
   const [history, setHistory] = useState(() => {
     try {
       return normalizeQuotaHistory(getLocalStorageItem(STORAGE_KEY, HistorySchema) ?? {});
@@ -503,6 +504,41 @@ export function QuotaPacingWidget({
     )
     .filter((line): line is string => line !== null)
     .join("\n");
+  // Forward the actual desktop localStorage observations, including existing historical
+  // samples on first render. Android must not invent its own quota history.
+  const desktopQuotaSeries = useMemo(() =>
+    rows.flatMap((row) => [...row.series, row.fable].flatMap((series) => {
+      if (!series || !series.window.resetsAt || !series.window.windowDurationMins) return [];
+      return [{
+        driver: series.account.driver,
+        accountName: series.account.displayName ?? series.account.email ?? series.account.driver,
+        accountKey: series.account.key,
+        checkedAt: series.account.limits.checkedAt,
+        window: {
+          id: series.window.id,
+          kind: series.window.kind,
+          windowDurationMins: series.window.windowDurationMins,
+          usedPercent: series.window.usedPercent,
+          resetsAt: series.window.resetsAt,
+        },
+        samples: history[series.key] ?? [],
+      }];
+    })), [rows, history]);
+  const serializedQuotaSeries = JSON.stringify(desktopQuotaSeries);
+  useEffect(() => {
+    if (!isElectron || desktopQuotaSeries.length === 0 ||
+        lastPublishedQuotaHistory.current === serializedQuotaSeries) return;
+    let active = true;
+    void fetch("/api/omni/usage/history", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capturedAt: Date.now(), series: desktopQuotaSeries }),
+    }).then((response) => {
+      if (active && response.ok) lastPublishedQuotaHistory.current = serializedQuotaSeries;
+    }).catch(() => { /* Retry on the next provider update; keep the desktop's original history. */ });
+    return () => { active = false; };
+  }, [desktopQuotaSeries, serializedQuotaSeries]);
+
   const connectedKey = Array.from(presentations)
     .filter(
       ([, presentation]) =>
