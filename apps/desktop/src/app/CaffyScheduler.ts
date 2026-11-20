@@ -174,6 +174,7 @@ interface CaffyStore {
   keepT3Busy: boolean;
   maxWorking: number;
   shutdownWhenIdle?: boolean;
+  shutdownArmedAt?: number | null;
   busyUntil?: number | null;
   agentStops?: AgentStoppedCaffy[];
   terminalConversations?: Array<{ sessionId: string; conversationId: string }>;
@@ -187,6 +188,7 @@ const CLOCK = 20_000;
 const IDLE_FALLBACK_MS = 2 * 60_000;
 /** How long an unavailable working-agent inventory may block idle shutdown. */
 const UNKNOWN_GRACE_MS = 5 * 60_000;
+const SHUTDOWN_ARM_MS = 10 * 60 * 60_000;
 const nativeOwner = (environmentId: string, threadId: string) => `t3:${environmentId}:${threadId}`;
 const valid = (row: CaffyConfig): boolean =>
   !!row &&
@@ -216,6 +218,7 @@ export class CaffyScheduler {
   private keepT3Busy = false;
   private maxWorking = 6;
   private shutdownWhenIdle = false;
+  private shutdownArmedAt: number | null = null;
   private busyUntil: number | null = null;
   private shutdownIdleSince: number | null = null;
   private shutdownChecking = false;
@@ -342,13 +345,26 @@ export class CaffyScheduler {
             this.agentStops.set(mark.sessionId, mark);
         }
         this.keepT3Busy = saved.keepT3Busy === true;
-        this.shutdownWhenIdle = saved.shutdownWhenIdle === true;
+        // An old arm without a timestamp cannot prove it is within the 10h window.
+        const armedAt = saved.shutdownArmedAt;
+        if (
+          saved.shutdownWhenIdle === true &&
+          typeof armedAt === "number" &&
+          Number.isSafeInteger(armedAt) &&
+          armedAt > 0 &&
+          armedAt <= Date.now() &&
+          Date.now() - armedAt < SHUTDOWN_ARM_MS
+        ) {
+          this.shutdownWhenIdle = true;
+          this.shutdownArmedAt = armedAt;
+        }
         this.busyUntil =
           saved.busyUntil != null && Number.isSafeInteger(saved.busyUntil) && saved.busyUntil > 0
             ? saved.busyUntil
             : null;
         if (Number.isInteger(saved.maxWorking) && saved.maxWorking >= 1 && saved.maxWorking <= 100)
           this.maxWorking = saved.maxWorking;
+        if (saved.shutdownWhenIdle === true && !this.shutdownWhenIdle) this.save();
       }
     } catch {
       /* Corrupt/missing local state is not evidence for a wake. */
@@ -444,6 +460,7 @@ export class CaffyScheduler {
           keepT3Busy: this.keepT3Busy,
           maxWorking: this.maxWorking,
           shutdownWhenIdle: this.shutdownWhenIdle,
+          shutdownArmedAt: this.shutdownArmedAt,
           busyUntil: this.busyUntil,
         } satisfies CaffyStore),
         { encoding: "utf8", flush: true },
@@ -486,6 +503,7 @@ export class CaffyScheduler {
     if (this.started) return;
     this.started = true;
     this.expireTimedBusy();
+    this.expireShutdownArm();
     this.backupConfiguration();
     let changed = false;
     for (const row of this.entries.values()) {
@@ -889,6 +907,7 @@ export class CaffyScheduler {
 
   status(sessionId?: string) {
     this.expireTimedBusy();
+    this.expireShutdownArm();
     if (sessionId) {
       const row = this.lookup(sessionId);
       return row
@@ -908,6 +927,8 @@ export class CaffyScheduler {
       keepT3Busy: this.keepT3Busy,
       maxWorking: this.maxWorking,
       shutdownWhenIdle: this.shutdownWhenIdle,
+      shutdownExpiresAt:
+        this.shutdownArmedAt === null ? null : this.shutdownArmedAt + SHUTDOWN_ARM_MS,
       busyUntil: this.busyUntil,
       shutdownError: this.shutdownError,
       shutdownBlocker: this.shutdownWhenIdle ? this.shutdownBlocker : null,
@@ -945,18 +966,33 @@ export class CaffyScheduler {
     this.save();
   }
 
+  /** Expiration only disarms shutdown; it never powers off the PC or stops other work. */
+  private expireShutdownArm(): void {
+    if (!this.shutdownWhenIdle) return;
+    if (this.shutdownArmedAt !== null && Date.now() - this.shutdownArmedAt < SHUTDOWN_ARM_MS)
+      return;
+    this.shutdownWhenIdle = false;
+    this.shutdownArmedAt = null;
+    this.shutdownIdleSince = null;
+    this.shutdownUnknownSince = null;
+    this.shutdownBlocker = null;
+    this.save();
+  }
+
   policy(input: {
     keepT3Busy?: boolean | undefined;
     maxWorking?: number | undefined;
     shutdownWhenIdle?: boolean | undefined;
     busyForMinutes?: number | undefined;
   }) {
+    this.expireShutdownArm();
     if (input.busyForMinutes !== undefined) {
       if (![60, 120, 240, 360].includes(input.busyForMinutes))
         throw new Error("busyForMinutes must be 60, 120, 240 or 360.");
       this.busyUntil = Date.now() + input.busyForMinutes * 60_000;
       this.keepT3Busy = true;
       this.shutdownWhenIdle = true;
+      this.shutdownArmedAt = Date.now();
       this.shutdownIdleSince = null;
       this.shutdownError = null;
     } else {
@@ -967,11 +1003,13 @@ export class CaffyScheduler {
       ) {
         this.busyUntil = null;
         this.shutdownWhenIdle = false;
+        this.shutdownArmedAt = null;
         this.keepT3Busy = false;
       }
       if (input.keepT3Busy !== undefined) this.keepT3Busy = input.keepT3Busy;
       if (input.shutdownWhenIdle !== undefined) {
         this.shutdownWhenIdle = input.shutdownWhenIdle;
+        this.shutdownArmedAt = input.shutdownWhenIdle ? Date.now() : null;
         this.shutdownIdleSince = null;
         this.shutdownError = null;
       }
@@ -990,6 +1028,8 @@ export class CaffyScheduler {
       keepT3Busy: this.keepT3Busy,
       maxWorking: this.maxWorking,
       shutdownWhenIdle: this.shutdownWhenIdle,
+      shutdownExpiresAt:
+        this.shutdownArmedAt === null ? null : this.shutdownArmedAt + SHUTDOWN_ARM_MS,
       busyUntil: this.busyUntil,
       shutdownError: this.shutdownError,
     };
@@ -2550,6 +2590,7 @@ export class CaffyScheduler {
    * No fallback to guessed zero when the live header or inventory is missing. */
   private async checkShutdown(): Promise<void> {
     this.expireTimedBusy();
+    this.expireShutdownArm();
     if (
       !this.started ||
       !this.shutdownWhenIdle ||
@@ -2564,6 +2605,7 @@ export class CaffyScheduler {
     this.shutdownChecking = true;
     try {
       const snapshot = await this.capacity();
+      this.expireShutdownArm();
       if (!this.started || !this.shutdownWhenIdle || this.busyUntil !== null) return;
       // A completed queued wake has a two-minute capacity cooldown; it is
       // *not* an active session and must not hold the PC awake indefinitely.
@@ -2613,7 +2655,10 @@ export class CaffyScheduler {
       this.shutdownBlocker = null;
       // Disarm durably BEFORE initiating /f. A failed OS call will remain off
       // rather than unexpectedly retry and terminate the user's later work.
+      this.expireShutdownArm();
+      if (!this.shutdownWhenIdle) return;
       this.shutdownWhenIdle = false;
+      this.shutdownArmedAt = null;
       this.shutdownIdleSince = null;
       this.save();
       try {

@@ -922,6 +922,7 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       const expired = JSON.parse(NodeFS.readFileSync(path, "utf8"));
       expired.keepT3Busy = true;
       expired.shutdownWhenIdle = true;
+      expired.shutdownArmedAt = Date.now();
       expired.busyUntil = Date.now() - 1_000;
       NodeFS.writeFileSync(path, JSON.stringify(expired));
       const resumed = f.open();
@@ -937,6 +938,76 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       }
     } finally {
       first.close();
+      f.dispose();
+    }
+  });
+  it("disarms idle shutdown 10 hours after arming, including across restarts", async () => {
+    const f = fixture();
+    let shutdowns = 0;
+    const first = f.open(() => {
+      shutdowns++;
+    });
+    try {
+      first.policy({ shutdownWhenIdle: true });
+      const expiresAt = (first.status() as { shutdownExpiresAt: number }).shutdownExpiresAt;
+      expect(expiresAt).toBeGreaterThan(Date.now() + 9 * 60 * 60_000);
+      first.policy({ maxWorking: 4 });
+      expect(first.status()).toMatchObject({ shutdownExpiresAt: expiresAt });
+      first.close();
+
+      const restored = f.open(() => {
+        shutdowns++;
+      });
+      try {
+        expect(restored.status()).toMatchObject({
+          shutdownWhenIdle: true,
+          shutdownExpiresAt: expiresAt,
+        });
+        const internal = restored as unknown as {
+          shutdownArmedAt: number | null;
+          checkShutdown: () => Promise<void>;
+        };
+        internal.shutdownArmedAt = Date.now() - 10 * 60 * 60_000 - 1;
+        restored.start();
+        await internal.checkShutdown();
+        expect(restored.status()).toMatchObject({
+          shutdownWhenIdle: false,
+          shutdownExpiresAt: null,
+          keepT3Busy: true,
+        });
+        expect(shutdowns).toBe(0);
+        const saved = JSON.parse(
+          NodeFS.readFileSync(NodePath.join(f.directory, "caffy-v2.json"), "utf8"),
+        );
+        expect(saved).toMatchObject({ shutdownWhenIdle: false, shutdownArmedAt: null });
+      } finally {
+        restored.close();
+      }
+    } finally {
+      first.close();
+      f.dispose();
+    }
+  });
+  it("does not revive expired or untracked shutdown arms from disk", () => {
+    const f = fixture();
+    const path = NodePath.join(f.directory, "caffy-v2.json");
+    try {
+      for (const armedAt of [undefined, Date.now() - 10 * 60 * 60_000 - 1]) {
+        const saved = JSON.parse(NodeFS.readFileSync(path, "utf8"));
+        saved.shutdownWhenIdle = true;
+        saved.shutdownArmedAt = armedAt;
+        NodeFS.writeFileSync(path, JSON.stringify(saved));
+        const c = f.open();
+        try {
+          expect(c.status()).toMatchObject({
+            shutdownWhenIdle: false,
+            shutdownExpiresAt: null,
+          });
+        } finally {
+          c.close();
+        }
+      }
+    } finally {
       f.dispose();
     }
   });

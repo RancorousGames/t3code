@@ -49,6 +49,7 @@ export interface T3CaffyOverview {
   maxWorking: number;
   keepT3Busy: boolean;
   shutdownWhenIdle: boolean;
+  shutdownExpiresAt: number | null;
   busyUntil: number | null;
   /** Why "Turn PC off when idle" hasn't fired yet, or null. */
   shutdownBlocker: string | null;
@@ -124,6 +125,10 @@ export function useT3CaffyOverview(): T3CaffyOverview | null {
           maxWorking: data.maxWorking,
           keepT3Busy: data.keepT3Busy,
           shutdownWhenIdle: data.shutdownWhenIdle,
+          shutdownExpiresAt:
+            "shutdownExpiresAt" in data && typeof data.shutdownExpiresAt === "number"
+              ? data.shutdownExpiresAt
+              : null,
           busyUntil:
             "busyUntil" in data && typeof data.busyUntil === "number" ? data.busyUntil : null,
           shutdownBlocker:
