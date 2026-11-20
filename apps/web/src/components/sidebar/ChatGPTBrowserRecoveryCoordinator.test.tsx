@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   })),
   blank: false,
   result: vi.fn(async (id: string) => ({
-    activity: "invalid: Could not load this ChatGPT conversation",
+    activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
     url: `https://chatgpt.com/c/${id}`,
   })),
   loading: false,
@@ -163,7 +163,7 @@ beforeEach(() => {
   }));
   document.body.innerHTML = "";
   mocks.result.mockReset().mockImplementation(async (id: string) => ({
-    activity: "invalid: Could not load this ChatGPT conversation",
+    activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
     url: `https://chatgpt.com/c/${id}`,
   }));
   mocks.refresh.mockReset().mockResolvedValue(undefined);
@@ -213,7 +213,7 @@ describe("serialized ChatGPT browser recovery", () => {
       await vi.advanceTimersByTimeAsync(45_000);
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
-    activity = "invalid: Could not load this ChatGPT conversation";
+    activity = "invalid: A temporary limit is preventing this chat from loading. Try again later.";
     await act(async () => {
       window.dispatchEvent(
         new CustomEvent("t3:chatgpt-recovery-state-changed", {
@@ -235,7 +235,7 @@ describe("serialized ChatGPT browser recovery", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(40_000);
     });
-    activity = "invalid: Could not load this ChatGPT conversation";
+    activity = "invalid: A temporary limit is preventing this chat from loading. Try again later.";
     await act(async () => {
       await vi.advanceTimersByTimeAsync(90_000);
     });
@@ -385,7 +385,7 @@ describe("serialized ChatGPT browser recovery", () => {
   it("wakes a dark-grey background guest long enough to discover an error without selecting it", async () => {
     mocks.result.mockImplementation(async (id: string) => ({
       activity: useBrowserSurfaceStore.getState().activityByTabId[`runtime:${id}`]
-        ? "invalid: Could not load this ChatGPT conversation"
+        ? "invalid: A temporary limit is preventing this chat from loading. Try again later."
         : "idle",
       url: `https://chatgpt.com/c/${id}`,
     }));
@@ -448,7 +448,8 @@ describe("serialized ChatGPT browser recovery", () => {
   });
 
   it("does not lose a confirmed recovery queue entry when the guest becomes uninspectable", async () => {
-    let activity = "invalid: Could not load this ChatGPT conversation";
+    let activity =
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.";
     mocks.result.mockImplementation(async (id: string) => ({
       activity,
       url: `https://chatgpt.com/c/${id}`,
@@ -473,7 +474,7 @@ describe("serialized ChatGPT browser recovery", () => {
   it("survives prolonged unverifiable red probes without a terminal gate", async () => {
     let guestReadable = true;
     mocks.result.mockImplementation(async (id: string) => ({
-      activity: "invalid: Could not load this ChatGPT conversation",
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
       url: guestReadable ? `https://chatgpt.com/c/${id}` : "https://chatgpt.com/c/unknown",
     }));
     await mount(["comit"], ["comit"], ["comit"]);
@@ -569,7 +570,8 @@ describe("serialized ChatGPT browser recovery", () => {
     });
     await act(async () => {
       resolveProbe?.({
-        activity: "invalid: Could not load this ChatGPT conversation",
+        activity:
+          "invalid: A temporary limit is preventing this chat from loading. Try again later.",
         url: "https://chatgpt.com/c/comit",
       });
       await Promise.resolve();
@@ -616,7 +618,7 @@ describe("serialized ChatGPT browser recovery", () => {
   it("refuses a stale error panel after the guest changes conversation", async () => {
     mocks.urlOverride = "https://chatgpt.com/c/comit";
     mocks.result.mockImplementation(async () => ({
-      activity: "invalid: Could not load this ChatGPT conversation",
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
       url: "https://chatgpt.com/c/other",
     }));
     await mount(["comit"]);
@@ -890,7 +892,7 @@ describe("persistent orange recovery safety", () => {
 
   it("halts destructive retries for a permanent auth failure", async () => {
     mocks.result.mockImplementation(async (id: string) => ({
-      activity: "invalid: Could not load this ChatGPT conversation",
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
       permanentReason: "auth",
       url: `https://chatgpt.com/c/${id}`,
     }));
@@ -908,7 +910,8 @@ describe("persistent orange recovery safety", () => {
   });
 
   it("keeps transient red retries alive on a fixed cadence, resetting on health", async () => {
-    let activity = "invalid: Could not load this ChatGPT conversation";
+    let activity =
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.";
     mocks.result.mockImplementation(async (id: string) => ({
       activity,
       url: `https://chatgpt.com/c/${id}`,
@@ -1168,7 +1171,7 @@ describe("recovering lost ChatGPT conversation routes", () => {
 describe("red error panel without an editor", () => {
   it("retries a confirmed load-error panel without a composer or per-session backoff", async () => {
     mocks.result.mockImplementation(async (id: string) => ({
-      activity: "invalid: Could not load this ChatGPT conversation",
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
       url: `https://chatgpt.com/c/${id}`,
       draftEmpty: null,
       stopVisible: false,
@@ -1184,7 +1187,7 @@ describe("red error panel without an editor", () => {
     ).toBe(1);
   });
 
-  it("waits a full minute before recovering a persistently missing composer", async () => {
+  it("never recovers a missing composer, even after prolonged observation", async () => {
     mocks.result.mockImplementation(async (id: string) => ({
       activity: "invalid: the ChatGPT composer is unavailable",
       url: `https://chatgpt.com/c/${id}`,
@@ -1193,30 +1196,12 @@ describe("red error panel without an editor", () => {
     }));
     await mount(["comit"], ["comit"], ["comit"]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(23_000);
-    });
-    expect(phaseChanges).toHaveBeenCalledWith("comit", "queued");
-    expect(mocks.refresh).not.toHaveBeenCalled();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(220_000);
     });
     expect(mocks.refresh).not.toHaveBeenCalled();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(40_000);
-    });
-    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(40_000);
-    });
-    // A reload must respect the fixed 120-second cooldown, not a 20-second loop.
-    expect(mocks.refresh).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(100_000);
-    });
-    expect(mocks.refresh).toHaveBeenCalledTimes(2);
   });
 
-  it("does not refresh if a missing composer reappears before the grace ends", async () => {
+  it("does not refresh when an unrecognized composer UI disappears and returns", async () => {
     let activity = "invalid: the ChatGPT composer is unavailable";
     mocks.result.mockImplementation(async (id: string) => ({
       activity,
@@ -1252,7 +1237,7 @@ describe("red error panel without an editor", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(40_000);
     });
-    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith("runtime:comit");
+    expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
   it("never auto-refreshes unrelated invalid states without a load-error panel", async () => {
@@ -1269,9 +1254,9 @@ describe("red error panel without an editor", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
-  it("keeps an unverified red page queued without refreshing a different conversation", async () => {
+  it("keeps a confirmed temporary-limit error queued without refreshing a different conversation", async () => {
     mocks.result.mockResolvedValue({
-      activity: "invalid: the ChatGPT composer is unavailable",
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
       url: "https://chatgpt.com/c/another",
     });
     await mount(["comit"], ["comit"], ["comit"]);
@@ -1299,7 +1284,7 @@ describe("red error panel without an editor", () => {
       }),
     );
     mocks.result.mockImplementation(async (id: string) => ({
-      activity: "invalid: Could not load this ChatGPT conversation",
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
       url: `https://chatgpt.com/c/${id}`,
       draftEmpty: null,
       stopVisible: false,
@@ -1314,9 +1299,9 @@ describe("red error panel without an editor", () => {
     ).toBeUndefined();
   });
 
-  it("does not refresh a red composer error when the draft is nonempty", async () => {
+  it("does not refresh a temporary-limit error when the draft is nonempty", async () => {
     mocks.result.mockImplementation(async (id: string) => ({
-      activity: "invalid: the ChatGPT composer is unavailable",
+      activity: "invalid: A temporary limit is preventing this chat from loading. Try again later.",
       url: `https://chatgpt.com/c/${id}`,
       draftEmpty: false,
       stopVisible: false,

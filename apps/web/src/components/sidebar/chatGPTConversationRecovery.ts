@@ -11,12 +11,9 @@ export type ChatGPTRecoveryProblem =
 
 export function chatGPTRecoveryProblem(activity: string): ChatGPTRecoveryProblem | null {
   if (activity === "invalid: browser-unresponsive") return "browser-unresponsive";
-  // Both the explicit ChatGPT load-error panel and a persistently missing
-  // composer can be repaired. The coordinator gives the ambiguous composer
-  // state its own sustained-failure grace before it may reload.
+  // An absent composer is not evidence of failure after a ChatGPT UI update.
   if (
-    activity === "invalid: Could not load this ChatGPT conversation" ||
-    activity === "invalid: the ChatGPT composer is unavailable"
+    activity === "invalid: A temporary limit is preventing this chat from loading. Try again later."
   )
     return "load-failure";
   if (activity === "interrupted" || activity === "delivery-timeout") return activity;

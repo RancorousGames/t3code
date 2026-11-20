@@ -28,52 +28,52 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("ChatGPT conversation failure detection", () => {
-  it("detects an actual visible error panel with its Retry button", () => {
+  it("detects the explicit temporary-limit notice even without Retry", () => {
     document.body.innerHTML =
-      "<main><div><h2>Could not load this ChatGPT conversation</h2><button>Retry</button></div></main>";
+      "<main><div><h2>A temporary limit is preventing this chat from loading. Try again later.</h2></div></main>";
     expect(hasChatGPTLoadFailure()).toBe(true);
     expect(window.eval(CHATGPT_LOAD_FAILURE_EXPRESSION)).toBe(true);
   });
 
   it("ignores an ordinary chat message quoting the error", () => {
     document.body.innerHTML =
-      '<main><div data-message-author-role="user"><p>Could not load this ChatGPT conversation</p>' +
+      '<main><div data-message-author-role="user"><p>A temporary limit is preventing this chat from loading. Try again later.</p>' +
       "<button>Retry</button></div></main>";
     expect(hasChatGPTLoadFailure()).toBe(false);
   });
 
-  it("ignores a missing, hidden or unrelated Retry button", () => {
+  it("ignores old error text and hidden temporary-limit notices", () => {
     document.body.innerHTML =
-      "<main><div><h2>Could not load this ChatGPT conversation</h2></div></main>";
+      "<main><div><h2>Could not load this ChatGPT conversation</h2><button>Retry</button></div></main>";
     expect(hasChatGPTLoadFailure()).toBe(false);
     document.body.innerHTML =
-      "<main><div hidden><h2>Could not load this ChatGPT conversation</h2><button>Retry</button></div></main>";
-    expect(hasChatGPTLoadFailure()).toBe(false);
-    document.body.innerHTML =
-      "<main><div><h2>Could not load this ChatGPT conversation</h2></div></main><footer><button>Retry</button></footer>";
+      "<main><div hidden><h2>A temporary limit is preventing this chat from loading. Try again later.</h2></div></main>";
     expect(hasChatGPTLoadFailure()).toBe(false);
   });
 
   it("never refreshes a page which is currently generating", () => {
     document.body.innerHTML =
-      "<main><div><h2>Could not load this ChatGPT conversation</h2><button>Retry</button></div>" +
+      "<main><div><h2>A temporary limit is preventing this chat from loading. Try again later.</h2></div>" +
       '<button data-testid="stop-button">Stop</button></main>';
     expect(hasChatGPTLoadFailure()).toBe(false);
   });
 });
 
 describe("recoverable ChatGPT activity", () => {
-  it("recovers confirmed load errors and sustained missing composers, but not unrelated invalid states", () => {
-    expect(chatGPTRecoveryProblem("invalid: Could not load this ChatGPT conversation")).toBe(
-      "load-failure",
-    );
-    expect(chatGPTRecoveryProblem("invalid: the ChatGPT composer is unavailable")).toBe("load-failure");
+  it("recovers explicit temporary-limit errors but never a missing composer", () => {
+    expect(
+      chatGPTRecoveryProblem(
+        "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+      ),
+    ).toBe("load-failure");
+    expect(chatGPTRecoveryProblem("invalid: the ChatGPT composer is unavailable")).toBeNull();
     expect(chatGPTRecoveryProblem("interrupted")).toBe("interrupted");
     expect(chatGPTRecoveryProblem("delivery-timeout")).toBe("delivery-timeout");
     for (const state of [
       "working",
       "idle",
       "invalid: this page is not on ChatGPT",
+      "invalid: Could not load this ChatGPT conversation",
       "invalid: unrelated message",
     ]) {
       expect(chatGPTRecoveryProblem(state)).toBeNull();
@@ -143,10 +143,18 @@ describe("serialized recovery cooldowns", () => {
     recordRecoveryAttempt("local", "comit", 1000, ["comit", "other"]);
     recordRecoveryAttempt("local", "other", 2000, ["other"]);
     const state = JSON.parse(localStorage.getItem(recoveryKey("local"))!);
-    expect(state).toEqual({ lastAttemptAt: 2000, redLastAttemptAt: 2000,
-      orangeLastAttemptAt: 0, bySession: { other: 2000 } });
-    expect(readRecoveryHistory("another")).toEqual({ lastAttemptAt: 0,
-      redLastAttemptAt: 0, orangeLastAttemptAt: 0, bySession: {} });
+    expect(state).toEqual({
+      lastAttemptAt: 2000,
+      redLastAttemptAt: 2000,
+      orangeLastAttemptAt: 0,
+      bySession: { other: 2000 },
+    });
+    expect(readRecoveryHistory("another")).toEqual({
+      lastAttemptAt: 0,
+      redLastAttemptAt: 0,
+      orangeLastAttemptAt: 0,
+      bySession: {},
+    });
     expect(cooldownElapsed(3000, 1000, RECOVERY_GLOBAL_MS)).toBe(true);
   });
 

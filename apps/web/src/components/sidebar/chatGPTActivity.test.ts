@@ -74,19 +74,36 @@ describe("ChatGPT activity recency", () => {
 
 describe("verification title colors", () => {
   it("preserves operational status colors for verification-pending sessions", () => {
-    for (const age of ["working", "invalid", "interrupted", "delivery-timeout", "unloaded", "unknown"] as const) {
+    for (const age of [
+      "working",
+      "invalid",
+      "interrupted",
+      "delivery-timeout",
+      "unloaded",
+      "unknown",
+    ] as const) {
       expect(chatGPTVerificationTitleColorClass(age, true)).toBe(chatGPTActivityColorClass(age));
     }
   });
 
   it("turns otherwise light-grey or blue verification titles amber", () => {
     for (const age of ["inactive", "recent", "snoozed"] as const) {
-      expect(chatGPTVerificationTitleColorClass(age, true)).toBe("text-amber-700! dark:text-amber-200!");
+      expect(chatGPTVerificationTitleColorClass(age, true)).toBe(
+        "text-amber-700! dark:text-amber-200!",
+      );
     }
   });
 
   it("does not change title colors without verification pending", () => {
-    for (const age of ["working", "invalid", "interrupted", "unloaded", "inactive", "recent", "snoozed"] as const) {
+    for (const age of [
+      "working",
+      "invalid",
+      "interrupted",
+      "unloaded",
+      "inactive",
+      "recent",
+      "snoozed",
+    ] as const) {
       expect(chatGPTVerificationTitleColorClass(age, false)).toBe(chatGPTActivityColorClass(age));
     }
   });
@@ -122,34 +139,41 @@ describe("ChatGPT composer activity", () => {
     Object.defineProperty(stop, "getClientRects", { value: () => [] });
     expect(readActivity()).toBe("idle");
   });
-  it("marks fully loaded pages without a composer as unavailable", () => {
+  it("leaves missing or changed composer UI unknown, not errored", () => {
     document.body.innerHTML = "<main>Sign in</main>";
-    expect(readActivity()).toBe("invalid: the ChatGPT composer is unavailable");
+    expect(readActivity()).toBe("unknown: the ChatGPT composer is unavailable");
+    document.body.innerHTML =
+      '<main><div class="ProseMirror" contenteditable="true">Draft</div></main>';
+    expect(readActivity()).toBe("unknown: the ChatGPT composer is unavailable");
   });
   it("does not treat other sites or a voice-recording Stop control as generation", () => {
     document.body.innerHTML =
       '<div id="prompt-textarea"></div><button aria-label="Stop recording"></button>';
     expect(readActivity()).toBe("idle");
     dom.reconfigure({ url: "https://example.com/" });
-    expect(readActivity()).toBe("invalid: this page is not on ChatGPT");
+    expect(readActivity()).toBe("unknown: this page is not on ChatGPT");
   });
 
-  it("marks the exact visible conversation error with Retry as unavailable", () => {
+  it("marks only the explicit temporary-limit message as errored", () => {
     document.body.innerHTML =
-      "<main><h2>Could not load this ChatGPT conversation</h2><button>Retry</button></main>";
-    expect(readActivity()).toBe("invalid: Could not load this ChatGPT conversation");
+      "<main><h2>A temporary limit is preventing this chat from loading. Try again later.</h2></main>";
+    expect(readActivity()).toBe(
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+    );
+    document.body.innerHTML =
+      '<main><div id="prompt-textarea"></div><h2>Could not load this ChatGPT conversation</h2><button>Retry</button></main>';
+    expect(readActivity()).toBe("idle");
   });
 
-  it("does not mistake a quoted or hidden load error for an actual failure", () => {
+  it("does not mistake quoted or hidden temporary-limit messages for actual failures", () => {
+    const notice = "A temporary limit is preventing this chat from loading. Try again later.";
     document.body.innerHTML =
       '<div id="prompt-textarea"></div>' +
-      '<div data-message-author-role="user">Could not load this ChatGPT conversation</div>' +
-      "<button>Retry</button>";
+      `<div data-content-search-unit-key="turn:assistant"><div class="markdown">${notice}</div></div>`;
     expect(readActivity()).toBe("idle");
 
     document.body.innerHTML =
-      '<div id="prompt-textarea"></div><div hidden>' +
-      "<h2>Could not load this ChatGPT conversation</h2><button>Retry</button></div>";
+      '<div id="prompt-textarea"></div><div hidden>' + `<h2>${notice}</h2></div>`;
     expect(readActivity()).toBe("idle");
   });
 

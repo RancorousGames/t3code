@@ -40,7 +40,7 @@ describe("ChatGPT session model", () => {
     expect(derive({ age: "invalid", attached: false }).attention).toBe("error");
     expect(derive({ age: "unknown", status: "working", attached: false }).activity).toBe("working");
     expect(derive({ age: "unknown", status: "unavailable", attached: false }).attention).toBe(
-      "error",
+      "none",
     );
   });
 
@@ -67,8 +67,9 @@ describe("ChatGPT session model", () => {
     expect(derive({ attached: true, hibernated: true, age: "working" }).activity).toBe("working");
     expect(derive({ attached: true, unloaded: true, age: "invalid" }).attention).toBe("error");
     expect(derive({ attached: true, age: "unloaded", status: "unavailable" }).attention).toBe(
-      "error",
+      "none",
     );
+    expect(derive({ attached: true, age: "unknown", status: "stuck" }).attention).toBe("error");
   });
 
   it("maps transcript status, uncertain send and browser needs without losing priority", () => {

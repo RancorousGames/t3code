@@ -685,7 +685,7 @@ export async function inspectBrowserSession(
         "ChatGPT confirmed its conversation length limit; this thread cannot accept further turns.";
     } else if (page.stuck) {
       result.status = "stuck";
-      result.statusReason = "ChatGPT shows 'Could not load this ChatGPT conversation' and Retry.";
+      result.statusReason = "ChatGPT shows the temporary conversation-loading limit notice.";
     } else if (page.connectionInterrupted) {
       result.status = "stuck_connecting";
       result.statusReason =

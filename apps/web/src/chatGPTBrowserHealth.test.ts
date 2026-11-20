@@ -21,18 +21,31 @@ describe("blank browser classification", () => {
   it("excludes a normal empty composer, login/challenge controls, and visible content", () => {
     expect(isBlankChatGPTDocument()).toBe(true);
     for (const html of [
-      '<div contenteditable="true"></div>', '<input>', '<iframe></iframe>',
-      '<svg></svg>', '<main>Sign in</main>', '<button>Continue</button>',
+      '<div contenteditable="true"></div>',
+      "<input>",
+      "<iframe></iframe>",
+      "<main>Sign in</main>",
+      "<button>Continue</button>",
     ]) {
       document.body.innerHTML = html;
       expect(isBlankChatGPTDocument()).toBe(false);
+    }
+    for (const html of [
+      "",
+      "<main><svg></svg>ChatGPT</main>",
+      '<div role="progressbar">Loading...</div>',
+    ]) {
+      document.body.innerHTML = html;
+      expect(isBlankChatGPTDocument()).toBe(true);
     }
   });
 
   it("waits a minute on the same guest and URL, then clears when the page responds", async () => {
     const guest = {
       getURL: () => "https://chatgpt.com/",
-      executeJavaScript: vi.fn().mockResolvedValue({ blank: true, activity: "invalid: composer missing" }),
+      executeJavaScript: vi
+        .fn()
+        .mockResolvedValue({ blank: true, activity: "invalid: composer missing" }),
     };
     await inspectChatGPTBrowserHealth(guest);
     expect(chatGPTBrowserFailure(guest)).toBeNull();
@@ -44,7 +57,7 @@ describe("blank browser classification", () => {
     expect(chatGPTBrowserFailure(guest)).toBeNull();
   });
 
-  it("bounds nonsettling inspections and distinguishes sustained timeouts from blank DOM", async () => {
+  it("keeps even sustained DOM inspection timeouts unknown rather than errored", async () => {
     const guest = {
       getURL: () => "https://chatgpt.com/",
       executeJavaScript: () => new Promise<unknown>(() => {}),
@@ -56,8 +69,8 @@ describe("blank browser classification", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     const second = inspectChatGPTBrowserHealth(guest);
     await vi.advanceTimersByTimeAsync(4_000);
-    expect(await second).toBe("invalid: browser-unresponsive");
-    expect(chatGPTBrowserFailure(guest)).toBe("probe-timeout");
+    expect(await second).toBe("unknown: browser inspection timed out");
+    expect(chatGPTBrowserFailure(guest)).toBeNull();
   });
 
   it("does not carry failure evidence across navigation or guest replacement", async () => {

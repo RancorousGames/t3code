@@ -215,7 +215,8 @@ describe("ChatGPT guest hibernation", () => {
 
   it("keeps a just-recovered red session loaded through a fresh idle window", async () => {
     useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
-    let pageState = "invalid: Could not load this ChatGPT conversation";
+    let pageState =
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.";
     mocks.execute.mockImplementation(async (expression) =>
       expression.includes("inspectChatGPTComposer")
         ? ({ status: "empty", url: mocks.nav.url, text: "" } as unknown as string)
@@ -313,7 +314,9 @@ describe("ChatGPT browser session activity persistence", () => {
     useBrowserSurfaceStore.getState().release(runtimeId, surfaceOwner);
     mocks.nav._tag = "Loading";
     mocks.overlay.loading = true;
-    mocks.execute.mockResolvedValue("invalid: Could not load this ChatGPT conversation");
+    mocks.execute.mockResolvedValue(
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+    );
     await act(async () => {
       renderer = create(<ActivityObserver />);
     });
@@ -327,16 +330,16 @@ describe("ChatGPT browser session activity persistence", () => {
     expect(renderer!.root.findByType("span").props.children).toBe("inactive");
   });
 
-  it("confirms an unavailable composer within a second without another DOM mutation", async () => {
+  it("never marks a missing composer as an error, even after repeated probes", async () => {
     mocks.execute.mockResolvedValue("invalid: the ChatGPT composer is unavailable");
     await act(async () => {
       renderer = create(<ActivityObserver />);
     });
     expect(renderer!.root.findByType("span").props.children).toBe("unknown");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(31_000);
     });
-    expect(renderer!.root.findByType("span").props.children).toBe("invalid");
+    expect(renderer!.root.findByType("span").props.children).toBe("unknown");
   });
 
   it("promotes a verified human-touched backend worker without changing lineage or spawn provenance, durably", async () => {
@@ -419,13 +422,17 @@ describe("ChatGPT browser session activity persistence", () => {
   it("detects the conversation error while cached navigation is still Loading", async () => {
     mocks.nav._tag = "Loading";
     mocks.overlay.loading = true;
-    mocks.execute.mockResolvedValue("invalid: Could not load this ChatGPT conversation");
+    mocks.execute.mockResolvedValue(
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+    );
     await act(async () => {
       renderer = create(<ActivityObserver />);
     });
     const status = renderer!.root.findByType("span");
     expect(status.props.children).toBe("invalid");
-    expect(status.props["aria-label"]).toContain("Could not load this ChatGPT conversation");
+    expect(status.props["aria-label"]).toContain(
+      "A temporary limit is preventing this chat from loading",
+    );
   });
 
   it("publishes queued-recovery status for orange and load failures, then clears it on recovery", async () => {
@@ -447,7 +454,9 @@ describe("ChatGPT browser session activity persistence", () => {
     });
     expect(status.props["data-recovery-problem"]).toBe("delivery-timeout");
 
-    mocks.execute.mockResolvedValue("invalid: Could not load this ChatGPT conversation");
+    mocks.execute.mockResolvedValue(
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+    );
     await act(async () => {
       window.dispatchEvent(
         new CustomEvent("t3:chatgpt-page-push", {
@@ -473,7 +482,9 @@ describe("ChatGPT browser session activity persistence", () => {
   it("rechecks an error that appears after an initially idle page without refreshing", async () => {
     mocks.execute
       .mockResolvedValueOnce("idle")
-      .mockResolvedValue("invalid: Could not load this ChatGPT conversation");
+      .mockResolvedValue(
+        "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+      );
     await act(async () => {
       renderer = create(<ActivityObserver />);
     });
@@ -502,7 +513,9 @@ describe("ChatGPT browser session activity persistence", () => {
   it("retries after a hung guest JavaScript inspection instead of polling forever", async () => {
     mocks.execute
       .mockImplementationOnce(() => new Promise<string>(() => {}))
-      .mockResolvedValue("invalid: Could not load this ChatGPT conversation");
+      .mockResolvedValue(
+        "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+      );
     await act(async () => {
       renderer = create(<ActivityObserver />);
     });

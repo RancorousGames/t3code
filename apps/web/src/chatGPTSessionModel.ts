@@ -125,7 +125,7 @@ export function deriveChatGPTSession(
   const absent =
     raw.attached === false &&
     ["recent", "inactive", "unknown"].includes(originalAge) &&
-    !["working", "stuck", "unavailable", "stuck_connecting"].includes(raw.status ?? "");
+    !["working", "stuck", "stuck_connecting"].includes(raw.status ?? "");
   // Only actual guest attachment can invalidate an unloaded observation.
   // A cached Loading overlay can outlive the browser tab it belonged to.
   const staleUnloaded =
@@ -147,7 +147,7 @@ export function deriveChatGPTSession(
         ? "working"
         : age === "interrupted" || status === "stuck_connecting"
           ? "interrupted"
-          : age === "invalid" || status === "stuck" || status === "unavailable"
+          : age === "invalid" || status === "stuck"
             ? "failed"
             : age === "recent" ||
                 age === "unloaded-recent" ||
@@ -207,7 +207,9 @@ export function deriveChatGPTSession(
       ? null
       : raw.completionValid
         ? "completed"
-        : (attention !== "none" && attention !== "ready_for_you") || activity === "interrupted" || activity === "failed"
+        : (attention !== "none" && attention !== "ready_for_you") ||
+            activity === "interrupted" ||
+            activity === "failed"
           ? "needs_you"
           : residency === "snoozed"
             ? "snoozed"

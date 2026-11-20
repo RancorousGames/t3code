@@ -101,7 +101,7 @@ export function chatGPTActivityAge(
 // controls only; never exports the conversation transcript to the host.
 function readChatGPTActivity(loadFailure: boolean) {
   if (!["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(location.hostname))
-    return "invalid: this page is not on ChatGPT";
+    return "unknown: this page is not on ChatGPT";
   // Settings deliberately has no composer; it must not trigger error recovery.
   if (/^\/settings(?:\/|$)/.test(location.pathname)) return "unknown: ChatGPT settings open";
   const visible = (element: Element) => {
@@ -118,7 +118,8 @@ function readChatGPTActivity(loadFailure: boolean) {
     return element.getClientRects().length > 0;
   };
 
-  if (loadFailure) return "invalid: Could not load this ChatGPT conversation";
+  if (loadFailure)
+    return "invalid: A temporary limit is preventing this chat from loading. Try again later.";
 
   // ChatGPT can retain a Stop control after delivery fails. Treat a visible,
   // standalone notice as an interruption before checking the composer.
@@ -149,20 +150,27 @@ function readChatGPTActivity(loadFailure: boolean) {
         // Modern ChatGPT renders turns under content-search-unit-key instead of
         // data-message-author-role. Never treat the user's or assistant's prose
         // quoting a failure as a live provider failure.
-        if (element.closest(
-          '[data-message-author-role="user"],[data-content-search-unit-key$=":user"],' +
-          '[data-testid="user-message"],blockquote,pre,code,[contenteditable],textarea,' +
-          '.markdown,.prose,[data-markdown-text-style="assistant-message"]',
-        )) continue;
+        if (
+          element.closest(
+            '[data-message-author-role="user"],[data-content-search-unit-key$=":user"],' +
+              '[data-testid="user-message"],blockquote,pre,code,[contenteditable],textarea,' +
+              '.markdown,.prose,[data-markdown-text-style="assistant-message"]',
+          )
+        )
+          continue;
         const assistantTurn = element.closest(
           '[data-message-author-role="assistant"],[data-content-search-unit-key$=":assistant"],' +
-          '[data-testid="assistant-message"]',
+            '[data-testid="assistant-message"]',
         );
         // An actual inline error is a provider status region, not ordinary
         // assistant text. Standalone notices outside a turn remain detectable.
-        if (assistantTurn && !element.closest(
-          '[role="alert"],[role="status"],[data-testid*="error"],[data-state="error"]',
-        )) continue;
+        if (
+          assistantTurn &&
+          !element.closest(
+            '[role="alert"],[role="status"],[data-testid*="error"],[data-state="error"]',
+          )
+        )
+          continue;
         // Status text may be split across sibling spans. Keep the match local
         // so a quoted sentence elsewhere in the conversation cannot trigger it.
         let container: Element | null = element;
@@ -182,11 +190,11 @@ function readChatGPTActivity(loadFailure: boolean) {
   const composer = document.querySelector(
     '#prompt-textarea, [data-testid="prompt-textarea"], form textarea, [contenteditable="true"][role="textbox"]',
   );
-  return composer && visible(composer) ? "idle" : "invalid: the ChatGPT composer is unavailable";
+  // Missing controls are not proof of an error: ChatGPT changes its composer DOM.
+  return composer && visible(composer) ? "idle" : "unknown: the ChatGPT composer is unavailable";
 }
 
-// Reuse the recovery detector so the sidebar agrees with automatic recovery
-// about the precise "Could not load conversation" failure panel.
+// Reuse the explicit temporary-limit detector so the sidebar and recovery agree.
 export const CHATGPT_ACTIVITY_EXPRESSION = `(() => {
   const loadFailure = (${hasChatGPTLoadFailure.toString()})();
   return (${readChatGPTActivity.toString()})(loadFailure);

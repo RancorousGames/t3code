@@ -22,7 +22,10 @@ import {
 import { hasVerifiedEmptyChatGPTComposer } from "../../chatGPTDraftInspection";
 import { observeChatGPTIdleSnapshot } from "../../chatGPTIdleTransitions";
 import { recordChatGPTActivityTrace } from "../../chatGPTActivityTrace";
-import { inspectChatGPTBrowserHealth } from "../../chatGPTBrowserHealth";
+import {
+  CHATGPT_BROWSER_UNRESPONSIVE_ACTIVITY,
+  inspectChatGPTBrowserHealth,
+} from "../../chatGPTBrowserHealth";
 import { saveChatGPTPageSnapshot } from "../../chatGPTPageSnapshot";
 import { hasUncertainChatGPTSend, inspectBrowserSession } from "../../chatGPTSessionControl";
 import { ingestChatGPTTranscript } from "../../state/chatGPTTranscriptIndex";
@@ -114,7 +117,6 @@ export function useChatGPTBrowserSessionActivity(
   }, [lastWorkingAt]);
   const [now, setNow] = useState(() => Date.now());
   const previousState = useRef<ChatGPTActivityState>("unknown");
-  const missingComposerObservations = useRef(0);
   const lastHeartbeatAt = useRef(0);
   const [result, setResult] = useState<{
     tabId: string | null;
@@ -196,7 +198,6 @@ export function useChatGPTBrowserSessionActivity(
       }, 1_500);
     };
     previousState.current = "unknown";
-    missingComposerObservations.current = 0;
     lastHeartbeatAt.current = 0;
     // Snooze blocks automatic loading, but an already-attached page can still
     // receive external messages. Observe that existing guest without waking it.
@@ -321,10 +322,13 @@ export function useChatGPTBrowserSessionActivity(
                       ? "Message delivery timed out. Please try again."
                       : null;
               } else if (typeof value === "string" && value.startsWith("invalid: ")) {
+                // Old/missing UI selectors must not make a healthy ChatGPT tab red.
                 next =
-                  value === "invalid: the ChatGPT composer is unavailable" && isLoading
-                    ? "unknown"
-                    : "invalid";
+                  value === CHATGPT_BROWSER_UNRESPONSIVE_ACTIVITY ||
+                  value ===
+                    "invalid: A temporary limit is preventing this chat from loading. Try again later."
+                    ? "invalid"
+                    : "unknown";
                 reason = value.slice(9);
               } else if (typeof value === "string" && value.startsWith("unknown: ")) {
                 reason = value.slice(9);
@@ -336,15 +340,7 @@ export function useChatGPTBrowserSessionActivity(
         }
       if (disposed) return;
 
-      // A successful navigation can briefly have no composer during hydration.
-      // Require two consecutive observations before showing it as unavailable.
-      if (next === "invalid" && reason === "the ChatGPT composer is unavailable") {
-        missingComposerObservations.current++;
-        if (missingComposerObservations.current < 2) {
-          next = "unknown";
-          reason = "checking the ChatGPT composer";
-        }
-      } else missingComposerObservations.current = 0;
+      // Missing controls are always unknown; no number of observations proves failure.
 
       const observedAt = Date.now();
       // A recovered red/orange guest deserves a fresh idle grace period.
@@ -496,7 +492,7 @@ export function useChatGPTBrowserSessionActivity(
         // This describes the detector's evidence, not the conversation's contents.
         const cause = !reason
           ? "none"
-          : reason.includes("Could not load")
+          : reason.includes("A temporary limit")
             ? "conversation-load-failure"
             : reason.includes("composer")
               ? "composer"
@@ -562,16 +558,13 @@ export function useChatGPTBrowserSessionActivity(
           queuedPush = false;
           timer = setTimeout(() => scheduleInspect("push"), 0);
         } else {
-          // Confirm a missing composer promptly; the first observation deliberately
-          // stays unknown to allow hydration. Quiet, settled pages keep the slow heartbeat.
+          // Unknown layouts stay observable, but do not trigger error recovery.
           const delay =
-            missingComposerObservations.current === 1
-              ? 1_000
-              : previousState.current === "working" || previousState.current === "interrupted"
-                ? ACTIVE_HEARTBEAT_MS
-                : previousState.current === "invalid" || previousState.current === "unknown"
-                  ? UNHEALTHY_HEARTBEAT_MS
-                  : BROWSER_HEARTBEAT_MS;
+            previousState.current === "working" || previousState.current === "interrupted"
+              ? ACTIVE_HEARTBEAT_MS
+              : previousState.current === "invalid" || previousState.current === "unknown"
+                ? UNHEALTHY_HEARTBEAT_MS
+                : BROWSER_HEARTBEAT_MS;
           timer = setTimeout(() => scheduleInspect("heartbeat"), delay);
         }
       });
