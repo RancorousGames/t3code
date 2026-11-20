@@ -1,3 +1,8 @@
+import type {
+  OrchestratorMcpDelegateTaskInput,
+  OrchestratorMcpDelegateTaskResult,
+} from "@t3tools/contracts";
+
 export interface SwarmRequest {
   readonly action: string;
   readonly [field: string]: unknown;
@@ -10,6 +15,11 @@ export interface SwarmOptions {
     readonly native: (request: Record<string, unknown>) => Promise<unknown>;
     readonly chatgpt: (request: Record<string, unknown>) => Promise<unknown>;
   };
+  readonly coordinatorCaller?: { readonly threadId: string; readonly environmentId: string };
+  readonly delegate?: (
+    request: OrchestratorMcpDelegateTaskInput,
+  ) => Promise<OrchestratorMcpDelegateTaskResult>;
+  readonly taskStatus?: (taskId: string) => Promise<OrchestratorMcpDelegateTaskResult>;
 }
 
 export declare function defaultSwarmHome(): string;

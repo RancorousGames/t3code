@@ -82,3 +82,57 @@ No mobile-specific workspace UX, automatic native/ChatGPT identity picker, auton
 4. **Scale and remote robustness:** reduce repeated full event-log scans, bound delivery history returned to mobile/agent tools, and ensure environment-specific board roots and transports agree on remote servers.
 
 **Not yet proven:** a live native-to-ChatGPT-to-native round trip, cross-device UI, autonomous worker spawning, and a production upgrade of T3/OMCP-T. A source-only check does not imply that these features are available in the running desktop.
+
+## Autonomous coordinator (T3-0289; source-only)
+
+The coordinator is now an **attached, existing native T3 thread** rather than the free-text
+coordinator label. Create the Swarm and attach that thread first. In the Swarm workspace
+enable writes, enter a concrete goal, select the native coordinator alias, choose a
+**2–12 worker cap**, and click **Authorize goal and notify coordinator**. This is a
+single explicit human opt-in: no agent is launched when the Swarm is created,
+when the desktop starts, or when board reads occur. The goal is an immutable board
+event; the native coordinator receives it through the existing T3 native-message
+transport, not a new scheduler.
+
+The coordinator LLM plans the work, using its own provider capabilities and the
+goal constraints. It calls `swarm_plan_team` with a list of distinct assignments
+(stable UUID, alias, native/ChatGPT runtime, title, concrete task and optional native
+provider instance). The plan must include **both** runtimes. Calling
+`swarm_dispatch_team` delegates only as many items as the persisted cap permits,
+in plan order. Each assignment is durably reserved **before** transport:
+
+- An already-attached alias receives a pinned `@alias` board mention through existing
+  T3 native-message / ChatGPT enqueue delivery. It is reused, never reset or cloned.
+- A new native worker uses **OrchestratorMcpService.delegateTask**, inheriting T3's
+  provider/project, caller-run, runtime-mode and approval controls; ChatGPT targets
+  the **existing ChatGPTDelegation** provider. Creation is never routed around
+  the desktop's native-create approval hold.
+- The delegated task ID, session/thread ID, binding, and conservative uncertain
+  result are persisted as append-only Swarm events. A delegate with a known native
+  child thread or ChatGPT conversation URL becomes a board member automatically.
+  If the ChatGPT conversation ID becomes known later, `swarm_sync_team` explicitly
+  reads the existing delegated task status and completes its membership binding.
+  No timer or transport retry is installed.
+
+**Safety/limits:** Only the exact authenticated native coordinator bound at
+goal creation may plan or dispatch. Ordinary native members cannot impersonate
+the coordinator. Both the operator's goal action and MCP's live-caller policy
+must authorize work. One active goal per Swarm; atomic immutable slots prevent
+concurrent requests from exceeding the goal's cap. All reserved/uncertain slots
+remain occupied rather than risking duplicate launches. Finishing/releasing
+slots, verifier approval, and team lifecycle are intentionally owned by the
+separate verification/lifecycle tasks; until that integration, this is a bounded
+one-wave coordinator (additional planned work is reported as `capacity_waiting`).
+An uncertain delegation is **not automatically retried**: reconcile its stable
+request/child task ID with T3. No child sessions were launched to verify this
+implementation; coverage uses injected fake authorized delegation and message
+transports, including replay, membership binding, and cap enforcement.
+
+The CLI has an explicit `goal` action for the same operator opt-in, for example:
+`{"action":"goal","swarmId":"...","goalId":"UUID","coordinatorMember":"lead","goal":"Build the feature","maxConcurrentWorkers":2}`
+(with `--enable`). `plan`, `dispatch` and `sync` are **not CLI/HTTP agent-bypass
+routes**: they require the exact authenticated native coordinator context and
+existing T3 delegation service, exposed through the three native MCP tools.
+After a future authorized desktop/server restart, verify a real mixed team only
+with approved disposable worker sessions; no production agent was started as
+part of this source implementation.

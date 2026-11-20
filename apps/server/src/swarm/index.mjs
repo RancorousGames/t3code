@@ -105,10 +105,24 @@ function project(events, swarmId) {
   const members = {};
   const messages = [];
   const wakes = {};
+  const goals = {};
+  const plans = {};
+  const assignments = {};
   for (const e of events) {
     if (e.type === "member" || e.type === "member-set") members[e.member.alias] = e.member;
     if (e.type === "member-detached") delete members[e.alias];
     if (e.type === "message") messages.push(e);
+    if (e.type === "goal") goals[e.goalId] = e;
+    if (e.type === "team-plan") plans[e.goalId] = e;
+    if (e.type === "assignment-slot") assignments[e.assignmentId] = { ...e, status: "reserved" };
+    if (e.type === "assignment-attempt" && assignments[e.assignmentId])
+      assignments[e.assignmentId].status = "uncertain";
+    if (e.type === "assignment-outcome" && assignments[e.assignmentId]) {
+      assignments[e.assignmentId].status = e.status;
+      assignments[e.assignmentId].receipt = e.receipt;
+    }
+    if (e.type === "assignment-binding" && assignments[e.assignmentId])
+      assignments[e.assignmentId].binding = e.binding;
     if (e.type === "wake-intent")
       wakes[e.key] = {
         id: e.key,
@@ -136,6 +150,9 @@ function project(events, swarmId) {
     members,
     messages,
     wakes,
+    goals,
+    plans,
+    assignments,
     events,
   };
 }
@@ -256,6 +273,195 @@ async function createIntent(root, board, post, memberName) {
   return (await append(root, board.id, key, payload)).value;
 }
 
+function workerHandoff(board, goal, assignment) {
+  return [
+    `[T3 Swarm: ${board.name} | ${board.id}]`,
+    `Goal: ${goal.goal}`,
+    `You are @${assignment.member}, assigned work ${assignment.assignmentId}.`,
+    `Your distinct objective: ${assignment.title}`,
+    assignment.task,
+    "",
+    "Work only on this assignment. Do not delegate further workers.",
+    "Post progress/results on this board under your attached alias when available.",
+    "Native: swarm_post_message / swarm_read_board. ChatGPT: OMCP-T t3_sessions.swarm.",
+    "Your T3 session remains yours. The separate verifier/lifecycle will assess completion.",
+  ].join("\n");
+}
+
+async function bindDelegatedWorker(root, board, assignment, receipt) {
+  let binding;
+  if (assignment.kind === "native" && receipt.childThreadId) {
+    binding = { kind: "native", threadId: receipt.childThreadId };
+  } else if (assignment.kind === "chatgpt" && receipt.chatgptSessionId) {
+    const conversationId = /chatgpt\.com\/c\/([0-9a-f-]{36})/i.exec(receipt.link ?? "")?.[1];
+    if (conversationId && UUID.test(conversationId)) {
+      binding = {
+        kind: "chatgpt",
+        sessionId: receipt.chatgptSessionId,
+        conversationId,
+      };
+    }
+  }
+  if (!binding) return null;
+  await runSwarm(
+    { action: "attach", swarmId: board.id, member: assignment.member, ...binding },
+    { root, enabled: true },
+  );
+  await append(root, board.id, "binding-" + assignment.assignmentId, {
+    type: "assignment-binding",
+    assignmentId: assignment.assignmentId,
+    binding,
+  });
+  return binding;
+}
+
+// Each irrevocable slot is an atomic event, shared by CLI and MCP readers. A
+// second coordinator invocation cannot overbook even when both read the same log.
+async function reserveSlot(root, board, goal, assignment) {
+  const current = await read(root, board.id);
+  if (current.assignments[assignment.assignmentId])
+    return current.assignments[assignment.assignmentId];
+  for (let slot = 1; slot <= goal.maxConcurrentWorkers; slot++) {
+    try {
+      const reserved = await append(root, board.id, "worker-slot-" + slot, {
+        type: "assignment-slot",
+        goalId: goal.goalId,
+        assignmentId: assignment.assignmentId,
+        member: assignment.member,
+        slot,
+        kind: assignment.kind,
+        title: assignment.title,
+      });
+      if (reserved.value.assignmentId === assignment.assignmentId)
+        return { ...reserved.value, status: "reserved" };
+    } catch (error) {
+      if (!String(error).includes("Event ID already exists with different content")) throw error;
+    }
+  }
+  return null;
+}
+
+async function dispatchTeam(root, board, goalId, options) {
+  const goal = board.goals[goalId];
+  const plan = board.plans[goalId];
+  demand(plan, "Coordinator must persist a mixed-team plan before dispatch");
+  demand(typeof options.delegate === "function", "Authorized T3 delegation service unavailable");
+  const results = [];
+  for (const item of plan.assignments) {
+    const latest = await read(root, board.id);
+    const previous = latest.assignments[item.assignmentId];
+    if (previous && previous.status !== "reserved") {
+      results.push(previous);
+      continue;
+    }
+    const reservation = await reserveSlot(root, latest, goal, item);
+    if (!reservation) {
+      results.push({ assignmentId: item.assignmentId, status: "capacity_waiting" });
+      continue;
+    }
+    // Do not repeat a request after a possibly committed transport/delegation.
+    // The reservation itself is retryable until its first attempted side effect.
+    const attempted = await append(root, board.id, "assignment-attempt-" + item.assignmentId, {
+      type: "assignment-attempt",
+      assignmentId: item.assignmentId,
+    });
+    if (!attempted.created) {
+      results.push((await read(root, board.id)).assignments[item.assignmentId]);
+      continue;
+    }
+    let status = "uncertain";
+    let receipt;
+    try {
+      const member = latest.members[item.member];
+      if (member) {
+        demand(member.kind === item.kind, "Attached worker type changed");
+        const delivered = await runSwarm(
+          {
+            action: "post",
+            swarmId: board.id,
+            author: goal.coordinatorMember,
+            messageId: item.assignmentId,
+            body: workerHandoff(latest, goal, item),
+            mentions: [item.member],
+          },
+          { root, enabled: true, transports: options.transports },
+        );
+        receipt = { kind: "reused", wake: delivered.wakes[0] };
+        status = delivered.wakes[0]?.state === "uncertain" ? "uncertain" : "assigned";
+      } else {
+        const task = workerHandoff(latest, goal, item);
+        const result = await options.delegate({
+          clientRequestId: item.assignmentId,
+          title: item.title,
+          task,
+          role: "implementation",
+          isolation: "shared",
+          mode: "async",
+          ...(item.kind === "chatgpt"
+            ? { target: { providerInstanceId: "chatgpt" } }
+            : item.providerInstanceId
+              ? { target: { providerInstanceId: item.providerInstanceId } }
+              : {}),
+        });
+        demand(typeof result?.taskId === "string", "Delegation returned no task ID");
+        receipt = {
+          taskId: result.taskId,
+          status: result.status,
+          childThreadId: result.childThreadId ?? null,
+          chatgptSessionId: result.chatgptSessionId ?? null,
+          link: result.link ?? null,
+        };
+        try {
+          receipt.binding = await bindDelegatedWorker(root, latest, item, result);
+        } catch (error) {
+          receipt.bindingError = String(error);
+        }
+        status = "delegated";
+      }
+    } catch (error) {
+      receipt = {
+        error: String(error instanceof Error ? error.message : error),
+        guidance: "Outcome may already be committed. Reconcile IDs; do not redelegate.",
+      };
+    }
+    await append(root, board.id, "assignment-outcome-" + item.assignmentId, {
+      type: "assignment-outcome",
+      assignmentId: item.assignmentId,
+      status,
+      receipt,
+    });
+    results.push((await read(root, board.id)).assignments[item.assignmentId]);
+  }
+  return { goalId, assignments: results, maxConcurrentWorkers: goal.maxConcurrentWorkers };
+}
+
+// Explicit read/bind only; verification and terminal-state transitions belong elsewhere.
+async function syncTeam(root, board, goalId, options) {
+  demand(typeof options.taskStatus === "function", "Authorized task status service unavailable");
+  const results = [];
+  for (const assignment of Object.values(board.assignments)) {
+    if (
+      assignment.goalId !== goalId ||
+      assignment.binding ||
+      assignment.kind !== "chatgpt" ||
+      !assignment.receipt?.taskId
+    )
+      continue;
+    try {
+      const result = await options.taskStatus(assignment.receipt.taskId);
+      const plan = board.plans[goalId]?.assignments.find(
+        (item) => item.assignmentId === assignment.assignmentId,
+      );
+      if (!plan) continue;
+      const binding = await bindDelegatedWorker(root, board, plan, result);
+      results.push({ assignmentId: assignment.assignmentId, binding, taskStatus: result.status });
+    } catch (error) {
+      results.push({ assignmentId: assignment.assignmentId, error: String(error) });
+    }
+  }
+  return { goalId, bindings: results };
+}
+
 /** Invoke explicitly; no server hook, watcher, scheduler or background sender. */
 export async function runSwarm(input, options = {}) {
   demand(input && typeof input === "object" && !Array.isArray(input), "Expected JSON object");
@@ -297,6 +503,135 @@ export async function runSwarm(input, options = {}) {
   }
   const swarmId = uuid(input.swarmId, "swarmId");
   const board = await read(root, swarmId);
+  if (action === "goal") {
+    const goalId = uuid(input.goalId, "goalId");
+    const coordinatorMember = alias(input.coordinatorMember);
+    const recipient = board.members[coordinatorMember];
+    demand(recipient?.kind === "native", "Coordinator must be an attached native T3 thread");
+    const goal = text(input.goal, "goal", 12000);
+    const maxConcurrentWorkers = input.maxConcurrentWorkers;
+    demand(
+      Number.isInteger(maxConcurrentWorkers) &&
+        maxConcurrentWorkers >= 2 &&
+        maxConcurrentWorkers <= 12,
+      "maxConcurrentWorkers must be 2..12 for a mixed native/ChatGPT team",
+    );
+    demand(
+      Object.values(board.goals).every((other) => other.goalId === goalId),
+      "This Swarm already has a goal; complete its lifecycle before starting another",
+    );
+    let created;
+    try {
+      created = await append(root, swarmId, "active-goal", {
+        type: "goal",
+        goalId,
+        goal,
+        maxConcurrentWorkers,
+        coordinatorMember,
+        recipient,
+      });
+    } catch (error) {
+      if (String(error).includes("Event ID already exists with different content"))
+        throw new Error("This Swarm already has a goal with different settings");
+      throw error;
+    }
+    const prompt = [
+      `Swarm coordinator goal ${goalId} on board ${swarmId}:`,
+      goal,
+      "",
+      `Plan a team with distinct, non-overlapping assignments (at least one native T3 and one ChatGPT worker).`,
+      `Max ${maxConcurrentWorkers} concurrent workers. Reuse an attached worker where appropriate; otherwise delegate through Swarm tools.`,
+      `Call swarm_plan_team with this goalId and assignments, then swarm_dispatch_team.`,
+      `Keep the board authoritative; never invoke delegate_task directly for this goal or bypass the Swarm cap.`,
+      `Do not mark verification/completion: the separate lifecycle handles that. Do not change existing sessions.`,
+    ].join("\n");
+    const notice = await runSwarm(
+      {
+        action: "post",
+        swarmId,
+        messageId: goalId,
+        author: "human",
+        body: prompt,
+        mentions: [coordinatorMember],
+      },
+      options,
+    );
+    return { goal: created.value, created: created.created, wakes: notice.wakes };
+  }
+  if (action === "plan" || action === "dispatch" || action === "sync") {
+    const goalId = uuid(input.goalId, "goalId");
+    const goal = board.goals[goalId];
+    demand(goal, "Unknown Swarm goal");
+    demand(
+      options.coordinatorCaller?.threadId === goal.recipient.threadId &&
+        (!goal.recipient.environmentId ||
+          options.coordinatorCaller?.environmentId === goal.recipient.environmentId),
+      "Only the goal's authenticated native coordinator may plan or dispatch",
+    );
+    demand(
+      equal(board.members[goal.coordinatorMember], goal.recipient),
+      "Coordinator detached or rebound; no delegation allowed",
+    );
+    if (action === "plan") {
+      const assignments = input.assignments;
+      demand(
+        Array.isArray(assignments) && assignments.length >= 2 && assignments.length <= 24,
+        "Plan needs 2..24 distinct assignments",
+      );
+      const normalized = assignments.map((item) => {
+        demand(item && typeof item === "object", "Invalid assignment");
+        const name = alias(item.member);
+        demand(name !== goal.coordinatorMember, "Coordinator cannot be its own worker");
+        demand(["native", "chatgpt"].includes(item.kind), "Worker kind must be native or chatgpt");
+        demand(
+          !board.members[name] || board.members[name].kind === item.kind,
+          "Existing alias has a different worker kind",
+        );
+        if (item.kind === "native" && item.providerInstanceId !== undefined)
+          text(item.providerInstanceId, "providerInstanceId", 64);
+        demand(
+          item.kind === "native" || item.providerInstanceId === undefined,
+          "ChatGPT always uses the existing authorized browser delegation provider",
+        );
+        return {
+          assignmentId: uuid(item.assignmentId, "assignmentId"),
+          member: name,
+          kind: item.kind,
+          title: text(item.title, "title", 200),
+          task: text(item.task, "task", 16000),
+          ...(item.providerInstanceId ? { providerInstanceId: item.providerInstanceId } : {}),
+        };
+      });
+      demand(
+        new Set(normalized.map((item) => item.member)).size === normalized.length,
+        "Duplicate worker alias in plan",
+      );
+      demand(
+        new Set(normalized.map((item) => item.assignmentId)).size === normalized.length,
+        "Duplicate assignment ID in plan",
+      );
+      demand(
+        new Set(normalized.map((item) => item.task.trim().toLowerCase())).size ===
+          normalized.length,
+        "Team members need distinct work",
+      );
+      demand(
+        normalized.some((item) => item.kind === "native") &&
+          normalized.some((item) => item.kind === "chatgpt"),
+        "A Swarm plan must include native and ChatGPT work",
+      );
+      const planned = await append(root, swarmId, "plan-" + goalId, {
+        type: "team-plan",
+        goalId,
+        assignments: normalized,
+      });
+      return { plan: planned.value, created: planned.created };
+    }
+    if (action === "dispatch") {
+      return dispatchTeam(root, await read(root, swarmId), goalId, options);
+    }
+    return syncTeam(root, await read(root, swarmId), goalId, options);
+  }
   if (action === "attach") {
     const name = alias(input.member);
     demand(["native", "chatgpt"].includes(input.kind), "kind must be native or chatgpt");
@@ -431,6 +766,9 @@ export async function runSwarm(input, options = {}) {
       nextAfterMessageId: messages.at(-1)?.messageId ?? cursor,
       hasMore: index !== null && index + 1 + messages.length < board.messages.length,
       wakes: input.includeWakes === false ? [] : Object.values(board.wakes),
+      goals: Object.values(board.goals),
+      plans: Object.values(board.plans),
+      assignments: Object.values(board.assignments),
     };
   }
   if (action === "delivery") {
@@ -461,5 +799,7 @@ export async function runSwarm(input, options = {}) {
     }
     return { wakes: outcomes };
   }
-  throw new Error("action must be create, list, attach, detach, post, read, wake or delivery");
+  throw new Error(
+    "action must be create, list, goal, plan, dispatch, sync, attach, detach, post, read, wake or delivery",
+  );
 }

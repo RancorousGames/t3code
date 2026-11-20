@@ -6,6 +6,7 @@ import { Tool, Toolkit } from "effect/ai";
 import * as ServerConfig from "../config.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as DesktopTransport from "../chatgpt-delegation/DesktopTransport.ts";
+import * as OrchestratorMcpService from "../mcp/OrchestratorMcpService.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 
 const dependencies = [
@@ -14,6 +15,7 @@ const dependencies = [
   Path.Path,
   DesktopTransport.DesktopTransport,
   ThreadManagementService.ThreadManagementService,
+  OrchestratorMcpService.OrchestratorMcpService,
 ];
 
 const success = Schema.Struct({ actor: Schema.String, data: Schema.Unknown });
@@ -57,4 +59,58 @@ const PostSwarmMessage = Tool.make("swarm_post_message", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const SwarmToolkit = Toolkit.make(ReadSwarmBoard, PostSwarmMessage);
+const PlanSwarmTeam = Tool.make("swarm_plan_team", {
+  ...common,
+  description:
+    "As the attached native coordinator, persist a distinct mixed native/ChatGPT team plan " +
+    "for an explicitly authorized Swarm goal. Planning alone launches no workers. " +
+    "Use stable assignmentId UUIDs and then call swarm_dispatch_team.",
+  parameters: Schema.Struct({
+    swarmId: Schema.String,
+    goalId: Schema.String,
+    assignments: Schema.Array(
+      Schema.Struct({
+        assignmentId: Schema.String,
+        member: Schema.String,
+        kind: Schema.Literals(["native", "chatgpt"]),
+        title: Schema.String,
+        task: Schema.String,
+        providerInstanceId: Schema.optional(Schema.String),
+      }),
+    ),
+  }),
+  success: Schema.Unknown,
+})
+  .annotate(Tool.Title, "Plan Swarm team")
+  .annotate(Tool.Idempotent, true);
+
+const DispatchSwarmTeam = Tool.make("swarm_dispatch_team", {
+  ...common,
+  description:
+    "Delegate planned Swarm workers through T3's existing authorized delegate_task implementation, " +
+    "or send assignments to already attached members. Enforces the persisted per-goal cap, " +
+    "preserves stable request IDs and never retries uncertain launches. Explicit opt-in goal required.",
+  parameters: Schema.Struct({ swarmId: Schema.String, goalId: Schema.String }),
+  success: Schema.Unknown,
+})
+  .annotate(Tool.Title, "Dispatch Swarm team")
+  .annotate(Tool.OpenWorld, true);
+
+const SyncSwarmTeam = Tool.make("swarm_sync_team", {
+  ...common,
+  description:
+    "Explicitly reconcile newly delegated ChatGPT session identity and attach it to the shared board. " +
+    "Does not launch workers, poll, verify or finish assignments.",
+  parameters: Schema.Struct({ swarmId: Schema.String, goalId: Schema.String }),
+  success: Schema.Unknown,
+})
+  .annotate(Tool.Title, "Bind Swarm workers")
+  .annotate(Tool.Idempotent, true);
+
+export const SwarmToolkit = Toolkit.make(
+  ReadSwarmBoard,
+  PostSwarmMessage,
+  PlanSwarmTeam,
+  DispatchSwarmTeam,
+  SyncSwarmTeam,
+);

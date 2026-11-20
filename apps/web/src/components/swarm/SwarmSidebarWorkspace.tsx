@@ -44,7 +44,23 @@ type SwarmWake = {
   liveReceipt?: { status?: string };
   statusCheckError?: string;
 };
+type SwarmGoal = {
+  goalId: string;
+  goal: string;
+  coordinatorMember: string;
+  maxConcurrentWorkers: number;
+};
+type SwarmAssignment = {
+  assignmentId: string;
+  member: string;
+  title: string;
+  status: string;
+  receipt?: { taskId?: string; error?: string };
+};
 type SwarmBoard = {
+  goals: SwarmGoal[];
+  plans: { goalId: string; assignments: SwarmAssignment[] }[];
+  assignments: SwarmAssignment[];
   id: string;
   name: string;
   coordinator: string;
@@ -102,6 +118,15 @@ function SwarmWorkspace({
   const [body, setBody] = useState("");
   const [mentionText, setMentionText] = useState("");
   const [outcomes, setOutcomes] = useState<SwarmWake[]>([]);
+  const [goal, setGoal] = useState("");
+  const [coordinatorMember, setCoordinatorMember] = useState("");
+  const [maxConcurrentWorkers, setMaxConcurrentWorkers] = useState(2);
+  const pendingGoal = useRef<{
+    goalId: string;
+    goal: string;
+    coordinatorMember: string;
+    maxConcurrentWorkers: number;
+  } | null>(null);
   const pendingCreate = useRef<{ id: string; name: string; coordinator: string } | null>(null);
   const pendingPost = useRef<{ messageId: string; body: string; mentions: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -205,6 +230,26 @@ function SwarmWorkspace({
     });
   };
 
+  const startGoal = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!board || !enabled || !coordinatorMember || board.goals.length > 0) return;
+    void act(async () => {
+      const request = { goal: goal.trim(), coordinatorMember, maxConcurrentWorkers };
+      const goalId =
+        pendingGoal.current &&
+        pendingGoal.current.goal === request.goal &&
+        pendingGoal.current.coordinatorMember === request.coordinatorMember &&
+        pendingGoal.current.maxConcurrentWorkers === request.maxConcurrentWorkers
+          ? pendingGoal.current.goalId
+          : randomUUID();
+      pendingGoal.current = { goalId, ...request };
+      await swarmCall("goal", { swarmId: board.id, goalId, ...request }, true);
+      pendingGoal.current = null;
+      setGoal("");
+      await loadBoard(board.id);
+    });
+  };
+
   const refreshDelivery = () => {
     if (!board) return;
     void act(async () => {
@@ -244,7 +289,8 @@ function SwarmWorkspace({
             <NetworkIcon className="size-4" /> Swarm workspace
           </DialogTitle>
           <p className="text-xs text-muted-foreground">
-            Existing T3 and ChatGPT sessions only. Ordinary chats remain unchanged.
+            Existing sessions stay intact. Launching delegated workers requires an explicit, bounded
+            goal.
           </p>
         </DialogHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 pb-5">
@@ -316,6 +362,98 @@ function SwarmWorkspace({
                   >
                     <RefreshCwIcon /> Refresh board
                   </Button>
+                </div>
+                <div className="rounded-lg border border-border p-3">
+                  <h3 className="text-sm font-semibold">Autonomous coordinator</h3>
+                  {board.goals.length > 0 ? (
+                    <div className="mt-2 space-y-2 text-xs">
+                      {board.goals.map((entry) => (
+                        <div key={entry.goalId}>
+                          <p className="whitespace-pre-wrap break-words">{entry.goal}</p>
+                          <p className="mt-1 text-muted-foreground">
+                            @{entry.coordinatorMember} · max {entry.maxConcurrentWorkers} workers
+                          </p>
+                        </div>
+                      ))}
+                      {board.plans.map((plan) => (
+                        <div key={plan.goalId}>
+                          <strong>Team plan</strong>
+                          {plan.assignments.map((item) => (
+                            <p key={item.assignmentId} className="mt-1 break-words">
+                              @{item.member}: {item.title} —{" "}
+                              {board.assignments.find(
+                                (assigned) => assigned.assignmentId === item.assignmentId,
+                              )?.status ?? "planned"}
+                            </p>
+                          ))}
+                        </div>
+                      ))}
+                      <p className="text-muted-foreground">
+                        Coordination runs in the attached native T3 thread. Verification and
+                        completion are separate.
+                      </p>
+                    </div>
+                  ) : (
+                    <form onSubmit={startGoal} className="mt-2 space-y-2">
+                      <label className={fieldLabel}>
+                        Goal
+                        <textarea
+                          className={textareaClass + " min-h-20"}
+                          value={goal}
+                          maxLength={12000}
+                          required
+                          onChange={(e) => setGoal(e.target.value)}
+                        />
+                      </label>
+                      <label className={fieldLabel}>
+                        Coordinator (existing native T3 thread)
+                        <select
+                          className={textareaClass}
+                          value={coordinatorMember}
+                          required
+                          onChange={(e) => setCoordinatorMember(e.target.value)}
+                        >
+                          <option value="">Choose coordinator</option>
+                          {board.members
+                            .filter((member) => member.kind === "native")
+                            .map((member) => (
+                              <option key={member.alias} value={member.alias}>
+                                @{member.alias}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <label className={fieldLabel}>
+                        Max concurrent workers (2–12)
+                        <Input
+                          type="number"
+                          min={2}
+                          max={12}
+                          size="sm"
+                          value={maxConcurrentWorkers}
+                          onChange={(e) => setMaxConcurrentWorkers(Number(e.target.value))}
+                        />
+                      </label>
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={
+                          !enabled ||
+                          busy ||
+                          !goal.trim() ||
+                          !coordinatorMember ||
+                          maxConcurrentWorkers < 2 ||
+                          maxConcurrentWorkers > 12
+                        }
+                      >
+                        Authorize goal and notify coordinator
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        This authorizes up to the selected number of native/ChatGPT delegations. No
+                        background worker launcher or scheduler is installed.
+                      </p>
+                    </form>
+                  )}
                 </div>
                 <div className="rounded-lg border border-border p-3">
                   <h3 className="mb-2 text-sm font-semibold">

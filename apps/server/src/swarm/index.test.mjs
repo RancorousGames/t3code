@@ -257,3 +257,272 @@ test("native Swarm calls bind the author to the authenticated thread", async () 
       /exactly one Swarm membership/,
     );
   }));
+
+test("authorized coordinator plans, reuses and delegates a mixed team with a durable worker cap", async () =>
+  make(async (call) => {
+    await call({
+      action: "attach",
+      swarmId: A,
+      kind: "native",
+      member: "lead",
+      threadId: B,
+      environmentId: "env-a",
+    });
+    await call({
+      action: "attach",
+      swarmId: A,
+      kind: "native",
+      member: "existing",
+      threadId: C,
+      environmentId: "env-a",
+    });
+    const transportCalls = [];
+    const transports = {
+      native: async (request) => {
+        transportCalls.push(request);
+        return {
+          threadId: request.threadId,
+          messageId: request.clientRequestId,
+          messageSent: true,
+        };
+      },
+      chatgpt: async (request) => ({
+        messageId: request.messageId,
+        sessionId: request.sessionId,
+        conversationId: request.expectedConversationId,
+        status: "queued",
+      }),
+    };
+    const goal = await call(
+      {
+        action: "goal",
+        swarmId: A,
+        goalId: D,
+        coordinatorMember: "lead",
+        maxConcurrentWorkers: 2,
+        goal: "Implement a gameplay feature and document its architecture.",
+      },
+      { transports },
+    );
+    assert.equal(goal.wakes[0].state, "accepted");
+    const assignments = [
+      {
+        assignmentId: "00000000-0000-4000-8000-000000000011",
+        member: "existing",
+        kind: "native",
+        title: "Architecture",
+        task: "Inspect existing systems and record architecture constraints.",
+      },
+      {
+        assignmentId: "00000000-0000-4000-8000-000000000012",
+        member: "browser",
+        kind: "chatgpt",
+        title: "Implementation",
+        task: "Implement the independently scoped gameplay module.",
+      },
+      {
+        assignmentId: "00000000-0000-4000-8000-000000000013",
+        member: "later",
+        kind: "native",
+        title: "Examples",
+        task: "Create supporting use case examples.",
+      },
+    ];
+    const coordinatorCaller = { threadId: B, environmentId: "env-a" };
+    await assert.rejects(
+      () =>
+        call(
+          { action: "plan", swarmId: A, goalId: D, assignments },
+          { coordinatorCaller: { threadId: C, environmentId: "env-a" } },
+        ),
+      /authenticated native coordinator/i,
+    );
+    await call({ action: "plan", swarmId: A, goalId: D, assignments }, { coordinatorCaller });
+    const launches = [];
+    const delegate = async (request) => {
+      launches.push(request);
+      assert.equal(request.target.providerInstanceId, "chatgpt");
+      return {
+        taskId: "chatgpt-task:test",
+        chatgptSessionId: "00000000-0000-4000-8000-000000000014",
+        link: "https://chatgpt.com/c/00000000-0000-4000-8000-000000000015",
+        status: "running",
+        childThreadId: null,
+      };
+    };
+    const opts = { coordinatorCaller, transports, delegate };
+    const first = await call({ action: "dispatch", swarmId: A, goalId: D }, opts);
+    assert.deepEqual(
+      first.assignments.map((entry) => entry.status),
+      ["assigned", "delegated", "capacity_waiting"],
+    );
+    const second = await call({ action: "dispatch", swarmId: A, goalId: D }, opts);
+    assert.equal(launches.length, 1);
+    assert.equal(transportCalls.length, 2);
+    assert.equal(second.assignments[2].status, "capacity_waiting");
+    const board = await call({ action: "read", swarmId: A });
+    assert.equal(board.assignments.length, 2);
+    assert.ok(
+      board.members.some((member) => member.alias === "browser" && member.kind === "chatgpt"),
+    );
+    assert.deepEqual(
+      board.plans[0].assignments.map((entry) => entry.member),
+      ["existing", "browser", "later"],
+    );
+    await assert.rejects(
+      () =>
+        call({
+          action: "goal",
+          swarmId: A,
+          goalId: "00000000-0000-4000-8000-000000000016",
+          coordinatorMember: "lead",
+          maxConcurrentWorkers: 2,
+          goal: "Another goal",
+        }),
+      /already has a goal/i,
+    );
+  }));
+
+test("unknown delegated spawn is never repeated and retains its slot across calls", async () =>
+  make(async (call) => {
+    await call({ action: "attach", swarmId: A, kind: "native", member: "lead", threadId: B });
+    const coordinatorCaller = { threadId: B, environmentId: "env-a" };
+    await call({
+      action: "goal",
+      swarmId: A,
+      goalId: D,
+      coordinatorMember: "lead",
+      maxConcurrentWorkers: 2,
+      goal: "Review and implement a feature.",
+    });
+    await call(
+      {
+        action: "plan",
+        swarmId: A,
+        goalId: D,
+        assignments: [
+          {
+            assignmentId: "00000000-0000-4000-8000-000000000021",
+            member: "implementer",
+            kind: "native",
+            title: "Implementation",
+            task: "Write the feature.",
+          },
+          {
+            assignmentId: "00000000-0000-4000-8000-000000000022",
+            member: "writer",
+            kind: "chatgpt",
+            title: "Documentation",
+            task: "Document the feature.",
+          },
+        ],
+      },
+      { coordinatorCaller },
+    );
+    let count = 0;
+    const delegate = async () => {
+      count += 1;
+      throw new Error("Unknown desktop result");
+    };
+    const input = { action: "dispatch", swarmId: A, goalId: D };
+    await call(input, { coordinatorCaller, delegate });
+    await call(input, { coordinatorCaller, delegate });
+    assert.equal(count, 2);
+    const board = await call({ action: "read", swarmId: A });
+    assert.deepEqual(
+      board.assignments.map((entry) => entry.status),
+      ["uncertain", "uncertain"],
+    );
+    await assert.rejects(
+      () => call({ action: "plan", swarmId: A, goalId: D, assignments: [] }, { coordinatorCaller }),
+      /2..24/,
+    );
+  }));
+
+test("new native and ChatGPT delegations bind through their existing T3 task receipts", async () =>
+  make(async (call) => {
+    await call({ action: "attach", swarmId: A, kind: "native", member: "lead", threadId: B });
+    const coordinatorCaller = { threadId: B, environmentId: "env-a" };
+    await call({
+      action: "goal",
+      swarmId: A,
+      goalId: D,
+      coordinatorMember: "lead",
+      maxConcurrentWorkers: 2,
+      goal: "Deliver implementation and documentation.",
+    });
+    await call(
+      {
+        action: "plan",
+        swarmId: A,
+        goalId: D,
+        assignments: [
+          {
+            assignmentId: "00000000-0000-4000-8000-000000000031",
+            member: "native_worker",
+            kind: "native",
+            title: "Core",
+            task: "Implement core domain behavior.",
+          },
+          {
+            assignmentId: "00000000-0000-4000-8000-000000000032",
+            member: "browser_worker",
+            kind: "chatgpt",
+            title: "Documentation",
+            task: "Write independent API documentation.",
+          },
+        ],
+      },
+      { coordinatorCaller },
+    );
+    const delegate = async (request) =>
+      request.target?.providerInstanceId === "chatgpt"
+        ? {
+            taskId: "chatgpt-task:example",
+            status: "running",
+            childThreadId: null,
+            chatgptSessionId: "00000000-0000-4000-8000-000000000041",
+          }
+        : {
+            taskId: "native-task:example",
+            status: "running",
+            childThreadId: "00000000-0000-4000-8000-000000000042",
+          };
+    const initial = await call(
+      { action: "dispatch", swarmId: A, goalId: D },
+      { coordinatorCaller, delegate },
+    );
+    assert.deepEqual(
+      initial.assignments.map((item) => item.status),
+      ["delegated", "delegated"],
+    );
+    let board = await call({ action: "read", swarmId: A });
+    assert.ok(
+      board.members.some(
+        (member) => member.alias === "native_worker" && member.threadId.endsWith("42"),
+      ),
+    );
+    assert.ok(!board.members.some((member) => member.alias === "browser_worker"));
+    const synced = await call(
+      { action: "sync", swarmId: A, goalId: D },
+      {
+        coordinatorCaller,
+        taskStatus: async () => ({
+          taskId: "chatgpt-task:example",
+          status: "running",
+          childThreadId: null,
+          chatgptSessionId: "00000000-0000-4000-8000-000000000041",
+          link: "https://chatgpt.com/c/00000000-0000-4000-8000-000000000043",
+        }),
+      },
+    );
+    assert.equal(synced.bindings.length, 1);
+    board = await call({ action: "read", swarmId: A });
+    assert.ok(
+      board.members.some(
+        (member) =>
+          member.alias === "browser_worker" &&
+          member.conversationId === "00000000-0000-4000-8000-000000000043",
+      ),
+    );
+  }));
