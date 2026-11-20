@@ -604,6 +604,48 @@ export function ChatGPTSessionRegistryDriver() {
     // Keep the lease alive independently so a slow guest cannot make all local
     // sessions disappear from the external registry during that operation.
     let heartbeatPending = false;
+    let unavailableSince: number | null = null;
+    const recordTransition = (
+      event: "unavailable" | "recovered",
+      details: Record<string, unknown>,
+    ) => {
+      const entry = {
+        at: new Date().toISOString(),
+        event,
+        environmentId: targetEnvironment,
+        driverId,
+        ...details,
+      };
+      // Existing Electron main captures this prefix in its rotating log file.
+      console.warn(
+        `[t3-delivery-trace] ${JSON.stringify({ component: "chatgpt-registry-driver", ...entry })}`,
+      );
+      // Keep the most recent transitions locally too, even across T3 restarts.
+      try {
+        const key = `t3code:chatgpt-registry:driver-diagnostics:${targetEnvironment}`;
+        const previous: unknown = JSON.parse(window.localStorage.getItem(key) ?? "[]");
+        const entries = Array.isArray(previous) ? previous.slice(-31) : [];
+        window.localStorage.setItem(key, JSON.stringify([...entries, entry]));
+      } catch {
+        // Diagnostics must never interfere with the driver.
+      }
+    };
+    // Log transitions only: ten-second heartbeats and five-second retries remain silent.
+    const markUnavailable = (source: string, reason: string) => {
+      if (disposed) return;
+      if (unavailableSince === null) {
+        unavailableSince = Date.now();
+        recordTransition("unavailable", { source, reason: reason.slice(0, 200) });
+      }
+      registered = false;
+    };
+    const markRegistered = () => {
+      if (unavailableSince !== null) {
+        recordTransition("recovered", { unavailableMs: Date.now() - unavailableSince });
+        unavailableSince = null;
+      }
+      registered = true;
+    };
     const keepLeaseAlive = setInterval(() => {
       if (disposed || !registered || heartbeatPending) return;
       heartbeatPending = true;
@@ -612,10 +654,14 @@ export function ChatGPTSessionRegistryDriver() {
         input: { environmentId: targetEnvironment, driverId },
       })
         .then((response) => {
-          if (!disposed && (response._tag !== "Success" || !response.value.ok)) registered = false;
+          if (!disposed && (response._tag !== "Success" || !response.value.ok))
+            markUnavailable(
+              "lease heartbeat",
+              response._tag === "Success" ? (response.value.reason ?? "rejected") : response._tag,
+            );
         })
-        .catch(() => {
-          if (!disposed) registered = false;
+        .catch((error) => {
+          markUnavailable("lease heartbeat exception", String(error));
         })
         .finally(() => {
           heartbeatPending = false;
@@ -672,8 +718,15 @@ export function ChatGPTSessionRegistryDriver() {
             environmentId: targetEnvironment,
             input: { environmentId: targetEnvironment, driverId },
           });
-          if (disposed || response._tag !== "Success" || !response.value.ok) return;
-          registered = true;
+          if (disposed) return;
+          if (response._tag !== "Success" || !response.value.ok) {
+            markUnavailable(
+              "register",
+              response._tag === "Success" ? (response.value.reason ?? "rejected") : response._tag,
+            );
+            return;
+          }
+          markRegistered();
           migrating = true;
           void drainActions();
         } else {
@@ -681,8 +734,12 @@ export function ChatGPTSessionRegistryDriver() {
             environmentId: targetEnvironment,
             input: { environmentId: targetEnvironment, driverId },
           });
-          if (disposed || response._tag !== "Success" || !response.value.ok) {
-            registered = false;
+          if (disposed) return;
+          if (response._tag !== "Success" || !response.value.ok) {
+            markUnavailable(
+              "tick heartbeat",
+              response._tag === "Success" ? (response.value.reason ?? "rejected") : response._tag,
+            );
             return;
           }
         }
@@ -897,9 +954,9 @@ export function ChatGPTSessionRegistryDriver() {
         migrating = false;
         // Action draining has its own interval: neither this migration nor a
         // slow registry read can hold external notifications hostage.
-      } catch {
+      } catch (error) {
         // Loss of connection never authorizes resubmission of a taken action.
-        registered = false;
+        markUnavailable("registry tick exception", String(error));
       } finally {
         running = false;
         if (!disposed) next = setTimeout(() => void tick(), TICK_MS);

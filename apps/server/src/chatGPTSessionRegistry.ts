@@ -201,12 +201,30 @@ const make = Effect.gen(function* () {
       Effect.map((rows) => rows[0] ?? null),
     );
 
+  // One warning per expired lease, not one per polling request while offline.
+  // Key by the last heartbeat timestamp so a later outage is logged separately.
+  const loggedExpiredLeases = new Map<string, number>();
+  const logExpiredLease = (environmentId: string, row: DriverRow | null, now: number) =>
+    Effect.gen(function* () {
+      if (!row || now - row.last_seen_at < DRIVER_LEASE_MS) return;
+      if (loggedExpiredLeases.get(environmentId) === row.last_seen_at) return;
+      loggedExpiredLeases.set(environmentId, row.last_seen_at);
+      yield* Effect.logWarning("ChatGPT desktop driver lease expired", {
+        environmentId,
+        driverId: row.driver_id,
+        lastSeenAt: row.last_seen_at,
+        elapsedMs: now - row.last_seen_at,
+        leaseMs: DRIVER_LEASE_MS,
+      });
+    });
+
   const liveDriver = Effect.fn("ChatGPTSessionRegistry.liveDriver")(function* (
     environmentId: string,
   ) {
     const driver = yield* findDriver(environmentId);
     const now = yield* Clock.currentTimeMillis;
     if (!driver || now - driver.last_seen_at >= DRIVER_LEASE_MS) {
+      yield* logExpiredLease(environmentId, driver, now);
       return yield* Effect.fail(new ChatGPTDriverUnavailable());
     }
     return driver.driver_id;
@@ -353,6 +371,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const row = yield* findDriver(environmentId);
         const now = yield* Clock.currentTimeMillis;
+        yield* logExpiredLease(environmentId, row, now);
         return {
           environmentId,
           driverId: row?.driver_id ?? null,
@@ -376,7 +395,9 @@ const make = Effect.gen(function* () {
               ),
             );
           }
-          if (previous && now - previous.last_seen_at >= DRIVER_LEASE_MS) {
+          const expired = !!previous && now - previous.last_seen_at >= DRIVER_LEASE_MS;
+          if (expired && previous) {
+            yield* logExpiredLease(environmentId, previous, now);
             // Even a reconnecting renderer that retains the same driver UUID
             // must not pick up pre-crash unsubmitted messages after lease expiry.
             yield* retireUndispatched(environmentId, previous.driver_id, now);
@@ -387,6 +408,15 @@ const make = Effect.gen(function* () {
           ON CONFLICT(environment_id) DO UPDATE
           SET driver_id = excluded.driver_id, last_seen_at = excluded.last_seen_at
         `;
+          if (!previous || previous.driver_id !== driverId || expired) {
+            yield* Effect.logInfo("ChatGPT desktop driver registered", {
+              environmentId,
+              driverId,
+              previousDriverId: previous?.driver_id ?? null,
+              offlineMs: expired && previous ? now - previous.last_seen_at : null,
+            });
+          }
+          loggedExpiredLeases.delete(environmentId);
         }),
       ),
     heartbeat: (environmentId, driverId) =>
@@ -395,14 +425,22 @@ const make = Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
           const row = yield* findDriver(environmentId);
           if (!row || row.driver_id !== driverId) return false;
-          if (now - row.last_seen_at >= DRIVER_LEASE_MS) {
+          const gapMs = now - row.last_seen_at;
+          if (gapMs >= DRIVER_LEASE_MS) {
+            yield* logExpiredLease(environmentId, row, now);
             // A suspended renderer can resume with its old driver UUID without
             // re-registering. Retire stale NOT-TAKEN requests before renewing.
             yield* retireUndispatched(environmentId, driverId, now);
+            yield* Effect.logInfo("ChatGPT desktop driver heartbeat resumed", {
+              environmentId,
+              driverId,
+              gapMs,
+            });
           }
           const rows = yield* sql`UPDATE chatgpt_registry_drivers SET last_seen_at = ${now}
           WHERE environment_id = ${environmentId} AND driver_id = ${driverId}
           RETURNING environment_id`;
+          loggedExpiredLeases.delete(environmentId);
           return rows.length > 0;
         }),
       ),
@@ -412,8 +450,14 @@ const make = Effect.gen(function* () {
           const deleted = yield* sql`DELETE FROM chatgpt_registry_drivers
           WHERE environment_id = ${environmentId} AND driver_id = ${driverId}
           RETURNING environment_id`;
-          if (deleted.length)
+          if (deleted.length) {
             yield* retireUndispatched(environmentId, driverId, yield* Clock.currentTimeMillis);
+            loggedExpiredLeases.delete(environmentId);
+            yield* Effect.logInfo("ChatGPT desktop driver disconnected", {
+              environmentId,
+              driverId,
+            });
+          }
         }),
       ),
     sync: (driverId, changes, initial = false) =>
