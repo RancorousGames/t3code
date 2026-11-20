@@ -444,6 +444,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  /** Explicit, server-assigned opt-in for tiny single-purpose provider sessions. */
+  contextProfile: Schema.optional(Schema.Literal("minimal")),
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -2910,6 +2912,8 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     projectId: ProjectId,
     title: TrimmedNonEmptyString,
+    /** Explicit server-only launch option; absence retains the normal full context. */
+    contextProfile: Schema.optional(Schema.Literal("minimal")),
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,

@@ -149,6 +149,42 @@ describe("CodexAdapterV2 assistant message streaming", () => {
 });
 
 describe("CodexAdapterV2 runtime policy", () => {
+  it("isolates explicitly minimal threads without reducing normal session context", () => {
+    const threadId = ThreadId.make("minimal-thread");
+    const mcpSession = {
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer test",
+    } as NonNullable<Parameters<typeof CodexAdapterV2.codexThreadRuntimeParams>[0]["mcpSession"]>;
+    const normal = CodexAdapterV2.codexThreadRuntimeParams({ threadId, mcpSession });
+    const minimal = CodexAdapterV2.codexThreadRuntimeParams({
+      threadId,
+      mcpSession,
+      contextProfile: "minimal",
+    });
+
+    assert.isUndefined(normal.config["project_doc_max_bytes"]);
+    assert.isUndefined(normal.config["skills.include_instructions"]);
+    assert.equal(minimal.config["project_doc_max_bytes"], 0);
+    assert.equal(minimal.config["skills.include_instructions"], false);
+    assert.equal(minimal.config["tools.update_plan.enabled"], false);
+    assert.deepEqual(minimal.config["mcp_servers.t3-code"], {
+      url: "http://127.0.0.1:43123/mcp",
+      tool_timeout_sec: 3_900,
+      http_headers: { Authorization: "Bearer test" },
+      enabled: false,
+    });
+    assert.deepEqual(minimal.config["mcp_servers.t3-code-direct"], {
+      url: "http://127.0.0.1:43123/mcp",
+      tool_timeout_sec: 3_900,
+      http_headers: { Authorization: "Bearer test" },
+      enabled: false,
+    });
+    assert.notDeepEqual(
+      normal.config["mcp_servers.t3-code"],
+      minimal.config["mcp_servers.t3-code"],
+    );
+  });
+
   it.effect.each([undefined, false, true])(
     "selects native collaboration modes without prompt overrides with hasT3Mcp=%s",
     (hasT3Mcp) =>

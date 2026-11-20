@@ -437,6 +437,7 @@ export interface ProviderAdapterV2OpenSessionInput {
 export interface ProviderAdapterV2EnsureThreadInput {
   readonly threadId: ThreadId;
   readonly title?: string;
+  readonly contextProfile?: OrchestrationV2AppThread["contextProfile"];
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly providerSessionId?: ProviderSessionId;
@@ -600,6 +601,7 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly resumeThread: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly threadId?: ThreadId;
+    readonly contextProfile?: OrchestrationV2AppThread["contextProfile"];
     readonly modelSelection?: ModelSelection;
     readonly runtimePolicy?: ProviderAdapterV2RuntimePolicy;
   }) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;

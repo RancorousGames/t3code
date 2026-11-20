@@ -1501,25 +1501,6 @@ const subagentDeviceInstructions: HookCallback = () =>
     },
   });
 
-/** Only server-generated reset-window hello turns can bypass Claude's normal coding context. */
-export function isMinimalClaudeResetWakeHello(
-  input: Pick<
-    ProviderAdapter.ProviderAdapterV2TurnInput,
-    "appThread" | "message" | "providerTurnOrdinal"
-  >,
-): boolean {
-  return (
-    input.appThread.creationSource === "server" &&
-    (input.appThread.title === "5-hour session wake" ||
-      input.appThread.title === "5-hour wake test") &&
-    input.providerTurnOrdinal === 1 &&
-    input.message.messageId.startsWith("reset-wake:") &&
-    input.message.creationSource === "server" &&
-    input.message.text === "Say 'hello'." &&
-    input.message.attachments.length === 0
-  );
-}
-
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -1545,21 +1526,21 @@ export function makeClaudeQueryOptions(input: {
   readonly appendSystemPromptFileText?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
   readonly toolSearchOverride?: "true";
-  readonly minimalWakeHello?: boolean;
+  readonly minimalContext?: boolean;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
   const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
     ? { resume: input.nativeThreadId }
     : { sessionId: input.nativeThreadId };
-  if (input.minimalWakeHello) {
-    // Real Haiku inference must still occur to start the 5-hour usage window.
-    // SDK isolation removes user/project instructions, skills, plugins and MCP tools.
+  if (input.minimalContext) {
+    // Explicit lightweight profile: genuine inference with no coding context or tools.
     return {
       model: compiledSelection.apiModelId,
       tools: [],
       permissionMode: "default",
       includePartialMessages: true,
       ...threadIdentity,
+      ...(input.resumeSessionAt === undefined ? {} : { resumeSessionAt: input.resumeSessionAt }),
       ...(compiledSelection.effort === undefined
         ? {}
         : { effort: compiledSelection.effort as NonNullable<ClaudeQueryOptions["effort"]> }),
@@ -1570,7 +1551,7 @@ export function makeClaudeQueryOptions(input: {
       plugins: [],
       mcpServers: {},
       strictMcpConfig: true,
-      systemPrompt: "Reply with exactly hello.",
+      systemPrompt: "Answer the user's request directly.",
     };
   }
   const {
@@ -10385,10 +10366,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
           });
-          const minimalWakeHello = isMinimalClaudeResetWakeHello(turnInput);
+          const minimalContext = turnInput.appThread.contextProfile === "minimal";
           const queryPolicyKey =
             claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides) +
-            (minimalWakeHello ? ":minimal-reset-wake" : "");
+            (minimalContext ? ":minimal-context" : "");
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
@@ -10504,7 +10485,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           );
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
-            minimalWakeHello,
+            minimalContext,
             nativeThreadId,
             resume: shouldResume,
             ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),

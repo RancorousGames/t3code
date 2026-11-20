@@ -1190,6 +1190,9 @@ export const layer: Layer.Layer<
             session.ensureThread({
               threadId: projection.thread.id,
               title: projection.thread.title,
+              ...(projection.thread.contextProfile === undefined
+                ? {}
+                : { contextProfile: projection.thread.contextProfile }),
               modelSelection: run.modelSelection,
               runtimePolicy: resolvedRuntimePolicy,
               providerSessionId,
@@ -1236,6 +1239,9 @@ export const layer: Layer.Layer<
             session.ensureThread({
               threadId: projection.thread.id,
               title: projection.thread.title,
+              ...(projection.thread.contextProfile === undefined
+                ? {}
+                : { contextProfile: projection.thread.contextProfile }),
               modelSelection: run.modelSelection,
               runtimePolicy: resolvedRuntimePolicy,
               providerSessionId,
@@ -1263,6 +1269,9 @@ export const layer: Layer.Layer<
             : session.resumeThread({
                 providerThread,
                 threadId: projection.thread.id,
+                ...(projection.thread.contextProfile === undefined
+                  ? {}
+                  : { contextProfile: projection.thread.contextProfile }),
                 modelSelection: run.modelSelection,
                 runtimePolicy: resolvedRuntimePolicy,
               }),
@@ -1338,6 +1347,9 @@ export const layer: Layer.Layer<
           session.ensureThread({
             threadId: projection.thread.id,
             title: projection.thread.title,
+            ...(projection.thread.contextProfile === undefined
+              ? {}
+              : { contextProfile: projection.thread.contextProfile }),
             modelSelection: run.modelSelection,
             runtimePolicy: resolvedRuntimePolicy,
             providerSessionId,

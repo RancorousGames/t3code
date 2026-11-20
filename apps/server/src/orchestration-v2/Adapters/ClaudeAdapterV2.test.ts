@@ -236,40 +236,7 @@ function makeClaudeTestTurnInput(input: {
 }
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
-  it("isolates server-created reset hellos without affecting normal or queued work", () => {
-    const hello = {
-      appThread: { creationSource: "server", title: "5-hour session wake" },
-      providerTurnOrdinal: 1,
-      message: {
-        messageId: MessageId.make("reset-wake:test"),
-        creationSource: "server",
-        text: "Say 'hello'.",
-        attachments: [],
-      },
-    } as unknown as Pick<
-      ProviderAdapter.ProviderAdapterV2TurnInput,
-      "appThread" | "message" | "providerTurnOrdinal"
-    >;
-    assert.isTrue(ClaudeAdapterV2.isMinimalClaudeResetWakeHello(hello));
-    assert.isFalse(
-      ClaudeAdapterV2.isMinimalClaudeResetWakeHello({
-        ...hello,
-        providerTurnOrdinal: 2,
-      }),
-    );
-    assert.isFalse(
-      ClaudeAdapterV2.isMinimalClaudeResetWakeHello({
-        ...hello,
-        message: { ...hello.message, text: "Do the queued work" },
-      }),
-    );
-    assert.isFalse(
-      ClaudeAdapterV2.isMinimalClaudeResetWakeHello({
-        ...hello,
-        appThread: { ...hello.appThread, creationSource: "web" },
-      }),
-    );
-
+  it("isolates explicit minimal-context sessions without affecting ordinary work", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "claude-haiku-5-5" },
       nativeThreadId: "minimal-reset-wake",
@@ -277,7 +244,7 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       cwd: "/workspace",
       settings: { ...AUTO_COMPACT_CLAUDE_SETTINGS, launchArgs: "--add-dir ../apps" },
       mcpServers: { unused: { type: "http", url: "http://localhost:7777" } },
-      minimalWakeHello: true,
+      minimalContext: true,
     });
     assert.deepEqual(options.tools, []);
     assert.deepEqual(options.settingSources, []);
@@ -285,7 +252,7 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.deepEqual(options.plugins, []);
     assert.deepEqual(options.mcpServers, {});
     assert.isTrue(options.strictMcpConfig);
-    assert.equal(options.systemPrompt, "Reply with exactly hello.");
+    assert.equal(options.systemPrompt, "Answer the user's request directly.");
     assert.isUndefined(options.additionalDirectories);
     assert.isUndefined(options.extraArgs);
 

@@ -1342,8 +1342,9 @@ const CODEX_T3_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 const CODEX_T3_DIRECT_MCP_SERVER = "t3-code-direct";
 const CODEX_DIRECT_ONLY_T3_TOOL = "t3_thread_wait";
 
-function codexThreadRuntimeParams(input: {
+export function codexThreadRuntimeParams(input: {
   readonly threadId: ThreadId | null;
+  readonly contextProfile?: "minimal";
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly managedMcpServers?: ReadonlyArray<ManagedMcpServer>;
   readonly modelSelection?: { readonly model: string };
@@ -1354,6 +1355,7 @@ function codexThreadRuntimeParams(input: {
   readonly config: Readonly<Record<string, Schema.Json>>;
 } {
   const { mcpSession } = input;
+  const minimal = input.contextProfile === "minimal";
   const t3Server =
     mcpSession === undefined
       ? undefined
@@ -1367,10 +1369,18 @@ function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      // Opt-in only. Never remove auth/provider settings from the shared app-server.
+      ...(minimal
+        ? {
+            project_doc_max_bytes: 0,
+            "skills.include_instructions": false,
+            "tools.update_plan.enabled": false,
+          }
+        : {}),
       ...Object.fromEntries(
         enabledManagedMcpServers(input.managedMcpServers ?? [], "codex").map((server) => [
           `mcp_servers.${managedMcpServerKey(server.name)}`,
-          { url: server.url },
+          { url: server.url, ...(minimal ? { enabled: false } : {}) },
         ]),
       ),
       // One app-server serves many threads, so the id goes in per-thread shell config, not its env.
@@ -1380,15 +1390,17 @@ function codexThreadRuntimeParams(input: {
       ...(t3Server === undefined
         ? {}
         : {
-            // Override only T3's servers so launch-argument MCP servers survive.
-            "mcp_servers.t3-code": { ...t3Server, disabled_tools: [CODEX_DIRECT_ONLY_T3_TOOL] },
-            // Code Mode runs a blocking wait as a nested call, and the model keeps working
-            // around it. A second, direct-only registration makes it a plain tool call.
-            [`mcp_servers.${CODEX_T3_DIRECT_MCP_SERVER}`]: {
-              ...t3Server,
-              enabled_tools: [CODEX_DIRECT_ONLY_T3_TOOL],
-              omit_tools_from: ["code_mode", "deferred"],
-            },
+            // Codex's minimal profile disables T3 MCP; the normal profile preserves tool routing.
+            "mcp_servers.t3-code": minimal
+              ? { ...t3Server, enabled: false }
+              : { ...t3Server, disabled_tools: [CODEX_DIRECT_ONLY_T3_TOOL] },
+            [`mcp_servers.${CODEX_T3_DIRECT_MCP_SERVER}`]: minimal
+              ? { ...t3Server, enabled: false }
+              : {
+                  ...t3Server,
+                  enabled_tools: [CODEX_DIRECT_ONLY_T3_TOOL],
+                  omit_tools_from: ["code_mode", "deferred"],
+                },
           }),
     },
   };
@@ -6726,7 +6738,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               codexInput,
               runtimePolicy: turnInput.runtimePolicy,
               modelSelection: turnInput.modelSelection,
-              hasT3Mcp: mcpSession !== undefined,
+              hasT3Mcp:
+                mcpSession !== undefined && turnInput.appThread.contextProfile !== "minimal",
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
@@ -7044,6 +7057,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     threadId: threadInput.threadId,
                     mcpSession,
                     managedMcpServers,
+                    ...(threadInput.contextProfile === undefined
+                      ? {}
+                      : { contextProfile: threadInput.contextProfile }),
                     modelSelection: threadInput.modelSelection,
                     runtimePolicy: threadInput.runtimePolicy,
                   }),
@@ -7079,6 +7095,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   threadId: appThreadId,
                   mcpSession: yield* readMcpSession(appThreadId),
                   managedMcpServers: yield* readManagedMcpServers(),
+                  ...(threadInput.contextProfile === undefined
+                    ? {}
+                    : { contextProfile: threadInput.contextProfile }),
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),

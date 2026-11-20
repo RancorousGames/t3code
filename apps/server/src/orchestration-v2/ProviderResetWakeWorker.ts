@@ -315,6 +315,12 @@ export const makeSweep = Effect.gen(function* () {
               ? "Queued at provider reset"
               : "5-hour session wake",
           generateTitle: false,
+          // Only auto-generated quota probes are minimal; queued user jobs keep full context.
+          ...((decision.testOnly === true || !config.queued) &&
+          decision.text === HELLO &&
+          (provider.driver === "claudeAgent" || provider.driver === "codex")
+            ? { contextProfile: "minimal" as const }
+            : {}),
           modelSelection: selection,
           runtimeMode: "full-access",
           interactionMode: "default",

@@ -345,6 +345,7 @@ describe("reset wake startup recovery", () => {
       expect(launch).toHaveBeenCalledOnce();
       const request = launch.mock.calls[0]?.[0] as unknown as ThreadLaunch.ThreadLaunchInput;
       expect(request.initialMessage?.text).toBe("Work on the nightly build.");
+      expect(request.contextProfile).toBeUndefined();
       expect(request.modelSelection).toEqual({
         instanceId: providerSnapshot.instanceId,
         model: "gpt-6-luna",
@@ -380,6 +381,7 @@ describe("test hello dispatch reliability", () => {
               [currentProvider.instanceId]: config({
                 enabled: false,
                 testRequestedAt: requestedAt,
+                queued: { text: "Run scheduled work later" },
               }),
             },
           });
@@ -418,9 +420,11 @@ describe("test hello dispatch reliability", () => {
             yield* sweep();
           }).pipe(Effect.provide(layer));
           expect(launch).toHaveBeenCalledTimes(1);
+          expect(launch.mock.calls[0]?.[0]?.contextProfile).toBe("minimal");
           const wake = persisted.providerResetWakeups[currentProvider.instanceId];
           expect(wake?.testRequestedAt).toBeUndefined();
           expect(wake?.enabled).toBe(false);
+          expect(wake?.queued?.text).toBe("Run scheduled work later");
           expect(wake?.lastTestResult?.requestedAt).toBe(requestedAt);
           expect(wake?.lastTestResult?.status).toBe(succeeds ? "succeeded" : "failed");
           expect(wake?.lastTestResult?.threadId).toBe(succeeds ? "wake-test" : undefined);
