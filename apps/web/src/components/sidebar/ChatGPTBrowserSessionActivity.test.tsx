@@ -277,6 +277,27 @@ describe("ChatGPT browser session activity persistence", () => {
     });
     expect(renderer!.root.findByType("span").props.children).toBe("unloaded");
   });
+  it("preserves confirmed load failure instead of masking it as unloaded on detach", async () => {
+    mocks.execute.mockResolvedValue(
+      "invalid: A temporary limit is preventing this chat from loading. Try again later.",
+    );
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    const status = renderer!.root.findByType("span");
+    expect(status.props.children).toBe("invalid");
+    await act(async () => {
+      webview.remove();
+      detachPresence();
+      window.dispatchEvent(
+        new CustomEvent("t3:chatgpt-page-push", { detail: { runtimeTabId: runtimeId } }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(status.props.children).toBe("invalid");
+    expect(status.props["aria-label"]).toContain("A temporary limit");
+  });
+
   it("shows unloaded, not recent/idle, when the guest is gone but it worked recently", async () => {
     localStorage.setItem(storageKey, JSON.stringify(Date.now() - 10_000));
     detachPresence();
@@ -328,6 +349,15 @@ describe("ChatGPT browser session activity persistence", () => {
       renderer!.update(<ActivityObserver />);
     });
     expect(renderer!.root.findByType("span").props.children).toBe("inactive");
+  });
+
+  it("does not turn an unverified navigation LoadFailed into a red error", async () => {
+    mocks.nav._tag = "LoadFailed";
+    mocks.execute.mockResolvedValue("unknown: the ChatGPT composer is unavailable");
+    await act(async () => {
+      renderer = create(<ActivityObserver />);
+    });
+    expect(renderer!.root.findByType("span").props.children).toBe("unknown");
   });
 
   it("never marks a missing composer as an error, even after repeated probes", async () => {

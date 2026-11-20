@@ -35,6 +35,24 @@ describe("ChatGPT conversation failure detection", () => {
     expect(window.eval(CHATGPT_LOAD_FAILURE_EXPRESSION)).toBe(true);
   });
 
+  it("detects a split temporary-limit notice without requiring an exact leaf text node", () => {
+    document.body.innerHTML =
+      "<main><section><div><span>A temporary limit is preventing this chat from loading.</span>" +
+      "<span>Try again later.</span></div></section></main>";
+    expect(hasChatGPTLoadFailure()).toBe(true);
+  });
+
+  it("does not classify a newly submitted quote as an error, even with changed turn markup", () => {
+    document.body.innerHTML =
+      '<main><div class="new-turn"><p>A temporary limit is preventing this chat from loading. Try again later.</p></div>' +
+      '<div contenteditable="true" class="ProseMirror"></div></main>';
+    expect(hasChatGPTLoadFailure()).toBe(false);
+    document.body.innerHTML =
+      '<main><div role="status">A temporary limit is preventing this chat from loading. Try again later.</div>' +
+      '<div contenteditable="true" class="ProseMirror"></div></main>';
+    expect(hasChatGPTLoadFailure()).toBe(true);
+  });
+
   it("ignores an ordinary chat message quoting the error", () => {
     document.body.innerHTML =
       '<main><div data-message-author-role="user"><p>A temporary limit is preventing this chat from loading. Try again later.</p>' +

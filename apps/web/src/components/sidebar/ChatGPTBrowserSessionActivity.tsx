@@ -118,6 +118,7 @@ export function useChatGPTBrowserSessionActivity(
   const [now, setNow] = useState(() => Date.now());
   const previousState = useRef<ChatGPTActivityState>("unknown");
   const lastHeartbeatAt = useRef(0);
+  const lastConfirmedFailure = useRef<{ tabId: string; url: string; reason: string } | null>(null);
   const [result, setResult] = useState<{
     tabId: string | null;
     activity: ChatGPTActivityState;
@@ -199,6 +200,7 @@ export function useChatGPTBrowserSessionActivity(
     };
     previousState.current = "unknown";
     lastHeartbeatAt.current = 0;
+    if (lastConfirmedFailure.current?.tabId !== runtimeTabId) lastConfirmedFailure.current = null;
     // Snooze blocks automatic loading, but an already-attached page can still
     // receive external messages. Observe that existing guest without waking it.
     if (!runtimeTabId || (snoozed && !attached)) return;
@@ -228,119 +230,137 @@ export function useChatGPTBrowserSessionActivity(
           navTag = nav?._tag ?? "none";
           const loading = tabId ? state.desktopByTabId[tabId]?.loading : false;
           if (nav?._tag === "LoadFailed") {
-            next = "invalid";
-            reason = nav.description || "the ChatGPT page failed to load";
-          } else {
-            // The navigation overlay can remain "Loading" even after ChatGPT has
-            // rendered its own conversation failure panel. Inspect the attached
-            // guest anyway: the session-control reader does so and correctly
-            // identifies these failures, while the old sidebar stayed grey.
-            const isLoading = nav?._tag === "Loading" || loading;
-            reason = isLoading ? "the page is loading" : reason;
-            const webview = Array.from(
-              document.querySelectorAll<HTMLElementTagNameMap["webview"]>(
-                'webview, [data-t3-chromium-guest="true"]',
-              ),
-            ).find((element) => element.dataset.previewTab === runtimeTabId);
-            if (webview) {
-              // Guest preload confirms a new rendered user turn after a trusted
-              // composer submission. No sidebar visibility or cached URL needed.
-              const session = readChatGPTBrowserSessions(environmentId).find(
-                (entry) => entry.id === sessionId,
-              );
-              if (session && !session.humanControlled) {
-                try {
-                  const observed: unknown = await webview.executeJavaScript(
-                    `(() => {
+            // Navigation status alone is not evidence of a failed ChatGPT conversation.
+            reason = nav.description || "browser navigation failed; awaiting DOM confirmation";
+          }
+          // The navigation overlay can remain "Loading" even after ChatGPT has
+          // rendered its own conversation failure panel. Inspect the attached
+          // guest anyway: the session-control reader does so and correctly
+          // identifies these failures, while the old sidebar stayed grey.
+          const isLoading = nav?._tag === "Loading" || loading;
+          reason = isLoading ? "the page is loading" : reason;
+          const webview = Array.from(
+            document.querySelectorAll<HTMLElementTagNameMap["webview"]>(
+              'webview, [data-t3-chromium-guest="true"]',
+            ),
+          ).find((element) => element.dataset.previewTab === runtimeTabId);
+          if (webview) {
+            // Guest preload confirms a new rendered user turn after a trusted
+            // composer submission. No sidebar visibility or cached URL needed.
+            const session = readChatGPTBrowserSessions(environmentId).find(
+              (entry) => entry.id === sessionId,
+            );
+            if (session && !session.humanControlled) {
+              try {
+                const observed: unknown = await webview.executeJavaScript(
+                  `(() => {
                       const root = document.documentElement;
                       const verified = Number(root.getAttribute("data-t3code-human-chat-verified-at"));
                       return Number.isFinite(verified) && verified > 0;
                     })()`,
-                  );
-                  if (observed === true) markHumanControlled(sessionId);
-                } catch {
-                  // Guest reloads and navigation races should not affect status.
-                }
+                );
+                if (observed === true) markHumanControlled(sessionId);
+              } catch {
+                // Guest reloads and navigation races should not affect status.
               }
-              const value = await inspectChatGPTBrowserHealth(webview, (snapshot) => {
-                if (saveChatGPTPageSnapshot(environmentId, sessionId, snapshot))
-                  queueIndex(
-                    `${snapshot.conversationId}:${snapshot.contentHash}:${snapshot.turnCount}`,
-                  );
-                const currentSession = readChatGPTBrowserSessions(environmentId).find(
-                  (s) => s.id === sessionId,
-                );
-                const currentNav = tabId
-                  ? readThreadPreviewState(threadRef).sessions[tabId]?.navStatus
-                  : null;
-                if (
-                  !currentSession ||
-                  currentSession.hidden ||
-                  currentNav?._tag !== "Success" ||
-                  currentNav.url !== snapshot.url
-                )
-                  return;
-                const idle = observeChatGPTIdleSnapshot(
-                  environmentId,
-                  sessionId,
-                  currentSession.binding?.boundAt ?? null,
-                  snapshot,
-                );
-                // Confirm apparent completion with a second real guest snapshot,
-                // rather than treating a transient disappearance of Stop as idle.
-                if (idle.confirmAgain && idleConfirmTimer === undefined) {
-                  idleConfirmTimer = setTimeout(() => {
-                    idleConfirmTimer = undefined;
-                    if (!disposed)
-                      window.dispatchEvent(
-                        new CustomEvent("t3:chatgpt-page-push", {
-                          detail: { runtimeTabId },
-                        }),
-                      );
-                  }, 850);
-                }
-              });
-              healthTag =
-                typeof value === "string"
-                  ? value.startsWith("invalid: ")
-                    ? "invalid"
-                    : value.startsWith("unknown: ")
-                      ? "unknown"
-                      : value
-                  : "no-result";
-              if (
-                value === "working" ||
-                value === "idle" ||
-                value === "interrupted" ||
-                value === "delivery-timeout"
-              ) {
-                next = value;
-                reason =
-                  value === "interrupted"
-                    ? "waiting for the complete answer"
-                    : value === "delivery-timeout"
-                      ? "Message delivery timed out. Please try again."
-                      : null;
-              } else if (typeof value === "string" && value.startsWith("invalid: ")) {
-                // Old/missing UI selectors must not make a healthy ChatGPT tab red.
-                next =
-                  value === CHATGPT_BROWSER_UNRESPONSIVE_ACTIVITY ||
-                  value ===
-                    "invalid: A temporary limit is preventing this chat from loading. Try again later."
-                    ? "invalid"
-                    : "unknown";
-                reason = value.slice(9);
-              } else if (typeof value === "string" && value.startsWith("unknown: ")) {
-                reason = value.slice(9);
-              } else reason = "page inspection returned an unexpected result";
             }
+            const value = await inspectChatGPTBrowserHealth(webview, (snapshot) => {
+              if (saveChatGPTPageSnapshot(environmentId, sessionId, snapshot))
+                queueIndex(
+                  `${snapshot.conversationId}:${snapshot.contentHash}:${snapshot.turnCount}`,
+                );
+              const currentSession = readChatGPTBrowserSessions(environmentId).find(
+                (s) => s.id === sessionId,
+              );
+              const currentNav = tabId
+                ? readThreadPreviewState(threadRef).sessions[tabId]?.navStatus
+                : null;
+              if (
+                !currentSession ||
+                currentSession.hidden ||
+                currentNav?._tag !== "Success" ||
+                currentNav.url !== snapshot.url
+              )
+                return;
+              const idle = observeChatGPTIdleSnapshot(
+                environmentId,
+                sessionId,
+                currentSession.binding?.boundAt ?? null,
+                snapshot,
+              );
+              // Confirm apparent completion with a second real guest snapshot,
+              // rather than treating a transient disappearance of Stop as idle.
+              if (idle.confirmAgain && idleConfirmTimer === undefined) {
+                idleConfirmTimer = setTimeout(() => {
+                  idleConfirmTimer = undefined;
+                  if (!disposed)
+                    window.dispatchEvent(
+                      new CustomEvent("t3:chatgpt-page-push", {
+                        detail: { runtimeTabId },
+                      }),
+                    );
+                }, 850);
+              }
+            });
+            healthTag =
+              typeof value === "string"
+                ? value.startsWith("invalid: ")
+                  ? "invalid"
+                  : value.startsWith("unknown: ")
+                    ? "unknown"
+                    : value
+                : "no-result";
+            if (
+              value === "working" ||
+              value === "idle" ||
+              value === "interrupted" ||
+              value === "delivery-timeout"
+            ) {
+              next = value;
+              reason =
+                value === "interrupted"
+                  ? "waiting for the complete answer"
+                  : value === "delivery-timeout"
+                    ? "Message delivery timed out. Please try again."
+                    : null;
+            } else if (typeof value === "string" && value.startsWith("invalid: ")) {
+              // Old/missing UI selectors must not make a healthy ChatGPT tab red.
+              next =
+                value === CHATGPT_BROWSER_UNRESPONSIVE_ACTIVITY ||
+                value ===
+                  "invalid: A temporary limit is preventing this chat from loading. Try again later."
+                  ? "invalid"
+                  : "unknown";
+              reason = value.slice(9);
+            } else if (typeof value === "string" && value.startsWith("unknown: ")) {
+              reason = value.slice(9);
+            } else reason = "page inspection returned an unexpected result";
           }
         } catch (error) {
           reason = error instanceof Error ? error.message : String(error);
         }
+      const navAfterProbe = tabId
+        ? readThreadPreviewState(threadRef).sessions[tabId]?.navStatus
+        : null;
+      const observedUrl = navAfterProbe && "url" in navAfterProbe ? navAfterProbe.url : null;
+      const confirmedReason =
+        reason === "browser-unresponsive" ||
+        reason === "A temporary limit is preventing this chat from loading. Try again later.";
+      if (next === "invalid" && confirmedReason && observedUrl) {
+        lastConfirmedFailure.current = { tabId: runtimeTabId, url: observedUrl, reason: reason! };
+      } else if (["idle", "working", "interrupted", "delivery-timeout"].includes(next)) {
+        lastConfirmedFailure.current = null; // A fresh page observation cleared the error.
+      } else if (
+        next === "unknown" &&
+        !attached &&
+        lastConfirmedFailure.current?.tabId === runtimeTabId &&
+        lastConfirmedFailure.current.url === observedUrl
+      ) {
+        // A detached guest cannot disprove its last positively observed error.
+        next = "invalid";
+        reason = lastConfirmedFailure.current.reason;
+      }
       if (disposed) return;
-
-      // Missing controls are always unknown; no number of observations proves failure.
 
       const observedAt = Date.now();
       // A recovered red/orange guest deserves a fresh idle grace period.
@@ -637,15 +657,23 @@ export function useChatGPTBrowserSessionActivity(
   // hibernation outrank cached activity for the sidebar status and colour.
   // No active preview tab (or an attachment still pending) is NOT a loaded idle guest.
   const notResident = unloaded || !attached;
+  // Presence can disappear after a confirmed provider error. "Unloaded" is
+  // a residency observation, not proof the error has resolved.
+  const confirmedError =
+    activity === "invalid" &&
+    (reason === "browser-unresponsive" ||
+      reason === "A temporary limit is preventing this chat from loading. Try again later.");
   const age = snoozed
     ? "snoozed"
-    : notResident
-      ? unloadedChatGPTActivityAge(
-          lastWorkingAt,
-          wasWarmSessionActiveBeforeFailure(environmentId, sessionId),
-          now,
-        )
-      : chatGPTActivityAge(activity, lastWorkingAt, now);
+    : confirmedError
+      ? "invalid"
+      : notResident
+        ? unloadedChatGPTActivityAge(
+            lastWorkingAt,
+            wasWarmSessionActiveBeforeFailure(environmentId, sessionId),
+            now,
+          )
+        : chatGPTActivityAge(activity, lastWorkingAt, now);
   useEffect(() => {
     const previous = previousDisplayedAge.current;
     if (previous === age) return;
