@@ -86,7 +86,13 @@ export const layer = HttpRouter.add(
     const result = yield* Effect.tryPromise({
       try: () =>
         runSwarm(
-          { ...input, action: String(input.action) },
+          {
+            ...input,
+            action: String(input.action),
+            // Browser sessions represent the human operator, not an agent.
+            // Never let a crafted browser request impersonate a swarm member.
+            ...(input.action === "post" ? { author: "human" } : {}),
+          },
           {
             root: path.join(config.baseDir, "swarm"),
             enabled: write && input.enabled === true,

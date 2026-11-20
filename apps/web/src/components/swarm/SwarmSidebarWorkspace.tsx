@@ -102,6 +102,7 @@ function SwarmWorkspace({
   const [body, setBody] = useState("");
   const [mentionText, setMentionText] = useState("");
   const [outcomes, setOutcomes] = useState<SwarmWake[]>([]);
+  const pendingCreate = useRef<{ id: string; name: string; coordinator: string } | null>(null);
   const pendingPost = useRef<{ messageId: string; body: string; mentions: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +128,13 @@ function SwarmWorkspace({
     event.preventDefault();
     if (!enabled) return;
     void act(async () => {
-      const created = await swarmCall<{ id: string }>("create", { name, coordinator }, true);
+      const id =
+        pendingCreate.current?.name === name && pendingCreate.current?.coordinator === coordinator
+          ? pendingCreate.current.id
+          : randomUUID();
+      pendingCreate.current = { id, name, coordinator };
+      const created = await swarmCall<{ id: string }>("create", { id, name, coordinator }, true);
+      pendingCreate.current = null;
       await loadBoard(created.id);
       onCreated(created.id);
     });
@@ -185,7 +192,7 @@ function SwarmWorkspace({
           swarmId: board.id,
           author: "human",
           body,
-          mentions,
+          ...(mentions.length ? { mentions } : {}),
           messageId,
         },
         true,
@@ -324,7 +331,27 @@ function SwarmWorkspace({
                         key={member.alias}
                         className="border-b border-border/60 py-2 last:border-0"
                       >
-                        <div className="text-sm font-medium">@{member.alias}</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm font-medium">@{member.alias}</div>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost-muted"
+                            disabled={!enabled || busy}
+                            onClick={() =>
+                              void act(async () => {
+                                await swarmCall(
+                                  "detach",
+                                  { swarmId: board.id, member: member.alias },
+                                  true,
+                                );
+                                await loadBoard(board.id);
+                              })
+                            }
+                          >
+                            Detach
+                          </Button>
+                        </div>
                         <div className="text-xs text-muted-foreground">
                           {member.kind === "native" ? "Native T3 thread" : "ChatGPT browser"}
                         </div>
@@ -458,7 +485,7 @@ function SwarmWorkspace({
                     required
                   />
                   <label className={fieldLabel}>
-                    Explicit wake mentions (comma-separated attached aliases)
+                    Optional explicit wake mentions (comma-separated aliases)
                     <Input
                       size="sm"
                       value={mentionText}
@@ -470,7 +497,8 @@ function SwarmWorkspace({
                     Post{mentionText.trim() ? " and notify" : ""}
                   </Button>
                   <p className="text-xs text-muted-foreground">
-                    Messages persist on this board. Mentions use T3's existing delivery mechanisms.
+                    Use @alias in your message to wake a participant automatically, or specify
+                    explicit aliases above. Detaching never closes the original session.
                   </p>
                 </form>
                 {(outcomes.length > 0 || board.wakes.length > 0) && (

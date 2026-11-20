@@ -53,7 +53,18 @@ async function getEvents(root, id) {
         return event;
       }),
   );
-  return events.sort((a, b) => a.at.localeCompare(b.at) || a.key.localeCompare(b.key));
+  return events.sort((a, b) => {
+    const clock = a.at.localeCompare(b.at);
+    if (clock !== 0) return clock;
+    // Keep rapid successive membership mutations in commit order even when
+    // multiple events share the same millisecond timestamp.
+    if (a.atNs && b.atNs && a.atNs !== b.atNs) {
+      const aa = BigInt(a.atNs);
+      const bb = BigInt(b.atNs);
+      return aa < bb ? -1 : 1;
+    }
+    return a.key.localeCompare(b.key);
+  });
 }
 
 // Immutable one-file-per-event board. A hard link publishes a complete temp
@@ -64,7 +75,12 @@ async function append(root, id, key, event) {
   await FS.mkdir(folder, { recursive: true });
   const target = Path.join(folder, key + ".json");
   const tmp = Path.join(folder, ".pending-" + Crypto.randomUUID());
-  const value = { ...event, key, at: new Date().toISOString() };
+  const value = {
+    ...event,
+    key,
+    at: new Date().toISOString(),
+    atNs: process.hrtime.bigint().toString(),
+  };
   try {
     await FS.writeFile(tmp, JSON.stringify(value) + "\n", { flag: "wx" });
     try {
@@ -73,8 +89,8 @@ async function append(root, id, key, event) {
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
       const prior = JSON.parse(await FS.readFile(target, "utf8"));
-      const { at: _oldAt, ...oldFields } = prior;
-      const { at: _newAt, ...newFields } = value;
+      const { at: _oldAt, atNs: _oldNs, ...oldFields } = prior;
+      const { at: _newAt, atNs: _newNs, ...newFields } = value;
       demand(equal(oldFields, newFields), "Event ID already exists with different content: " + key);
       return { value: prior, created: false };
     }
@@ -90,7 +106,8 @@ function project(events, swarmId) {
   const messages = [];
   const wakes = {};
   for (const e of events) {
-    if (e.type === "member") members[e.member.alias] = e.member;
+    if (e.type === "member" || e.type === "member-set") members[e.member.alias] = e.member;
+    if (e.type === "member-detached") delete members[e.alias];
     if (e.type === "message") messages.push(e);
     if (e.type === "wake-intent")
       wakes[e.key] = {
@@ -100,6 +117,9 @@ function project(events, swarmId) {
         message: e.notification,
         state: "pending",
         deliveryId: e.deliveryId,
+        // Pin the original recipient; later rebindings must never redirect
+        // historical notifications or their delivery receipt lookups.
+        ...(e.recipient ? { recipient: e.recipient } : {}),
       };
   }
   for (const e of events) {
@@ -131,17 +151,26 @@ function notification(board, post, target) {
     post.body,
     "",
     "This is an event notification, not an autonomous agent spawn.",
-    "Read/post on the same board with scripts/swarm.mjs and the above swarmId.",
-    "The board remains authoritative; reply there when you have local CLI access.",
+    "ChatGPT: use t3_sessions with action=swarm and params.action=read/post to reply on this board.",
+    "Native agents: use scripts/swarm.mjs, or your existing OMCP-T access.",
+    "The board remains authoritative; direct messages still use ordinary T3 messaging.",
   ].join("\n");
 }
 
 async function wakeOnce(root, board, wakeId, transports) {
   const wake = board.wakes[wakeId];
   demand(wake, "Unknown wake event " + wakeId);
-  const member = board.members[wake.target];
-  demand(member, "Missing target member " + wake.target);
   if (wake.state !== "pending") return wake;
+  // A previously acknowledged v1 event remains readable. Only unattempted
+  // legacy wakes are blocked, because their original recipient was not pinned.
+  demand(wake.recipient, "Wake recipient is unpinned; inspect the historical delivery manually");
+  const member = wake.recipient;
+  // No sender means no delivery could have occurred. Leave the intent pending
+  // so a later explicit wake can use the existing T3 transport safely.
+  const sender = member.kind === "native" ? transports?.native : transports?.chatgpt;
+  if (typeof sender !== "function") {
+    return { ...wake, detail: { error: "Delivery bridge unavailable; no attempt was made" } };
+  }
   const attempt = await append(root, board.id, "attempt-" + wakeId, {
     type: "wake-attempt",
     wakeId,
@@ -208,10 +237,10 @@ async function wakeOnce(root, board, wakeId, transports) {
 
 async function createIntent(root, board, post, memberName) {
   const target = alias(memberName);
-  demand(board.members[target], "Target not attached: " + target);
   const key = "wake-" + post.messageId + "-" + target;
   const existing = board.events.find((event) => event.key === key);
   if (existing) return existing;
+  demand(board.members[target], "Target not attached: " + target);
   const digest = Crypto.createHash("sha256")
     .update(board.id + ":" + post.messageId + ":" + target)
     .digest("hex");
@@ -222,6 +251,7 @@ async function createIntent(root, board, post, memberName) {
     target,
     deliveryId,
     notification: notification(board, post, target),
+    recipient: board.members[target],
   };
   return (await append(root, board.id, key, payload)).value;
 }
@@ -296,21 +326,63 @@ export async function runSwarm(input, options = {}) {
       if (!UUID.test(member.threadId))
         demand(member.environmentId, "Opaque native thread needs exact environmentId");
     }
-    const inserted = await append(root, swarmId, "member-" + name, { type: "member", member });
+    const current = board.members[name];
+    if (current) {
+      demand(
+        equal(current, member),
+        "Member is already attached to a different recipient; detach first",
+      );
+      return { member: current, attached: false };
+    }
+    // Keep original v1 attachment events readable. An alias can later be
+    // reattached after a detach without overwriting its immutable history.
+    const previouslyAttached = board.events.some(
+      (event) =>
+        (event.type === "member" || event.type === "member-set") && event.member.alias === name,
+    );
+    const key = previouslyAttached ? "member-set-" + Crypto.randomUUID() : "member-" + name;
+    const inserted = await append(root, swarmId, key, {
+      type: previouslyAttached ? "member-set" : "member",
+      member,
+    });
     return { member, attached: inserted.created };
+  }
+  if (action === "detach") {
+    const name = alias(input.member);
+    if (!board.members[name]) return { member: name, detached: false };
+    await append(root, swarmId, "member-detached-" + Crypto.randomUUID(), {
+      type: "member-detached",
+      alias: name,
+    });
+    return { member: name, detached: true };
   }
   if (action === "post") {
     const author = input.author === "human" ? "human" : alias(input.author);
-    demand(author === "human" || board.members[author], "Author is not attached");
     const messageId = uuid(input.messageId ?? Crypto.randomUUID(), "messageId");
     const body = text(input.body, "body", 28000);
-    const mentions = input.mentions ?? [];
+    const prior = board.messages.find((message) => message.messageId === messageId);
+    demand(
+      author === "human" || board.members[author] || prior?.author === author,
+      "Author is not attached",
+    );
+    // Replays must preserve the original intent even if membership changes.
+    // Explicit mentions are authoritative (including [] to suppress a wake).
+    const mentions =
+      input.mentions !== undefined
+        ? input.mentions
+        : prior?.author === author && prior.body === body
+          ? prior.mentions
+          : [...body.matchAll(/(^|[^a-z0-9_@])@([a-z][a-z0-9_-]{0,39})(?![a-z0-9_-])/gi)]
+              .map((match) => match[2].toLowerCase())
+              .filter((name) => board.members[name]);
     demand(
       Array.isArray(mentions) && mentions.length <= 20,
       "mentions must be a list of <=20 aliases",
     );
     const targets = [...new Set(mentions.map(alias))];
-    for (const target of targets) demand(board.members[target], "Target not attached: " + target);
+    if (!prior) {
+      for (const target of targets) demand(board.members[target], "Target not attached: " + target);
+    }
     const event = await append(root, swarmId, "message-" + messageId, {
       type: "message",
       messageId,
@@ -338,13 +410,27 @@ export async function runSwarm(input, options = {}) {
     };
   }
   if (action === "read") {
+    const limit = input.limit ?? 100;
+    demand(Number.isSafeInteger(limit) && limit >= 1 && limit <= 500, "read limit must be 1..500");
+    const cursor =
+      input.afterMessageId === undefined ? null : uuid(input.afterMessageId, "afterMessageId");
+    const index =
+      cursor === null ? null : board.messages.findIndex((message) => message.messageId === cursor);
+    demand(index === null || index >= 0, "Message cursor not found in Swarm board");
+    const messages =
+      index === null
+        ? board.messages.slice(-limit)
+        : board.messages.slice(index + 1, index + 1 + limit);
     return {
       id: board.id,
       name: board.name,
       coordinator: board.coordinator,
       members: Object.values(board.members),
-      messages: board.messages.slice(-Math.min(500, Math.max(1, input.limit ?? 100))),
-      wakes: Object.values(board.wakes),
+      messages,
+      totalMessages: board.messages.length,
+      nextAfterMessageId: messages.at(-1)?.messageId ?? cursor,
+      hasMore: index !== null && index + 1 + messages.length < board.messages.length,
+      wakes: input.includeWakes === false ? [] : Object.values(board.wakes),
     };
   }
   if (action === "delivery") {
@@ -353,8 +439,8 @@ export async function runSwarm(input, options = {}) {
     demand(!id || selected.length === 1, "Unknown wakeId");
     const outcomes = [];
     for (const wake of selected) {
-      const member = board.members[wake.target];
-      if (member.kind !== "chatgpt" || wake.state === "pending") {
+      const member = wake.recipient ?? board.members[wake.target];
+      if (member?.kind !== "chatgpt" || wake.state === "pending") {
         outcomes.push(wake);
         continue;
       }
@@ -375,5 +461,5 @@ export async function runSwarm(input, options = {}) {
     }
     return { wakes: outcomes };
   }
-  throw new Error("action must be create, list, attach, post, read, wake or delivery");
+  throw new Error("action must be create, list, attach, detach, post, read, wake or delivery");
 }
