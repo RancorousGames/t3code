@@ -184,11 +184,14 @@ export function observedSpawnParent(request, session, observed) {
       ? "not_requested"
       : !observed
         ? "unconfirmed"
-        : parentSessionId !== expected
-          ? "mismatch"
-          : parentLinkStatus === "hidden" || parentLinkStatus === "unresolved"
-            ? "dangling"
-            : "confirmed",
+        : parentSessionId === null &&
+            (parentLinkStatus === "hidden" || parentLinkStatus === "unresolved")
+          ? "unavailable"
+          : parentSessionId !== expected
+            ? "mismatch"
+            : parentLinkStatus === "hidden" || parentLinkStatus === "unresolved"
+              ? "dangling"
+              : "confirmed",
   };
 }
 

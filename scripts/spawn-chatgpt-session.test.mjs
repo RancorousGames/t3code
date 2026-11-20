@@ -510,6 +510,25 @@ NodeTest.test("explicit parent confirmation requires a downstream observation", 
   NodeAssert.equal(dangling.parentConfirmation, "dangling");
   NodeAssert.equal(dangling.parentLinkStatus, "unresolved");
   NodeAssert.equal(dangling.sessionId, "child");
+  const unavailable = classifySpawnResponse(
+    {
+      ok: true,
+      data: {
+        action: "spawn",
+        created: true,
+        sessionId: "independent-child",
+        parentSessionId: null,
+        parentLinkStatus: "unresolved",
+        messageSent: false,
+        promptDelivery: "pending",
+        sendAttempted: null,
+      },
+    },
+    request,
+  );
+  NodeAssert.equal(unavailable.parentConfirmation, "unavailable");
+  NodeAssert.equal(unavailable.parentSessionId, null);
+  NodeAssert.equal(unavailable.sessionId, "independent-child");
   NodeAssert.equal(observed("exact-manager-id").requestedParentSessionId, "exact-manager-id");
   NodeAssert.equal(observed(null).parentConfirmation, "mismatch");
   NodeAssert.equal(
