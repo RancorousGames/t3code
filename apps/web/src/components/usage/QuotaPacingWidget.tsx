@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
 import { isElectron } from "../../env";
 import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalStorage";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { useEnvironmentProviders, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironmentHttpBaseUrl, useEnvironmentProviders, usePrimaryEnvironmentId } from "../../state/environments";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -460,6 +460,7 @@ export function QuotaPacingWidget({
     [presentations, providersByEnvironment],
   );
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryHttpBaseUrl = useEnvironmentHttpBaseUrl(primaryEnvironmentId);
   const activeSamples = useChatGPTActiveHistory(primaryEnvironmentId, isElectron);
   const autoworkHistory = useAutoworkHistory();
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
@@ -526,18 +527,19 @@ export function QuotaPacingWidget({
     })), [rows, history]);
   const serializedQuotaSeries = JSON.stringify(desktopQuotaSeries);
   useEffect(() => {
-    if (!isElectron || desktopQuotaSeries.length === 0 ||
-        lastPublishedQuotaHistory.current === serializedQuotaSeries) return;
+    if (!isElectron || !primaryHttpBaseUrl || desktopQuotaSeries.length === 0) return;
+    const publishedKey = primaryHttpBaseUrl + "|" + serializedQuotaSeries;
+    if (lastPublishedQuotaHistory.current === publishedKey) return;
     let active = true;
-    void fetch("/api/omni/usage/history", {
+    void fetch(new URL("/api/omni/usage/history", primaryHttpBaseUrl), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ capturedAt: Date.now(), series: desktopQuotaSeries }),
     }).then((response) => {
-      if (active && response.ok) lastPublishedQuotaHistory.current = serializedQuotaSeries;
+      if (active && response.ok) lastPublishedQuotaHistory.current = publishedKey;
     }).catch(() => { /* Retry on the next provider update; keep the desktop's original history. */ });
     return () => { active = false; };
-  }, [desktopQuotaSeries, serializedQuotaSeries]);
+  }, [desktopQuotaSeries, primaryHttpBaseUrl, serializedQuotaSeries]);
 
   const connectedKey = Array.from(presentations)
     .filter(
