@@ -82,9 +82,17 @@ export async function inspectChatGPTBrowserHealth(
   try {
     const result = await Promise.race([
       webview.executeJavaScript(`(() => {
+        // Keep the fast activity result even if an optional page snapshot fails
+        // on a newer ChatGPT DOM. A snapshot exception must not turn a working
+        // session grey or hide a positively detected load failure.
         const activity = ${CHATGPT_ACTIVITY_EXPRESSION};
-        return { blank: (${isBlankChatGPTDocument.toString()})(), activity,
-          snapshot: (${inspectChatGPTPageSnapshot.toString()})(String(activity ?? "unknown")) };
+        let blank = false;
+        try { blank = (${isBlankChatGPTDocument.toString()})(); } catch {}
+        let snapshot = null;
+        try {
+          snapshot = (${inspectChatGPTPageSnapshot.toString()})(String(activity ?? "unknown"));
+        } catch {}
+        return { blank, activity, snapshot };
       })()`),
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), 4_000);
