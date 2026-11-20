@@ -4,6 +4,7 @@ import * as FS from "node:fs/promises";
 import * as OS from "node:os";
 import * as Path from "node:path";
 import { runSwarm } from "./index.mjs";
+import { swarmForNativeThread } from "./nativeAgent.mjs";
 
 const A = "00000000-0000-4000-8000-000000000001";
 const B = "00000000-0000-4000-8000-000000000002";
@@ -14,7 +15,7 @@ const make = async (fn) => {
   const call = (payload, extra = {}) => runSwarm(payload, { root, enabled: true, ...extra });
   try {
     await call({ action: "create", id: A, name: "Review" });
-    await fn(call);
+    await fn(call, root);
   } finally {
     await FS.rm(root, { recursive: true, force: true });
   }
@@ -184,4 +185,75 @@ test("a missing delivery bridge leaves an intent pending for later explicit wake
     );
     assert.equal(resumed.wake.state, "accepted");
     assert.equal(deliveries.length, 1);
+  }));
+
+test("native Swarm calls bind the author to the authenticated thread", async () =>
+  make(async (call, root) => {
+    await call({
+      action: "attach",
+      swarmId: A,
+      kind: "native",
+      member: "native",
+      threadId: B,
+      environmentId: D,
+    });
+    await call({
+      action: "attach",
+      swarmId: A,
+      kind: "chatgpt",
+      member: "browser",
+      sessionId: C,
+      conversationId: D,
+    });
+    const sends = [];
+    const context = {
+      root,
+      threadId: B,
+      environmentId: D,
+      transports: {
+        native: async () => {
+          throw new Error("unexpected native wake");
+        },
+        chatgpt: async (request) => {
+          sends.push(request);
+          return {
+            messageId: request.messageId,
+            sessionId: request.sessionId,
+            conversationId: request.expectedConversationId,
+            status: "queued",
+          };
+        },
+      },
+    };
+    const posted = await swarmForNativeThread(
+      {
+        action: "post",
+        swarmId: A,
+        messageId: C,
+        body: "Please review @browser",
+      },
+      context,
+    );
+    assert.equal(posted.actor, "native");
+    assert.equal(posted.data.wakes[0].state, "queued");
+    assert.equal(sends.length, 1);
+    const read = await swarmForNativeThread({ action: "read", swarmId: A }, context);
+    assert.equal(read.actor, "native");
+    assert.equal(read.data.messages[0].author, "native");
+    await assert.rejects(
+      () =>
+        swarmForNativeThread(
+          { action: "post", swarmId: A, messageId: D, body: "impersonated" },
+          { ...context, threadId: C },
+        ),
+      /exactly one Swarm membership/,
+    );
+    await assert.rejects(
+      () =>
+        swarmForNativeThread(
+          { action: "read", swarmId: A },
+          { ...context, environmentId: "another-environment" },
+        ),
+      /exactly one Swarm membership/,
+    );
   }));

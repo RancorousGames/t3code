@@ -8,6 +8,7 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import * as DesktopTransport from "../chatgpt-delegation/DesktopTransport.ts";
 import { runSwarm } from "./index.mjs";
+import { desktopSwarmTransports } from "./desktopTransports.ts";
 
 const noStore = { "cache-control": "no-store" };
 const reply = (data: unknown, status = 200) =>
@@ -47,42 +48,7 @@ export const layer = HttpRouter.add(
     const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
     const exchange = (request: Parameters<typeof desktop.exchange>[0]) =>
       runPromise(desktop.exchange(request));
-    const transports = {
-      native: async (call: Record<string, unknown>) => {
-        const result = await exchange({
-          version: 1,
-          requestId: String(call.clientRequestId),
-          type: "t3.threads",
-          action: "send",
-          threadId: String(call.threadId),
-          ...(call.expectedEnvironmentId
-            ? { environmentId: String(call.expectedEnvironmentId) }
-            : {}),
-          clientRequestId: String(call.clientRequestId),
-          message: String(call.message),
-        });
-        return result;
-      },
-      chatgpt: async (call: Record<string, unknown>) =>
-        call.action === "delivery_status"
-          ? exchange({
-              version: 1,
-              requestId: `swarm-delivery-status:${String(call.messageId)}`,
-              type: "chatgpt.sessions",
-              action: "delivery_status",
-              messageId: String(call.messageId),
-            })
-          : exchange({
-              version: 1,
-              requestId: String(call.messageId),
-              type: "chatgpt.sessions",
-              action: "enqueue",
-              messageId: String(call.messageId),
-              sessionId: String(call.sessionId),
-              expectedConversationId: String(call.expectedConversationId),
-              message: String(call.message),
-            }),
-    };
+    const transports = desktopSwarmTransports(exchange);
     const result = yield* Effect.tryPromise({
       try: () =>
         runSwarm(

@@ -59,6 +59,9 @@ import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
+import { SwarmToolkit } from "../swarm/mcpTools.ts";
+import * as SwarmDesktopTransport from "../chatgpt-delegation/DesktopTransport.ts";
+import * as SwarmHandlers from "../swarm/mcpHandlers.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
 import {
   PreviewSnapshotTool,
@@ -1103,6 +1106,10 @@ export const layerOrchestratorToolkit = toolkitRegistration(
   OrchestratorHandlers.layer,
 ).pipe(Layer.provide(OrchestratorMcpService.layer), Layer.provide(ThreadMetadataMcpService.layer));
 
+export const layerSwarmToolkit = toolkitRegistration(SwarmToolkit, SwarmHandlers.layer).pipe(
+  Layer.provide(SwarmDesktopTransport.layer),
+);
+
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 
 const layerWorktreeToolkitRegistration = toolkitRegistration(
@@ -1159,6 +1166,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 export const layerTools = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
+  layerSwarmToolkit,
   layerThreadToolkit,
   layerAttachmentToolkit,
   layerProjectRegistration,
