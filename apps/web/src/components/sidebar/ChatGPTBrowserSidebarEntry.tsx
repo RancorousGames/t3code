@@ -629,6 +629,11 @@ export function ChatGPTBrowserSidebarEntry({
     false,
     Schema.Boolean,
   );
+  const [showClosedSessions, setShowClosedSessions] = useLocalStorage(
+    `t3code:chatgpt-browser:show-closed-sessions:${environmentId ?? "unconnected"}`,
+    false,
+    Schema.Boolean,
+  );
   const [selectedColors, setSelectedColors] = useLocalStorage(
     `t3code:chatgpt-browser:color-filter:${environmentId ?? "unconnected"}`,
     [] as string[],
@@ -1716,8 +1721,8 @@ export function ChatGPTBrowserSidebarEntry({
       registry: registrySearch?.environmentId === environmentId ? registrySearch.rows : [],
       removals,
       query: searchQuery,
-    });
-  }, [environmentId, isSearching, registrySearch, searchQuery, sessions]);
+    }).filter((hit) => showClosedSessions || hit.status !== "closed");
+  }, [environmentId, isSearching, registrySearch, searchQuery, sessions, showClosedSessions]);
   const [closingId, setClosingId] = useState<string | null>(null);
   const closingRef = useRef<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -2885,7 +2890,9 @@ export function ChatGPTBrowserSidebarEntry({
                     }
                     // Highlighted while the list differs from the default view.
                     data-pressed={
-                      showWorkers && !hideUnloaded && !selectedColors.length ? undefined : ""
+                      showWorkers && !hideUnloaded && !showClosedSessions && !selectedColors.length
+                        ? undefined
+                        : ""
                     }
                   />
                 }
@@ -2928,6 +2935,7 @@ export function ChatGPTBrowserSidebarEntry({
                       setSelectedColors([]);
                       setShowWorkers(true);
                       setHideUnloaded(false);
+                      setShowClosedSessions(false);
                       setShowAIInterfaceSessions(false);
                     }}
                   >
@@ -3013,6 +3021,14 @@ export function ChatGPTBrowserSidebarEntry({
                     title="Hide unloaded sessions from the main sidebar list; they stay available in search and the dashboard."
                   >
                     Hide unloaded
+                  </MenuCheckboxItem>
+                  <MenuCheckboxItem
+                    checked={showClosedSessions}
+                    onCheckedChange={setShowClosedSessions}
+                    aria-label="Include closed ChatGPT sessions in search"
+                    title="Include sessions closed in T3 in sidebar search results. Their ChatGPT conversations may still exist."
+                  >
+                    Include closed sessions in search
                   </MenuCheckboxItem>
                   <MenuCheckboxItem
                     checked={showAIInterfaceSessions}
@@ -4018,13 +4034,13 @@ export function ChatGPTBrowserSidebarEntry({
                 </div>
                 <div
                   className="truncate font-mono text-[10px] text-muted-foreground"
-                  title={hit.id}
+                  title={hit.conversationUrl ?? "ChatGPT conversation URL unavailable"}
                 >
-                  {hit.id}
+                  {hit.conversationUrl ?? "ChatGPT conversation URL unavailable"}
                 </div>
                 <div className="text-[10px] text-muted-foreground">
                   {hit.status === "closed"
-                    ? "Closed / expired"
+                    ? "Closed in T3"
                     : "Registry only (not in local sessions)"}
                 </div>
               </div>
@@ -4047,14 +4063,16 @@ export function ChatGPTBrowserSidebarEntry({
                   Open
                 </Button>
               )}
-              <Button
-                size="xs"
-                variant="ghost-muted"
-                title={`Copy session ID ${hit.id}`}
-                onClick={() => void navigator.clipboard.writeText(hit.id)}
-              >
-                Copy
-              </Button>
+              {hit.conversationUrl && (
+                <Button
+                  size="xs"
+                  variant="ghost-muted"
+                  title="Copy ChatGPT conversation URL"
+                  onClick={() => void navigator.clipboard.writeText(hit.conversationUrl!)}
+                >
+                  Copy
+                </Button>
+              )}
             </div>
           </SidebarMenuItem>
         ))}
