@@ -111,6 +111,8 @@ export function inspectChatGPTPage(input: {
   }
   // A full conversation is terminal for this ChatGPT conversation, unlike
   // a temporarily unavailable composer. Ignore quoted code and message bodies.
+  // The hard-limit banner lives near the composer, outside <main> on newer ChatGPT.
+  // Only short visible nodes outside chat turns can establish terminal status.
   const conversationFull =
     [...document.querySelectorAll('[role="alert"],[role="status"],[data-testid*="error"]')].some(
       (el) =>
@@ -122,7 +124,7 @@ export function inspectChatGPTPage(input: {
           (el.textContent ?? "").slice(0, 400),
         ),
     ) ||
-    [...document.querySelectorAll("main div,main p,main span")].some(
+    [...document.querySelectorAll("body div,body p,body span")].some(
       (el) =>
         visible(el) &&
         !el.closest(

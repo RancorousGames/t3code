@@ -114,10 +114,12 @@ export function inspectChatGPTPageSnapshot(activityState: string): ChatGPTPageSn
         ),
     )
     .map((node) => (node.textContent ?? "").slice(0, 400));
+  // ChatGPT renders the hard-limit banner beside the composer, outside <main>
+  // and often without alert/status semantics. The body scan excludes chat turns.
   const limitNotice = /conversation (?:is )?(?:too long|full)|maximum (?:conversation )?length/i;
   const conversationFull =
     alerts.some((text) => limitNotice.test(text)) ||
-    [...document.querySelectorAll("main div,main p,main span")].some(
+    [...document.querySelectorAll("body div,body p,body span")].some(
       (node) =>
         visible(node) &&
         !node.closest(
