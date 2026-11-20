@@ -53,6 +53,32 @@ export function hasChatGPTLoadFailure(): boolean {
     ),
   ).some(visible);
 
+  // The current provider failure page places its title, error sentence and
+  // "Try again" control inside one <main>. There may be no standalone text
+  // element whose *entire* text equals the notice. When there is no chat editor
+  // or visible conversation, inspect this short, rendered error panel instead
+  // of the whole body (which includes hundreds of KB of hydration scripts).
+  if (!activeEditor && !activeTurns) {
+    const main = body.querySelector('main,[role="main"]');
+    const mainText = normalize((main as HTMLElement | null)?.innerText ?? main?.textContent ?? "");
+    const retry =
+      main &&
+      Array.from(main.querySelectorAll('button,[role="button"]')).some(
+        (button) => visible(button) && /^try again$/i.test(normalize(button.textContent)),
+      );
+    // Some variants render the retry action as a link/div instead of a button.
+    const retryTail = mainText.slice(mainText.indexOf(message) + message.length).trim();
+    const hasRetryAction = retry || /^try again$/i.test(retryTail);
+    if (
+      main &&
+      visible(main) &&
+      hasRetryAction &&
+      mainText.length <= 400 &&
+      mainText.includes(message)
+    )
+      return true;
+  }
+
   const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
   let node: Node | null;
   while ((node = walker.nextNode())) {
