@@ -8,6 +8,7 @@ import {
   sendAppControlRequest,
   classifySpawnResponse,
   reconcileCreatedSpawn,
+  observeSpawnDriver,
 } from "./spawn-chatgpt-session.mjs";
 
 NodeTest.test("script validates title and message without connecting", () => {
@@ -79,17 +80,26 @@ NodeTest.test("the OMCP/CLI spawn request carries explicit parent UUID only when
     "request-2",
   );
   NodeAssert.equal(without.parentSessionId, undefined);
-  const strict = createChatGPTSpawnRequest(parseArguments([
-    "--title", "Strict child", "--message", "Implement", "--require-parent",
-    "--parent-session-id", "missing-manager",
-  ]), "strict-request");
+  const strict = createChatGPTSpawnRequest(
+    parseArguments([
+      "--title",
+      "Strict child",
+      "--message",
+      "Implement",
+      "--require-parent",
+      "--parent-session-id",
+      "missing-manager",
+    ]),
+    "strict-request",
+  );
   NodeAssert.equal(strict.requireParent, true);
   NodeAssert.equal(explicit.requireParent, undefined);
   NodeAssert.equal(without.autoClose, undefined);
   NodeAssert.equal(without.project, "t3code");
-  const optIn = createChatGPTSpawnRequest(parseArguments([
-    "--title", "Worker", "--message", "Implement", "--auto-close",
-  ]), "request-auto-close");
+  const optIn = createChatGPTSpawnRequest(
+    parseArguments(["--title", "Worker", "--message", "Implement", "--auto-close"]),
+    "request-auto-close",
+  );
   NodeAssert.equal(optIn.autoClose, true);
 });
 
@@ -306,6 +316,7 @@ NodeTest.test("partial created receipt is a success with ID and no delivered cla
     {
       requestId: "spawn-request",
       outcome: "created",
+      controlChannel: "online",
       created: true,
       sessionId: "t3-uuid",
       parentSessionId: null,
@@ -380,10 +391,11 @@ NodeTest.test("pending renderer spawn keeps its created ID in the OMCP-compatibl
   NodeAssert.equal(receipt.created, true);
   NodeAssert.equal(receipt.sessionId, "reserved-native-uuid");
   NodeAssert.equal(receipt.messageSent, false);
-  NodeAssert.equal(receipt.promptDelivery, "unknown");
+  NodeAssert.equal(receipt.promptDelivery, "pending");
   NodeAssert.equal(receipt.deliveryPending, true);
   NodeAssert.equal(receipt.sendAttempted, null);
   NodeAssert.match(receipt.next, /delivery continues/i);
+  NodeAssert.equal(receipt.controlChannel, "online");
 });
 
 NodeTest.test(
@@ -412,6 +424,7 @@ NodeTest.test(
     NodeAssert.equal(result.created, true);
     NodeAssert.equal(result.sessionId, "durable-created-uuid");
     NodeAssert.equal(result.promptDelivery, "unknown");
+    NodeAssert.equal(result.controlChannel, "online");
     NodeAssert.equal(result.messageSent, false);
     NodeAssert.equal(calls.length, 1);
     NodeAssert.deepEqual(timeouts, [20_000]);
@@ -430,6 +443,45 @@ NodeTest.test("unavailable reconciliation stays unknown and never invents sessio
   NodeAssert.equal(result.sessionId, null);
   NodeAssert.equal(result.created, null);
   NodeAssert.match(result.lookupError, /renderer unavailable/);
+  NodeAssert.equal(result.controlChannel, "unknown");
+});
+
+NodeTest.test("driver liveness is independent of creation and prompt delivery", () => {
+  NodeAssert.deepEqual(
+    observeSpawnDriver("home", () => ({
+      driverOnline: false,
+      driverLastSeenAt: 42,
+    })),
+    { driverOnline: false, driverLastSeenAt: 42 },
+  );
+  NodeAssert.deepEqual(
+    observeSpawnDriver("home", () => ({
+      driverOnline: true,
+      driverLastSeenAt: 43,
+    })),
+    { driverOnline: true, driverLastSeenAt: 43 },
+  );
+  NodeAssert.deepEqual(
+    observeSpawnDriver("home", () => {
+      throw new Error("no registry");
+    }),
+    { driverOnline: null, driverLastSeenAt: null },
+  );
+});
+
+NodeTest.test("desktop control offline is separate from an unknown send outcome", async () => {
+  const result = await reconcileCreatedSpawn(
+    "offline-pipe",
+    { requestId: "stable-uuid" },
+    async () => {
+      throw Object.assign(new Error("connect ENOENT"), { code: "ENOENT" });
+    },
+  );
+  NodeAssert.equal(result.controlChannel, "offline");
+  NodeAssert.equal(result.created, null);
+  NodeAssert.equal(result.promptDelivery, "unknown");
+  NodeAssert.equal(result.requestId, "stable-uuid");
+  NodeAssert.match(result.next, /do not spawn or send again/i);
 });
 
 NodeTest.test("explicit parent confirmation requires a downstream observation", () => {
@@ -440,13 +492,21 @@ NodeTest.test("explicit parent confirmation requires a downstream observation", 
       request,
     );
   NodeAssert.equal(observed("exact-manager-id").parentConfirmation, "confirmed");
-  const dangling = classifySpawnResponse({
-    ok: true, data: {
-      action: "spawn", created: true, sessionId: "child",
-      parentSessionId: "exact-manager-id", parentLinkStatus: "unresolved",
-      messageSent: false, promptDelivery: "pending",
+  const dangling = classifySpawnResponse(
+    {
+      ok: true,
+      data: {
+        action: "spawn",
+        created: true,
+        sessionId: "child",
+        parentSessionId: "exact-manager-id",
+        parentLinkStatus: "unresolved",
+        messageSent: false,
+        promptDelivery: "pending",
+      },
     },
-  }, request);
+    request,
+  );
   NodeAssert.equal(dangling.parentConfirmation, "dangling");
   NodeAssert.equal(dangling.parentLinkStatus, "unresolved");
   NodeAssert.equal(dangling.sessionId, "child");
@@ -533,7 +593,7 @@ NodeTest.test(
     NodeAssert.equal(receipt.parentConfirmation, "confirmed");
     NodeAssert.equal(receipt.outcome, "created");
     NodeAssert.equal(receipt.messageSent, false);
-    NodeAssert.equal(receipt.promptDelivery, "unknown");
+    NodeAssert.equal(receipt.promptDelivery, "pending");
     NodeAssert.equal(receipt.deliveryPending, true);
   },
 );

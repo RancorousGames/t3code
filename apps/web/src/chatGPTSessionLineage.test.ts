@@ -43,15 +43,20 @@ describe("explicit ChatGPT spawn parent identity", () => {
     });
   });
 
-  it("keeps unknown and hidden IDs as unresolved lineage, while strict calls fail closed", () => {
-    expect(resolveChatGPTSpawnParent(existing, "missing")).toEqual({
-      parentSessionId: "missing",
-      verifiedParent: null,
-      status: "unresolved",
-    });
+  it("detaches unknown and hidden parents in best-effort mode, while strict calls fail closed", () => {
+    for (const requested of ["missing", "6cdc065f-d511-4732-8cdc-eb8f385cb666"]) {
+      expect(resolveChatGPTSpawnParent(existing, requested)).toEqual({
+        parentSessionId: null,
+        verifiedParent: null,
+        status: "unresolved",
+      });
+      expect(() => resolveChatGPTSpawnParent(existing, requested, true)).toThrow(
+        /Unknown or hidden/,
+      );
+    }
     const hidden = [{ ...existing[0]!, hidden: true }, existing[1]!];
     expect(resolveChatGPTSpawnParent(hidden, parentId)).toEqual({
-      parentSessionId: parentId,
+      parentSessionId: null,
       verifiedParent: null,
       status: "hidden",
     });

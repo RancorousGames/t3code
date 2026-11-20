@@ -786,7 +786,7 @@ describe("background ChatGPT activation", () => {
     ["unknown", "unresolved"],
     ["known-hidden", "hidden"],
   ] as const)(
-    "creates and delivers with a dangling %s parent, without claiming trust",
+    "creates an independent session for unavailable %s parent, without claiming trust",
     async (parentSessionId, status) => {
       mocks.browserSessions = [{ id: "known-hidden", title: "Hidden manager", hidden: true }];
       await act(async () => {
@@ -807,7 +807,6 @@ describe("background ChatGPT activation", () => {
         "Worker",
         expect.objectContaining({
           spawnRequestId: parentSessionId,
-          parentSessionId,
           binding: expect.objectContaining({ parentSessionId: null, role: "worker" }),
         }),
       );
@@ -817,7 +816,7 @@ describe("background ChatGPT activation", () => {
         ok: true,
         data: {
           created: true,
-          parentSessionId,
+          parentSessionId: null,
           parentLinkStatus: status,
           promptDelivery: "pending",
         },

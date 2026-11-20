@@ -3,8 +3,8 @@ import { findChatGPTSessionByAnyId } from "./chatGPTBootstrapIdentity";
 
 export type ChatGPTParentLinkStatus = "not_requested" | "resolved" | "hidden" | "unresolved";
 
-/** Only a visible, registered parent is verified; unresolved IDs remain routing
- * metadata, not authority for a project, seat, role or permission. */
+/** Best-effort spawns use only visible, registered parents. An unavailable
+ * parent is reported but never persisted as a speculative lineage edge. */
 export function resolveChatGPTSpawnParent(
   sessions: readonly BrowserSession[],
   requestedId: string | undefined,
@@ -25,7 +25,7 @@ export function resolveChatGPTSpawnParent(
       "Unknown or hidden parent T3 session ID; strict require_parent requires a visible, registered parent.",
     );
   return {
-    parentSessionId: parent && !parent.hidden ? parent.id : requestedId,
+    parentSessionId: parent && !parent.hidden ? parent.id : null,
     verifiedParent: parent && !parent.hidden ? parent : null,
     status,
   };
@@ -50,7 +50,11 @@ export function chatGPTParentIndex(
       const requested = session.parentSessionId;
       return [
         session.id,
-        requested ? (byId.has(requested) ? requested : publicIds.get(requested.toLowerCase()) ?? null) : null,
+        requested
+          ? byId.has(requested)
+            ? requested
+            : (publicIds.get(requested.toLowerCase()) ?? null)
+          : null,
       ] as const;
     }),
   );

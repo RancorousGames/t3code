@@ -14,6 +14,7 @@ import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+import { readRegistryList } from "./t3-registry-read.mjs";
 
 const ROOT = NodePath.resolve(import.meta.dirname, "..");
 
@@ -196,6 +197,7 @@ export function observedSpawnParent(request, session, observed) {
 export async function reconcileCreatedSpawn(address, request, exchange = sendAppControlRequest) {
   let matchedSession = null;
   let lookupError = null;
+  let controlChannel = "unknown";
   try {
     const listed = await exchange(
       address,
@@ -209,6 +211,7 @@ export async function reconcileCreatedSpawn(address, request, exchange = sendApp
       },
       20_000,
     );
+    controlChannel = "online";
     if (listed.ok && Array.isArray(listed.data?.sessions)) {
       const matches = listed.data.sessions.filter(
         (session) =>
@@ -220,10 +223,14 @@ export async function reconcileCreatedSpawn(address, request, exchange = sendApp
     }
   } catch (error) {
     lookupError = error instanceof Error ? error.message : String(error);
+    controlChannel = ["ENOENT", "ECONNREFUSED", "EPIPE"].includes(error?.code)
+      ? "offline"
+      : "unknown";
   }
   const sessionId = matchedSession?.id ?? null;
   return {
     requestId: request.requestId,
+    controlChannel,
     outcome: sessionId ? "created" : "unknown",
     created: sessionId ? true : null,
     sessionId,
@@ -259,6 +266,7 @@ export function classifySpawnResponse(response, request) {
     return {
       requestId: request.requestId,
       outcome: "delivered",
+      controlChannel: "online",
       created: true,
       sessionId: response.sessionId,
       messageSent: true,
@@ -279,16 +287,13 @@ export function classifySpawnResponse(response, request) {
     return {
       requestId: request.requestId,
       outcome: data.messageSent ? "delivered" : "created",
+      controlChannel: "online",
       created: true,
       sessionId: data.sessionId,
       ...observedSpawnParent(request, data, Object.hasOwn(data, "parentSessionId")),
       messageSent: data.messageSent,
-      // The launcher returns before the background initial delivery completes.
-      // For external spawn consumers, "pending" is not evidence of delivery:
-      // preserve creation identity while reporting the unconfirmed state as UNKNOWN.
-      // OMCP's strict receipt contract intentionally accepts only terminal
-      // delivery states (unknown/not_sent/user_turn_observed).
-      promptDelivery: data.promptDelivery === "pending" ? "unknown" : data.promptDelivery,
+      // Creation is durable but background initial delivery is not necessarily observed.
+      promptDelivery: data.promptDelivery,
       ...(data.promptDelivery === "pending" ? { deliveryPending: true } : {}),
       sendAttempted: data.sendAttempted ?? null,
       ...(data.reason ? { reason: data.reason } : {}),
@@ -299,6 +304,20 @@ export function classifySpawnResponse(response, request) {
     };
   }
   throw new Error("T3 Code did not provide a valid ChatGPT initial prompt delivery receipt.");
+}
+
+// Registry driver liveness is independent of the desktop control socket and
+// of whether the created guest has actually received its first prompt.
+export function observeSpawnDriver(home, readRegistry = readRegistryList) {
+  try {
+    const status = readRegistry({ which: "all" }, { home });
+    return {
+      driverOnline: typeof status.driverOnline === "boolean" ? status.driverOnline : null,
+      driverLastSeenAt: status.driverLastSeenAt ?? null,
+    };
+  } catch {
+    return { driverOnline: null, driverLastSeenAt: null };
+  }
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -326,8 +345,18 @@ export async function main(args = process.argv.slice(2)) {
     // The renderer may already have accepted this request. Never replay it.
   }
   const receipt = response ? classifySpawnResponse(response, request) : null;
+  const outcome = receipt ?? (await reconcileCreatedSpawn(address, request));
+  const driver = observeSpawnDriver(options.home);
   process.stdout.write(
-    JSON.stringify(receipt ?? (await reconcileCreatedSpawn(address, request))) + "\n",
+    JSON.stringify({
+      ...outcome,
+      ...driver,
+      ...(driver.driverOnline === false && outcome.promptDelivery !== "user_turn_observed"
+        ? {
+            next: "T3 desktop driver is offline. Keep the original request/session IDs; restore driver connectivity, then inspect delivery read-only. Never respawn or resend the initial prompt on an uncertain outcome.",
+          }
+        : {}),
+    }) + "\n",
   );
 }
 
