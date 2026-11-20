@@ -652,6 +652,7 @@ export function useChatGPTBrowserSessionActivity(
   }, [lastWorkingAt]);
 
   const activity = result.tabId === runtimeTabId ? result.activity : "unknown";
+  const reason = result.tabId === runtimeTabId ? result.reason : null;
   // A recent answer is not evidence that its guest is still resident. A hidden
   // renderer can be unmounted without any ChatGPT DOM event, so presence and
   // hibernation outrank cached activity for the sidebar status and colour.
@@ -685,7 +686,6 @@ export function useChatGPTBrowserSessionActivity(
       `${previous ?? "mounted"}->${age} guestHibernated=${unloaded} attached=${attached} loading=${loading} observed=${activity}`,
     );
   }, [environmentId, sessionId, age, unloaded, attached, loading, activity]);
-  const reason = result.tabId === runtimeTabId ? result.reason : null;
   const label =
     age === "snoozed"
       ? "ChatGPT is snoozed; unsnooze to reload the conversation"
