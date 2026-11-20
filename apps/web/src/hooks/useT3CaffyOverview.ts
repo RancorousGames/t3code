@@ -4,6 +4,7 @@ import type { ScheduledChatGPTJob } from "../components/sidebar/ChatGPTDelayedPr
 /** Read-only T3-owned scheduling state, never the obsolete OpenRig Caffy registry. */
 export interface T3CaffyEntry {
   sessionId: string;
+  conversationId?: string;
   browserSessionId?: string | undefined;
   publicSessionId?: string | undefined;
   mode: "idle" | "periodic" | "startup";

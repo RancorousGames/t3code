@@ -20,6 +20,14 @@ const dateTimeLocal = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 const maxDelayMs = 90 * 24 * 60 * 60_000;
 
+const describeSaveFailure = (cause: unknown) => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (message.includes("Exact sessionId and conversationId UUIDs required")) {
+    return "Caffy cannot verify the ChatGPT conversation for this session. Open the chat and let it load (send its first message if it is new), then try again.";
+  }
+  return message;
+};
+
 export interface AutoContinueConfig {
   mode: "idle" | "periodic" | "startup";
   respectSlots?: boolean;
@@ -225,7 +233,7 @@ export function ChatGPTCaffyScheduleDialog({
         autoRebootEveryRuns: rebootRuns,
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(describeSaveFailure(cause));
     } finally {
       setBusy(false);
     }
@@ -568,12 +576,15 @@ export function ChatGPTCaffyScheduleDialog({
                 </div>
               </div>
             )}
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
           </div>
+          {error && (
+            <p
+              role="alert"
+              className="max-h-28 shrink-0 overflow-y-auto border-t border-destructive/30 bg-destructive/10 px-6 py-3 text-sm text-destructive"
+            >
+              {error}
+            </p>
+          )}
           <DialogFooter className="shrink-0">
             {target.kind === "scheduled" && (
               <Button

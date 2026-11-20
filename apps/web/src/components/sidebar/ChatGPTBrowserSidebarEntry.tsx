@@ -259,7 +259,7 @@ async function stopChatGPTGenerationForSchedule(
   sessionId: string,
 ) {
   const expression = `(() => {
-    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
     if (!(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return false;
     stop.click();
     return true;
@@ -995,7 +995,9 @@ export function ChatGPTBrowserSidebarEntry({
         null)
       : null;
     const conversationId =
-      chatGPTConversationIdFromUrl(url) ?? session?.bootstrapIdentity?.conversationId;
+      chatGPTConversationIdFromUrl(url) ??
+      session?.bootstrapIdentity?.conversationId ??
+      activeCaffyMonitors.get(sessionId)?.conversationId;
     await control({
       action: "set",
       sessionId,
@@ -3661,7 +3663,7 @@ export function ChatGPTBrowserSidebarEntry({
                                   className={`relative flex min-w-0 items-center gap-0 rounded-md ${session.verificationPending ? "bg-amber-400/20 ring-1 ring-inset ring-amber-400/50" : displayRole === "manager" ? "bg-[rgba(157,111,195,0.14)]" : displayRole === "worker" ? "bg-[rgba(148,105,180,0.14)]" : ""} ${session.conversationFullId ? "ring-4 ring-inset ring-violet-500/90 bg-violet-500/10" : idleAttentionReady ? "ring-4 ring-inset ring-yellow-400/90" : activeSessionId === session.id ? "ring-4 ring-inset ring-primary/80" : displayedSessionIds.has(session.id) ? "ring-1 ring-inset ring-sky-400/60" : ""}`}
                                   title={
                                     session.conversationFullId
-                                      ? "Maximum conversation length reached — sending and Caffy disabled. Reboot this session."
+                                      ? "Maximum conversation length reached — T3 reboots this session with context automatically (on detection or the next message)."
                                       : idleAttentionReady
                                         ? "Attention ready — click to clear"
                                         : session.returnMarker
