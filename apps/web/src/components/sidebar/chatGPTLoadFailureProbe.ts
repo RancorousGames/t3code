@@ -53,12 +53,10 @@ export function hasChatGPTLoadFailure(): boolean {
     ),
   ).some(visible);
 
-  // The current provider failure page places its title, error sentence and
-  // "Try again" control inside one <main>. There may be no standalone text
-  // element whose *entire* text equals the notice. When there is no chat editor
-  // or visible conversation, inspect this short, rendered error panel instead
-  // of the whole body (which includes hundreds of KB of hydration scripts).
-  if (!activeEditor && !activeTurns) {
+  // The provider's short error panel includes a title and retry action, not
+  // an exact-text element; an inert composer textarea may remain mounted.
+  // Require no visible chat turns and a retry action to avoid quoted user text.
+  if (!activeTurns) {
     const main = body.querySelector('main,[role="main"]');
     const mainText = normalize((main as HTMLElement | null)?.innerText ?? main?.textContent ?? "");
     const retry =

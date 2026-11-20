@@ -46,7 +46,8 @@ describe("ChatGPT conversation failure detection", () => {
     document.body.innerHTML =
       "<main><header>WT0717 Fix Submitted</header><section>" +
       "<span>A temporary limit is preventing this chat from loading.</span>" +
-      "<span>Try again later.</span><button>Try again</button></section></main>";
+      "<span>Try again later.</span><button>Try again</button>" +
+      '<textarea class="composer-placeholder"></textarea></section></main>';
     expect(hasChatGPTLoadFailure()).toBe(true);
   });
 

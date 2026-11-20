@@ -20,6 +20,24 @@ export function isBlankChatGPTDocument(): boolean {
   const body = document.body;
   if (!body) return true;
   const visible = (element: Element) => element.getClientRects().length > 0;
+  // A failed conversation can render the entire ChatGPT shell, including
+  // sidebar buttons and an inert composer textarea, around a tiny spinner.
+  // Inspect the main conversation area before these shell controls mask it.
+  const main = body.querySelector('main,[role="main"]');
+  const mainText = ((main as HTMLElement | null)?.innerText ?? main?.textContent ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (
+    main &&
+    visible(main) &&
+    /^Loading chat(?:…|[.]{3})?$/i.test(mainText) &&
+    !Array.from(
+      main.querySelectorAll(
+        '[data-message-author-role],[data-content-search-unit-key],[data-testid^="conversation-turn-"]',
+      ),
+    ).some(visible)
+  )
+    return true;
   // A real chat, login/challenge flow, or interactive UI is not a blank page.
   if (
     Array.from(

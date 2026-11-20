@@ -40,6 +40,15 @@ describe("blank browser classification", () => {
     }
   });
 
+  it("recognizes an unloaded conversation loading shell despite sidebar controls and a placeholder editor", () => {
+    document.body.innerHTML =
+      "<aside><button>History</button></aside><main>Loading chat…<textarea></textarea></main>";
+    expect(isBlankChatGPTDocument()).toBe(true);
+    document.body.innerHTML =
+      '<main>Loading chat…<div data-message-author-role="user">Sent message</div><textarea></textarea></main>';
+    expect(isBlankChatGPTDocument()).toBe(false);
+  });
+
   it("waits a minute on the same guest and URL, then clears when the page responds", async () => {
     const guest = {
       getURL: () => "https://chatgpt.com/",
