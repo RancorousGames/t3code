@@ -25,6 +25,7 @@ export const layer = HttpRouter.add(
         instanceId: provider.instanceId,
         checkedAt: provider.usageLimits!.checkedAt,
         windows: provider.usageLimits!.windows,
+        resetCredits: provider.usageLimits!.resetCredits,
         unavailable: provider.usageLimits!.unavailable,
       }));
     const external = (yield* sources.current).flatMap((source) =>
@@ -34,6 +35,7 @@ export const layer = HttpRouter.add(
         instanceId: account.id,
         checkedAt: account.usageLimits.checkedAt,
         windows: account.usageLimits.windows,
+        resetCredits: account.usageLimits.resetCredits,
         unavailable: account.usageLimits.unavailable,
       })),
     );
