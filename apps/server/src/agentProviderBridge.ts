@@ -145,7 +145,9 @@ export function dispatchBrowserWork(
   if (
     session.kind !== "t3/chatgpt" ||
     session.source.browserSessionId !== browserSessionId ||
-    (action !== "visibility" && action !== "load" && action !== "control" &&
+    (action !== "visibility" &&
+      action !== "load" &&
+      action !== "control" &&
       session.source.conversationId !== expectedConversationId &&
       // A cold guest has no observed conversation; queued delivery will
       // verify the exact requested conversation before touching its composer.
@@ -154,9 +156,12 @@ export function dispatchBrowserWork(
         options?.delivery === "WhenIdle" &&
         session.source.conversationId === null
       )) ||
-    (action !== "visibility" && action !== "load" && action !== "control" &&
+    (action !== "visibility" &&
+      action !== "load" &&
+      action !== "control" &&
       !session.capabilities.includes(action === "history" ? "ReadHistory" : "Submit")) ||
-    (action === "load" && expectedConversationId !== null &&
+    (action === "load" &&
+      expectedConversationId !== null &&
       session.source.conversationId !== null &&
       session.source.conversationId !== expectedConversationId) ||
     (action === "submit" && !session.deliveryModes.includes(options?.delivery ?? "WhenIdle"))
@@ -166,7 +171,11 @@ export function dispatchBrowserWork(
       code: "ConversationChanged",
       message: "Published browser session or conversation is not eligible.",
     });
+  // Closing a session must not be refused because a status/history read is
+  // still in flight. The desktop processes the close as the next work item.
+  const isClose = action === "control" && options?.command === "close";
   if (
+    !isClose &&
     [...jobs.values()].some(
       (job) =>
         job.work.browserSessionId === browserSessionId && job.work.environmentId === environmentId,
@@ -195,7 +204,15 @@ export function dispatchBrowserWork(
     jobs.set(work.jobId, { owner, work, claimed: false, resolve });
     // Never replay after timeout: the desktop might already have pressed Enter.
     Effect.runFork(
-      Effect.sleep(action === "submit" ? SUBMIT_TIMEOUT_MS : action === "load" ? 35_000 : action === "control" ? 48_000 : READ_TIMEOUT_MS).pipe(
+      Effect.sleep(
+        action === "submit"
+          ? SUBMIT_TIMEOUT_MS
+          : action === "load"
+            ? 35_000
+            : action === "control"
+              ? 48_000
+              : READ_TIMEOUT_MS,
+      ).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (!jobs.has(work.jobId)) return;
@@ -226,9 +243,13 @@ export function takeDesktopWork(
     clockNow() - catalog.updatedAt > LEASE_MS
   )
     return Promise.resolve(null);
-  const available = [...jobs.values()].find(
+  const pending = [...jobs.values()].filter(
     (job) => job.owner === connectionId && job.work.environmentId === environmentId && !job.claimed,
   );
+  // A requested close takes precedence over unclaimed status/history polls.
+  const available =
+    pending.find((job) => job.work.action === "control" && job.work.command === "close") ??
+    pending[0];
   if (available) {
     available.claimed = true;
     return Promise.resolve(available.work);
