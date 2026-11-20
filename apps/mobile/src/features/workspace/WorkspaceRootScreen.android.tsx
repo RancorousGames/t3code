@@ -82,7 +82,6 @@ export function WorkspaceRootScreen() {
                       actions={[{
                         accessibilityLabel: "T3 usage",
                         icon: "chart.bar.xaxis",
-                        overflowOnly: true,
                         onPress: () => setUsageOpen(true),
                       }]}
                     />
