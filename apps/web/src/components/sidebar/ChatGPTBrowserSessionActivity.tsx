@@ -533,7 +533,7 @@ export function useChatGPTBrowserSessionActivity(
           `state=${next} ${detail}`,
         );
       }
-      if (!hibernated) recordChatGPTProviderActivity(environmentId, sessionId, next);
+      if (!hibernated) recordChatGPTProviderActivity(environmentId, sessionId, next, reason);
       previousState.current = next;
       setResult((current) =>
         current.tabId === runtimeTabId && current.activity === next && current.reason === reason

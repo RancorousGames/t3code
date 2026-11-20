@@ -60,6 +60,7 @@ import { previewEnvironment } from "../../state/preview";
 import {
   inspectBrowserSession,
   isLoadedChatGPTBrowserGuest,
+  isResidentChatGPTBrowserGuest,
   runChatGPTSessionControl,
 } from "../../chatGPTSessionControl";
 import { executeAgentProviderBrowserWork } from "../../agentProviderBrowser";
@@ -2428,12 +2429,17 @@ export function DesktopAppActivationCoordinator() {
                   !entry.hidden && nav?._tag === "Success"
                     ? chatGPTConversationIdFromUrl(nav.url)
                     : null;
+                // A real guest can report a verified load failure while its
+                // navigation overlay is still Loading (no conversation URL yet).
+                // Preserve that red/orange evidence on phones, but do not offer
+                // remote sends until the conversation is actually bound.
+                const guestResident = isResidentChatGPTBrowserGuest(environmentId, entry);
                 const loaded =
                   !!conversationId && isLoadedChatGPTBrowserGuest(environmentId, entry);
                 const liveConversationId = conversationId;
-                const detail = loaded
+                const detail = guestResident
                   ? readChatGPTProviderActivityDetail(environmentId, entry.id)
-                  : { activity: "unknown" as const, since: null };
+                  : { activity: "unknown" as const, since: null, problem: null };
                 const activity = detail.activity;
                 const sinceIso =
                   detail.since === null ? null : new Date(detail.since).toISOString();
@@ -2463,6 +2469,9 @@ export function DesktopAppActivationCoordinator() {
                     ...(entry.snoozedUntil != null ? { snoozedUntil: entry.snoozedUntil } : {}),
                     ...(entry.snoozedAt != null ? { snoozedAt: entry.snoozedAt } : {}),
                     ...(entry.createdAt != null ? { createdAt: entry.createdAt } : {}),
+                    ...(entry.borderColor ? { borderColor: entry.borderColor } : {}),
+                    conversationFull: !!entry.conversationFullId,
+                    verificationPending: !!entry.verificationPending,
                     ...(entry.returnMarker ? { returnMarker: entry.returnMarker } : {}),
                     ...(caffy
                       ? {
@@ -2499,6 +2508,21 @@ export function DesktopAppActivationCoordinator() {
                     observedAt,
                     turnStartedAt: activity === "working" ? sinceIso : null,
                     activityAt: sinceIso,
+                    // The desktop guest probe is authoritative. Do not turn missing
+                    // composer controls or quoted chat text into an error on Android.
+                    activityText: entry.conversationFullId
+                      ? "Maximum conversation length reached — reboot to continue"
+                      : detail.problem === "temporary-limit"
+                        ? "A temporary limit is preventing this chat from loading. Try again later."
+                        : detail.problem === "browser-unresponsive"
+                          ? "ChatGPT browser is blank or unresponsive"
+                          : detail.problem === "page-failed"
+                            ? "ChatGPT page failed to load"
+                            : activity === "interrupted"
+                              ? "Connection interrupted — waiting for the complete answer"
+                              : activity === "delivery-timeout"
+                                ? "Message delivery timed out — please try again"
+                                : null,
                   },
                   // A WaitForSlot message is merely queued; a hibernated or blank
                   // guest must not be awakened until the global capacity gate admits.

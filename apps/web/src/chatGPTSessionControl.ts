@@ -445,6 +445,18 @@ function guestFor(environmentId: EnvironmentId, sessionId: string) {
   };
 }
 
+/** A present guest can have a real error overlay before navigation becomes Success.
+ * Observation only: presence does not authorize history reads or delivery.
+ */
+export function isResidentChatGPTBrowserGuest(
+  environmentId: EnvironmentId,
+  entry: BrowserSession,
+): boolean {
+  if (entry.hidden) return false;
+  const guest = guestFor(environmentId, entry.id);
+  return !!guest.runtimeId && !!guest.webview && !isChatGPTGuestHibernated(guest.runtimeId);
+}
+
 /** Provider v1 only touches already mounted, awake guests; never hydrates tabs. */
 export function isLoadedChatGPTBrowserGuest(
   environmentId: EnvironmentId,
