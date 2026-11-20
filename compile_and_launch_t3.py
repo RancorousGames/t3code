@@ -1,7 +1,7 @@
-"""Rebuild/reopen T3 without killing Chromium by default.
+"""Rebuild T3 and reload its UI or restart its Electron process.
 
-The stable Electron owner and browser views survive; UI assets reload.
-Main-process/server changes require an explicitly destructive replacement.
+A UI-only reload retains the Electron main process but remounts ChatGPT webviews.
+Use --replace-electron for a full restart and main-process changes.
 """
 
 import argparse
@@ -138,14 +138,12 @@ def stop_custom_app(root: Path) -> bool:
     for item in running_custom_processes(root):
         pid = int(item["ProcessId"])
         if pid in roots:
-            # Never use /T: the independent persistent ChatGPT Chromium host
-            # was spawned by this Electron PID and must survive T3 restarts.
+            # Never use /T: only terminate the verified T3 executable root.
             subprocess.run(["taskkill.exe", "/PID", str(pid), "/F"],
                            capture_output=True, text=True, check=False,
                            creationflags=CREATE_NO_WINDOW)
 
-    # Clean up only processes running the T3 custom executable. The separate
-    # electron.exe Chromium host is deliberately excluded and stays resident.
+    # Clean up only processes running the verified custom T3 executable.
     for item in running_custom_processes(root):
         pid = int(item["ProcessId"])
         subprocess.run(["taskkill.exe", "/PID", str(pid), "/F"],
@@ -161,7 +159,7 @@ def stop_custom_app(root: Path) -> bool:
 def session_backup(root: Path) -> Path:
     """Back up ChatGPT session metadata AND Caffy schedules *after* shutdown.
 
-    Browser session metadata lives in Chromium Local Storage while desktop
+    Browser session metadata lives in Electron's Chromium-backed localStorage;
     Caffy state lives in .t3/userdata. Never wipe the live profile during
     a build, and preserve the scheduler state needed for a faithful restart.
     """
@@ -424,12 +422,12 @@ def build_and_reload_ui(root: Path, *, rebuild: bool = True) -> bool:
     }
     if not set(roots).issubset(current_roots):
         raise RuntimeError("T3 window owner changed during build; refusing to target another window.")
-    # Never inject Ctrl+R: the focused native ChatGPT guest may receive it,
-    # triggering a real ChatGPT navigation and losing live page state.
+    # Never inject Ctrl+R: a focused ChatGPT webview might receive it,
+    # navigating the conversation instead of the T3 UI.
     # The running Electron main has a dedicated window-message handler which
     # reloads its OWN webContents and writes an authenticated-by-PID ack.
     reload_owner_ui(root, roots[0])
-    print("T3 UI reloaded in its existing Electron owner; Chromium pages preserved.", flush=True)
+    print("T3 UI reloaded in its existing Electron process; ChatGPT webviews remounted.", flush=True)
     print("Electron main/backend changes are NOT activated by this reload.", flush=True)
     return True
 
@@ -603,7 +601,7 @@ def spawn_independent_worker(root: Path, *, force_build: bool = False, restart_o
         f"Build status log: {log_path}\n"
         + ("Destructive Electron replacement explicitly requested."
          if full_restart else
-         "Safe rebuild/UI reload: existing Electron and browser processes stay alive."),
+         "UI-only rebuild/reload: Electron main stays alive; webviews may remount."),
         flush=True,
     )
 
@@ -621,7 +619,7 @@ if __name__ == "__main__":
         modes.add_argument("--restart-only", action="store_true",
                            help="Safely reload UI from existing compiled assets")
         parser.add_argument("--full-restart", action="store_true",
-                            help="Legacy alias for safe rebuild/UI reload (preserves live browser pages)")
+                            help="Legacy alias for UI-only rebuild/reload (webviews remount)")
         parser.add_argument("--replace-electron", action="store_true",
                             help="EXPLICITLY destroy the Electron owner and its live browser pages to activate native/backend changes")
         parser.add_argument("--taskboard-manifest", type=Path,

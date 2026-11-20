@@ -152,7 +152,7 @@ export function useChatGPTBootstrapRegistration(environmentId: EnvironmentId, se
         }
       }
     };
-    // Native pages and restored/offscreen legacy guests may not emit page pushes.
+    // Restored or offscreen Electron webviews may not emit page pushes.
     const poll = setInterval(() => void probe(), 20_000);
     const onPush = (event: Event) => {
       const detail = (event as CustomEvent<{ runtimeTabId?: string }>).detail;

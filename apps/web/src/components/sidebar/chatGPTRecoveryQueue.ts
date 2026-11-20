@@ -524,7 +524,7 @@ export function beginRecoveryAttempt(
     backendFor(id),
     "attempt",
     entry.red
-      ? `Automatic red recovery attempt started: ${action}; priority ${entry.reason}. Awaiting native host acknowledgement.`
+      ? `Automatic red recovery attempt started: ${action}; priority ${entry.reason}. Awaiting browser action outcome.`
       : `Automatic recovery action dispatched: ${action}; priority ${entry.reason}.`,
     { sessionId: id, attempt: entry.attempts },
   );

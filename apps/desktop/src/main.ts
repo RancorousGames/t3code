@@ -250,7 +250,6 @@ const layerDesktopRuntime = layerDesktopClerk.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
-// Ordinary close/reopen retains the native browser renderer inside this one
-// T3 executable. The existing single-instance activation reveals the window.
+// Install Windows single-instance activation and the explicit T3 UI reload handler.
 installPersistentMainWindowLifecycle(Electron.app);
 DesktopApp.program.pipe(Effect.provide(layerDesktopRuntime), NodeRuntime.runMain);

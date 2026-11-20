@@ -178,8 +178,8 @@ export function ChatGPTWarmScheduler({
       const expected = pendingGuestIds.current.get(session.id);
       const forward = window.desktopBridge?.appActivation?.reportChatGPTRecipientMounted;
       if (!expected || !forward || recipientMountReports.current.has(session.id)) return;
-      // A native host's residency alone isn't sufficient. Confirm ChatGPT DOM,
-      // the exact conversation, and that it can accept input before releasing.
+      // An attached webview alone isn't sufficient. Confirm the exact ChatGPT
+      // conversation and an input-ready composer before releasing.
       try {
         const inspection = await inspectBrowserSession(environmentId, session, "end", 1, false);
         // A stopped/partial assistant turn leaves a user-only transcript.
@@ -284,7 +284,7 @@ export function ChatGPTWarmScheduler({
             "webview",
             session.id,
             "guest-attached",
-            "Legacy webview attached; ChatGPT composer health is checked separately.",
+            "Electron webview attached; ChatGPT composer health is checked separately.",
           );
         } else if (now - startedAt >= 45_000) {
           // A stuck guest must not monopolize every subsequent warm slot.
@@ -294,7 +294,7 @@ export function ChatGPTWarmScheduler({
             environmentId,
             "webview",
             "retry",
-            "Legacy guest did not attach within 45s; delayed for 90s before another warm attempt.",
+            "ChatGPT webview did not attach within 45s; delayed for 90s before another warm attempt.",
             { sessionId: session.id, nextAt: now + 90_000 },
           );
           console.warn(
@@ -370,7 +370,7 @@ export function ChatGPTWarmScheduler({
           ),
         })),
         planned,
-        `Legacy webviews: ${snapshot.occupiedIds.size} occupied, ${candidates.length} candidates.`,
+        `ChatGPT webviews: ${snapshot.occupiedIds.size} occupied, ${candidates.length} candidates.`,
         "warm",
         planned.map((id, ordinal) => ({ id, earliestAt: firstAt + ordinal * 12_000 })),
       );
@@ -400,7 +400,7 @@ export function ChatGPTWarmScheduler({
         environmentId,
         "webview",
         next,
-        "Requested legacy webview warm load; attachment window is 45s.",
+        "Requested ChatGPT webview warm load; attachment window is 45s.",
       );
       lastStartedAt.current = now;
     };

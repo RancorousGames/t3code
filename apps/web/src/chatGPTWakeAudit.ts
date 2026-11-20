@@ -29,7 +29,6 @@ export function recordChatGPTWakeAudit(
     `quickStep=${options.quickSnoozeStep ?? "none"}`,
     `now=${Date.now()}`,
   ].join(" ");
-  // Temporary wake diagnostics remain visible in the desktop renderer log
-  // without the removed Native Chromium IPC bridge.
+  // Temporary wake diagnostics remain visible in the desktop renderer log.
   console.info("[t3-wake-audit]", { environmentId, sessionId, detail: detail.slice(0, 220) });
 }

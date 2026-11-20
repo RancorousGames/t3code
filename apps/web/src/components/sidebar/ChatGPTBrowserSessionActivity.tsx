@@ -74,7 +74,7 @@ export function useChatGPTBrowserSessionActivity(
   label: string;
   lastWorkingAt: number;
   recoveryProblem: ChatGPTRecoveryProblem | null;
-  /** Chromium host residency, distinct from obsolete Electron webview attachment. */
+  /** Optional browser guest residency signal; null means unknown. */
   resident?: boolean | null;
 } {
   const threadRef = useMemo(

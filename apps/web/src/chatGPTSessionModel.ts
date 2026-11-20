@@ -305,7 +305,7 @@ type ActivityObservation = {
   age: ChatGPTActivityAge;
   label: string;
   lastWorkingAt: number;
-  /** Independent Chromium host presence; null means checking. */
+  /** Optional guest residency observation; null means not yet known. */
   resident?: boolean | null;
 };
 type SessionOptions = {
@@ -364,8 +364,8 @@ export function useChatGPTSession(
     () => runtimeTabId !== null && hasHostedBrowserGuestTab(threadRef, runtimeTabId),
     () => false,
   );
-  // A persistent Chromium page can remain loaded without any T3 webview.
-  // Tri-state null must remain unknown, not turn into a false unloaded claim.
+  // Prefer an explicit residency observation; otherwise use actual webview attachment.
+  // An unknown observation is not proof that the guest is unloaded.
   const actualResidency = observation.resident === undefined ? attached : observation.resident;
   const loading =
     options.loading ??

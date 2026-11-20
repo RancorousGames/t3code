@@ -1,8 +1,7 @@
 /**
- * Allow the T3 desktop process to fully exit when its main window closes.
- * The independent Chromium host (and its ChatGPT pages) remains alive and is
- * reattached by a newly launched T3; the taskbar shortcut starts a fresh app.
- * A second launch while T3 is open still focuses the existing window.
+ * Manage Windows main-window activation and renderer reloads.
+ * Closing the main window exits T3, including its embedded ChatGPT webviews;
+ * a new launch recreates them. A second launch focuses the existing window.
  */
 import type { App, BrowserWindow } from "electron";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Synchronous main-process acknowledgement for Win32 native reload.
@@ -105,8 +104,7 @@ export function installPersistentMainWindowLifecycle(app: App): void {
     window.on("closed", () => {
       if (primaryWindow !== window) return;
       primaryWindow = null;
-      // Other hidden Electron utility windows must not keep the T3 owner alive
-      // after its main window is closed. Chromium pages live in another process.
+      // Hidden Electron utility windows must not keep T3 running after its main window closes.
       if (!quitting) app.quit();
     });
   });
