@@ -4,7 +4,7 @@ import { WorkspaceExtraTab } from "./WorkspaceExtraTab";
 import { SettingsRouteScreen } from "../settings/SettingsRouteScreen";
 import { WorkspaceSectionToolbar } from "./WorkspaceSectionToolbar";
 import { useNavigation } from "@react-navigation/native";
-import { use, useState } from "react";
+import { use } from "react";
 import { Platform, View, useWindowDimensions } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,7 +28,6 @@ import { WorkspaceConnectionTitle } from "../home/WorkspaceConnectionTitle";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
 import { ChatGPTSessionsScreen } from "../chatgpt/ChatGPTSessionsScreen";
-import { ChatGPTUsageSheet } from "../chatgpt/ChatGPTUsageSheet";
 import {
   WorkspaceTabsContext,
   WorkspaceTabsProvider,
@@ -75,7 +74,6 @@ function WorkspaceRootTitle(props: {
 }
 
 function WorkspaceRootContent() {
-  const [usageOpen, setUsageOpen] = useState(false);
   const navigation = useNavigation();
   const selectTab = useSelectWorkspaceTab();
   const { width: windowWidth } = useWindowDimensions();
@@ -187,7 +185,6 @@ function WorkspaceRootContent() {
                     },
                   ]
                 : []),
-              ...(state.selectedTab === "chatGPT" ? [{ accessibilityLabel: "T3 usage", icon: "chart.bar.xaxis" as const, overflowOnly: true, onPress: () => setUsageOpen(true) }] : []),
               {
                 accessibilityLabel: "Settings",
                 icon: "gearshape",
@@ -197,7 +194,6 @@ function WorkspaceRootContent() {
           />
         )}
         <SafeAreaInsetsContext value={compactTabs ? { ...insets, bottom: 0 } : insets}>
-          {Platform.OS === "android" ? <ChatGPTUsageSheet visible={usageOpen} onClose={() => setUsageOpen(false)} /> : null}
           {settingsOpen ? (
             <SettingsRouteScreen />
           ) : enabled.length === 0 ? (
