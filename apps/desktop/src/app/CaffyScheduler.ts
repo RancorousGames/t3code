@@ -179,8 +179,7 @@ interface CaffyStore {
   terminalConversations?: Array<{ sessionId: string; conversationId: string }>;
 }
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
-const WAKE_TEXT =
-  "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
+const WAKE_TEXT = `Continue working on your current assignment. If everything is genuinely finished or blocked, stop Caffy by calling OMCPT t3_sessions with action="caffy" and params={"action":"stop","sessionId":"<your T3_ID>"}.`;
 const CLOCK = 20_000;
 /** Stall fallback for idle mode: when no verified idle edge follows a wake
  * (e.g. the reply was a ChatGPT refusal the edge detector cannot read), wake

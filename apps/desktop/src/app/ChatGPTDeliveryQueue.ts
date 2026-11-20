@@ -62,10 +62,13 @@ type BrowserRequest = Extract<DesktopAppActivationRequest, { type: "chatgpt.sess
 type Sender = (request: DesktopAppActivationRequest) => Promise<DesktopAppActivationResponse>;
 type PublicRecord = Omit<DeliveryRecord, "body">;
 const MARKER = (messageId: string) => `[T3-MSG:${messageId}]`;
-const CAFFY_WAKE_BODY =
+const CAFFY_WAKE_BODY = `Continue working on your current assignment. If everything is genuinely finished or blocked, stop Caffy by calling OMCPT t3_sessions with action="caffy" and params={"action":"stop","sessionId":"<your T3_ID>"}.`;
+const LEGACY_CAFFY_WAKE_BODY =
   "Continue working on your current assignment. If everything is genuinely finished, stop Caffy for this session using the caffy tool (action=stop, sessionId=your T3_ID).";
 const isCaffyRecord = (record: DeliveryRecord) =>
-  record.caffyWake === true || record.body === CAFFY_WAKE_BODY;
+  record.caffyWake === true ||
+  record.body === CAFFY_WAKE_BODY ||
+  record.body === LEGACY_CAFFY_WAKE_BODY;
 const PREFLIGHT_RETRY_MS = 15_000;
 const UNMOUNTED_RETRY_MS = 60_000;
 const MAX_RESEND_DELAY_MS = 5 * 60_000;
