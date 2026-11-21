@@ -215,7 +215,9 @@ async function nativeLaunchForBoard(
         ? { options: [{ id: "reasoningEffort", value: explicitModel.effort ?? "medium" }] }
         : {}),
     },
-    runtimeMode: "approval-required",
+    // A model saved on the task already carries recorded user approval (TaskBoard --user-approval),
+    // so those workers run unattended in full access; ad hoc native opens stay supervised.
+    runtimeMode: explicitModel ? "full-access" : "approval-required",
     environmentId: projects.environmentId,
   };
 }
