@@ -28,6 +28,7 @@ const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 export function taskRuntimeFromSelection(selection) {
   if (!selection) return "chatgpt";
   const provider = selection.provider;
+  if (provider === "chatgpt") return "chatgpt";
   if (provider === "claudeAgent" || provider.startsWith("claudeAgent_")) return "claude";
   if (provider === "codex" || provider.startsWith("codex_")) return "codex";
   if (provider === "opencode" || provider.startsWith("opencode_")) return "opencode";
@@ -195,12 +196,12 @@ async function nativeLaunchForBoard(
         ) ?? (ready.length === 1 ? ready[0] : null));
   if (!selected)
     throw Error("No unique ready native provider for this task; choose a provider explicitly.");
-  const model =
-    selected.models.find((entry) => entry.slug === explicitModel?.model)?.slug ??
-    selected.models.find((entry) => entry.slug === previous?.modelSelection?.model)?.slug ??
-    selected.models.find((entry) => entry.slug === defaultSelection?.model)?.slug ??
-    selected.models.find((entry) => entry.isDefault)?.slug ??
-    (selected.models.length === 1 ? selected.models[0].slug : null);
+  const model = explicitModel
+    ? selected.models.find((entry) => entry.slug === explicitModel.model)?.slug
+    : (selected.models.find((entry) => entry.slug === previous?.modelSelection?.model)?.slug ??
+      selected.models.find((entry) => entry.slug === defaultSelection?.model)?.slug ??
+      selected.models.find((entry) => entry.isDefault)?.slug ??
+      (selected.models.length === 1 ? selected.models[0].slug : null));
   if (!model) throw Error("No unambiguous native default model for this task.");
   return {
     runtime: kind,
