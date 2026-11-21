@@ -108,9 +108,16 @@ export async function executeAgentProviderBrowserWork(
         session: Awaited<ReturnType<typeof inspectBrowserSession>>;
       };
       const session = result.session;
+      // A completed ChatGPT turn can remain readable after its composer goes
+      // unavailable. Read visible messages only from the verified exact /c/ URL.
+      const readableWithoutComposer =
+        session.status === "unavailable" &&
+        session.messages.length > 0 &&
+        chatGPTConversationIdFromUrl(session.observedGuestUrl) === work.expectedConversationId;
       if (
         result.verifiedConversationId !== work.expectedConversationId ||
-        ["unavailable", "loading", "hibernated"].includes(session.status)
+        ["loading", "hibernated"].includes(session.status) ||
+        (session.status === "unavailable" && !readableWithoutComposer)
       )
         return {
           ok: false,
