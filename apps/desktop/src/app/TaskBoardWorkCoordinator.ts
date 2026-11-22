@@ -36,6 +36,7 @@ interface QueueItem {
   claimed: boolean;
   claimedBy?: string | null;
   queueRequest: string;
+  modelSelection?: { provider: string; model: string } | null;
   state: QueueState;
   stateSince?: string | null;
   reservationId?: string | null;
@@ -167,16 +168,7 @@ const ROOT = findTaskBoardRoot(ROOT_CANDIDATES);
 const TASKBOARD_CLI = process.env.TASKBOARD_CLI
   ? NodePath.resolve(process.env.TASKBOARD_CLI)
   : ROOT
-    ? NodePath.resolve(
-        ROOT,
-        "..",
-        "TaskBoard",
-        "packages",
-        "task-cli",
-        "target",
-        "release",
-        "taskboard.exe",
-      )
+    ? NodePath.resolve(ROOT, "..", "TaskBoard", "TaskBoard.exe")
     : null;
 function dispatcherScript(): string {
   if (!ROOT) throw new Error("TaskBoard dispatcher scripts are unavailable.");
@@ -1305,6 +1297,40 @@ export class TaskBoardWorkCoordinator {
       // Old ambiguous starts remain in TaskBoard for exact-request recovery,
       // but stop consuming capacity or repeatedly blocking unrelated launches.
       if (!this.caffy.policyEnabled) return;
+
+      const claudeCandidates = snapshots.flatMap((board) =>
+        board.dispatchEnabled
+          ? board.items.filter(
+              (item) =>
+                (item.state === "queued" || item.state === "reserved") &&
+                /^claudeAgent(?:_|$)/.test(item.modelSelection?.provider ?? ""),
+            )
+          : [],
+      );
+      if (claudeCandidates.length) {
+        const selections = claudeCandidates.map((item) => item.modelSelection!);
+        const available = await cli(
+          "node.exe",
+          [dispatcherScript()],
+          JSON.stringify({
+            action: "available-claude-models",
+            selections,
+            home: this.home,
+          }),
+        )
+          .then((result) => new Set(result as string[]))
+          .catch(() => new Set<string>());
+        const deferred = new Set(
+          claudeCandidates.filter(
+            ({ modelSelection }) =>
+              !available.has(`${modelSelection!.provider}/${modelSelection!.model}`),
+          ),
+        );
+        snapshots = snapshots.map((board) => ({
+          ...board,
+          items: board.items.filter((item) => !deferred.has(item)),
+        }));
+      }
 
       // Resume an unexpired Reserved task, or replace an expired lease.
       const reserved = snapshots.flatMap((board) =>

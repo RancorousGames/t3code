@@ -231,6 +231,7 @@ export async function reconcileCreatedSpawn(address, request, exchange = sendApp
       : "unknown";
   }
   const sessionId = matchedSession?.id ?? null;
+  const delivered = matchedSession?.promptDelivery === "user_turn_observed";
   return {
     requestId: request.requestId,
     controlChannel,
@@ -242,9 +243,9 @@ export async function reconcileCreatedSpawn(address, request, exchange = sendApp
       matchedSession,
       matchedSession !== null && Object.hasOwn(matchedSession, "parentSessionId"),
     ),
-    messageSent: false,
-    promptDelivery: "unknown",
-    sendAttempted: null,
+    messageSent: delivered,
+    promptDelivery: delivered ? "user_turn_observed" : "unknown",
+    sendAttempted: delivered ? true : null,
     reconciliation: sessionId ? "read_only_list_correlation" : "unconfirmed",
     ...(lookupError ? { lookupError } : {}),
     next: "Inspect the exact session with chatgpt.sessions read/list; do not spawn or send again automatically.",

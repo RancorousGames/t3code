@@ -35,9 +35,20 @@ export function taskRuntimeFromSelection(selection) {
   throw Error(`Unsupported TaskBoard provider: ${String(provider)}`);
 }
 
+export function claudeQuotaAvailable(provider, model, now = Date.now()) {
+  return !provider.usageWindows?.some(
+    ({ id, usedPercent, resetsAt }) =>
+      usedPercent >= 100 &&
+      (!resetsAt || Date.parse(resetsAt) > now) &&
+      (id === "five_hour" ||
+        id === "seven_day" ||
+        (id.startsWith("seven_day_") && model.includes(id.slice("seven_day_".length)))),
+  );
+}
+
 function taskboardExecutable() {
   if (process.env.TASKBOARD_CLI) return process.env.TASKBOARD_CLI;
-  const sibling = Path.resolve(ROOT, "../TaskBoard/packages/task-cli/target/release/taskboard.exe");
+  const sibling = Path.resolve(ROOT, "../TaskBoard/TaskBoard.exe");
   return FS.existsSync(sibling) ? sibling : "taskboard.exe";
 }
 
@@ -46,7 +57,7 @@ async function taskCommand(
   args,
   { executable = taskboardExecutable(), run = execFile } = {},
 ) {
-  const { stdout } = await run(executable, [...args, "--root", board], {
+  const { stdout } = await run(executable, ["--json", "--root", board, ...args], {
     timeout: 30_000,
     maxBuffer: 4 * 1024 * 1024,
     windowsHide: true,
@@ -113,6 +124,7 @@ async function nativeLaunchForBoard(
   home,
   exchange,
   explicitModel = null,
+  checkQuota = false,
 ) {
   const desiredDriver = kind === "claude" ? "claudeAgent" : kind;
   const projects = await native(
@@ -196,6 +208,8 @@ async function nativeLaunchForBoard(
         ) ?? (ready.length === 1 ? ready[0] : null));
   if (!selected)
     throw Error("No unique ready native provider for this task; choose a provider explicitly.");
+  if (checkQuota && kind === "claude" && !claudeQuotaAvailable(selected, explicitModel.model))
+    return null;
   const model = explicitModel
     ? selected.models.find((entry) => entry.slug === explicitModel.model)?.slug
     : (selected.models.find((entry) => entry.slug === previous?.modelSelection?.model)?.slug ??
@@ -221,7 +235,7 @@ async function nativeLaunchForBoard(
     environmentId: projects.environmentId,
   };
 }
-function taskPrompt(task, { intent = "conversation", board } = {}) {
+function taskPrompt(task, { intent = "conversation", board, queue } = {}) {
   const brief = task.live?.brief?.trim();
   const implementation = intent === "implement";
   return [
@@ -229,6 +243,9 @@ function taskPrompt(task, { intent = "conversation", board } = {}) {
       ? `Implement TaskBoard task ${task.id}: ${task.title}`
       : `Task ${task.id}: ${task.title}`,
     implementation ? `TaskBoard: ${board} (task ${task.id}).` : "",
+    queue?.requireQueue
+      ? `If TaskBoard still shows Starting, claim your reservation with TaskBoard.exe --root "${board}" --json task queue working ${task.id} --queue-request ${queue.queueRequest} --request-id ${queue.reservationId} --session-id <your T3 session UUID>.`
+      : "",
     task.description ?? "",
     implementation && task.acceptance_criteria?.length
       ? `Acceptance criteria:\n${task.acceptance_criteria.map((criterion) => `- ${criterion}`).join("\n")}`
@@ -279,6 +296,7 @@ export async function openTaskSession(
   }
   try {
     let priorAttempt = null;
+    let previousNative = null;
     try {
       priorAttempt = JSON.parse(await FSP.readFile(journal, "utf8"));
     } catch (error) {
@@ -346,7 +364,8 @@ export async function openTaskSession(
           const saved = JSON.parse(await FSP.readFile(journal, "utf8"));
           if (saved.requestId !== priorAttempt.requestId)
             throw Error("Spawn journal changed during queue lifecycle reconciliation.");
-          await FSP.rm(journal);
+          if (priorAttempt.kind !== "chatgpt") previousNative = priorAttempt;
+          else await FSP.rm(journal);
           priorAttempt = null;
         } else {
           return {
@@ -534,7 +553,7 @@ export async function openTaskSession(
       const request = createChatGPTSpawnRequest(
         {
           title: `${task.id} ${task.title}`.slice(0, 80),
-          message: taskPrompt(task, { intent, board }),
+          message: taskPrompt(task, { intent, board, queue: input }),
           parentSessionId: "",
           project: intent === "implement" ? Path.basename(Path.dirname(board)) : "",
           seatId: "",
@@ -547,6 +566,7 @@ export async function openTaskSession(
           (input.requireQueue === true ? input.reservationId : undefined) ??
           Crypto.randomUUID(),
       );
+      if (previousNative) await FSP.rm(journal);
       const address = controlAddress(home);
       let response;
       if (!priorAttempt) {
@@ -654,13 +674,65 @@ export async function openTaskSession(
         home,
         exchange,
         selectedModel,
+        input.requireQueue && !priorAttempt,
       ));
+    if (!configuration)
+      return {
+        taskRef,
+        status: "usage_limited",
+        definitelyNotCreated: true,
+        message: "Claude usage limit reached.",
+      };
     if (configuration.runtime !== kind)
       throw Error("Native task runtime does not match its selected kind.");
     const nativeEnvironmentId = input.environmentId ?? configuration.environmentId;
-    const clientRequestId = priorAttempt?.requestId ?? Crypto.randomUUID();
+    const clientRequestId =
+      priorAttempt?.requestId ?? (input.requireQueue ? input.reservationId : Crypto.randomUUID());
+    const message = taskPrompt(task, { intent, board, queue: input });
     let created;
-    if (priorAttempt) {
+    if (previousNative && previousNative.kind === kind) {
+      const threadId = previousNative.threadId ?? previousNative.requestId;
+      const listed = await native(
+        { action: "list", expectedEnvironmentId: nativeEnvironmentId },
+        { home, exchange },
+      );
+      const previous = listed.threads?.find((thread) => thread.id === threadId);
+      if (
+        previous &&
+        previous.providerInstanceId === configuration.providerInstanceId &&
+        previous.modelSelection?.model === configuration.modelSelection.model
+      ) {
+        await FSP.writeFile(
+          journal,
+          JSON.stringify({ kind, intent, requestId: clientRequestId, threadId }),
+        );
+        await native(
+          {
+            action: "send",
+            threadId,
+            clientRequestId,
+            message,
+            expectedEnvironmentId: nativeEnvironmentId,
+          },
+          { home, exchange },
+        );
+        created = { threadId };
+      }
+    }
+    if (!created && priorAttempt?.threadId) {
+      const receipt = await native(
+        {
+          action: "read",
+          threadId: priorAttempt.threadId,
+          clientRequestId,
+          expectedEnvironmentId: nativeEnvironmentId,
+        },
+        { home, exchange },
+      );
+      if (!receipt.messageSeen)
+        return { taskRef, kind, status: "unknown", requestId: clientRequestId };
+      created = { threadId: priorAttempt.threadId };
+    } else if (!created && priorAttempt) {
       const listed = await native(
         { action: "list", expectedEnvironmentId: nativeEnvironmentId },
         { home, exchange },
@@ -674,9 +746,9 @@ export async function openTaskSession(
           message: "Previous native create outcome not confirmed; never resubmit initial prompt.",
         };
       created = { threadId: clientRequestId };
-    } else {
+    } else if (!created) {
       await FSP.writeFile(journal, JSON.stringify({ kind, intent, requestId: clientRequestId }), {
-        flag: "wx",
+        flag: previousNative ? "w" : "wx",
       });
       created = await native(
         {
@@ -685,7 +757,7 @@ export async function openTaskSession(
           ...configuration,
           title: task.title,
           clientRequestId,
-          firstMessage: taskPrompt(task, { intent, board }),
+          firstMessage: message,
           initialMessageId: Crypto.randomUUID(),
         },
         { home, exchange },
@@ -709,13 +781,17 @@ export async function openTaskSession(
       await command(board, ["task", "claim", "--agent", `t3:${created.threadId}`, id]);
     }
     if (task.live?.with_me) await command(board, ["task", "live", "start", id]);
+    const resumed = !!(
+      priorAttempt?.threadId ||
+      (previousNative && created.threadId !== clientRequestId)
+    );
     return {
       taskRef,
-      status: "created",
+      status: resumed ? "opened" : "created",
       kind,
       threadId: created.threadId,
       sessionId: created.threadId,
-      created: true,
+      created: !resumed,
     };
   } finally {
     await FSP.rmdir(lock);
