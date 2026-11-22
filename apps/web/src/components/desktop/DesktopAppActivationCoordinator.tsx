@@ -508,6 +508,7 @@ export function DesktopAppActivationCoordinator() {
               installed: provider.installed,
               status: provider.status,
               available: provider.availability !== "unavailable",
+              usageWindows: provider.usageLimits?.windows,
               models: provider.models.map((model) => ({
                 slug: model.slug,
                 isDefault: model.isDefault === true,
