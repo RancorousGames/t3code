@@ -2234,6 +2234,12 @@ export interface DesktopPreviewBridge {
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
   registerWebview: (tabId: string, webContentsId: number) => Promise<void>;
+  selectChatGPTImage: (input: {
+    webContentsId: number;
+    expectedConversationId: string;
+    requestId: string;
+    fileName: string;
+  }) => Promise<{ ok: boolean; route: string; reason: string | null }>;
   navigate: (tabId: string, url: string) => Promise<void>;
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;

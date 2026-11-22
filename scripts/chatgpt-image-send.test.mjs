@@ -18,6 +18,7 @@ async function runScenario(mode) {
   let resets = 0;
   let submits = 0;
   let cancelled = false;
+  let nativeCalls = 0;
   const control = async (request) => {
     if (request.action === "read") {
       return {
@@ -29,38 +30,64 @@ async function runScenario(mode) {
         conversationGuardValidated: true,
       };
     }
+    if (request.action === "experimental_native_image_select") {
+      nativeCalls++;
+      return {
+        result: {
+          ok: mode === "native_works",
+          route: "cdp_file_input",
+          reason: mode === "native_works" ? null : "native_unavailable",
+        },
+      };
+    }
     Assert.equal(request.action, "experimental_evaluate");
     const expression = request.expression;
     const respond = (value) => ({ result: { ok: true, value } });
     if (expression.includes("const previous=window.__t3ChatGPTImageSend;"))
       return respond({ ok: true });
     if (expression.includes("s.chunks.push(")) return respond({ ok: true });
-    if (expression.includes('const labels=["Attach photos","Attach photos or videos","Attach files"]')) {
+    if (expression.includes('s.phase="uploading";return {ok:true}')) return respond({ ok: true });
+    if (
+      expression.includes('const labels=["Attach photos","Attach photos or videos","Attach files"]')
+    ) {
       attempt++;
       stages++;
       cancelled = false;
-      return respond({ ok: true, label: ["Attach photos", "Attach photos or videos", "Attach files"][attempt],
-        route: "react_handler", fileInputCount: 0 });
+      return respond({
+        ok: true,
+        label: ["Attach photos", "Attach photos or videos", "Attach files"][attempt],
+        route: "react_handler",
+        fileInputCount: 0,
+      });
     }
     if (expression.includes("const attachments=Array.isArray(p.attachments)")) {
       const status = cancelled
         ? { attachments: 0, owned: false, attachmentStatus: null, ready: false }
         : mode === "all_stalled"
           ? { attachments: 1, owned: true, attachmentStatus: "uploading", ready: false }
-        : mode === "other_attachment"
-          ? { attachments: 1, owned: false, attachmentStatus: "ready", ready: false }
-          : attempt === 0
-            ? { attachments: 0, owned: false, attachmentStatus: null, ready: false }
-            : { attachments: 1, owned: true, attachmentStatus: "ready", ready: true };
+          : mode === "other_attachment"
+            ? { attachments: 1, owned: false, attachmentStatus: "ready", ready: false }
+            : mode === "native_works"
+              ? { attachments: 1, owned: true, attachmentStatus: "ready", ready: true }
+              : attempt === 0
+                ? { attachments: 0, owned: false, attachmentStatus: null, ready: false }
+                : { attachments: 1, owned: true, attachmentStatus: "ready", ready: true };
       return respond({
-        ok: true, draftChanged: false, submitting: false, pending: false,
-        uploads: 0, ...status,
+        ok: true,
+        draftChanged: false,
+        submitting: false,
+        pending: false,
+        rendering: true,
+        uploads: 0,
+        ...status,
       });
     }
     if (expression.includes("const a=p.attachments||[]")) {
       resets++;
       cancelled = true;
-      return respond(mode === "all_stalled" ? { ok: true, removedId: "my-id" } : { ok: true, empty: true });
+      return respond(
+        mode === "all_stalled" ? { ok: true, removedId: "my-id" } : { ok: true, empty: true },
+      );
     }
     if (expression.includes("const result=p.onSubmit(")) {
       submits++;
@@ -73,17 +100,41 @@ async function runScenario(mode) {
   };
   try {
     const requestId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-    const receipt = await sendChatGPTImage({
-      requestId, sessionId, expectedConversationId: conversationId,
-      message: "test", imagePath,
-    }, { home: root, control, wait: async () => {} });
-    const persisted = JSON.parse(FS.readFileSync(
-      Path.join(root, "userdata", "chatgpt-image-deliveries-v1", requestId + ".json"), "utf8"));
-    return { receipt, persisted, stages, resets, submits };
+    const receipt = await sendChatGPTImage(
+      {
+        requestId,
+        sessionId,
+        expectedConversationId: conversationId,
+        message: "test",
+        imagePath,
+      },
+      { home: root, control, wait: async () => {} },
+    );
+    const persisted = JSON.parse(
+      FS.readFileSync(
+        Path.join(root, "userdata", "chatgpt-image-deliveries-v1", requestId + ".json"),
+        "utf8",
+      ),
+    );
+    const nativeStagingExists = FS.existsSync(
+      Path.join(root, "userdata", "chatgpt-image-native-staging", requestId, "test.png"),
+    );
+    return { receipt, persisted, stages, resets, submits, nativeCalls, nativeStagingExists };
   } finally {
     FS.rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("native file selection submits one verified image exactly once", async () => {
+  const r = await runScenario("native_works");
+  Assert.equal(r.receipt.status, "delivered");
+  Assert.equal(r.receipt.imageCount, 1);
+  Assert.equal(r.nativeCalls, 1);
+  Assert.equal(r.stages, 0);
+  Assert.equal(r.submits, 1);
+  Assert.equal(r.persisted.stageRoute, "native_cdp");
+  Assert.equal(r.nativeStagingExists, false);
+});
 
 test("a missing React upload is re-staged once, then submitted exactly once", async () => {
   const r = await runScenario("missing_first");
@@ -92,8 +143,10 @@ test("a missing React upload is re-staged once, then submitted exactly once", as
   Assert.equal(r.stages, 2);
   Assert.equal(r.resets, 1);
   Assert.equal(r.submits, 1);
-  Assert.deepEqual(r.persisted.stageAttempts.map((a) => a.label),
-    ["Attach photos", "Attach photos or videos"]);
+  Assert.deepEqual(
+    r.persisted.stageAttempts.map((a) => a.label),
+    ["Attach photos", "Attach photos or videos"],
+  );
 });
 
 test("repeated stalled uploads never submit an unready attachment", async () => {

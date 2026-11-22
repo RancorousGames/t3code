@@ -15,7 +15,7 @@ const CHUNK_CHARS = 6000;
 const UPLOAD_POLL_MS = 350;
 const UPLOAD_MISSING_RETRY_POLLS = 15; // React should stage an attachment within seconds.
 const UPLOAD_STALLED_RETRY_POLLS = 65; // A stalled upload is safe to remove before submitting.
-const UPLOAD_MAX_POLLS = 210; // Covers three bounded upload attempts without submitting twice.
+const UPLOAD_MAX_POLLS = 280; // Native selection plus three bounded legacy fallback routes.
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const expression = (body) => "(() => { " + body + " })()";
 const receiptDir = (home) => Path.join(home, "userdata", "chatgpt-image-deliveries-v1");
@@ -165,7 +165,7 @@ async function guardedEval(
 
 function sourceProps() {
   return `
-    const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
+    const e=[...document.querySelectorAll('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]')].find(e=>e.getClientRects().length>0&&e.getBoundingClientRect().width>0);
     if(!e)return null;
     for(const root of [e,e.parentElement,e.parentElement?.parentElement]){
       let f=root?.[Object.keys(root).find(k=>k.startsWith("__reactFiber"))];
@@ -181,7 +181,7 @@ function sourceProps() {
 
 function imagePreflight(id) {
   return expression(`
-    const editor=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
+    const editor=[...document.querySelectorAll('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]')].find(e=>e.getClientRects().length>0&&e.getBoundingClientRect().width>0);
     if(!editor)return {ok:false,reason:"composer_missing"};
     const draft=editor instanceof HTMLTextAreaElement?editor.value:editor.innerText||editor.textContent||"";
     const previous=window.__t3ChatGPTImageSend;
@@ -224,7 +224,7 @@ function imagePreflight(id) {
     style.textContent='[data-composer-body] [class*="ComposerLayoutAttachments"] {display:none !important;}';
     document.head.appendChild(style);
     const state={
-      id:${JSON.stringify(id)},chunks:[],phase:"transfer",findProps,
+      id:${JSON.stringify(id)},chunks:[],phase:"transfer",findProps,editor,
       originalDraft:draft,style,uploadId:null,composerView,
       originalDoc:composerView?.state.doc,
       selectionBookmark:composerView?.state.selection?.getBookmark?.(),
@@ -274,7 +274,8 @@ function attachmentStatus(id) {
     if(s?.id!==${JSON.stringify(id)})return {ok:false,reason:"transfer_lost"};
     const p=s.findProps();
     if(!p)return {ok:false,reason:"callback_lost"};
-    const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
+    const e=[...document.querySelectorAll('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]')].find(e=>e.getClientRects().length>0&&e.getBoundingClientRect().width>0);
+    if(!e||e!==s.editor)return {ok:false,reason:"visible_composer_changed"};
     const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
     const view=s.composerView;
     const changed=view?.state?.doc&&s.originalDoc
@@ -293,7 +294,8 @@ function attachmentStatus(id) {
       attachmentName:attachment?.name||null,attachmentSize:attachment?.size??null,
       expectedName:s.file?.name||null,expectedSize:s.file?.size??null,
       ready:owned&&attachment?.status==="ready"&&!!attachment.id&&!!attachment.uploadId,
-      pending:!!p.isWaitingForFileUploads,submitting:!!p.isSubmitting};
+      pending:!!p.isWaitingForFileUploads,submitting:!!p.isSubmitting,
+      rendering:!!s.lastFrame&&performance.now()-s.lastFrame<1500};
   `);
 }
 
@@ -319,8 +321,20 @@ function stageUploadExpression(id, attempt, fileName, mime, size) {
     }
     const labels=["Attach photos","Attach photos or videos","Attach files"];
     const label=labels[${attempt}];
-    const input=[...document.querySelectorAll("input[type=file]")]
-      .find(i=>i.getAttribute("aria-label")===label&&!i.disabled);
+    // Frame heartbeat: ChatGPT processes uploads on animation frames, which an
+    // uncomposited (offscreen) guest never gets. attachmentStatus reports it.
+    if(!s.frameLoop){
+      s.frameLoop=true;s.lastFrame=0;
+      const tick=()=>{s.lastFrame=performance.now();
+        if(s.phase==="uploading")requestAnimationFrame(tick);else s.frameLoop=false;};
+      requestAnimationFrame(tick);
+    }
+    // ChatGPT mounts a hidden and a visible composer at the same time.
+    // The first hidden input can accept a file while the visible composer owns it.
+    const inputs=[...document.querySelectorAll("input[type=file]")]
+      .filter(i=>i.getAttribute("aria-label")===label&&!i.disabled);
+    const input=inputs.find(i=>i.closest("form")?.contains(s.editor))
+      ||inputs.at(-1);
     if(!input)return {ok:false,reason:"file_handler_missing",label};
     const key=Object.keys(input).find(k=>k.startsWith("__reactProps"));
     const onChange=key&&input[key]?.onChange;
@@ -362,7 +376,8 @@ function sendExpression(id, message, conversationId) {
         ||p.attachments[0]?.status!=="ready"||!p.attachments[0]?.id||!p.attachments[0]?.uploadId
         ||!s.uploadId||p.attachments[0]?.uploadId!==s.uploadId)
       return {ok:false,reason:"attachment_not_ready"};
-    const e=document.querySelector('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]');
+    const e=[...document.querySelectorAll('[contenteditable="true"][role="textbox"],#prompt-textarea,[data-testid="composer-input"]')].find(e=>e.getClientRects().length>0&&e.getBoundingClientRect().width>0);
+    if(!e||e!==s.editor)return {ok:false,reason:"visible_composer_changed"};
     const draft=e instanceof HTMLTextAreaElement?e.value:e?.innerText||e?.textContent||"";
     const changed=s.composerView?.state?.doc&&s.originalDoc
       ? !s.composerView.state.doc.eq(s.originalDoc) : draft!==s.originalDraft;
@@ -524,10 +539,65 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       );
       if (!r?.ok) throw new Error("Image transfer failed before upload: " + JSON.stringify(r));
     }
-    let stage = await experiment(
-      stageUploadExpression(requestId, 0, Path.basename(imagePath), mime, image.length),
-    );
+    // Chromium's real file picker is the preferred route. Synthetic React
+    // change events remain as bounded fallback for older desktop builds.
+    const fileName = Path.basename(imagePath);
+    let stage;
+    const nativeFileName = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}\.(?:png|jpe?g|webp)$/i.test(fileName);
+    if (nativeFileName) {
+      const nativeDirectory = Path.join(
+        home,
+        "userdata",
+        "chatgpt-image-native-staging",
+        requestId,
+      );
+      FS.mkdirSync(nativeDirectory, { recursive: true });
+      FS.writeFileSync(Path.join(nativeDirectory, fileName), image, { flag: "wx" });
+      const armed = await experiment(
+        expression(`
+        const s=window.__t3ChatGPTImageSend;
+        if(s?.id!==${JSON.stringify(requestId)}||s.phase!=="transfer")
+          return {ok:false,reason:"stage_state_lost"};
+        s.phase="uploading";return {ok:true};
+      `),
+      );
+      if (!armed?.ok) throw new Error("Native attachment was not armed: " + JSON.stringify(armed));
+      record.status = "uploading";
+      persist(home, record);
+      try {
+        const native = await control({
+          action: "experimental_native_image_select",
+          sessionId,
+          expectedConversationId,
+          nativeImageRequestId: requestId,
+          nativeImageFileName: fileName,
+        });
+        if (native?.result?.ok) {
+          stage = {
+            ok: true,
+            route: "native_cdp",
+            label: "Native file selection",
+            fileInputCount: 1,
+          };
+        } else {
+          record.nativeFallbackReason = native?.result?.reason ?? "native_selection_refused";
+        }
+      } catch (error) {
+        // A lost IPC reply might have selected the file. Inspect the same
+        // composer rather than immediately staging a second image.
+        stage = {
+          ok: true,
+          route: "native_cdp_unconfirmed",
+          label: "Native file selection (outcome unconfirmed)",
+        };
+        record.nativeFallbackReason = String(error).slice(0, 180);
+      }
+    }
+    if (!stage) {
+      stage = await experiment(stageUploadExpression(requestId, 0, fileName, mime, image.length));
+    }
     if (!stage?.ok) throw new Error("Image attachment failed: " + JSON.stringify(stage));
+    const firstStageWasNative = stage.route?.startsWith("native_cdp") === true;
     record.stageRoute = stage.route;
     record.fileInputCountAfterChange = stage.fileInputCount;
     record.stageAttempts = [{ attempt: 0, label: stage.label }];
@@ -553,12 +623,15 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
         break;
       }
       pollsOnStage++;
-      const missing = s.attachments === 0 && pollsOnStage >= UPLOAD_MISSING_RETRY_POLLS;
+      // A missing attachment in a guest that gets no animation frames is a
+      // stalled upload that may still land; re-staging it stacks extra images.
+      const missing =
+        s.attachments === 0 && s.rendering && pollsOnStage >= UPLOAD_MISSING_RETRY_POLLS;
       const stalled =
         s.attachments === 1 &&
         (["error", "failed"].includes(s.attachmentStatus) ||
           pollsOnStage >= UPLOAD_STALLED_RETRY_POLLS);
-      if (currentAttempt < 2 && (missing || stalled)) {
+      if (currentAttempt < (firstStageWasNative ? 3 : 2) && (missing || stalled)) {
         // No user turn was sent. Re-stage through a different React handler
         // only after the prior attachment is absent or explicitly cancelled.
         const reset = await experiment(resetUploadExpression(requestId));
@@ -591,7 +664,7 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
         stage = await experiment(
           stageUploadExpression(
             requestId,
-            currentAttempt,
+            firstStageWasNative ? currentAttempt - 1 : currentAttempt,
             Path.basename(imagePath),
             mime,
             image.length,
@@ -704,6 +777,16 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
       );
     } catch {
       /* The guest may have navigated after submission. */
+    }
+    // Once Chromium has confirmed a ready upload, it no longer needs the
+    // native selection file. Never make successful delivery depend on cleanup.
+    if (record.uploadReadyObserved) {
+      try {
+        FS.rmSync(Path.join(home, "userdata", "chatgpt-image-native-staging", requestId), {
+          recursive: true,
+          force: true,
+        });
+      } catch {}
     }
     try {
       FS.closeSync(lock.fd);

@@ -165,6 +165,7 @@ export async function controlSessions(
     "recovery_metrics",
     "marker_probe",
     "experimental_evaluate",
+    "experimental_native_image_select",
     "bootstrap_title",
     "bootstrap_discover",
     "bootstrap_status",
@@ -335,6 +336,17 @@ export async function controlSessions(
     throw new Error(
       "experimental_evaluate requires a 1..8000 character JS expression. An expectedConversationId is optional only for verified backend-created fresh chats.",
     );
+  if (
+    input.action === "experimental_native_image_select" &&
+    (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.nativeImageRequestId ?? "") ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.expectedConversationId ?? "") ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}\.(?:png|jpe?g|webp)$/i.test(
+        input.nativeImageFileName ?? "",
+      ))
+  )
+    throw new Error(
+      "Native image selection requires exact request/conversation and safe filename.",
+    );
   if (input.expression !== undefined && input.action !== "experimental_evaluate")
     throw new Error("expression is valid only for experimental_evaluate.");
   if (
@@ -479,9 +491,14 @@ export async function controlSessions(
     throw new Error("senderSessionId is a nonempty source ID used only with send.");
   if (
     input.expectedConversationId !== undefined &&
-    (!["read", "send", "reconcile_send", "enqueue", "experimental_evaluate"].includes(
-      input.action,
-    ) ||
+    (![
+      "read",
+      "send",
+      "reconcile_send",
+      "enqueue",
+      "experimental_evaluate",
+      "experimental_native_image_select",
+    ].includes(input.action) ||
       typeof input.expectedConversationId !== "string" ||
       !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.expectedConversationId))
   ) {
@@ -556,6 +573,12 @@ export async function controlSessions(
           ...(input.postSubmitImageRequestId
             ? { postSubmitImageRequestId: input.postSubmitImageRequestId }
             : {}),
+        }
+      : {}),
+    ...(input.action === "experimental_native_image_select"
+      ? {
+          nativeImageRequestId: input.nativeImageRequestId,
+          nativeImageFileName: input.nativeImageFileName,
         }
       : {}),
     ...(["bootstrap_title", "bootstrap_discover"].includes(input.action)

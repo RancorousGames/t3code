@@ -1223,7 +1223,8 @@ export function DesktopAppActivationCoordinator() {
             request.action === "read" ||
             request.action === "send" ||
             request.action === "reconcile_send" ||
-            request.action === "experimental_evaluate"
+            request.action === "experimental_evaluate" ||
+            request.action === "experimental_native_image_select"
           ) {
             if (!getChatGPTSessionPersistedStore(environmentId).persist.hasHydrated())
               throw new Error("ChatGPT session registry is not hydrated; no message sent.");
@@ -1438,7 +1439,8 @@ export function DesktopAppActivationCoordinator() {
             request.action === "read" ||
             request.action === "send" ||
             request.action === "reconcile_send" ||
-            request.action === "experimental_evaluate"
+            request.action === "experimental_evaluate" ||
+            request.action === "experimental_native_image_select"
           ) {
             // Fresh backend-spawned ChatGPT guests do not have a conversation
             // UUID until the first turn. The renderer checks persisted origin,
@@ -1723,6 +1725,8 @@ export function DesktopAppActivationCoordinator() {
             expression: request.expression,
             allowComposerDraft: request.allowComposerDraft,
             postSubmitImageRequestId: request.postSubmitImageRequestId,
+            nativeImageRequestId: request.nativeImageRequestId,
+            nativeImageFileName: request.nativeImageFileName,
             from: request.from,
             count: request.count,
             maxMessageChars: request.maxMessageChars,
@@ -3402,7 +3406,13 @@ export function DesktopAppActivationCoordinator() {
       const sessions = environmentId ? readChatGPTBrowserSessions(environmentId) : [];
       const recipient =
         request.type === "chatgpt.sessions" &&
-        ["read", "send", "reconcile_send", "experimental_evaluate"].includes(request.action) &&
+        [
+          "read",
+          "send",
+          "reconcile_send",
+          "experimental_evaluate",
+          "experimental_native_image_select",
+        ].includes(request.action) &&
         request.sessionId
           ? (sessions.find((session) => session.id === request.sessionId) ??
             sessions.find(
@@ -3417,7 +3427,13 @@ export function DesktopAppActivationCoordinator() {
           : undefined;
       const recipientId =
         request.type === "chatgpt.sessions" &&
-        ["read", "send", "reconcile_send", "experimental_evaluate"].includes(request.action)
+        [
+          "read",
+          "send",
+          "reconcile_send",
+          "experimental_evaluate",
+          "experimental_native_image_select",
+        ].includes(request.action)
           ? request.sessionId
           : undefined;
       if (recipientId) {

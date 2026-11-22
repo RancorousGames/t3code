@@ -7,6 +7,7 @@ import {
   wakeChatGPTGuest,
 } from "./browser/chatGPTGuestHibernation";
 import { previewRuntimeTabId } from "./browser/previewRuntimeTabId";
+import { acquireBrowserSurfaceActivity } from "./browser/browserSurfaceStore";
 import { resetHostedBrowserGuest } from "./browser/hostedBrowserGuestReset";
 import { chatGPTBrowserFailure } from "./chatGPTBrowserHealth";
 import {
@@ -88,6 +89,7 @@ export type ChatGPTSessionAction =
   | "read"
   | "recovery_metrics"
   | "experimental_evaluate"
+  | "experimental_native_image_select"
   | "send"
   | "reconcile_send"
   | "stop"
@@ -426,6 +428,32 @@ async function reconcileChatGPTSend(
 // Keep it until a later inspection shows recovery. Never assume the banner is permanent.
 const interruptedFirstSeen = new Map<string, string>();
 
+// Electron stops compositing offscreen guests, so requestAnimationFrame never
+// fires and ChatGPT's upload pipeline stalls (images pile up in the composer).
+// Multi-call experiments (image sends) keep the guest painted behind the app
+// while calls keep arriving; the lease lapses PAINT_LEASE_IDLE_MS after the last.
+const PAINT_LEASE_IDLE_MS = 20_000;
+const PAINT_LEASE_SETTLE_MS = 300;
+const paintLeases = new Map<
+  string,
+  { release: () => void; timer: ReturnType<typeof setTimeout> }
+>();
+
+/** Holds a lingering paint lease for runtimeId; resolves once a fresh lease has had time to paint. */
+async function holdChatGPTGuestPaint(runtimeId: string): Promise<void> {
+  const existing = paintLeases.get(runtimeId);
+  if (existing) clearTimeout(existing.timer);
+  const release = existing?.release ?? acquireBrowserSurfaceActivity(runtimeId);
+  paintLeases.set(runtimeId, {
+    release,
+    timer: setTimeout(() => {
+      paintLeases.delete(runtimeId);
+      release();
+    }, PAINT_LEASE_IDLE_MS),
+  });
+  if (!existing) await new Promise((resolve) => setTimeout(resolve, PAINT_LEASE_SETTLE_MS));
+}
+
 function guestFor(environmentId: EnvironmentId, sessionId: string) {
   const thread = chatGPTBrowserThreadRef(environmentId, sessionId);
   const state = readThreadPreviewState(thread);
@@ -754,6 +782,8 @@ export async function runChatGPTSessionControl(input: {
   expression?: string | undefined;
   allowComposerDraft?: boolean | undefined;
   postSubmitImageRequestId?: string | undefined;
+  nativeImageRequestId?: string | undefined;
+  nativeImageFileName?: string | undefined;
   from?: "start" | "end" | undefined;
   count?: number | undefined;
   maxMessageChars?: number | undefined;
@@ -791,7 +821,14 @@ export async function runChatGPTSessionControl(input: {
   const from = input.from ?? "end";
   if (
     input.expectedConversationId !== undefined &&
-    !["read", "send", "reconcile_send", "experimental_evaluate", "stop"].includes(action)
+    ![
+      "read",
+      "send",
+      "reconcile_send",
+      "experimental_evaluate",
+      "experimental_native_image_select",
+      "stop",
+    ].includes(action)
   ) {
     throw new Error("expectedConversationId is supported only for read, send and reconcile_send.");
   }
@@ -860,6 +897,54 @@ export async function runChatGPTSessionControl(input: {
       )),
     };
   }
+  if (action === "experimental_native_image_select") {
+    const expectedId = input.expectedConversationId;
+    const requestId = input.nativeImageRequestId;
+    const fileName = input.nativeImageFileName;
+    if (
+      !expectedId ||
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(expectedId) ||
+      !requestId ||
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(requestId) ||
+      !fileName ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}\.(?:png|jpe?g|webp)$/i.test(fileName)
+    )
+      throw new Error(
+        "Native image selection requires exact request/conversation and safe filename.",
+      );
+    if (entry.hidden || hasUncertainChatGPTSend(environmentId, entry.id))
+      throw new Error("Native image selection refused: hidden guest or unresolved send.");
+    const guest = guestFor(environmentId, entry.id);
+    if (
+      !guest.runtimeId ||
+      !guest.webview ||
+      guest.loading ||
+      isChatGPTGuestHibernated(guest.runtimeId) ||
+      chatGPTConversationIdFromUrl(guest.webview.getURL()) !== expectedId ||
+      !previewBridge
+    )
+      throw new Error("Native image selection requires exact mounted ready guest.");
+    const nativeGuest = guest.webview as typeof guest.webview & { getWebContentsId: () => number };
+    const webContentsId = nativeGuest.getWebContentsId();
+    if (!Number.isSafeInteger(webContentsId) || webContentsId < 1)
+      throw new Error("Native image selection requires an attached WebContents.");
+    await holdChatGPTGuestPaint(guest.runtimeId);
+    const result = await previewBridge.selectChatGPTImage({
+      webContentsId,
+      expectedConversationId: expectedId,
+      requestId,
+      fileName,
+    });
+    if (guestFor(environmentId, entry.id).webview !== guest.webview)
+      throw new Error("Native image selection guest replaced; outcome unknown.");
+    return {
+      action,
+      sessionId: entry.id,
+      conversationGuardValidated: true,
+      verifiedConversationId: expectedId,
+      result,
+    };
+  }
   if (action === "experimental_evaluate") {
     // Explicit developer experiment, never a send or queue fallback. Reject
     // unmounted/hibernated/hidden guests rather than waking a different page.
@@ -892,6 +977,7 @@ export async function runChatGPTSessionControl(input: {
       input.allowComposerDraft === true,
       input.postSubmitImageRequestId ?? null,
     );
+    await holdChatGPTGuestPaint(guest.runtimeId);
     const result = await chatGPTWebviewAutomation.evaluate(guest.runtimeId, { expression });
     if (guestFor(environmentId, entry.id).webview !== originalWebview)
       throw new Error("Experiment guest was replaced; outcome unknown.");

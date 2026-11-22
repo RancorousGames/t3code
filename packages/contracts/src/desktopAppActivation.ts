@@ -219,6 +219,7 @@ export const DesktopAppActivationRequest = Schema.Union([
       "recovery_metrics",
       "marker_probe",
       "experimental_evaluate",
+      "experimental_native_image_select",
       "bootstrap_title",
       "bootstrap_discover",
       "bootstrap_status",
@@ -260,6 +261,8 @@ export const DesktopAppActivationRequest = Schema.Union([
     allowComposerDraft: Schema.optional(Schema.Boolean),
     // Only the matching image's post-submit receipt probe may run during generation.
     postSubmitImageRequestId: Schema.optional(ChatGPTConversationId),
+    nativeImageRequestId: Schema.optional(ChatGPTConversationId),
+    nativeImageFileName: Schema.optional(Schema.String),
     attentionId: Schema.optional(NativeOperationId),
     spokenMessage: Schema.optional(Schema.String),
     // Trusted local TaskBoard asks T3 to act only on its existing, exactly-linked guest.

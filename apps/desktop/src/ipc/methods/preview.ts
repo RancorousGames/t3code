@@ -29,6 +29,9 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as NodeURL from "node:url";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import { webContents } from "electron";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
@@ -90,6 +93,83 @@ const closeTab = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.closeTab")(function* ({ tabId }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.closeTab(tabId);
+  }),
+});
+
+/**
+ * Chromium's real file-input selection, exclusively for the local image sender.
+ * The renderer cannot choose a filesystem path: MAIN reconstructs it from a
+ * UUID-bound, dedicated staging directory and checks the exact guest URL.
+ */
+const selectChatGPTImage = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CHATGPT_IMAGE_FILE_CHANNEL,
+  payload: Schema.Struct({
+    webContentsId: Schema.Number,
+    expectedConversationId: Schema.String,
+    requestId: Schema.String,
+    fileName: Schema.String,
+  }),
+  result: Schema.Struct({
+    ok: Schema.Boolean,
+    route: Schema.String,
+    reason: Schema.NullOr(Schema.String),
+  }),
+  handler: Effect.fn("desktop.ipc.preview.selectChatGPTImage")(function* (input, event) {
+    const route = "cdp_file_input";
+    const fail = (reason: string) => ({ ok: false, route, reason });
+    if (
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(input.requestId) ||
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(input.expectedConversationId) ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}\.(?:png|jpe?g|webp)$/i.test(input.fileName) ||
+      !Number.isSafeInteger(input.webContentsId)
+    )
+      return fail("invalid_request");
+    const home = process.env["T3CODE_HOME"];
+    if (!home || !NodePath.isAbsolute(home)) return fail("local_staging_home_unavailable");
+    const filePath = NodePath.join(
+      home,
+      "userdata",
+      "chatgpt-image-native-staging",
+      input.requestId,
+      input.fileName,
+    );
+    try {
+      const info = NodeFS.lstatSync(filePath);
+      if (!info.isFile() || info.size < 1 || info.size > 2 * 1024 * 1024)
+        return fail("invalid_image_file");
+      const real = NodeFS.realpathSync(filePath);
+      if (real !== filePath) return fail("staging_path_is_not_canonical");
+    } catch {
+      return fail("staged_image_missing");
+    }
+    const wc = webContents.fromId(input.webContentsId);
+    if (
+      !wc ||
+      wc.isDestroyed() ||
+      wc.getType() !== "webview" ||
+      !event ||
+      wc.hostWebContents?.id !== event.sender.id
+    )
+      return fail("guest_ownership_mismatch");
+    const expectedUrl = "https://chatgpt.com/c/" + input.expectedConversationId;
+    if (wc.getURL() !== expectedUrl) return fail("conversation_changed");
+    if (!wc.debugger.isAttached()) return fail("guest_debugger_unavailable");
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const { root } = (await wc.debugger.sendCommand("DOM.getDocument", { depth: 1 })) as {
+          root: { nodeId: number };
+        };
+        const { nodeId } = (await wc.debugger.sendCommand("DOM.querySelector", {
+          nodeId: root.nodeId,
+          selector: 'input[type="file"][aria-label="Attach photos"]',
+        })) as { nodeId: number };
+        if (!nodeId) return fail("native_file_input_missing");
+        if (wc.isDestroyed() || wc.getURL() !== expectedUrl) return fail("conversation_changed");
+        await wc.debugger.sendCommand("DOM.setFileInputFiles", { files: [filePath], nodeId });
+        return { ok: true, route, reason: null };
+      },
+      catch: (cause) => new Error("Native ChatGPT file selection failed: " + String(cause)),
+    });
   }),
 });
 
@@ -421,6 +501,7 @@ export const methods = [
   createTab,
   closeTab,
   registerWebview,
+  selectChatGPTImage,
   navigate,
   goBack,
   goForward,
