@@ -79,7 +79,7 @@ export type AgentProviderV1Delivery = typeof AgentProviderV1Delivery.Type;
 
 export const AgentProviderV1State = Schema.Struct({
   reachability: Schema.Literals(["Reachable", "Unreachable", "Unknown"]),
-  activity: Schema.Literals(["Idle", "Working", "WaitingOnUser", "Errored", "Unknown"]),
+  activity: Schema.Literals(["Idle", "Working", "WaitingOnUser", "UsageLimited", "Errored", "Unknown"]),
   confidence: Schema.Literals(["Confirmed", "Inferred", "Unknown"]),
   elsewhere: Schema.NullOr(Schema.Boolean),
   observedAt: Schema.String,

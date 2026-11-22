@@ -2699,7 +2699,7 @@ export const layerWsRpc = (
                       : active
                         ? "Working"
                         : thread.status === "failed"
-                          ? "Errored"
+                          ? (thread.lastErrorClass === "usage_limit" ? "UsageLimited" : "Errored")
                           : "Idle";
                   const runStartedAt = thread.activityRunStartedAt ?? thread.latestRunStartedAt;
                   const threadRef = (id: string) => ({
@@ -2728,6 +2728,7 @@ export const layerWsRpc = (
                       activityText: activity === "WaitingOnUser"
                         ? "Waiting for your approval or input"
                         : active ? (thread.activityRunStatus ?? thread.status)
+                        : activity === "UsageLimited" ? "Usage limit reached"
                         : activity === "Errored" ? (thread.lastError ?? "Failed").slice(0, 200)
                         : null,
                     },

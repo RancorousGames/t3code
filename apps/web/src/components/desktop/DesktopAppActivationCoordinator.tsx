@@ -2501,7 +2501,7 @@ export function DesktopAppActivationCoordinator() {
                         : activity === "idle"
                           ? "Idle"
                           : activity === "invalid"
-                            ? "Errored"
+                            ? (detail.problem === "temporary-limit" ? "UsageLimited" : "Errored")
                             : activity === "interrupted" || activity === "delivery-timeout"
                               ? "Errored"
                               : "Unknown",
