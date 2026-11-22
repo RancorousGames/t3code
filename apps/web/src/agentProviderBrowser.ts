@@ -172,6 +172,8 @@ export async function executeAgentProviderBrowserWork(
           !["done_or_idle", "waiting_for_input"].includes(previous.session.status))
       )
         return { ok: false, code: "Busy", message: "Exact ChatGPT guest is not confirmed idle." };
+      // Steer = the same send the T3 Session Queue (Caffy etc.) uses, minus the idle
+      // wait: ChatGPT accepts a message mid-reply, so no Stop click is needed.
       const sent = (await runChatGPTSessionControl({
         environmentId,
         sessions,
@@ -182,9 +184,16 @@ export async function executeAgentProviderBrowserWork(
         neverWake: true,
       })) as {
         messageSent: boolean;
-        delivery: "unknown" | "user_turn_observed";
+        delivery: "unknown" | "user_turn_observed" | "pre_submit_aborted";
         verifiedConversationId?: string;
+        reason?: string;
       };
+      if (sent.delivery === "pre_submit_aborted")
+        return {
+          ok: false,
+          code: "Busy",
+          message: `ChatGPT refused the send; nothing was submitted (${sent.reason ?? "no reason"}).`,
+        };
       return {
         ok: true,
         data: {

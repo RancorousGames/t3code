@@ -40,9 +40,8 @@ export function chatGPTDirectSubmitExpression(input: {
       '[contenteditable="true"][data-placeholder],textarea[placeholder]'
     );
     if (!(editor instanceof HTMLElement)) return { submitted: false, reason: 'editor_missing' };
-    const stop = document.querySelector('[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"]');
-    if (stop instanceof HTMLButtonElement && stop.getClientRects().length && !stop.disabled)
-      return { submitted: false, reason: 'generation_active' };
+    // No "reply is generating" refusal: ChatGPT accepts mid-reply sends (Steer).
+    // Callers that must wait for idle (the T3 Session Queue) gate that themselves.
     let callback = null;
     // React sometimes puts the fiber on the editor and sometimes on its
     // wrappers. All paths still require the distinctive composer props.
