@@ -753,6 +753,7 @@ export async function runChatGPTSessionControl(input: {
   sessionId?: string | undefined;
   expression?: string | undefined;
   allowComposerDraft?: boolean | undefined;
+  postSubmitImageRequestId?: string | undefined;
   from?: "start" | "end" | undefined;
   count?: number | undefined;
   maxMessageChars?: number | undefined;
@@ -889,6 +890,7 @@ export async function runChatGPTSessionControl(input: {
       input.expression,
       newBackendChat,
       input.allowComposerDraft === true,
+      input.postSubmitImageRequestId ?? null,
     );
     const result = await chatGPTWebviewAutomation.evaluate(guest.runtimeId, { expression });
     if (guestFor(environmentId, entry.id).webview !== originalWebview)

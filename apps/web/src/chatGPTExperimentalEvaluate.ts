@@ -20,9 +20,12 @@ export function allowsChatGPTExperimentalNewChat(
   if (session.creationOrigin !== "backend" && !session.spawnRequestId?.trim()) return false;
   try {
     const url = new URL(guestUrl);
-    return url.protocol === "https:" &&
+    return (
+      url.protocol === "https:" &&
       (url.hostname === "chatgpt.com" || url.hostname === "chat.openai.com") &&
-      url.pathname === "/" && !url.hash;
+      url.pathname === "/" &&
+      !url.hash
+    );
   } catch {
     return false;
   }
@@ -36,14 +39,24 @@ export function buildChatGPTExperimentalExpression(
   expression: string,
   allowBackendNewChat = false,
   allowComposerDraft = false,
+  postSubmitImageRequestId: string | null = null,
 ): string {
   const newBackendChat = conversationId === null && allowBackendNewChat;
-  if (!newBackendChat &&
-      (conversationId === null ||
-       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(conversationId)))
-    throw new Error("An exact conversation UUID is required except for backend-created fresh chats.");
+  if (
+    !newBackendChat &&
+    (conversationId === null ||
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(conversationId))
+  )
+    throw new Error(
+      "An exact conversation UUID is required except for backend-created fresh chats.",
+    );
   if (!expression.trim() || expression.length > 8_000)
     throw new Error("The experiment requires a 1..8000 character JS expression.");
+  if (
+    postSubmitImageRequestId &&
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(postSubmitImageRequestId)
+  )
+    throw new Error("Post-submit image reconciliation requires the exact request UUID.");
 
   return `(async () => {
     const validHost = () => ['chatgpt.com', 'chat.openai.com'].includes(location.hostname);
@@ -64,7 +77,14 @@ export function buildChatGPTExperimentalExpression(
     const stop = document.querySelector(
       '[data-testid="stop-button"],[data-testid="composer-stop-button"],button[aria-label="Stop generating"]'
     );
-    if (stop && stop.getClientRects().length && !stop.disabled)
+    // A successful image submit starts generation before its receipt probe runs.
+    // Permit only follow-up evaluations for that exact already-submitted image.
+    const imageRequestId = ${JSON.stringify(postSubmitImageRequestId)};
+    const image = window.__t3ChatGPTImageSend;
+    const ownSubmittedImage = imageRequestId && image?.id === imageRequestId &&
+      (image.phase === 'submitted' || image.phase === 'pending_cleanup') &&
+      image.submitOutcome !== undefined;
+    if (stop && stop.getClientRects().length && !stop.disabled && !ownSubmittedImage)
       return { ok: false, reason: 'ChatGPT appears to be generating.' };
     try {
       const result = await (${expression});

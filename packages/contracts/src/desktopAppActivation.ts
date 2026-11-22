@@ -258,6 +258,8 @@ export const DesktopAppActivationRequest = Schema.Union([
     expression: Schema.optional(Schema.String),
     // Image injection submits its own user turn while preserving the human's draft.
     allowComposerDraft: Schema.optional(Schema.Boolean),
+    // Only the matching image's post-submit receipt probe may run during generation.
+    postSubmitImageRequestId: Schema.optional(ChatGPTConversationId),
     attentionId: Schema.optional(NativeOperationId),
     spokenMessage: Schema.optional(Schema.String),
     // Trusted local TaskBoard asks T3 to act only on its existing, exactly-linked guest.

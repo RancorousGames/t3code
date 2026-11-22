@@ -118,8 +118,13 @@ function publicReceipt(record) {
     verifiedConversationId: record.conversationId,
     conversationGuardValidated: true,
     status: record.status,
-    delivery: record.status === "delivered" ? "user_turn_observed" : "unconfirmed",
-    messageSent: record.status === "delivered",
+    delivery:
+      record.status === "delivered"
+        ? "user_turn_observed"
+        : record.status === "partial"
+          ? "text_only_observed"
+          : "unconfirmed",
+    messageSent: record.status === "delivered" || record.status === "partial",
     sendAttempted: record.sendAttempted === true,
     attachmentObserved: record.status === "delivered",
     imageName: record.imageName,
@@ -137,7 +142,13 @@ export function imageSendReceipt(home, requestId) {
   return publicReceipt(r);
 }
 
-async function guardedEval(control, id, sessionId, expressionText) {
+async function guardedEval(
+  control,
+  id,
+  sessionId,
+  expressionText,
+  postSubmitImageRequestId = null,
+) {
   if (expressionText.length > 8000) throw new Error("Guest expression exceeds 8000 characters.");
   const result = await control({
     action: "experimental_evaluate",
@@ -145,6 +156,7 @@ async function guardedEval(control, id, sessionId, expressionText) {
     expectedConversationId: id,
     expression: expressionText,
     allowComposerDraft: true,
+    ...(postSubmitImageRequestId ? { postSubmitImageRequestId } : {}),
   });
   if (result?.result?.ok !== true)
     throw new Error("Guest evaluation failed: " + JSON.stringify(result?.result ?? result));
@@ -490,7 +502,8 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
         return { ...fresh, reconciled: true };
     }
     persist(home, record);
-    const experiment = (js) => guardedEval(control, expectedConversationId, sessionId, js);
+    const experiment = (js, postSubmit = false) =>
+      guardedEval(control, expectedConversationId, sessionId, js, postSubmit ? requestId : null);
     const before = await experiment(imagePreflight(requestId));
     if (!before?.ok) {
       Object.assign(record, { status: "not_sent", reason: before?.reason ?? "Preflight refused" });
@@ -620,13 +633,15 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
     }
     let lastObserved = null;
     for (let i = 0; i < 70; i++) {
-      const observed = await experiment(deliveryProbe(marker));
+      // Generation can start immediately after onSubmit; receipt observation is
+      // permitted only against this exact submitted image request.
+      const observed = await experiment(deliveryProbe(marker), true);
       lastObserved = observed;
       // User text can appear before ChatGPT renders its image. Give the
-      // attachment a short bounded opportunity to render before text_only.
+      // attachment a short bounded opportunity to render before reporting partial delivery.
       if (observed?.found && (observed.imageCount > 0 || i >= 12)) {
         record.imageCount = observed.imageCount;
-        record.status = observed.imageCount > 0 ? "delivered" : "text_only";
+        record.status = observed.imageCount > 0 ? "delivered" : "partial";
         record.reason =
           observed.imageCount > 0 ? null : "Text observed without the image attachment.";
         persist(home, record);
@@ -671,7 +686,7 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
           // An UNKNOWN is never retried. If React is still submitting, let
           // the guarded orphan timer retry cleanup after the submission settles.
           let deferredCleanup=false;
-          const failed=${["not_sent", "unknown", "text_only"].includes(record.status)};
+          const failed=${["not_sent", "unknown", "partial"].includes(record.status)};
           // An upload that appeared after the last status poll is still ours.
           const a=s.findProps?.()?.attachments;
           if(failed&&!s.uploadId&&s.phase==="uploading"&&a?.length===1&&a[0].uploadId)
@@ -685,6 +700,7 @@ export async function sendChatGPTImage(input, { home, control, wait = delay } = 
         }
         return true;
       `),
+        requestId,
       );
     } catch {
       /* The guest may have navigated after submission. */

@@ -343,6 +343,12 @@ export async function controlSessions(
   )
     throw new Error("allowComposerDraft is a boolean valid only for experimental_evaluate.");
   if (
+    input.postSubmitImageRequestId !== undefined &&
+    (input.action !== "experimental_evaluate" ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.postSubmitImageRequestId))
+  )
+    throw new Error("postSubmitImageRequestId requires an exact UUID on experimental_evaluate.");
+  if (
     ![
       "list",
       "preferences",
@@ -544,7 +550,13 @@ export async function controlSessions(
         }
       : {}),
     ...(input.action === "experimental_evaluate"
-      ? { expression: input.expression, allowComposerDraft: input.allowComposerDraft === true }
+      ? {
+          expression: input.expression,
+          allowComposerDraft: input.allowComposerDraft === true,
+          ...(input.postSubmitImageRequestId
+            ? { postSubmitImageRequestId: input.postSubmitImageRequestId }
+            : {}),
+        }
       : {}),
     ...(["bootstrap_title", "bootstrap_discover"].includes(input.action)
       ? { proposedTitle: input.proposedTitle }

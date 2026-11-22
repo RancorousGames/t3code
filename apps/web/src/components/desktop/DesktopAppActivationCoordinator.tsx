@@ -1722,6 +1722,7 @@ export function DesktopAppActivationCoordinator() {
             marker: request.marker,
             expression: request.expression,
             allowComposerDraft: request.allowComposerDraft,
+            postSubmitImageRequestId: request.postSubmitImageRequestId,
             from: request.from,
             count: request.count,
             maxMessageChars: request.maxMessageChars,
