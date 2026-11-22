@@ -405,6 +405,7 @@ test("unknown queue spawn is reconciled with the same reservation and never resu
   };
   let spawnCalls = 0;
   let sessionVisible = false;
+  let promptDelivery = "unknown";
   const command = async (_board, args) => {
     if (args[1] === "show") return { task: { ...ctx.task }, readiness: "ready" };
     if (args[1] === "execution") return queueIntent;
@@ -424,21 +425,29 @@ test("unknown queue spawn is reconciled with the same reservation and never resu
       ok: true,
       data: {
         sessions: sessionVisible
-          ? [{ id: "recovered-session", spawnRequestId: reservationId }]
+          ? [{ id: "recovered-session", spawnRequestId: reservationId, promptDelivery }]
           : [],
       },
     };
   };
   const options = { home: ctx.home, command, exchange };
+  const recovery = { ...queueInput, reconcileOnly: true };
+  const interrupted = await openTaskSession(recovery, options);
+  assert.equal(interrupted.definitelyNotCreated, true);
+  assert.equal(spawnCalls, 0);
   const first = await openTaskSession(queueInput, options);
   assert.equal(first.status, "unknown");
   sessionVisible = true;
-  const second = await openTaskSession(queueInput, options);
+  const second = await openTaskSession(recovery, options);
   assert.equal(second.status, "prompt_unknown");
   assert.equal(spawnCalls, 1);
   assert.equal(second.sessionId, "recovered-session");
   assert.equal(queueIntent.queue_state, "starting");
   assert.equal(ctx.task.claimed_by, null);
+  promptDelivery = "user_turn_observed";
+  await openTaskSession(recovery, options);
+  assert.equal(queueIntent.queue_session_id, "recovered-session");
+  assert.equal(spawnCalls, 1);
 });
 
 test("a definite T3 rejection releases its journal for a new TaskBoard reservation", async () => {

@@ -344,6 +344,16 @@ export async function openTaskSession(
           task.blocked_reason ||
           task.review_status === "open" ||
           shown.readiness !== "ready");
+      // Every launch writes its journal under this task lock before calling T3.
+      // Recovery can therefore release an interrupted pre-launch transition.
+      if (input.reconcileOnly && !priorReservationAttempt) {
+        return {
+          taskRef: { board, id },
+          status: "not_started",
+          definitelyNotCreated: true,
+          message: "No launch was attempted for this reservation.",
+        };
+      }
       if (priorAttempt && !priorReservationAttempt) {
         // A TaskBoard queue item may be dispatched again after its previous T3
         // worker was durably marked Working and later released. The board's
@@ -493,6 +503,7 @@ export async function openTaskSession(
         // not_sent/sendAttempted=false receipt before starting delivery.
         if (
           input.requireQueue === true &&
+          !input.reconcileOnly &&
           input.reservationId === priorAttempt?.requestId &&
           browserMatches[0].spawnRequestId === input.reservationId &&
           browserMatches[0].promptDelivery === "not_sent" &&

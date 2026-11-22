@@ -796,6 +796,13 @@ export class TaskBoardWorkCoordinator {
   }
 
   private async startReserved(boardRoot: string, item: QueueItem, requestId: string) {
+    // The live green-session count is the admission limit, including when
+    // resuming a previously reserved task after other workers became active.
+    const capacity = await this.caffy.capacity().catch(() => null);
+    if (!capacity || capacity.unknown !== 0 || capacity.working >= capacity.limit) {
+      this.lastIdleReason = capacity?.reason ?? "Green-session count unavailable; spawn deferred.";
+      return;
+    }
     this.admittedStarts.set(requestId, Date.now());
     await this.taskCommand(boardRoot, [
       "task",
@@ -813,15 +820,13 @@ export class TaskBoardWorkCoordinator {
     await this.starting(current, boardRoot, requestId);
   }
 
-  private async starting(item: QueueItem, boardRoot: string, requestId: string) {
+  private async starting(
+    item: QueueItem,
+    boardRoot: string,
+    requestId: string,
+    reconcileOnly = false,
+  ) {
     if (!this.running) return;
-    // The live green-session count is the admission limit, including when
-    // resuming a previously reserved task after other workers became active.
-    const capacity = await this.caffy.capacity().catch(() => null);
-    if (!capacity || capacity.unknown !== 0 || capacity.working >= capacity.limit) {
-      this.lastIdleReason = capacity?.reason ?? "Green-session count unavailable; spawn deferred.";
-      return;
-    }
     const result = (await cli(
       "node.exe",
       [dispatcherScript()],
@@ -831,6 +836,7 @@ export class TaskBoardWorkCoordinator {
         intent: "implement",
         background: true,
         requireQueue: true,
+        reconcileOnly,
         queueRequest: item.queueRequest,
         reservationId: requestId,
         home: this.home,
@@ -1287,7 +1293,7 @@ export class TaskBoardWorkCoordinator {
         const { boardRoot, item } = nextStarting;
         this.startingLastAttempt.set(item.reservationId!, now);
         try {
-          await this.starting(item, boardRoot, item.reservationId!);
+          await this.starting(item, boardRoot, item.reservationId!, true);
         } catch (error) {
           this.lastError = `Starting ${item.taskId}: ${String(error)}`;
         }
@@ -1348,12 +1354,6 @@ export class TaskBoardWorkCoordinator {
         const liveLease = Number.isFinite(expiry) && expiry > Date.now();
         if (liveLease) {
           this.syncReservations(true);
-          // The reservation already occupies one slot, so admissible=false
-          // at precisely 3/3 is expected. But a human may have started more
-          // workers since the reservation was made. Never move Reserved to
-          // Starting if actual workers + all reservations now exceed the cap.
-          const capacity = await this.caffy.capacity().catch(() => null);
-          if (!capacity || capacity.unknown > 0 || capacity.used >= capacity.limit) return;
           await this.startReserved(next.boardRoot, next.item, next.item.reservationId!);
           return;
         }
