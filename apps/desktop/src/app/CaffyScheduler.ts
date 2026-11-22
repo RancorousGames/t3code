@@ -176,6 +176,7 @@ interface CaffyStore {
   shutdownWhenIdle?: boolean;
   shutdownArmedAt?: number | null;
   busyUntil?: number | null;
+  dailyWorkMinutes?: number | null;
   agentStops?: AgentStoppedCaffy[];
   terminalConversations?: Array<{ sessionId: string; conversationId: string }>;
 }
@@ -220,6 +221,8 @@ export class CaffyScheduler {
   private shutdownWhenIdle = false;
   private shutdownArmedAt: number | null = null;
   private busyUntil: number | null = null;
+  private dailyWorkMinutes: number | null = null;
+  private dailyWorkCompleted = false;
   private shutdownIdleSince: number | null = null;
   private shutdownChecking = false;
   private shutdownError: string | null = null;
@@ -364,6 +367,11 @@ export class CaffyScheduler {
             : null;
         if (Number.isInteger(saved.maxWorking) && saved.maxWorking >= 1 && saved.maxWorking <= 100)
           this.maxWorking = saved.maxWorking;
+        if (typeof saved.dailyWorkMinutes === "number" &&
+            Number.isInteger(saved.dailyWorkMinutes) &&
+            saved.dailyWorkMinutes >= 60 && saved.dailyWorkMinutes <= 720 &&
+            saved.dailyWorkMinutes % 60 === 0)
+          this.dailyWorkMinutes = saved.dailyWorkMinutes;
         if (saved.shutdownWhenIdle === true && !this.shutdownWhenIdle) this.save();
       }
     } catch {
@@ -462,6 +470,7 @@ export class CaffyScheduler {
           shutdownWhenIdle: this.shutdownWhenIdle,
           shutdownArmedAt: this.shutdownArmedAt,
           busyUntil: this.busyUntil,
+          dailyWorkMinutes: this.dailyWorkMinutes,
         } satisfies CaffyStore),
         { encoding: "utf8", flush: true },
       );
@@ -502,6 +511,17 @@ export class CaffyScheduler {
   start() {
     if (this.started) return;
     this.started = true;
+    // Each T3 launch gets a fresh work budget; yesterday's cutoff never persists into this run.
+    if (this.dailyWorkMinutes !== null) {
+      this.dailyWorkCompleted = false;
+      this.keepT3Busy = true;
+      this.busyUntil = Date.now() + this.dailyWorkMinutes * 60_000;
+      this.shutdownWhenIdle = false;
+      this.shutdownArmedAt = null;
+      this.shutdownBlocker = null;
+      this.throughput.setEnabled(true);
+      this.save();
+    }
     this.expireTimedBusy();
     this.expireShutdownArm();
     this.backupConfiguration();
@@ -930,6 +950,8 @@ export class CaffyScheduler {
       shutdownExpiresAt:
         this.shutdownArmedAt === null ? null : this.shutdownArmedAt + SHUTDOWN_ARM_MS,
       busyUntil: this.busyUntil,
+      dailyWorkMinutes: this.dailyWorkMinutes,
+      dailyWorkCompleted: this.dailyWorkCompleted,
       shutdownError: this.shutdownError,
       shutdownBlocker: this.shutdownWhenIdle ? this.shutdownBlocker : null,
     };
@@ -962,6 +984,12 @@ export class CaffyScheduler {
     this.throughput.setEnabled(false, this.busyUntil);
     this.busyUntil = null;
     this.keepT3Busy = false;
+    if (this.dailyWorkMinutes !== null) {
+      this.dailyWorkCompleted = true;
+      this.shutdownWhenIdle = true;
+      this.shutdownArmedAt = Date.now();
+      this.shutdownError = null;
+    }
     this.shutdownIdleSince = null;
     this.save();
   }
@@ -984,12 +1012,42 @@ export class CaffyScheduler {
     maxWorking?: number | undefined;
     shutdownWhenIdle?: boolean | undefined;
     busyForMinutes?: number | undefined;
+    dailyWorkMinutes?: number | null | undefined;
   }) {
     this.expireShutdownArm();
+    if (input.dailyWorkMinutes !== undefined) {
+      const minutes = input.dailyWorkMinutes;
+      if (minutes !== null && (!Number.isInteger(minutes) || minutes < 60 ||
+          minutes > 720 || minutes % 60 !== 0))
+        throw new Error("dailyWorkMinutes must be null or a whole number of hours from 1 to 12.");
+      const wasDaily = this.dailyWorkMinutes !== null;
+      this.dailyWorkMinutes = minutes;
+      this.dailyWorkCompleted = false;
+      if (minutes !== null) {
+        this.busyUntil = Date.now() + minutes * 60_000;
+        this.keepT3Busy = true;
+        this.shutdownWhenIdle = false;
+        this.shutdownArmedAt = null;
+        this.shutdownIdleSince = null;
+        this.shutdownBlocker = null;
+      } else {
+        this.busyUntil = null;
+        if (wasDaily) {
+          this.shutdownWhenIdle = false;
+          this.shutdownArmedAt = null;
+          this.shutdownIdleSince = null;
+          this.shutdownBlocker = null;
+        }
+      }
+    }
+    if (this.dailyWorkCompleted && input.keepT3Busy === true)
+      throw new Error("Daily work is complete for this T3 run. Disable daily work or restart T3 to resume.");
     if (input.busyForMinutes !== undefined) {
       if (![60, 120, 240, 360].includes(input.busyForMinutes))
         throw new Error("busyForMinutes must be 60, 120, 240 or 360.");
       this.busyUntil = Date.now() + input.busyForMinutes * 60_000;
+      this.dailyWorkMinutes = null;
+      this.dailyWorkCompleted = false;
       this.keepT3Busy = true;
       this.shutdownWhenIdle = true;
       this.shutdownArmedAt = Date.now();
@@ -999,7 +1057,7 @@ export class CaffyScheduler {
       // A manual switch replaces the combined schedule rather than leaving a hidden shutdown armed.
       if (
         this.busyUntil !== null &&
-        (input.keepT3Busy !== undefined || input.shutdownWhenIdle !== undefined)
+        (input.keepT3Busy !== undefined || (input.shutdownWhenIdle !== undefined && this.dailyWorkMinutes === null))
       ) {
         this.busyUntil = null;
         this.shutdownWhenIdle = false;
@@ -1031,6 +1089,8 @@ export class CaffyScheduler {
       shutdownExpiresAt:
         this.shutdownArmedAt === null ? null : this.shutdownArmedAt + SHUTDOWN_ARM_MS,
       busyUntil: this.busyUntil,
+      dailyWorkMinutes: this.dailyWorkMinutes,
+      dailyWorkCompleted: this.dailyWorkCompleted,
       shutdownError: this.shutdownError,
     };
   }

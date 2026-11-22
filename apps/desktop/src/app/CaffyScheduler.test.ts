@@ -898,6 +898,47 @@ describe("Caffy settings survive T3 restart and session lifecycle recovery", () 
       f.dispose();
     }
   });
+  it("runs the daily work budget once per T3 launch and restores the previous slots", () => {
+    const f = fixture();
+    const first = f.open();
+    try {
+      first.policy({ maxWorking: 4, dailyWorkMinutes: 240 });
+      first.start();
+      expect(first.status()).toMatchObject({
+        keepT3Busy: true, maxWorking: 4, dailyWorkMinutes: 240,
+        dailyWorkCompleted: false, shutdownWhenIdle: false,
+      });
+      const internal = first as unknown as {
+        busyUntil: number | null;
+        expireTimedBusy: () => void;
+      };
+      internal.busyUntil = Date.now() - 1;
+      internal.expireTimedBusy();
+      expect(first.status()).toMatchObject({
+        keepT3Busy: false, maxWorking: 4, busyUntil: null,
+        dailyWorkMinutes: 240, dailyWorkCompleted: true, shutdownWhenIdle: true,
+      });
+      expect(() => first.policy({ keepT3Busy: true })).toThrow(/Daily work is complete/);
+      first.policy({ dailyWorkMinutes: null });
+      expect(first.status()).toMatchObject({ dailyWorkMinutes: null, shutdownWhenIdle: false });
+      first.policy({ dailyWorkMinutes: 240 });
+    } finally {
+      first.close();
+    }
+    const restarted = f.open();
+    try {
+      restarted.start();
+      expect(restarted.status()).toMatchObject({
+        keepT3Busy: true, maxWorking: 4, dailyWorkMinutes: 240,
+        dailyWorkCompleted: false, shutdownWhenIdle: false,
+      });
+      expect((restarted.status() as { busyUntil: number }).busyUntil)
+        .toBeGreaterThan(Date.now() + 239 * 60_000);
+    } finally {
+      restarted.close();
+      f.dispose();
+    }
+  });
   it("persists timed Busy, disarms on manual override, and rejects new work after expiration", async () => {
     const f = fixture();
     const first = f.open();

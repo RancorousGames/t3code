@@ -89,6 +89,7 @@ export async function controlSessions(
       "maxWorking",
       "shutdownWhenIdle",
       "busyForMinutes",
+      "dailyWorkMinutes",
       "respectSlots",
       "beginAt",
       "prompt",
