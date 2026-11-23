@@ -329,7 +329,10 @@ function flattenOpenCodeModels(
         continue;
       }
 
-      const subProvider = nonEmptyTrimmed(provider.name);
+      const subProvider = subProviderLabelFor({
+        providerID: provider.id,
+        providerName: provider.name,
+      });
       const released = Date.parse(model.release_date);
       entries.push({
         model: {
@@ -460,6 +463,10 @@ function subProviderLabelFor(input: {
   readonly providerID: string;
   readonly providerName?: string;
 }): string | undefined {
+  // OpenCode's "google" route uses Google's AI Studio API, not OpenRouter.
+  if (input.providerID.toLowerCase() === "google") {
+    return "AI Studio API";
+  }
   const label = nonEmptyTrimmed(input.providerName) ?? input.providerID;
   return label.toLowerCase() === OPENCODE_PRESENTATION.displayName.toLowerCase()
     ? undefined
