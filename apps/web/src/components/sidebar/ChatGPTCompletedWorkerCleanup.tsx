@@ -1,5 +1,4 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { chatGPTSessionProfileId } from "../../chatGPTAccountProfiles";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef } from "react";
 
@@ -17,15 +16,8 @@ import {
   readSpawnAutoCloseIdleSince,
   spawnAutoCloseCandidate,
 } from "../../chatGPTSpawnAutoClose";
-import { isChatGPTGuestHibernated } from "../../browser/chatGPTGuestHibernation";
-import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
-import { chatGPTConversationIdFromUrl } from "../../chatGPTConversationIdentity";
 import { getLocalStorageItem, removeLocalStorageItem } from "../../hooks/useLocalStorage";
-import {
-  hasUncertainChatGPTSend,
-  inspectBrowserSession,
-  runChatGPTSessionControl,
-} from "../../chatGPTSessionControl";
+import { hasUncertainChatGPTSend } from "../../chatGPTSessionControl";
 
 import { readThreadPreviewState } from "../../previewStateStore";
 import { previewEnvironment } from "../../state/preview";
@@ -112,143 +104,58 @@ export function ChatGPTCompletedWorkerCleanup({
         const originalCandidate = candidateFor(initial, worker, Date.now());
         if (!originalCandidate || hasUncertainChatGPTSend(environmentId, worker.id)) continue;
 
-        const status = await inspectBrowserSession(environmentId, worker);
-        // The host can report "unloaded" for a deferred guest. Its status
-        // contract is being widened in another owned recovery change.
-        const observedStatus: string = status.status;
         const thread = chatGPTBrowserThreadRef(environmentId, worker.id);
-        const preview = readThreadPreviewState(thread);
-        const snapshots = Object.values(preview.sessions);
-        if (snapshots.length > 1) continue;
-        const snapshot = snapshots[0] ?? null;
-        const runtimeId =
-          snapshot && preview.serverEpoch
-            ? previewRuntimeTabId(thread, preview.serverEpoch, snapshot.tabId)
-            : null;
-        const cachedUrl = getLocalStorageItem(
-          chatGPTBrowserLastUrlKey(environmentId, worker.id),
-          Schema.String,
-        );
-        const conversationId = chatGPTConversationIdFromUrl(cachedUrl);
-        const registeredId =
-          worker.bootstrapIdentity?.state === "registered"
-            ? worker.bootstrapIdentity.conversationId
-            : null;
-
-        // A cold worker has no mounted composer. Before deleting its T3 slot,
-        // require a canonical persisted conversation URL, no guest, no pending
-        // send fence, and a stable preview URL when a preview still exists.
-        const noMountedGuest =
-          !runtimeId ||
-          !Array.from(document.querySelectorAll("webview")).some(
-            (guest) => guest.dataset.previewTab === runtimeId,
-          );
-        const coldClose =
-          (observedStatus === "unloaded" || observedStatus === "hibernated") &&
-          noMountedGuest &&
-          conversationId !== null &&
-          (snapshot === null
-            ? observedStatus === "unloaded" && runtimeId === null
-            : runtimeId !== null &&
-              (observedStatus === "unloaded" || isChatGPTGuestHibernated(runtimeId)) &&
-              preview.activeTabId === snapshot.tabId &&
-              snapshot.navStatus._tag === "Success" &&
-              chatGPTConversationIdFromUrl(snapshot.navStatus.url) === conversationId);
-
-        // Inactive unmounted workers still need exact conversation identity.
-        const inactiveUnloadedClose =
-          observedStatus === "unavailable" &&
-          status.statusReason === "Embedded ChatGPT webview is not mounted." &&
-          noMountedGuest &&
-          typeof registeredId === "string" &&
-          !!chatGPTConversationIdFromUrl(`https://chatgpt.com/c/${registeredId}`) &&
-          (conversationId === null || conversationId === registeredId) &&
-          (snapshot === null ||
-            (preview.activeTabId === snapshot.tabId &&
-              (snapshot.navStatus._tag !== "Success" ||
-                chatGPTConversationIdFromUrl(snapshot.navStatus.url) === registeredId)));
-        const allowedColdClose = coldClose || inactiveUnloadedClose;
-        const closeCandidate = originalCandidate;
-
-        const liveClose =
-          !!originalCandidate &&
-          snapshot !== null &&
-          (status.status === "done_or_idle" || status.status === "waiting_for_input") &&
-          status.activity === "idle" &&
-          status.uiColor !== "interrupted" &&
-          !!status.observedGuestUrl;
-        if (!liveClose && !allowedColdClose) continue;
-
         try {
-          // Recheck role, inactivity clock, exemptions and session
-          // identity after asynchronous host/UI operations. A sidebar click
-          // does NOT make a session human-controlled.
+          // Expiry is based on persisted worker activity, not a mounted guest's
+          // browser status. Recheck after awaits so active or exempt workers survive.
           const currentSessions = readChatGPTBrowserSessions(environmentId);
           const current = currentSessions.find((entry) => entry.id === worker.id);
           if (
             unmounted() ||
             !current ||
             JSON.stringify(current) !== JSON.stringify(worker) ||
+            hasUncertainChatGPTSend(environmentId, worker.id) ||
             !candidateFor(currentSessions, current, Date.now())
           )
             continue;
 
-          if (liveClose) {
-            // A loaded guest requires two affirmative empty-composer probes
-            // and stable exact identity through the existing close preflight.
-            await runChatGPTSessionControl({
-              environmentId,
-              sessions: currentSessions,
-              sessionId: current.id,
-              action: "change_state",
-              state: "closed",
-              neverWake: true,
-            });
-          }
-
-          if (allowedColdClose) {
-            const latest = await inspectBrowserSession(environmentId, current);
+          // Release any open preview tabs before removing the local T3 session.
+          // No guest inspection is needed, including for unloaded previews.
+          let failed = false;
+          for (const snapshot of Object.values(readThreadPreviewState(thread).sessions)) {
+            const freshSessions = readChatGPTBrowserSessions(environmentId);
             if (
-              latest.status !== status.status ||
+              unmounted() ||
+              JSON.stringify(freshSessions.find((entry) => entry.id === current.id)) !==
+                JSON.stringify(current) ||
               hasUncertainChatGPTSend(environmentId, current.id) ||
-              (runtimeId &&
-                Array.from(document.querySelectorAll("webview")).some(
-                  (guest) => guest.dataset.previewTab === runtimeId,
-                ))
-            )
-              continue;
-          }
-
-          const latestPreview = readThreadPreviewState(thread);
-          if (
-            unmounted() ||
-            hasUncertainChatGPTSend(environmentId, current.id) ||
-            JSON.stringify(
-              readChatGPTBrowserSessions(environmentId).find((entry) => entry.id === current.id),
-            ) !== JSON.stringify(current) ||
-            (snapshot !== null
-              ? latestPreview.sessions[snapshot.tabId] !== snapshot
-              : Object.keys(latestPreview.sessions).length !== 0) ||
-            (allowedColdClose &&
-              (getLocalStorageItem(
-                chatGPTBrowserLastUrlKey(environmentId, current.id),
-                Schema.String,
-              ) !== cachedUrl ||
-                (runtimeId !== null &&
-                  status.status === "hibernated" &&
-                  !isChatGPTGuestHibernated(runtimeId))))
-          )
-            continue;
-
-          if (snapshot !== null) {
+              !candidateFor(freshSessions, current, Date.now())
+            ) {
+              failed = true;
+              break;
+            }
             const result = await closePreviewSession({
               closePreview: close,
               snapshot,
               tabId: snapshot.tabId,
               threadRef: thread,
             });
-            if (result._tag === "Failure") continue;
+            if (result._tag === "Failure") {
+              failed = true;
+              break;
+            }
           }
+          if (failed) continue;
+
+          const latestSessions = readChatGPTBrowserSessions(environmentId);
+          if (
+            unmounted() ||
+            hasUncertainChatGPTSend(environmentId, current.id) ||
+            JSON.stringify(latestSessions.find((entry) => entry.id === current.id)) !==
+              JSON.stringify(current) ||
+            !candidateFor(latestSessions, current, Date.now())
+          )
+            continue;
           // At most one local container removed per scan. The conversation
           // remains on ChatGPT's servers; never archive/hide instead of close.
           if (selectedSessionId.current === current.id) continue;
@@ -258,9 +165,9 @@ export function ChatGPTCompletedWorkerCleanup({
           clearSpawnAutoCloseIdleSince(environmentId, current.id);
           console.info("[ChatGPT completed-worker cleanup]", {
             sessionId: current.id,
-            taskIds: closeCandidate?.taskIds,
-            dueAt: closeCandidate?.dueAt,
-            reason: closeCandidate?.reason,
+            taskIds: originalCandidate.taskIds,
+            dueAt: originalCandidate.dueAt,
+            reason: originalCandidate.reason,
           });
           return;
         } catch (error) {
@@ -270,7 +177,7 @@ export function ChatGPTCompletedWorkerCleanup({
     };
     void scan()
       .catch((error: unknown) => {
-        console.warn("[ChatGPT worker cleanup] Unable to inspect inactive worker", error);
+        console.warn("[ChatGPT worker cleanup] Unable to close expired worker", error);
       })
       .finally(() => {
         scanning.current = false;
