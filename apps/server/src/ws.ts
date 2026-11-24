@@ -23,6 +23,7 @@ import {
   readDesktopCatalog,
   disconnectDesktopCatalog,
   dispatchBrowserWork,
+  dispatchNativeThreadCaffy,
   hasUniqueDesktopCreator,
   takeDesktopWork,
   finishDesktopWork,
@@ -2289,34 +2290,50 @@ export const layerWsRpc = (
               const projects = projectRead.success;
               const providers = yield* providerRegistry.getProviders;
               return reply({
-                projects: projects.filter((p) => p.archivedAt == null).map((p) => ({
-                  id: p.id, title: p.title, workspaceRoot: p.workspaceRoot,
-                  defaultModelSelection: p.defaultModelSelection,
-                })),
-                models: providers.filter((p) => p.enabled && p.installed).flatMap((p) =>
-                  p.models.map((model) => {
-                    const effort = model.capabilities?.optionDescriptors?.find(
-                      (descriptor) => descriptor.type === "select" &&
-                        (descriptor.id === "reasoningEffort" || descriptor.id === "effort"),
-                    );
-                    return {
-                      instanceId: p.instanceId, provider: p.driver,
-                      slug: model.slug, label: model.slug,
-                      isDefault: model.isDefault === true,
-                      effortId: effort?.id ?? null,
-                      efforts: effort?.type === "select" ? effort.options.map((choice) => ({
-                        id: choice.id, label: choice.label,
-                      })) : [],
-                    };
-                  }),
-                ),
+                projects: projects
+                  .filter((p) => p.archivedAt == null)
+                  .map((p) => ({
+                    id: p.id,
+                    title: p.title,
+                    workspaceRoot: p.workspaceRoot,
+                    defaultModelSelection: p.defaultModelSelection,
+                  })),
+                models: providers
+                  .filter((p) => p.enabled && p.installed)
+                  .flatMap((p) =>
+                    p.models.map((model) => {
+                      const effort = model.capabilities?.optionDescriptors?.find(
+                        (descriptor) =>
+                          descriptor.type === "select" &&
+                          (descriptor.id === "reasoningEffort" || descriptor.id === "effort"),
+                      );
+                      return {
+                        instanceId: p.instanceId,
+                        provider: p.driver,
+                        slug: model.slug,
+                        label: model.slug,
+                        isDefault: model.isDefault === true,
+                        effortId: effort?.id ?? null,
+                        efforts:
+                          effort?.type === "select"
+                            ? effort.options.map((choice) => ({
+                                id: choice.id,
+                                label: choice.label,
+                              }))
+                            : [],
+                      };
+                    }),
+                  ),
               });
             }
             if (request.method === "projects.create") {
               const p = request.params as { name?: unknown } | null;
               const name = typeof p?.name === "string" ? p.name.trim() : "";
               if (!name || name.length > 80 || /[/\\\\]/.test(name))
-                return error("InvalidInput", "Project name must be 1–80 characters without path separators.");
+                return error(
+                  "InvalidInput",
+                  "Project name must be 1–80 characters without path separators.",
+                );
               const created = yield* Effect.result(managedFolders.createNamedProject({ name }));
               if (Result.isFailure(created))
                 return error("Unavailable", "T3 could not create the named project.");
@@ -2341,20 +2358,31 @@ export const layerWsRpc = (
                     "Create receipt belongs to a different environment.",
                   );
                 const seed = [environmentId, input.clientRequestId]
-                  .map((value) => `${value.length}:${value}`).join("");
-                const bytes = yield* crypto.digest("SHA-256", new TextEncoder().encode(seed)).pipe(Effect.orDie);
-                const hash = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+                  .map((value) => `${value.length}:${value}`)
+                  .join("");
+                const bytes = yield* crypto
+                  .digest("SHA-256", new TextEncoder().encode(seed))
+                  .pipe(Effect.orDie);
+                const hash = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join(
+                  "",
+                );
                 const nativeOperationId = `provider-v1-native-create:${hash}`;
                 if (input.operationId === nativeOperationId) {
                   const threadId = ThreadId.make(`provider-native-${hash.slice(0, 32)}`);
-                  const committed = yield* threadManagement.hasReceipt(CommandId.make(nativeOperationId));
+                  const committed = yield* threadManagement.hasReceipt(
+                    CommandId.make(nativeOperationId),
+                  );
                   if (!committed) return error("NotFound", "Native create receipt not found.");
                   const now = DateTime.formatIso(yield* DateTime.now);
                   return reply({
-                    operationId: nativeOperationId, clientRequestId: input.clientRequestId,
-                    state: "Created", session: { provider: "t3", id: `thread:${encodeURIComponent(threadId)}` },
-                    conversationId: null, initialPromptDelivery: "NotSent",
-                    parentConfirmed: false, observedAt: now,
+                    operationId: nativeOperationId,
+                    clientRequestId: input.clientRequestId,
+                    state: "Created",
+                    session: { provider: "t3", id: `thread:${encodeURIComponent(threadId)}` },
+                    conversationId: null,
+                    initialPromptDelivery: "NotSent",
+                    parentConfirmed: false,
+                    observedAt: now,
                   });
                 }
                 const found = getCreateReceipt(
@@ -2379,22 +2407,40 @@ export const layerWsRpc = (
                 return error("EnvironmentChanged", "Create environment does not match.");
               if (input.kind === "t3/thread") {
                 if (input.initialMessage !== undefined)
-                  return error("InvalidInput", "Create native thread first; submit its first message through the native queue.");
+                  return error(
+                    "InvalidInput",
+                    "Create native thread first; submit its first message through the native queue.",
+                  );
                 if (input.parentSessionId !== undefined)
-                  return error("Unsupported", "Native thread parenting is not supported by this creator.");
+                  return error(
+                    "Unsupported",
+                    "Native thread parenting is not supported by this creator.",
+                  );
                 const seed = [environmentId, input.clientRequestId]
-                  .map((value) => `${value.length}:${value}`).join("");
-                const bytes = yield* crypto.digest("SHA-256", new TextEncoder().encode(seed)).pipe(Effect.orDie);
-                const hash = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+                  .map((value) => `${value.length}:${value}`)
+                  .join("");
+                const bytes = yield* crypto
+                  .digest("SHA-256", new TextEncoder().encode(seed))
+                  .pipe(Effect.orDie);
+                const hash = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join(
+                  "",
+                );
                 const commandId = CommandId.make(`provider-v1-native-create:${hash}`);
                 const threadId = ThreadId.make(`provider-native-${hash.slice(0, 32)}`);
                 const observedAt = DateTime.formatIso(yield* DateTime.now);
                 const receipt = (state: "Created" | "NotCreated" | "Unknown", reason?: string) => ({
-                  operationId: commandId, clientRequestId: input.clientRequestId,
-                  state, session: state === "Created"
-                    ? { provider: "t3", id: `thread:${encodeURIComponent(threadId)}` } : null,
-                  conversationId: null, initialPromptDelivery: "NotSent",
-                  parentConfirmed: false, observedAt, ...(reason === undefined ? {} : { reason }),
+                  operationId: commandId,
+                  clientRequestId: input.clientRequestId,
+                  state,
+                  session:
+                    state === "Created"
+                      ? { provider: "t3", id: `thread:${encodeURIComponent(threadId)}` }
+                      : null,
+                  conversationId: null,
+                  initialPromptDelivery: "NotSent",
+                  parentConfirmed: false,
+                  observedAt,
+                  ...(reason === undefined ? {} : { reason }),
                 });
                 if (yield* threadManagement.hasReceipt(commandId)) return reply(receipt("Created"));
                 const snapshot = yield* Effect.result(
@@ -2407,50 +2453,95 @@ export const layerWsRpc = (
                 if (Result.isFailure(projectRead))
                   return error("Unavailable", "Could not read T3 project settings.");
                 const allProjects = projectRead.success;
-                const selectedProject = allProjects.find((candidate) =>
-                  project !== undefined &&
-                  (candidate.id.toLowerCase() === project ||
-                   candidate.title.toLowerCase() === project ||
-                   candidate.workspaceRoot.replace(/\\/g, "/").toLowerCase() === project),
+                const selectedProject = allProjects.find(
+                  (candidate) =>
+                    project !== undefined &&
+                    (candidate.id.toLowerCase() === project ||
+                      candidate.title.toLowerCase() === project ||
+                      candidate.workspaceRoot.replace(/\\/g, "/").toLowerCase() === project),
                 );
-                const sources = snapshot.success.threads.filter((thread) =>
-                  project === undefined || thread.projectId.toLowerCase() === project ||
-                  selectedProject?.id === thread.projectId ||
-                  thread.worktreePath?.replace(/\\/g, "/").toLowerCase() === project,
+                const sources = snapshot.success.threads.filter(
+                  (thread) =>
+                    project === undefined ||
+                    thread.projectId.toLowerCase() === project ||
+                    selectedProject?.id === thread.projectId ||
+                    thread.worktreePath?.replace(/\\/g, "/").toLowerCase() === project,
                 );
-                const source = sources.sort((a, b) => DateTime.toEpochMillis(b.updatedAt) -
-                  DateTime.toEpochMillis(a.updatedAt))[0];
+                const source = sources.sort(
+                  (a, b) =>
+                    DateTime.toEpochMillis(b.updatedAt) - DateTime.toEpochMillis(a.updatedAt),
+                )[0];
                 const projectId = selectedProject?.id ?? source?.projectId;
-                const modelSelection = input.modelSelection ?? source?.modelSelection ??
-                  selectedProject?.defaultModelSelection ?? null;
-                if (!projectId || !modelSelection) return reply(receipt("NotCreated",
-                  "Select an existing T3 project and a model (or create a model-configured project)."));
+                const modelSelection =
+                  input.modelSelection ??
+                  source?.modelSelection ??
+                  selectedProject?.defaultModelSelection ??
+                  null;
+                if (!projectId || !modelSelection)
+                  return reply(
+                    receipt(
+                      "NotCreated",
+                      "Select an existing T3 project and a model (or create a model-configured project).",
+                    ),
+                  );
                 if (input.modelSelection) {
                   const providers = yield* providerRegistry.getProviders;
-                  const provider = providers.find((candidate) =>
-                    candidate.instanceId === modelSelection.instanceId && candidate.enabled);
-                  const model = provider?.models.find((candidate) =>
-                    candidate.slug === modelSelection.model);
-                  if (!model) return reply(receipt("NotCreated",
-                    "Selected model is not in T3's current provider catalog."));
+                  const provider = providers.find(
+                    (candidate) =>
+                      candidate.instanceId === modelSelection.instanceId && candidate.enabled,
+                  );
+                  const model = provider?.models.find(
+                    (candidate) => candidate.slug === modelSelection.model,
+                  );
+                  if (!model)
+                    return reply(
+                      receipt(
+                        "NotCreated",
+                        "Selected model is not in T3's current provider catalog.",
+                      ),
+                    );
                   const descriptors = model.capabilities?.optionDescriptors ?? [];
-                  if (modelSelection.options?.some((option) =>
-                    !descriptors.some((d) => d.type === "select" && d.id === option.id &&
-                      d.options.some((candidate) => candidate.id === option.value)),
-                  )) return reply(receipt("NotCreated",
-                    "Selected reasoning effort is not supported by this model."));
+                  if (
+                    modelSelection.options?.some(
+                      (option) =>
+                        !descriptors.some(
+                          (d) =>
+                            d.type === "select" &&
+                            d.id === option.id &&
+                            d.options.some((candidate) => candidate.id === option.value),
+                        ),
+                    )
+                  )
+                    return reply(
+                      receipt(
+                        "NotCreated",
+                        "Selected reasoning effort is not supported by this model.",
+                      ),
+                    );
                 }
-                const dispatched = yield* Effect.result(threadManagement.dispatch({
-                  type: "thread.create", createdBy: "user", creationSource: "web",
-                  commandId, threadId, projectId, title: input.title,
-                  modelSelection, runtimeMode: source?.runtimeMode ?? "approval-required",
-                  interactionMode: source?.interactionMode ?? "default",
-                  branch: source?.branch ?? null,
-                  worktreePath: source?.worktreePath ?? null,
-                }));
+                const dispatched = yield* Effect.result(
+                  threadManagement.dispatch({
+                    type: "thread.create",
+                    createdBy: "user",
+                    creationSource: "web",
+                    commandId,
+                    threadId,
+                    projectId,
+                    title: input.title,
+                    modelSelection,
+                    runtimeMode: source?.runtimeMode ?? "approval-required",
+                    interactionMode: source?.interactionMode ?? "default",
+                    branch: source?.branch ?? null,
+                    worktreePath: source?.worktreePath ?? null,
+                  }),
+                );
                 if (Result.isFailure(dispatched))
-                  return reply(receipt("Unknown",
-                    "Native thread creation outcome is uncertain; reconcile the original request ID."));
+                  return reply(
+                    receipt(
+                      "Unknown",
+                      "Native thread creation outcome is uncertain; reconcile the original request ID.",
+                    ),
+                  );
                 return reply(receipt("Created"));
               }
               if (input.kind !== "t3/chatgpt")
@@ -2589,50 +2680,176 @@ export const layerWsRpc = (
                 options?: unknown;
               } | null;
               if (!p || p.expectedEnvironmentId !== environmentId)
-                return error("EnvironmentChanged", "Remote session control targets another environment.");
+                return error(
+                  "EnvironmentChanged",
+                  "Remote session control targets another environment.",
+                );
               const id = p.session?.id;
               const read = request.method === "sessions.controls";
               const command = read ? "status" : p.command;
+              // Native threads (thread:<id>): sidebar placement runs through the
+              // orchestration commands the desktop sidebar uses; Caffy lives in the
+              // Electron desktop, so those commands are forwarded to its publisher.
+              const nativeRaw = id && p.session?.provider === "t3" ? rawNativeThreadId({ provider: "t3", id }) : null;
+              if (nativeRaw !== null) {
+                const opts = (p.options && typeof p.options === "object" && !Array.isArray(p.options)
+                  ? p.options : {}) as Record<string, unknown>;
+                const threadId = ThreadId.make(nativeRaw);
+                const shell = yield* Effect.result(threadManagement.getThreadShell(threadId));
+                if (Result.isFailure(shell) || shell.success === null ||
+                    shell.success.deletedAt !== null || shell.success.archivedAt !== null)
+                  return error("NotFound", "Native thread no longer active.");
+                const thread = shell.success;
+                const nativeCaffy = (caffyCommand: string, caffyOptions: Record<string, unknown>) =>
+                  Effect.promise(() => dispatchNativeThreadCaffy(environmentId, nativeRaw, caffyCommand, caffyOptions));
+                if (command === "status") {
+                  // Caffy/snooze presets are best-effort: a missing desktop must not hide placement state.
+                  const desktop = yield* nativeCaffy("status", {});
+                  const desktopData = desktop?.ok ? desktop.data as Record<string, unknown> : null;
+                  return reply({
+                    kind: "t3/thread",
+                    title: thread.title,
+                    settled: thread.settledOverride === "settled",
+                    pinned: thread.pinnedAt != null,
+                    snoozedUntil: thread.snoozedUntil ? DateTime.toEpochMillis(thread.snoozedUntil) : null,
+                    autoSettleEnabled: thread.autoSettleDisabledAt == null,
+                    caffy: desktopData?.caffy ?? null,
+                    caffyAvailable: desktopData !== null,
+                    attentionSnoozePresets: desktopData?.attentionSnoozePresets ?? [],
+                  });
+                }
+                if (command?.startsWith("caffy_")) {
+                  const result = yield* nativeCaffy(command, opts);
+                  if (!result)
+                    return error("TimeoutUnknown", "Desktop Caffy outcome unconfirmed; inspect before retrying.");
+                  if (!result.ok) return error(result.code, result.message);
+                  return reply({ state: "Delivered", data: result.data });
+                }
+                const commandId = CommandId.make(`provider-v1-native-control:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`);
+                const base = { commandId, threadId };
+                const snoozeMs = typeof opts.until === "number" ? opts.until : null;
+                const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+                const title = typeof opts.value === "string" ? opts.value.trim() : "";
+                const nativeCommand =
+                  command === "settle" ? { type: "thread.settle" as const, ...base }
+                  : command === "unsettle" ? { type: "thread.unsettle" as const, ...base, reason: "user" as const }
+                  : command === "unsnooze" ? { type: "thread.unsnooze" as const, ...base, reason: "user" as const }
+                  : command === "pin" ? { type: "thread.pin" as const, ...base }
+                  : command === "unpin" ? { type: "thread.unpin" as const, ...base }
+                  : command === "auto_settle" && typeof opts.value === "boolean"
+                    ? { type: "thread.auto-settle.set" as const, ...base, enabled: opts.value }
+                  : command === "rename" && title.length > 0 && title.length <= 180
+                    ? { type: "thread.metadata.update" as const, ...base, title }
+                  : command === "snooze" && snoozeMs !== null && Number.isSafeInteger(snoozeMs) &&
+                      snoozeMs > nowMs && snoozeMs < nowMs + 366 * 86_400_000
+                    ? { type: "thread.snooze" as const, ...base,
+                        snoozedUntil: DateTime.formatIso(DateTime.makeUnsafe(snoozeMs)) }
+                  : null;
+                if (nativeCommand === null)
+                  return error("InvalidInput", "Invalid native thread control request.");
+                const dispatched = yield* Effect.result(threadManagement.dispatch(nativeCommand as never));
+                if (Result.isFailure(dispatched))
+                  return error("Conflict", `Native thread refused ${command}.`);
+                return reply({ state: "Delivered", data: { applied: command } });
+              }
               const allowed = new Set([
-                "status", "close", "unload", "reload", "keep_loaded", "reboot", "reboot_reconcile", "stop", "restore_url",
-                "verification", "worker", "binding_clear", "binding_update", "project", "parent",
-                "highlight", "rename", "caffy_set", "caffy_stop", "caffy_pause",
-                "caffy_resume", "caffy_startup", "caffy_begin", "caffy_reboot",
-                "caffy_wake", "caffy_schedule_spawn", "caffy_cancel_spawn", "caffy_cancel_begin",
-                "caffy_configure", "attention_open", "attention_snooze", "attention_dismiss",
-                "prepfile_create", "prepfile_image_chunk",
+                "status",
+                "close",
+                "unload",
+                "reload",
+                "keep_loaded",
+                "reboot",
+                "reboot_reconcile",
+                "stop",
+                "restore_url",
+                "verification",
+                "worker",
+                "binding_clear",
+                "binding_update",
+                "project",
+                "parent",
+                "highlight",
+                "rename",
+                "caffy_set",
+                "caffy_stop",
+                "caffy_pause",
+                "caffy_resume",
+                "caffy_startup",
+                "caffy_begin",
+                "caffy_reboot",
+                "caffy_wake",
+                "caffy_schedule_spawn",
+                "caffy_cancel_spawn",
+                "caffy_cancel_begin",
+                "caffy_configure",
+                "attention_open",
+                "attention_snooze",
+                "attention_dismiss",
+                "prepfile_create",
+                "prepfile_image_chunk",
               ]);
-              const optionsValid = p.options === undefined ||
-                (!!p.options && typeof p.options === "object" && !Array.isArray(p.options) &&
+              const optionsValid =
+                p.options === undefined ||
+                (!!p.options &&
+                  typeof p.options === "object" &&
+                  !Array.isArray(p.options) &&
                   Object.entries(p.options).length <= 16 &&
                   Object.entries(p.options).every(([key, value]) => {
-                    const stringLimit = key === "request" && command === "prepfile_create" ? 30_000
-                    : key === "prompt" && command === "reboot" ? 8_000
-                    : key === "repeatPrompt" && command === "caffy_configure" ? 29_800
-                    : key === "chunk" && command === "prepfile_image_chunk" ? 12_000
-                    : key === "prompt" &&
-                      ["caffy_begin", "caffy_set", "caffy_schedule_spawn"].includes(command ?? "")
-                        ? 8_000 : 500;
-                    const taskRefValid = key === "taskRef" && command === "prepfile_create" &&
-                      !!value && typeof value === "object" && !Array.isArray(value) &&
+                    const stringLimit =
+                      key === "request" && command === "prepfile_create"
+                        ? 30_000
+                        : key === "prompt" && command === "reboot"
+                          ? 8_000
+                          : key === "repeatPrompt" && command === "caffy_configure"
+                            ? 29_800
+                            : key === "chunk" && command === "prepfile_image_chunk"
+                              ? 12_000
+                              : key === "prompt" &&
+                                  ["caffy_begin", "caffy_set", "caffy_schedule_spawn"].includes(
+                                    command ?? "",
+                                  )
+                                ? 8_000
+                                : 500;
+                    const taskRefValid =
+                      key === "taskRef" &&
+                      command === "prepfile_create" &&
+                      !!value &&
+                      typeof value === "object" &&
+                      !Array.isArray(value) &&
                       Object.keys(value).length === 2 &&
-                      typeof (value as {board?:unknown}).board === "string" &&
-                      (value as {board:string}).board.length <= 500 &&
-                      typeof (value as {id?:unknown}).id === "string" &&
-                      /^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test((value as {id:string}).id);
-                    return key.length <= 40 && (taskRefValid || value === null || typeof value === "boolean" ||
-                      (typeof value === "number" && Number.isSafeInteger(value)) ||
-                      (typeof value === "string" && value.length <= stringLimit));
+                      typeof (value as { board?: unknown }).board === "string" &&
+                      (value as { board: string }).board.length <= 500 &&
+                      typeof (value as { id?: unknown }).id === "string" &&
+                      /^[A-Za-z][A-Za-z0-9]*-[0-9]{4,}$/.test((value as { id: string }).id);
+                    return (
+                      key.length <= 40 &&
+                      (taskRefValid ||
+                        value === null ||
+                        typeof value === "boolean" ||
+                        (typeof value === "number" && Number.isSafeInteger(value)) ||
+                        (typeof value === "string" && value.length <= stringLimit))
+                    );
                   }));
-              if (p.session?.provider !== "t3" || !id || id.startsWith("thread:") ||
-                  !command || !allowed.has(command) || !optionsValid)
+              if (
+                p.session?.provider !== "t3" ||
+                !id ||
+                id.startsWith("thread:") ||
+                !command ||
+                !allowed.has(command) ||
+                !optionsValid
+              )
                 return error("InvalidInput", "Invalid T3 browser control request.");
-              const result = yield* Effect.promise(() => dispatchBrowserWork(
-                environmentId, id, null, "control", undefined,
-                { command, controlOptions: p.options ?? {} },
-              ));
+              const result = yield* Effect.promise(() =>
+                dispatchBrowserWork(environmentId, id, null, "control", undefined, {
+                  command,
+                  controlOptions: p.options ?? {},
+                }),
+              );
               if (!result)
-                return error("TimeoutUnknown", "Desktop control outcome unconfirmed; inspect before retrying.");
+                return error(
+                  "TimeoutUnknown",
+                  "Desktop control outcome unconfirmed; inspect before retrying.",
+                );
               if (!result.ok) return error(result.code, result.message);
               return reply(read ? result.data : { state: "Delivered", data: result.data });
             }
@@ -2691,7 +2908,8 @@ export const layerWsRpc = (
                 (thread): AgentProviderV1Session => {
                   // Terminal statuses (completed/interrupted/cancelled) are idle, not
                   // Unknown: remote Stop buttons key off Working vs Idle.
-                  const active = thread.activeRunId !== null ||
+                  const active =
+                    thread.activeRunId !== null ||
                     ["preparing", "queued", "starting", "running"].includes(thread.status);
                   const activity =
                     thread.pendingRuntimeRequest !== null || thread.status === "waiting"
@@ -2699,7 +2917,9 @@ export const layerWsRpc = (
                       : active
                         ? "Working"
                         : thread.status === "failed"
-                          ? (thread.lastErrorClass === "usage_limit" ? "UsageLimited" : "Errored")
+                          ? thread.lastErrorClass === "usage_limit"
+                            ? "UsageLimited"
+                            : "Errored"
                           : "Idle";
                   const runStartedAt = thread.activityRunStartedAt ?? thread.latestRunStartedAt;
                   const threadRef = (id: string) => ({
@@ -2722,15 +2942,19 @@ export const layerWsRpc = (
                       confidence: "Confirmed",
                       elsewhere: null,
                       observedAt,
-                      turnStartedAt: active && runStartedAt
-                        ? DateTime.formatIso(runStartedAt) : null,
+                      turnStartedAt:
+                        active && runStartedAt ? DateTime.formatIso(runStartedAt) : null,
                       activityAt: DateTime.formatIso(thread.updatedAt),
-                      activityText: activity === "WaitingOnUser"
-                        ? "Waiting for your approval or input"
-                        : active ? (thread.activityRunStatus ?? thread.status)
-                        : activity === "UsageLimited" ? "Usage limit reached"
-                        : activity === "Errored" ? (thread.lastError ?? "Failed").slice(0, 200)
-                        : null,
+                      activityText:
+                        activity === "WaitingOnUser"
+                          ? "Waiting for your approval or input"
+                          : active
+                            ? (thread.activityRunStatus ?? thread.status)
+                            : activity === "UsageLimited"
+                              ? "Usage limit reached"
+                              : activity === "Errored"
+                                ? (thread.lastError ?? "Failed").slice(0, 200)
+                                : null,
                     },
                     // The native command queue already exists. No CreateSession,
                     // browser send, or management capabilities are implied.
@@ -2738,13 +2962,17 @@ export const layerWsRpc = (
                     // order the rest like the desktop ("updated_at": latest user message).
                     visibility: {
                       hidden: false,
-                      settled: thread.settledOverride === "settled" && !active &&
+                      settled:
+                        thread.settledOverride === "settled" &&
+                        !active &&
                         activity !== "WaitingOnUser",
                       ...(thread.snoozedUntil && activity !== "WaitingOnUser"
-                        ? { snoozedUntil: DateTime.toEpochMillis(thread.snoozedUntil) } : {}),
+                        ? { snoozedUntil: DateTime.toEpochMillis(thread.snoozedUntil) }
+                        : {}),
                       pinned: thread.pinnedAt != null,
                       sortAt: DateTime.toEpochMillis(
-                        thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt),
+                        thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
+                      ),
                     },
                     capabilities: [
                       "ReadHistory",
@@ -3025,20 +3253,26 @@ export const layerWsRpc = (
               const { session, expectedEnvironmentId, expectedConversation } = decoded.success;
               if (expectedEnvironmentId !== environmentId)
                 return error("EnvironmentChanged", "Session load environment changed.");
-              if (session.provider !== "t3")
-                return error("InvalidInput", "Expected a T3 session.");
+              if (session.provider !== "t3") return error("InvalidInput", "Expected a T3 session.");
               const nativeId = rawNativeThreadId(session);
               if (nativeId !== null) {
-                const shell = yield* Effect.result(threadManagement.getThreadShell(ThreadId.make(nativeId)));
+                const shell = yield* Effect.result(
+                  threadManagement.getThreadShell(ThreadId.make(nativeId)),
+                );
                 return Result.isFailure(shell)
                   ? error("Unavailable", "Native session could not be located.")
                   : reply({ state: "Ready" });
               }
               if (session.id.startsWith("thread:"))
                 return error("InvalidInput", "Malformed native thread reference.");
-              const result = yield* Effect.promise(() => dispatchBrowserWork(
-                environmentId, session.id, expectedConversation ?? null, "load",
-              ));
+              const result = yield* Effect.promise(() =>
+                dispatchBrowserWork(
+                  environmentId,
+                  session.id,
+                  expectedConversation ?? null,
+                  "load",
+                ),
+              );
               if (result === null)
                 return error("Unavailable", "PC did not acknowledge the browser load request.");
               if (!result.ok) return error(result.code, result.message);
@@ -3136,8 +3370,7 @@ export const layerWsRpc = (
                       clientRequestId: (input as typeof AgentProviderV1Submit.Type).clientRequestId,
                       expectedConversation: expected ?? null,
                       delivery: (input as typeof AgentProviderV1Submit.Type).delivery,
-                      ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers !=
-                      null
+                      ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers != null
                         ? {
                             maxActiveWorkers: (input as typeof AgentProviderV1Submit.Type)
                               .maxActiveWorkers!,
@@ -3172,8 +3405,7 @@ export const layerWsRpc = (
                             | "Steer",
                           clientRequestId: (input as typeof AgentProviderV1Submit.Type)
                             .clientRequestId,
-                          ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers !=
-                          null
+                          ...((input as typeof AgentProviderV1Submit.Type).maxActiveWorkers != null
                             ? {
                                 maxActiveWorkers: (input as typeof AgentProviderV1Submit.Type)
                                   .maxActiveWorkers!,
