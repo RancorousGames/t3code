@@ -70,6 +70,7 @@ import {
   reconcileSidebarReboot,
 } from "../../chatGPTSidebarReboot";
 import { restoreChatGPTSessionUrl } from "../../chatGPTSessionUrlRestore";
+import { recordChatGPTSessionRefreshedAt } from "../../chatGPTSessionTimestamps";
 import { publicChatGPTSessionId, publicChatGPTParentId } from "../../chatGPTBootstrapIdentity";
 import { chatGPTWebviewAutomation } from "../../chatGPTWebviewAutomation";
 import { previewRuntimeTabId } from "../../browser/previewRuntimeTabId";
@@ -2994,13 +2995,31 @@ export function DesktopAppActivationCoordinator() {
                   if (useChatGPTWarmSessions.getState().keepLoadedIds.has(id) !== desired)
                     toggleKeepLoadedChatGPTSession(id);
                 } else if (command === "reload") {
-                  await runChatGPTSessionControl({
-                    environmentId,
-                    sessions,
-                    action: "reload",
-                    sessionId: id,
-                    force: false,
-                  });
+                  // Explicit phone Reload is the browser's Refresh button, not automated recovery.
+                  const ref = chatGPTBrowserThreadRef(environmentId, id);
+                  const preview = readThreadPreviewState(ref);
+                  const runtimeId =
+                    preview.activeTabId && preview.serverEpoch
+                      ? previewRuntimeTabId(ref, preview.serverEpoch, preview.activeTabId)
+                      : null;
+                  if (runtimeId && isResidentChatGPTBrowserGuest(environmentId, entry)) {
+                    const bridge = window.desktopBridge?.preview;
+                    if (!bridge) throw new Error("Desktop browser controls unavailable.");
+                    await bridge.refresh(runtimeId);
+                    recordChatGPTSessionRefreshedAt(environmentId, id);
+                  } else {
+                    // Mounting an unloaded browser already loads its saved conversation.
+                    requestChatGPTDeliveryMount(environmentId, id);
+                    for (const ms of [500, 2_000, 5_000, 10_000, 20_000, 40_000, 75_000])
+                      window.setTimeout(
+                        () => window.dispatchEvent(new Event("t3:agent-provider-refresh")),
+                        ms,
+                      );
+                    window.setTimeout(
+                      () => releaseChatGPTDeliveryMount(environmentId, id),
+                      180_000,
+                    );
+                  }
                 } else if (command === "stop") {
                   await stopPhoneGeneration();
                 } else if (command === "unload") {
