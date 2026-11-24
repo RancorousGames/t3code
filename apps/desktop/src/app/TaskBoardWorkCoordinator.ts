@@ -850,6 +850,10 @@ export class TaskBoardWorkCoordinator {
       created?: boolean;
     };
 
+    if (result.status === "requeued") {
+      await this.readQueues();
+      return;
+    }
     if (result.definitelyNotCreated === true) {
       await this.taskCommand(boardRoot, [
         "task",
@@ -1282,13 +1286,13 @@ export class TaskBoardWorkCoordinator {
           .map((item) => ({ boardRoot: board.boardRoot, item })),
       );
       const now = Date.now();
-      const nextStarting = starting.find(({ boardRoot, item }) => {
-        const requestId = item.reservationId!;
-        return (
-          now < this.startingSince(boardRoot, item) + STARTING_HOLD_MS &&
-          now - (this.startingLastAttempt.get(requestId) ?? 0) >= STARTING_RECHECK_MS
-        );
-      });
+      // Capacity holds expire after five minutes. Exact-request recovery must
+      // continue independently, including across restarts and long outages.
+      const lastAttempt = (row: (typeof starting)[number]) =>
+        this.startingLastAttempt.get(row.item.reservationId!) ?? 0;
+      const nextStarting = starting
+        .filter((row) => now - lastAttempt(row) >= STARTING_RECHECK_MS)
+        .sort((a, b) => lastAttempt(a) - lastAttempt(b))[0];
       if (nextStarting) {
         const { boardRoot, item } = nextStarting;
         this.startingLastAttempt.set(item.reservationId!, now);

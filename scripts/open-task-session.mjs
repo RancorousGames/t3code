@@ -354,6 +354,63 @@ export async function openTaskSession(
           message: "No launch was attempted for this reservation.",
         };
       }
+      // The journal predates spawn. After quarantine, recover an orphan only
+      // under this task lock and TaskBoard's exact reservation comparison.
+      if (
+        input.reconcileOnly &&
+        priorReservationAttempt &&
+        priorAttempt.kind === "chatgpt" &&
+        !identityInvalid &&
+        !taskInvalid &&
+        !task.claimed_by &&
+        queueIntent.queue_state === "starting" &&
+        Date.now() - Date.parse(queueIntent.queue_state_since) >= 30 * 60_000
+      ) {
+        const response = await exchange(
+          controlAddress(home),
+          {
+            version: 1,
+            requestId: Crypto.randomUUID(),
+            type: "chatgpt.sessions",
+            action: "list",
+            which: "all",
+            includeHidden: true,
+          },
+          20_000,
+        );
+        const inventory = response?.data;
+        if (
+          response?.ok &&
+          Array.isArray(inventory?.sessions) &&
+          inventory.total === inventory.sessions.length &&
+          !inventory.hasMore &&
+          !inventory.incomplete &&
+          !inventory.sessions.some((session) => {
+            const ref = session.binding?.taskRef;
+            return (
+              session.spawnRequestId === reservationId ||
+              (ref?.id === id &&
+                Path.resolve(ref.board).toLowerCase() === board.toLowerCase() &&
+                session.activity !== "idle")
+            );
+          })
+        ) {
+          await command(board, [
+            "task",
+            "queue",
+            "abandon",
+            id,
+            "--queue-request",
+            input.queueRequest,
+            "--request-id",
+            reservationId,
+            "--verified-no-live-session",
+            "--reason",
+            "No exact worker in complete T3 inventory after 30-minute startup quarantine.",
+          ]);
+          return { taskRef: { board, id }, status: "requeued", created: false };
+        }
+      }
       if (priorAttempt && !priorReservationAttempt) {
         // A TaskBoard queue item may be dispatched again after its previous T3
         // worker was durably marked Working and later released. The board's
