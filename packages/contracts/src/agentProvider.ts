@@ -79,7 +79,14 @@ export type AgentProviderV1Delivery = typeof AgentProviderV1Delivery.Type;
 
 export const AgentProviderV1State = Schema.Struct({
   reachability: Schema.Literals(["Reachable", "Unreachable", "Unknown"]),
-  activity: Schema.Literals(["Idle", "Working", "WaitingOnUser", "UsageLimited", "Errored", "Unknown"]),
+  activity: Schema.Literals([
+    "Idle",
+    "Working",
+    "WaitingOnUser",
+    "UsageLimited",
+    "Errored",
+    "Unknown",
+  ]),
   confidence: Schema.Literals(["Confirmed", "Inferred", "Unknown"]),
   elsewhere: Schema.NullOr(Schema.Boolean),
   observedAt: Schema.String,
@@ -184,7 +191,17 @@ export const AgentProviderV1DesktopWork = Schema.Struct({
   environmentId: OpaqueId,
   browserSessionId: Schema.optional(OpaqueId),
   expectedConversationId: Schema.optional(OpaqueId),
-  action: Schema.Literals(["history", "submit", "create", "visibility", "load", "control"]),
+  action: Schema.Literals([
+    "history",
+    "submit",
+    "create",
+    "visibility",
+    "load",
+    "control",
+    "native_caffy",
+  ]),
+  /** Raw native thread id for "native_caffy" work. */
+  nativeThreadId: Schema.optional(Schema.String),
   command: Schema.optional(Schema.String),
   options: Schema.optional(Schema.Unknown),
   visibility: Schema.optional(

@@ -22,7 +22,9 @@ export type BrowserWork = {
   environmentId: string;
   browserSessionId?: string;
   expectedConversationId?: string;
-  action: "history" | "submit" | "create" | "visibility" | "load" | "control";
+  action: "history" | "submit" | "create" | "visibility" | "load" | "control" | "native_caffy";
+  /** Raw native T3 thread id, for action "native_caffy". */
+  nativeThreadId?: string;
   command?: string;
   options?: unknown;
   visibility?: { hidden?: boolean; snoozedUntil?: number | null };
@@ -334,6 +336,57 @@ export function dispatchBrowserCreate(
     jobs.set(work.jobId, { owner, work, claimed: false, resolve });
     Effect.runFork(
       Effect.sleep(105_000).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (!jobs.has(work.jobId)) return;
+            jobs.delete(work.jobId);
+            resolve(null);
+          }),
+        ),
+      ),
+    );
+    const waiter = waiters.get(owner);
+    if (waiter) {
+      waiters.delete(owner);
+      jobs.get(work.jobId)!.claimed = true;
+      waiter.resolve(work);
+    }
+  });
+}
+
+/**
+ * Native T3 thread Caffy (status / caffy_* commands) from a remote client. Caffy is
+ * owned by the Electron desktop, so this goes to the single live desktop publisher.
+ */
+export function dispatchNativeThreadCaffy(
+  environmentId: string,
+  nativeThreadId: string,
+  command: string,
+  options: Record<string, unknown>,
+): Promise<BrowserWorkReply | null> {
+  const now = clockNow();
+  const owners = [...catalogs.entries()].filter(
+    ([, catalog]) => catalog.environmentId === environmentId && now - catalog.updatedAt <= LEASE_MS,
+  );
+  if (owners.length !== 1)
+    return Promise.resolve({
+      ok: false,
+      code: "Unavailable",
+      message: "Exactly one connected T3 desktop is required for Caffy.",
+    });
+  const owner = owners[0]![0];
+  const work: BrowserWork = {
+    jobId: newId(),
+    environmentId,
+    action: "native_caffy",
+    nativeThreadId,
+    command,
+    options,
+  };
+  return new Promise((resolve) => {
+    jobs.set(work.jobId, { owner, work, claimed: false, resolve });
+    Effect.runFork(
+      Effect.sleep(command === "status" ? READ_TIMEOUT_MS : 48_000).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (!jobs.has(work.jobId)) return;

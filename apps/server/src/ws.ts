@@ -1,4 +1,8 @@
 import {
+  formatComposerContextReference,
+  threadContextRecord,
+} from "@t3tools/shared/composerContextReferences";
+import {
   AgentProviderV1CreateRequest,
   AgentProviderV1CreateGet,
   AgentProviderV1QueueRequest,
@@ -76,6 +80,7 @@ import {
   CommandId,
   authScopeResponse,
   AuthAccessStreamError,
+  AuthAccessWriteScope,
   type AuthAccessStreamEvent,
   AuthOrchestrationOperateScope,
   type AuthEnvironmentScope,
@@ -2690,28 +2695,62 @@ export const layerWsRpc = (
               // Native threads (thread:<id>): sidebar placement runs through the
               // orchestration commands the desktop sidebar uses; Caffy lives in the
               // Electron desktop, so those commands are forwarded to its publisher.
-              const nativeRaw = id && p.session?.provider === "t3" ? rawNativeThreadId({ provider: "t3", id }) : null;
+              const nativeRaw =
+                id && p.session?.provider === "t3"
+                  ? rawNativeThreadId({ provider: "t3", id })
+                  : null;
               if (nativeRaw !== null) {
-                const opts = (p.options && typeof p.options === "object" && !Array.isArray(p.options)
-                  ? p.options : {}) as Record<string, unknown>;
+                const opts = (
+                  p.options && typeof p.options === "object" && !Array.isArray(p.options)
+                    ? p.options
+                    : {}
+                ) as Record<string, unknown>;
                 const threadId = ThreadId.make(nativeRaw);
                 const shell = yield* Effect.result(threadManagement.getThreadShell(threadId));
-                if (Result.isFailure(shell) || shell.success === null ||
-                    shell.success.deletedAt !== null || shell.success.archivedAt !== null)
+                if (
+                  Result.isFailure(shell) ||
+                  shell.success === null ||
+                  shell.success.deletedAt !== null ||
+                  shell.success.archivedAt !== null
+                )
                   return error("NotFound", "Native thread no longer active.");
                 const thread = shell.success;
                 const nativeCaffy = (caffyCommand: string, caffyOptions: Record<string, unknown>) =>
-                  Effect.promise(() => dispatchNativeThreadCaffy(environmentId, nativeRaw, caffyCommand, caffyOptions));
+                  Effect.promise(() =>
+                    dispatchNativeThreadCaffy(environmentId, nativeRaw, caffyCommand, caffyOptions),
+                  );
                 if (command === "status") {
                   // Caffy/snooze presets are best-effort: a missing desktop must not hide placement state.
+                  const project = yield* projectService.getShell(thread.projectId).pipe(
+                    Effect.map(Option.getOrUndefined),
+                    Effect.orElseSucceed(() => undefined),
+                  );
+                  const canPromote =
+                    !!thread.worktreePath &&
+                    (yield* managedFolders.isScratchProject(thread.projectId));
                   const desktop = yield* nativeCaffy("status", {});
-                  const desktopData = desktop?.ok ? desktop.data as Record<string, unknown> : null;
+                  const desktopData = desktop?.ok
+                    ? (desktop.data as Record<string, unknown>)
+                    : null;
                   return reply({
                     kind: "t3/thread",
                     title: thread.title,
+                    branch: thread.branch,
+                    projectId: thread.projectId,
+                    workspace: thread.worktreePath ?? project?.workspaceRoot ?? null,
+                    projectTitle: project?.title ?? null,
+                    projectWorkspace: project?.workspaceRoot ?? null,
+                    canPromote,
+                    canShareGuest: currentSession.scopes.includes(AuthAccessWriteScope),
+                    threadReference: formatComposerContextReference(
+                      threadContextRecord({ environmentId, threadId }, thread.title),
+                    ),
+                    regeneratingTitle: thread.titleRegeneration != null,
                     settled: thread.settledOverride === "settled",
                     pinned: thread.pinnedAt != null,
-                    snoozedUntil: thread.snoozedUntil ? DateTime.toEpochMillis(thread.snoozedUntil) : null,
+                    snoozedUntil: thread.snoozedUntil
+                      ? DateTime.toEpochMillis(thread.snoozedUntil)
+                      : null,
                     autoSettleEnabled: thread.autoSettleDisabledAt == null,
                     caffy: desktopData?.caffy ?? null,
                     caffyAvailable: desktopData !== null,
@@ -2721,35 +2760,148 @@ export const layerWsRpc = (
                 if (command?.startsWith("caffy_")) {
                   const result = yield* nativeCaffy(command, opts);
                   if (!result)
-                    return error("TimeoutUnknown", "Desktop Caffy outcome unconfirmed; inspect before retrying.");
+                    return error(
+                      "TimeoutUnknown",
+                      "Desktop Caffy outcome unconfirmed; inspect before retrying.",
+                    );
                   if (!result.ok) return error(result.code, result.message);
                   return reply({ state: "Delivered", data: result.data });
                 }
-                const commandId = CommandId.make(`provider-v1-native-control:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`);
+                if (command === "share_guest") {
+                  if (!currentSession.scopes.includes(AuthAccessWriteScope))
+                    return error("Unsupported", "This connection cannot create guest links.");
+                  const shared = yield* Effect.result(guestShares.create({ threadId }));
+                  if (Result.isFailure(shared))
+                    return error(
+                      "Conflict",
+                      "Could not create guest link. Guest sharing and T3 Connect must be enabled.",
+                    );
+                  return reply({ state: "Delivered", data: { url: shared.success.url } });
+                }
+                if (command === "new_on_branch") {
+                  const creationId = typeof opts.requestId === "string" ? opts.requestId : "";
+                  if (
+                    !thread.branch ||
+                    !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+                      creationId,
+                    )
+                  )
+                    return error("InvalidInput", "A branch and creation request ID are required.");
+                  const newThreadId = ThreadId.make(creationId);
+                  const createCommandId = CommandId.make(`provider-v1-native-branch:${creationId}`);
+                  if (!(yield* threadManagement.hasReceipt(createCommandId))) {
+                    const created = yield* Effect.result(
+                      threadManagement.dispatch({
+                        type: "thread.create",
+                        createdBy: "user",
+                        creationSource: "web",
+                        commandId: createCommandId,
+                        threadId: newThreadId,
+                        projectId: thread.projectId,
+                        title: "New thread",
+                        modelSelection: thread.modelSelection,
+                        runtimeMode: thread.runtimeMode,
+                        interactionMode: thread.interactionMode,
+                        branch: thread.branch,
+                        worktreePath: thread.worktreePath,
+                      }),
+                    );
+                    if (Result.isFailure(created))
+                      return error("Conflict", "Could not create the branch thread.");
+                  }
+                  return reply({
+                    state: "Delivered",
+                    data: { sessionId: `thread:${encodeURIComponent(newThreadId)}` },
+                  });
+                }
+                if (command === "rename_project") {
+                  const title = typeof opts.value === "string" ? opts.value.trim() : "";
+                  if (!title || title.length > 180)
+                    return error("InvalidInput", "Invalid project title.");
+                  const updated = yield* Effect.result(
+                    projectService.update({
+                      commandId: yield* serverCommandId("native-project-rename"),
+                      projectId: thread.projectId,
+                      title,
+                    }),
+                  );
+                  if (Result.isFailure(updated))
+                    return error("Conflict", "Could not update project.");
+                  return reply({ state: "Delivered", data: { applied: command } });
+                }
+                if (command === "turn_into_project") {
+                  const promoted = yield* Effect.result(
+                    scratchThreadPromotion.promote({ threadId }),
+                  );
+                  if (Result.isFailure(promoted))
+                    return error("Conflict", "Native thread could not be promoted to a project.");
+                  return reply({ state: "Delivered", data: { applied: command } });
+                }
+                const commandId = CommandId.make(
+                  `provider-v1-native-control:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
+                );
                 const base = { commandId, threadId };
                 const snoozeMs = typeof opts.until === "number" ? opts.until : null;
                 const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
                 const title = typeof opts.value === "string" ? opts.value.trim() : "";
                 const nativeCommand =
-                  command === "settle" ? { type: "thread.settle" as const, ...base }
-                  : command === "unsettle" ? { type: "thread.unsettle" as const, ...base, reason: "user" as const }
-                  : command === "unsnooze" ? { type: "thread.unsnooze" as const, ...base, reason: "user" as const }
-                  : command === "pin" ? { type: "thread.pin" as const, ...base }
-                  : command === "unpin" ? { type: "thread.unpin" as const, ...base }
-                  : command === "auto_settle" && typeof opts.value === "boolean"
-                    ? { type: "thread.auto-settle.set" as const, ...base, enabled: opts.value }
-                  : command === "rename" && title.length > 0 && title.length <= 180
-                    ? { type: "thread.metadata.update" as const, ...base, title }
-                  : command === "snooze" && snoozeMs !== null && Number.isSafeInteger(snoozeMs) &&
-                      snoozeMs > nowMs && snoozeMs < nowMs + 366 * 86_400_000
-                    ? { type: "thread.snooze" as const, ...base,
-                        snoozedUntil: DateTime.formatIso(DateTime.makeUnsafe(snoozeMs)) }
-                  : null;
+                  command === "settle"
+                    ? { type: "thread.settle" as const, ...base }
+                    : command === "unsettle"
+                      ? { type: "thread.unsettle" as const, ...base, reason: "user" as const }
+                      : command === "unsnooze"
+                        ? { type: "thread.unsnooze" as const, ...base, reason: "user" as const }
+                        : command === "pin"
+                          ? { type: "thread.pin" as const, ...base }
+                          : command === "unpin"
+                            ? { type: "thread.unpin" as const, ...base }
+                            : command === "auto_settle" && typeof opts.value === "boolean"
+                              ? {
+                                  type: "thread.auto-settle.set" as const,
+                                  ...base,
+                                  enabled: opts.value,
+                                }
+                              : command === "regenerate_title"
+                                ? {
+                                    type: "thread.metadata.update" as const,
+                                    ...base,
+                                    regenerateTitle: true,
+                                  }
+                                : command === "mark_unread"
+                                  ? { type: "thread.mark-unread" as const, ...base }
+                                  : command === "archive"
+                                    ? { type: "thread.archive" as const, ...base }
+                                    : command === "delete" && opts.confirmed === true
+                                      ? { type: "thread.delete" as const, ...base }
+                                      : command === "rename" &&
+                                          title.length > 0 &&
+                                          title.length <= 180
+                                        ? {
+                                            type: "thread.metadata.update" as const,
+                                            ...base,
+                                            title,
+                                          }
+                                        : command === "snooze" &&
+                                            snoozeMs !== null &&
+                                            Number.isSafeInteger(snoozeMs) &&
+                                            snoozeMs > nowMs &&
+                                            snoozeMs < nowMs + 366 * 86_400_000
+                                          ? {
+                                              type: "thread.snooze" as const,
+                                              ...base,
+                                              snoozedUntil: DateTime.formatIso(
+                                                DateTime.makeUnsafe(snoozeMs),
+                                              ),
+                                            }
+                                          : null;
                 if (nativeCommand === null)
                   return error("InvalidInput", "Invalid native thread control request.");
-                const dispatched = yield* Effect.result(threadManagement.dispatch(nativeCommand as never));
+                const dispatched = yield* Effect.result(
+                  threadManagement.dispatch(nativeCommand as never),
+                );
                 if (Result.isFailure(dispatched))
                   return error("Conflict", `Native thread refused ${command}.`);
+                if (command === "delete") yield* nativeCaffy("caffy_retire", {});
                 return reply({ state: "Delivered", data: { applied: command } });
               }
               const allowed = new Set([
@@ -2904,6 +3056,12 @@ export const layerWsRpc = (
                 return error("Unavailable", "Native thread catalog cannot be read.");
               }
               const observedAt = DateTime.formatIso(yield* DateTime.now);
+              const projectRead = yield* Effect.result(projectStore.listShells());
+              const projectRoots = new Map(
+                Result.isSuccess(projectRead)
+                  ? projectRead.success.map((p) => [p.id, p.workspaceRoot] as const)
+                  : [],
+              );
               const items: AgentProviderV1Session[] = native.success.threads.map(
                 (thread): AgentProviderV1Session => {
                   // Terminal statuses (completed/interrupted/cancelled) are idle, not
@@ -2930,7 +3088,7 @@ export const layerWsRpc = (
                     ref: threadRef(thread.id),
                     kind: "t3/thread",
                     source: { environmentId, rawThreadId: thread.id, projectId: thread.projectId },
-                    workspace: thread.worktreePath,
+                    workspace: projectRoots.get(thread.projectId) ?? thread.worktreePath,
                     title: thread.title,
                     createdAt: DateTime.toEpochMillis(thread.createdAt),
                     ...(thread.lineage.parentThreadId === null
@@ -2980,6 +3138,7 @@ export const layerWsRpc = (
                       "IdempotentSubmit",
                       "NativeQueue",
                       "Interrupt",
+                      "RemoteControl",
                     ],
                     deliveryModes: ["Queue"],
                     // updatedAt may reflect titles or other metadata, not

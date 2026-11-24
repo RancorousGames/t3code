@@ -128,7 +128,10 @@ import {
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { chatGPTCloseStatus } from "../../chatGPTCloseStatus";
 import { useOmniworkPreferences } from "../../omniwork/chatGPTUnloadPolicy";
-import { readVerifiedT3CaffyOverview } from "../../hooks/useT3CaffyOverview";
+import {
+  readVerifiedT3CaffyOverview,
+  T3_CAFFY_UPDATED_EVENT,
+} from "../../hooks/useT3CaffyOverview";
 import {
   readChatGPTIdleTransition,
   subscribeChatGPTIdleTransitions,
@@ -1527,11 +1530,13 @@ export function DesktopAppActivationCoordinator() {
                   ),
                 );
                 if (observed && saved === observed && observed !== exactConversationId) {
+                  // A reboot replaced the conversation in this slot. The desktop
+                  // outbox parses this guard-mismatch text to retarget the message.
                   console.info(
-                    `[t3-delivery] ${request.requestId} original conversation replaced; dropping delivery`,
+                    `[t3-delivery] ${request.requestId} original conversation replaced`,
                   );
                   throw new Error(
-                    "T3 browser session is missing; original recipient retained, no message sent.",
+                    `ChatGPT conversation guard mismatch: expected ${exactConversationId}, observed ${observed}; no message sent.`,
                   );
                 }
                 await new Promise<void>((resolve) => setTimeout(resolve, 500));
@@ -2506,7 +2511,9 @@ export function DesktopAppActivationCoordinator() {
                         : activity === "idle"
                           ? "Idle"
                           : activity === "invalid"
-                            ? (detail.problem === "temporary-limit" ? "UsageLimited" : "Errored")
+                            ? detail.problem === "temporary-limit"
+                              ? "UsageLimited"
+                              : "Errored"
                             : activity === "interrupted" || activity === "delivery-timeout"
                               ? "Errored"
                               : "Unknown",
@@ -2658,7 +2665,7 @@ export function DesktopAppActivationCoordinator() {
                 const command = work.command;
                 const stopPhoneGeneration = async () => {
                   const expression = `(() => {
-                    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
+                    const stop = document.querySelector('button[data-testid="stop-button"],button[data-testid="composer-stop-button"],button[aria-label="Stop"],button[aria-label="Stop generating"],button[aria-label="Stop streaming"]');
                     if (!(stop instanceof HTMLButtonElement) || stop.disabled || !stop.getClientRects().length) return false;
                     stop.click(); return true;
                   })()`;
@@ -3245,94 +3252,184 @@ export function DesktopAppActivationCoordinator() {
                 };
               }
             };
+            // Phone Caffy for a native T3 thread: same scheduler and owner id
+            // (t3:<env>:<thread>) as the sidebar's native thread context menu.
+            const executeNativeCaffy = async () => {
+              try {
+                const threadId = work.nativeThreadId;
+                const caffy = window.desktopBridge?.caffyControl as
+                  | ((input: { action: string; [key: string]: unknown }) => Promise<unknown>)
+                  | undefined;
+                if (!threadId || !work.command) throw new Error("Native thread unavailable.");
+                if (!caffy) throw new Error("T3 Caffy controls unavailable.");
+                const owner = `t3:${environmentId}:${threadId}`;
+                const options = (work.options ?? {}) as Record<string, unknown>;
+                const bool = (name: string) =>
+                  typeof options[name] === "boolean" ? (options[name] as boolean) : null;
+                const number = (name: string) =>
+                  typeof options[name] === "number" && Number.isFinite(options[name])
+                    ? (options[name] as number)
+                    : null;
+                const command = work.command;
+                if (command === "status") {
+                  return {
+                    ok: true as const,
+                    data: {
+                      caffy: await caffy({ action: "status", sessionId: owner }).catch(() => null),
+                      attentionSnoozePresets: resolveSnoozePresets(
+                        new Date(),
+                        "24-hour",
+                        environmentId,
+                      ),
+                    },
+                  };
+                }
+                if (command === "caffy_set") {
+                  const mode = options.mode;
+                  if (mode !== "idle" && mode !== "periodic" && mode !== "startup")
+                    throw new Error("Unknown Caffy mode.");
+                  await caffy({
+                    action: "set",
+                    targetKind: "t3",
+                    environmentId,
+                    sessionId: threadId,
+                    mode,
+                    ...(number("durationMinutes") === null
+                      ? {}
+                      : { durationMinutes: number("durationMinutes")! }),
+                    ...(number("intervalMinutes") === null
+                      ? {}
+                      : { intervalMinutes: number("intervalMinutes")! }),
+                    onceOnly: bool("onceOnly") ?? false,
+                    respectSlots: bool("respectSlots") ?? false,
+                    startup: bool("startup") ?? mode === "startup",
+                    beginAt: number("beginAt"),
+                    repeatPrompt:
+                      typeof options.repeatPrompt === "string"
+                        ? options.repeatPrompt.slice(0, 29_800)
+                        : "",
+                    keepAwake: mode === "idle" && !(bool("onceOnly") ?? false),
+                    wakeNow: bool("wakeNow") ?? false,
+                  });
+                } else if (command === "caffy_retire") {
+                  await caffy({ action: "retire", sessionId: owner, lifecycleReason: "closed" });
+                } else if (command === "caffy_stop") {
+                  await caffy({ action: "stop", sessionId: owner, stopInitiator: "user" });
+                } else if (command === "caffy_pause" || command === "caffy_resume") {
+                  await caffy({
+                    action: command === "caffy_pause" ? "pause" : "resume",
+                    sessionId: owner,
+                  });
+                } else if (command === "caffy_startup") {
+                  const enabled = bool("value");
+                  if (enabled === null) throw new Error("Startup setting required.");
+                  await caffy({ action: "startup", sessionId: owner, startup: enabled });
+                } else if (command === "caffy_wake") {
+                  await caffy({ action: "wake", sessionId: owner });
+                } else throw new Error("Unsupported native thread Caffy action.");
+                window.dispatchEvent(new Event(T3_CAFFY_UPDATED_EVENT));
+                return { ok: true as const, data: { applied: command } };
+              } catch (cause) {
+                return {
+                  ok: false as const,
+                  code: "Unavailable" as const,
+                  message: cause instanceof Error ? cause.message : "T3 Caffy control failed.",
+                };
+              }
+            };
             const result =
-              work.action === "control"
-                ? await executePhoneControl()
-                : work.action === "create"
-                  ? await executeProviderBrowserCreate(environmentId, work, createSession)
-                  : work.action === "load"
-                    ? await (async () => {
-                        const id = work.browserSessionId;
-                        const entry = readChatGPTBrowserSessions(environmentId).find(
-                          (candidate) => candidate.id === id,
-                        );
-                        if (!id || !entry)
-                          return {
-                            ok: false as const,
-                            code: "Unavailable" as const,
-                            message: "The selected browser session no longer exists on this PC.",
-                          };
-                        // Android can request an unloaded session by its stable T3
-                        // identity. Mount the exact guest in the background; do not
-                        // switch tabs, reload a resident page, or send any message.
-                        requestChatGPTDeliveryMount(environmentId, id);
-                        try {
-                          for (const ms of [500, 2_000, 5_000, 10_000, 20_000, 40_000, 75_000])
-                            window.setTimeout(
-                              () => window.dispatchEvent(new Event("t3:agent-provider-refresh")),
-                              ms,
-                            );
-                          window.setTimeout(
-                            () => releaseChatGPTDeliveryMount(environmentId, id),
-                            180_000,
-                          );
-                          return { ok: true as const, data: { state: "Loading" } };
-                        } catch (cause) {
-                          releaseChatGPTDeliveryMount(environmentId, id);
-                          return {
-                            ok: false as const,
-                            code: "Unavailable" as const,
-                            message:
-                              cause instanceof Error
-                                ? cause.message
-                                : "PC could not mount browser session.",
-                          };
-                        }
-                      })()
-                    : work.action === "visibility"
+              work.action === "native_caffy"
+                ? await executeNativeCaffy()
+                : work.action === "control"
+                  ? await executePhoneControl()
+                  : work.action === "create"
+                    ? await executeProviderBrowserCreate(environmentId, work, createSession)
+                    : work.action === "load"
                       ? await (async () => {
                           const id = work.browserSessionId;
                           const entry = readChatGPTBrowserSessions(environmentId).find(
                             (candidate) => candidate.id === id,
                           );
-                          if (!id || !work.visibility || !entry) {
+                          if (!id || !entry)
                             return {
                               ok: false as const,
-                              code: "InvalidInput" as const,
-                              message: "Session or visibility patch unavailable",
+                              code: "Unavailable" as const,
+                              message: "The selected browser session no longer exists on this PC.",
                             };
-                          }
-                          if (work.visibility.hidden !== undefined)
-                            setSessionHidden(id, work.visibility.hidden);
-                          if (work.visibility.snoozedUntil !== undefined)
-                            setSessionSnooze([id], work.visibility.snoozedUntil);
-                          // The phone's explicit Unhide means its user opened this guest.
-                          // Wake only that session, without switching the desktop tab.
-                          if (work.visibility.hidden === false) {
-                            requestChatGPTDeliveryMount(environmentId, id);
-                            try {
-                            } catch (cause) {
-                              releaseChatGPTDeliveryMount(environmentId, id);
-                              return {
-                                ok: false as const,
-                                code: "Unavailable" as const,
-                                message:
-                                  cause instanceof Error ? cause.message : "Failed to wake browser",
-                              };
-                            }
-                            for (const delay of [500, 2_000, 5_000, 10_000])
+                          // Android can request an unloaded session by its stable T3
+                          // identity. Mount the exact guest in the background; do not
+                          // switch tabs, reload a resident page, or send any message.
+                          requestChatGPTDeliveryMount(environmentId, id);
+                          try {
+                            for (const ms of [500, 2_000, 5_000, 10_000, 20_000, 40_000, 75_000])
                               window.setTimeout(
                                 () => window.dispatchEvent(new Event("t3:agent-provider-refresh")),
-                                delay,
+                                ms,
                               );
                             window.setTimeout(
                               () => releaseChatGPTDeliveryMount(environmentId, id),
-                              90_000,
+                              180_000,
                             );
+                            return { ok: true as const, data: { state: "Loading" } };
+                          } catch (cause) {
+                            releaseChatGPTDeliveryMount(environmentId, id);
+                            return {
+                              ok: false as const,
+                              code: "Unavailable" as const,
+                              message:
+                                cause instanceof Error
+                                  ? cause.message
+                                  : "PC could not mount browser session.",
+                            };
                           }
-                          return { ok: true as const, data: { applied: true } };
                         })()
-                      : await executeAgentProviderBrowserWork(environmentId, work);
+                      : work.action === "visibility"
+                        ? await (async () => {
+                            const id = work.browserSessionId;
+                            const entry = readChatGPTBrowserSessions(environmentId).find(
+                              (candidate) => candidate.id === id,
+                            );
+                            if (!id || !work.visibility || !entry) {
+                              return {
+                                ok: false as const,
+                                code: "InvalidInput" as const,
+                                message: "Session or visibility patch unavailable",
+                              };
+                            }
+                            if (work.visibility.hidden !== undefined)
+                              setSessionHidden(id, work.visibility.hidden);
+                            if (work.visibility.snoozedUntil !== undefined)
+                              setSessionSnooze([id], work.visibility.snoozedUntil);
+                            // The phone's explicit Unhide means its user opened this guest.
+                            // Wake only that session, without switching the desktop tab.
+                            if (work.visibility.hidden === false) {
+                              requestChatGPTDeliveryMount(environmentId, id);
+                              try {
+                              } catch (cause) {
+                                releaseChatGPTDeliveryMount(environmentId, id);
+                                return {
+                                  ok: false as const,
+                                  code: "Unavailable" as const,
+                                  message:
+                                    cause instanceof Error
+                                      ? cause.message
+                                      : "Failed to wake browser",
+                                };
+                              }
+                              for (const delay of [500, 2_000, 5_000, 10_000])
+                                window.setTimeout(
+                                  () =>
+                                    window.dispatchEvent(new Event("t3:agent-provider-refresh")),
+                                  delay,
+                                );
+                              window.setTimeout(
+                                () => releaseChatGPTDeliveryMount(environmentId, id),
+                                90_000,
+                              );
+                            }
+                            return { ok: true as const, data: { applied: true } };
+                          })()
+                        : await executeAgentProviderBrowserWork(environmentId, work);
             // Never re-execute a work item following failed acknowledgement.
             await publishAgentProvider({
               environmentId,
