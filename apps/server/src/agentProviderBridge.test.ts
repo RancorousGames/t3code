@@ -5,18 +5,61 @@ import {
   dispatchBrowserWork,
   finishDesktopWork,
   publishDesktopCatalog,
+  readNativeCaffyBadges,
   permittedDesktopBrowserCapability,
   takeDesktopWork,
 } from "./agentProviderBridge.ts";
 
 describe("authenticated desktop catalog capability guard", () => {
   it("accepts the browser publisher's RemoteControl claim without permitting native powers", () => {
-    expect(["ReadHistory", "Submit", "RemoteControl"].every((capability) =>
-      permittedDesktopBrowserCapability(capability as Parameters<typeof permittedDesktopBrowserCapability>[0]),
-    )).toBe(true);
+    expect(
+      ["ReadHistory", "Submit", "RemoteControl"].every((capability) =>
+        permittedDesktopBrowserCapability(
+          capability as Parameters<typeof permittedDesktopBrowserCapability>[0],
+        ),
+      ),
+    ).toBe(true);
     expect(permittedDesktopBrowserCapability("CreateSession")).toBe(false);
     expect(permittedDesktopBrowserCapability("Desktop.NativeInput")).toBe(false);
     expect(permittedDesktopBrowserCapability("NativeQueue")).toBe(false);
+  });
+});
+
+describe("native thread Caffy catalog", () => {
+  it("exposes only the live desktop's badges for its environment", () => {
+    const owner = "native-caffy-desktop";
+    const environmentId = "native-caffy-environment";
+    publishDesktopCatalog(
+      owner,
+      environmentId,
+      [],
+      [
+        {
+          sessionId: `t3:${environmentId}:grapple-master`,
+          mode: "periodic",
+          paused: false,
+          onceOnly: false,
+          intervalMinutes: 1440,
+        },
+        {
+          sessionId: "t3:other-environment:wrong-thread",
+          mode: "idle",
+          paused: false,
+          onceOnly: false,
+          intervalMinutes: 20,
+        },
+      ],
+    );
+    try {
+      expect(readNativeCaffyBadges(environmentId).get("grapple-master")).toMatchObject({
+        mode: "periodic",
+        intervalMinutes: 1440,
+      });
+      expect(readNativeCaffyBadges(environmentId).has("wrong-thread")).toBe(false);
+    } finally {
+      disconnectDesktopCatalog(owner);
+    }
+    expect(readNativeCaffyBadges(environmentId).size).toBe(0);
   });
 });
 
@@ -31,8 +74,11 @@ describe("explicit phone browser load", () => {
       source: { environmentId, browserSessionId: browserId, conversationId: null },
       title: "Cold browser",
       state: {
-        reachability: "Unknown", activity: "Unknown", confidence: "Unknown",
-        elsewhere: null, observedAt: new Date().toISOString(),
+        reachability: "Unknown",
+        activity: "Unknown",
+        confidence: "Unknown",
+        elsewhere: null,
+        observedAt: new Date().toISOString(),
       },
       capabilities: ["Submit"],
       deliveryModes: ["WhenIdle", "WaitForSlot"],
@@ -42,15 +88,23 @@ describe("explicit phone browser load", () => {
       const loading = dispatchBrowserWork(environmentId, browserId, null, "load");
       const work = await takeDesktopWork(owner, environmentId);
       expect(work).toMatchObject({
-        action: "load", browserSessionId: browserId, environmentId,
+        action: "load",
+        browserSessionId: browserId,
+        environmentId,
       });
       expect(work).not.toHaveProperty("text");
-      expect(finishDesktopWork(owner, environmentId, work!.jobId, {
-        ok: true, data: { state: "Loading" },
-      })).toBe(true);
+      expect(
+        finishDesktopWork(owner, environmentId, work!.jobId, {
+          ok: true,
+          data: { state: "Loading" },
+        }),
+      ).toBe(true);
       expect(await loading).toEqual({ ok: true, data: { state: "Loading" } });
       const wrongId = await dispatchBrowserWork(
-        environmentId, "2cd492ec-8b9b-4a02-a059-511247c60ff7", null, "load",
+        environmentId,
+        "2cd492ec-8b9b-4a02-a059-511247c60ff7",
+        null,
+        "load",
       );
       expect(wrongId).toMatchObject({ ok: false, code: "Unavailable" });
       const unreadable = await dispatchBrowserWork(environmentId, browserId, null, "history");

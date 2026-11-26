@@ -177,11 +177,24 @@ export const AgentProviderV1HistoryPage = Schema.Struct({
 });
 export type AgentProviderV1HistoryPage = typeof AgentProviderV1HistoryPage.Type;
 
+// Native Caffy is desktop-owned too; publish its compact status once per
+// catalog instead of making a separate desktop RPC for each Android row.
+export const AgentProviderV1NativeCaffyBadge = Schema.Struct({
+  sessionId: Schema.String,
+  mode: Schema.Literals(["idle", "periodic", "startup"]),
+  paused: Schema.Boolean,
+  onceOnly: Schema.Boolean,
+  intervalMinutes: Schema.Number,
+  beginAt: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+export type AgentProviderV1NativeCaffyBadge = typeof AgentProviderV1NativeCaffyBadge.Type;
+
 // Desktop publishes a bounded, non-DOM local-session catalog over its own
 // authenticated environment connection. Publication alone authorizes no send.
 export const AgentProviderV1DesktopSnapshot = Schema.Struct({
   environmentId: OpaqueId,
   sessions: Schema.Array(AgentProviderV1Session),
+  nativeCaffy: Schema.optional(Schema.Array(AgentProviderV1NativeCaffyBadge)),
 });
 
 // Authenticated desktop publisher pulls one single-shot work item at a time.

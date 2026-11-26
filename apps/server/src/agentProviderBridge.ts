@@ -1,4 +1,8 @@
-import type { AgentProviderV1Capability, AgentProviderV1Session } from "@t3tools/contracts";
+import type {
+  AgentProviderV1Capability,
+  AgentProviderV1NativeCaffyBadge,
+  AgentProviderV1Session,
+} from "@t3tools/contracts";
 
 /** Browser catalogs may claim only capabilities implemented by the desktop bridge. */
 export function permittedDesktopBrowserCapability(capability: AgentProviderV1Capability): boolean {
@@ -16,6 +20,7 @@ type DesktopCatalog = {
   environmentId: string;
   updatedAt: number;
   sessions: ReadonlyArray<AgentProviderV1Session>;
+  nativeCaffy: ReadonlyArray<AgentProviderV1NativeCaffyBadge>;
 };
 export type BrowserWork = {
   jobId: string;
@@ -84,8 +89,9 @@ export function publishDesktopCatalog(
   connectionId: string,
   environmentId: string,
   sessions: ReadonlyArray<AgentProviderV1Session>,
+  nativeCaffy: ReadonlyArray<AgentProviderV1NativeCaffyBadge> = [],
 ): void {
-  catalogs.set(connectionId, { environmentId, updatedAt: clockNow(), sessions });
+  catalogs.set(connectionId, { environmentId, updatedAt: clockNow(), sessions, nativeCaffy });
 }
 
 export function disconnectDesktopCatalog(connectionId: string): void {
@@ -118,6 +124,23 @@ export function readDesktopCatalog(environmentId: string): ReadonlyArray<AgentPr
     }
   }
   return [...merged.values()];
+}
+
+/** Compact Caffy status is owned by the one live desktop, not the native thread store. */
+export function readNativeCaffyBadges(
+  environmentId: string,
+): ReadonlyMap<string, AgentProviderV1NativeCaffyBadge> {
+  const now = clockNow();
+  const live = [...catalogs.values()].filter(
+    (catalog) => catalog.environmentId === environmentId && now - catalog.updatedAt <= LEASE_MS,
+  );
+  if (live.length !== 1) return new Map();
+  const prefix = `t3:${environmentId}:`;
+  return new Map<string, AgentProviderV1NativeCaffyBadge>(
+    live[0]!.nativeCaffy
+      .filter((item) => item.sessionId.startsWith(prefix))
+      .map((item) => [item.sessionId.slice(prefix.length), item]),
+  );
 }
 
 /** Single-shot desktop handoff. A claimed job is NEVER redelivered on poll retry. */

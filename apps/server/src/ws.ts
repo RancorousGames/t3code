@@ -25,6 +25,7 @@ import {
   publishDesktopCatalog,
   permittedDesktopBrowserCapability,
   readDesktopCatalog,
+  readNativeCaffyBadges,
   disconnectDesktopCatalog,
   dispatchBrowserWork,
   dispatchNativeThreadCaffy,
@@ -2600,6 +2601,10 @@ export const layerWsRpc = (
               }
               if (
                 snapshot.sessions.length > 1000 ||
+                (snapshot.nativeCaffy?.length ?? 0) > 1000 ||
+                snapshot.nativeCaffy?.some(
+                  (item) => !item.sessionId.startsWith(`t3:${environmentId}:`),
+                ) ||
                 snapshot.sessions.some(
                   (session) =>
                     session.kind !== "t3/chatgpt" ||
@@ -2629,7 +2634,12 @@ export const layerWsRpc = (
                   "Desktop catalog contains invalid session identities or claims.",
                 );
               }
-              publishDesktopCatalog(providerDesktopConnectionId, environmentId, snapshot.sessions);
+              publishDesktopCatalog(
+                providerDesktopConnectionId,
+                environmentId,
+                snapshot.sessions,
+                snapshot.nativeCaffy,
+              );
               return reply({ published: snapshot.sessions.length });
             }
             if (request.method === "desktop.sessions.next") {
@@ -3062,6 +3072,7 @@ export const layerWsRpc = (
                   ? projectRead.success.map((p) => [p.id, p.workspaceRoot] as const)
                   : [],
               );
+              const nativeCaffy = readNativeCaffyBadges(environmentId);
               const items: AgentProviderV1Session[] = native.success.threads.map(
                 (thread): AgentProviderV1Session => {
                   // Terminal statuses (completed/interrupted/cancelled) are idle, not
@@ -3080,6 +3091,7 @@ export const layerWsRpc = (
                             : "Errored"
                           : "Idle";
                   const runStartedAt = thread.activityRunStartedAt ?? thread.latestRunStartedAt;
+                  const caffy = nativeCaffy.get(thread.id);
                   const threadRef = (id: string) => ({
                     provider: "t3" as const,
                     id: `thread:${encodeURIComponent(id)}`,
@@ -3131,6 +3143,15 @@ export const layerWsRpc = (
                       sortAt: DateTime.toEpochMillis(
                         thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
                       ),
+                      ...(caffy
+                        ? {
+                            caffyMode: caffy.mode,
+                            caffyPaused: caffy.paused,
+                            caffyOnceOnly: caffy.onceOnly,
+                            caffyIntervalMinutes: caffy.intervalMinutes,
+                            ...(caffy.beginAt != null ? { caffyBeginAt: caffy.beginAt } : {}),
+                          }
+                        : {}),
                     },
                     capabilities: [
                       "ReadHistory",

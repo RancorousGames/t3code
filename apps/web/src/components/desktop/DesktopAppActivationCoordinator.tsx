@@ -1532,9 +1532,7 @@ export function DesktopAppActivationCoordinator() {
                 if (observed && saved === observed && observed !== exactConversationId) {
                   // A reboot replaced the conversation in this slot. The desktop
                   // outbox parses this guard-mismatch text to retarget the message.
-                  console.info(
-                    `[t3-delivery] ${request.requestId} original conversation replaced`,
-                  );
+                  console.info(`[t3-delivery] ${request.requestId} original conversation replaced`);
                   throw new Error(
                     `ChatGPT conversation guard mismatch: expected ${exactConversationId}, observed ${observed}; no message sent.`,
                   );
@@ -2426,6 +2424,20 @@ export function DesktopAppActivationCoordinator() {
       // One verified desktop scheduler snapshot for the entire catalog (no per-row IPC).
       const caffyEntries = readVerifiedT3CaffyOverview()?.entries ?? [];
       const observedMs = Date.now();
+      const activeCaffy = caffyEntries.filter(
+        (item) => item.expiresAt === null || item.expiresAt > observedMs || !!item.pendingMessageId,
+      );
+      const nativePrefix = `t3:${environmentId}:`;
+      const nativeCaffy = activeCaffy
+        .filter((item) => item.sessionId.startsWith(nativePrefix))
+        .map((item) => ({
+          sessionId: item.sessionId,
+          mode: item.mode,
+          paused: item.paused,
+          onceOnly: item.onceOnly,
+          intervalMinutes: item.intervalMinutes,
+          ...(item.beginAt != null ? { beginAt: item.beginAt } : {}),
+        }));
       const sessions: AgentProviderV1Session[] = [];
       for (let offset = 0; offset < catalog.length; offset += 6) {
         sessions.push(
@@ -2557,7 +2569,7 @@ export function DesktopAppActivationCoordinator() {
           apiVersion: T3_AGENT_PROVIDER_VERSION,
           requestId: randomUUID(),
           method: "desktop.sessions.publish",
-          params: { environmentId, sessions },
+          params: { environmentId, sessions, nativeCaffy },
         },
       });
       if (response._tag === "Failure" && !stopped) {
