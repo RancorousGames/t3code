@@ -1,6 +1,7 @@
+import { useNativeCaffy, type NativeCaffyMonitor } from "../hooks/useNativeCaffy";
 import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { attachSidebarTree, SIDEBAR_TREE_PROPS } from "../lib/sidebarTree";
-import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
+import { readCaffyRecord, type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
@@ -108,11 +109,7 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
-import {
-  T3_CAFFY_UPDATED_EVENT,
-  useT3CaffyOverview,
-  type T3CaffyEntry,
-} from "../hooks/useT3CaffyOverview";
+import { T3_CAFFY_UPDATED_EVENT, useT3CaffyOverview } from "../hooks/useT3CaffyOverview";
 import {
   isQuickFourHourCaffy,
   QUICK_CAFFY_MINUTES,
@@ -961,8 +958,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // One shared Caffy poll for every native row; rows look up their own
   // `t3:<environmentId>:<threadId>` scheduler entry or agent-stop mark.
   const caffyOverview = useT3CaffyOverview();
+  const remoteCaffy = useNativeCaffy([...serverConfigs.keys()]);
+  const readCaffyDetails = useStableCallback(async (threadRef: ScopedThreadRef) =>
+    readCaffyRecord(
+      await remoteCaffy.control(threadRef, {
+        action: "status",
+        sessionId: `t3:${threadRef.environmentId}:${threadRef.threadId}`,
+      }),
+    ),
+  );
   const nativeCaffyByThreadKey = (() => {
-    const monitors = new Map<string, T3CaffyEntry>();
+    const monitors = new Map<string, NativeCaffyMonitor>(remoteCaffy.monitors);
     const stops = new Map<string, number>();
     for (const entry of caffyOverview?.entries ?? []) {
       if (entry.sessionId.startsWith("t3:")) monitors.set(entry.sessionId, entry);
@@ -2626,8 +2632,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
 
   const toggleNativeFourHourCaffy = useStableCallback(async (threadRef: ScopedThreadRef) => {
-    const control = window.desktopBridge?.caffyControl;
-    if (!control) return;
+    const control = (input: { action: string; [key: string]: unknown }) =>
+      remoteCaffy.control(threadRef, input);
     if (!checkThreadOperations([{ environmentId: threadRef.environmentId }])) return;
     const owner = `t3:${threadRef.environmentId}:${threadRef.threadId}`;
     try {
@@ -2679,7 +2685,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const nativeCaffyId = `t3:${threadRef.environmentId}:${threadRef.threadId}`;
         // Always query the T3 desktop scheduler, as ChatGPT sessions do: a
         // cached sidebar overview could show a different state after a recent edit.
-        const caffyControl = window.desktopBridge?.caffyControl;
+        const caffyControl = (input: { action: string; [key: string]: unknown }) =>
+          remoteCaffy.control(threadRef, input);
+        let caffyAvailable = false;
         let nativeCaffy: (AutoContinueConfig & CaffyMenuStatus) | null = null;
         if (caffyControl) {
           try {
@@ -2700,6 +2708,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 throw new Error("Caffy returned an unrecognized native schedule.");
               nativeCaffy = status as AutoContinueConfig & CaffyMenuStatus;
             }
+            caffyAvailable = true;
           } catch (error) {
             toastManager.add(
               stackedThreadToast({
@@ -2708,7 +2717,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 description: error instanceof Error ? error.message : String(error),
               }),
             );
-            return;
           }
         }
         const threadWorkspacePath =
@@ -2739,7 +2747,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
-              ...(caffyControl ? { caffy: nativeCaffy } : {}),
+              ...(caffyAvailable ? { caffy: nativeCaffy } : {}),
               canOperate: readEnvironmentScope(
                 threadRef.environmentId,
                 AuthOrchestrationOperateScope,
@@ -2809,7 +2817,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           case "caffy:pause":
           case "caffy:startup":
           case "caffy:stop": {
-            if (!caffyControl) return;
+            if (!caffyAvailable) return;
             try {
               if (clicked.value === "caffy:pause") {
                 if (!nativeCaffy) throw new Error("No active Caffy schedule.");
@@ -3095,6 +3103,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
         return;
       }
+      if (
+        !isElectron &&
+        event.ctrlKey &&
+        event.altKey &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        event.code === "KeyI" &&
+        !isTerminalFocused()
+      ) {
+        const key = readRouteThreadKey(router);
+        const thread = key ? threadByKeyRef.current.get(key) : null;
+        if (thread) {
+          event.preventDefault();
+          event.stopPropagation();
+          void toggleNativeFourHourCaffy(scopeThreadRef(thread.environmentId, thread.id));
+          return;
+        }
+      }
       const command = resolveShortcutCommand(event, keybindings, {
         platform: navigator.platform,
         context: {
@@ -3135,6 +3161,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     keybindings,
     navigateToThread,
     orderedThreadKeys,
+    router,
+    toggleNativeFourHourCaffy,
     routeRowThreadKey,
     routeTerminalOpen,
     threadByKey,
@@ -3658,6 +3686,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 `t3:${thread.environmentId}:${thread.id}`,
                               ) ?? null
                             }
+                            readCaffyDetails={readCaffyDetails}
                             caffyStoppedAt={nativeCaffyByThreadKey.stops.get(
                               `t3:${thread.environmentId}:${thread.id}`,
                             )}
@@ -3911,9 +3940,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             throw new Error("Native thread schedules have no session-spawn job.");
           }}
           submit={async (input: CaffyScheduleRequest) => {
-            const control = window.desktopBridge?.caffyControl;
-            if (!control) throw new Error("T3 Caffy scheduler is unavailable.");
             const target = nativeCaffySchedule.threadRef;
+            const control = (input: { action: string; [key: string]: unknown }) =>
+              remoteCaffy.control(target, input);
             const onceOnly = input.frequency === "once";
             await control({
               action: "set",

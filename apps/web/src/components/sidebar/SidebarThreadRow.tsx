@@ -115,7 +115,9 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } f
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
-import type { T3CaffyEntry } from "../../hooks/useT3CaffyOverview";
+import type { NativeCaffyMonitor } from "../../hooks/useNativeCaffy";
+import type { CaffyReadout } from "@t3tools/contracts";
+import { useStableCallback as useStableCaffyCallback } from "../../hooks/useStableCallback";
 import { CaffyStatusBadge } from "./CaffyStatusBadge";
 import { isCaffyIdleContinuationActive } from "../../chatGPTCaffyAttentionPolicy";
 import { nativeAttentionKey, useNativeThreadAttention } from "../../nativeThreadAttention";
@@ -580,7 +582,8 @@ type SidebarThreadRowProps = {
   renamingTitle: string;
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
   /** Native Caffy schedule for this thread (`t3:<env>:<thread>`), from the sidebar's shared poll. */
-  caffyMonitor?: T3CaffyEntry | null | undefined;
+  caffyMonitor?: NativeCaffyMonitor | null | undefined;
+  readCaffyDetails?: ((thread: ScopedThreadRef) => Promise<CaffyReadout | null>) | undefined;
   /** When an agent stopped this thread's Caffy; shown only without an active schedule. */
   caffyStoppedAt?: number | undefined;
   onSettle: (threadRef: ScopedThreadRef) => void;
@@ -726,8 +729,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     status !== "waiting" &&
     !(
       props.caffyMonitor &&
+      props.caffyMonitor.expiresAt !== undefined &&
       isCaffyIdleContinuationActive(
-        { entries: [props.caffyMonitor] },
+        { entries: [{ ...props.caffyMonitor, expiresAt: props.caffyMonitor.expiresAt }] },
         { id: props.caffyMonitor.sessionId },
       )
     );
@@ -1149,11 +1153,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     )
   ) : null;
 
+  const readCaffyDetails = useStableCaffyCallback(async () =>
+    props.readCaffyDetails ? props.readCaffyDetails(threadRef) : null,
+  );
   // Same coffee-pot badge as ChatGPT rows; its click opens this row's menu (Caffy items live there).
   const caffyBadge =
     props.caffyMonitor || props.caffyStoppedAt ? (
       <NativeCaffyBadge
         monitor={props.caffyMonitor ?? null}
+        readDetails={props.readCaffyDetails ? readCaffyDetails : undefined}
         stoppedAt={props.caffyMonitor ? undefined : props.caffyStoppedAt}
         onQuickMenu={(position) => onContextMenu(threadRef, position)}
       />
@@ -1657,7 +1665,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
 /** Wraps the shared badge with a ticking clock so countdowns stay fresh. */
 function NativeCaffyBadge(props: {
-  monitor: T3CaffyEntry | null;
+  monitor: NativeCaffyMonitor | null;
+  readDetails?: (() => Promise<CaffyReadout | null>) | undefined;
   stoppedAt: number | undefined;
   onQuickMenu: (position: { x: number; y: number }) => void;
 }) {
@@ -1670,6 +1679,8 @@ function NativeCaffyBadge(props: {
     >
       <CaffyStatusBadge
         monitor={props.monitor}
+        compact={props.monitor?.compact === true}
+        readDetails={props.readDetails}
         stoppedAt={props.stoppedAt}
         now={nowSecond}
         // Native threads have no dedicated Caffy hotkeys yet; the popup shows "Unbound".

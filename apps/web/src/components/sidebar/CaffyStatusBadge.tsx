@@ -49,13 +49,17 @@ function time(value: number | null | undefined): string {
 }
 
 export function CaffyStatusBadge({
-  monitor,
+  monitor: summaryMonitor,
+  compact: summaryOnly = false,
+  readDetails,
   stoppedAt,
   now,
   shortcuts,
   onQuickMenu,
 }: {
   monitor: CaffyReadout | null;
+  compact?: boolean;
+  readDetails?: (() => Promise<CaffyReadout | null>) | undefined;
   stoppedAt?: number | undefined;
   now: number;
   shortcuts: {
@@ -66,6 +70,34 @@ export function CaffyStatusBadge({
   onQuickMenu: (position: { x: number; y: number }) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<CaffyReadout | null>(null);
+  const monitor = open && summaryOnly && detail ? detail : summaryMonitor;
+  const compact = summaryOnly && (!open || !detail);
+  // Full scheduler history is read on demand, not for every visible thread.
+  useEffect(() => {
+    if (!open || !summaryOnly || !readDetails) return;
+    let disposed = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const result = await readDetails();
+        if (!disposed) setDetail(result);
+      } catch {
+        if (!disposed) setDetail(null);
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 10_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [open, summaryOnly, readDetails]);
+
   const [pinned, setPinned] = useState(false);
   const [popupPosition, setPopupPosition] = useState({ x: 8, y: 8 });
   const anchor = useRef<HTMLSpanElement>(null);
@@ -88,6 +120,7 @@ export function CaffyStatusBadge({
         y: Math.max(8, Math.min(rect.top, window.innerHeight - 420)),
       });
     }
+    if (!open) setDetail(null);
     setOpen(true);
   };
   const scheduleClose = () => {
@@ -229,81 +262,91 @@ export function CaffyStatusBadge({
               </button>
             </div>
             <p className="mt-2.5 text-sm leading-relaxed text-foreground">{badge.sentence}</p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <div
-                className={`rounded-lg border border-current/15 bg-current/5 p-2 ${palette.color}`}
-              >
-                <div className="text-3xs text-muted-foreground">Next wake</div>
-                <div className="mt-1 text-xs font-semibold leading-snug">{next}</div>
-              </div>
-              <div className="rounded-lg border border-border bg-muted/30 p-2">
-                <div className="text-3xs text-muted-foreground">Previous wake</div>
-                <div className="mt-1 text-xs font-semibold leading-snug">
-                  {time(monitor?.lastWakeAt)}
+            {compact ? (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Remote status summary. Open Caffy controls for the current schedule.
+              </p>
+            ) : (
+              <>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div
+                    className={`rounded-lg border border-current/15 bg-current/5 p-2 ${palette.color}`}
+                  >
+                    <div className="text-3xs text-muted-foreground">Next wake</div>
+                    <div className="mt-1 text-xs font-semibold leading-snug">{next}</div>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/30 p-2">
+                    <div className="text-3xs text-muted-foreground">Previous wake</div>
+                    <div className="mt-1 text-xs font-semibold leading-snug">
+                      {time(monitor?.lastWakeAt)}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-            <div className="mt-3">
-              <div className="text-3xs font-semibold tracking-wider text-muted-foreground uppercase">
-                Recent events
-              </div>
-              <table className="mt-1.5 w-full text-left text-3xs">
-                <thead className="border-b border-border text-muted-foreground">
-                  <tr>
-                    <th className="w-24 py-1 font-medium">Time</th>
-                    <th className="py-1 font-medium">Event</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {events.length ? (
-                    events.map((event) => (
-                      <tr key={event.time + event.label} className="border-b border-border/50">
-                        <td className="py-1.5 pr-1 text-muted-foreground">
-                          {new Date(event.time).toLocaleTimeString()}
-                        </td>
-                        <td className="py-1.5">{event.label}</td>
+                <div className="mt-3">
+                  <div className="text-3xs font-semibold tracking-wider text-muted-foreground uppercase">
+                    Recent events
+                  </div>
+                  <table className="mt-1.5 w-full text-left text-3xs">
+                    <thead className="border-b border-border text-muted-foreground">
+                      <tr>
+                        <th className="w-24 py-1 font-medium">Time</th>
+                        <th className="py-1 font-medium">Event</th>
                       </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td className="py-2 text-muted-foreground" colSpan={2}>
-                        No scheduler events recorded yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {monitor && (
-              <details className="mt-2.5 border-t border-border pt-2 text-2xs">
-                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                  Scheduler details
-                </summary>
-                <div className="mt-2 grid gap-1 text-foreground/80">
-                  <div>Working slots: {monitor.respectSlots ? "Respected" : "Not restricted"}</div>
-                  <div>
-                    Auto-reboot:{" "}
-                    {monitor.autoRebootEveryRuns
-                      ? `Every ${monitor.autoRebootEveryRuns} completed runs`
-                      : monitor.autoRebootMinutes
-                        ? `Every ${monitor.autoRebootMinutes} min`
-                        : "Off"}
-                  </div>
-                  <div>
-                    Run limit:{" "}
-                    {monitor.expiresAt == null ? "Until stopped" : time(monitor.expiresAt)}
-                  </div>
-                  <div>Last scheduler check: {time(monitor.lastCheckedAt)}</div>
-                  <div>Next scheduler check: {time(monitor.nextCheckAt)}</div>
-                  {monitor.lastCheckResult && <div>Last check: {monitor.lastCheckResult}</div>}
-                  {monitor.lastError && (
-                    <div className="text-destructive">Last error: {monitor.lastError}</div>
-                  )}
-                  {monitor.pendingMessageId && (
-                    <div>Delivery: {monitor.deliveryStatus ?? "Pending"}</div>
-                  )}
+                    </thead>
+                    <tbody>
+                      {events.length ? (
+                        events.map((event) => (
+                          <tr key={event.time + event.label} className="border-b border-border/50">
+                            <td className="py-1.5 pr-1 text-muted-foreground">
+                              {new Date(event.time).toLocaleTimeString()}
+                            </td>
+                            <td className="py-1.5">{event.label}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td className="py-2 text-muted-foreground" colSpan={2}>
+                            No scheduler events recorded yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-              </details>
+                {monitor && (
+                  <details className="mt-2.5 border-t border-border pt-2 text-2xs">
+                    <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                      Scheduler details
+                    </summary>
+                    <div className="mt-2 grid gap-1 text-foreground/80">
+                      <div>
+                        Working slots: {monitor.respectSlots ? "Respected" : "Not restricted"}
+                      </div>
+                      <div>
+                        Auto-reboot:{" "}
+                        {monitor.autoRebootEveryRuns
+                          ? `Every ${monitor.autoRebootEveryRuns} completed runs`
+                          : monitor.autoRebootMinutes
+                            ? `Every ${monitor.autoRebootMinutes} min`
+                            : "Off"}
+                      </div>
+                      <div>
+                        Run limit:{" "}
+                        {monitor.expiresAt == null ? "Until stopped" : time(monitor.expiresAt)}
+                      </div>
+                      <div>Last scheduler check: {time(monitor.lastCheckedAt)}</div>
+                      <div>Next scheduler check: {time(monitor.nextCheckAt)}</div>
+                      {monitor.lastCheckResult && <div>Last check: {monitor.lastCheckResult}</div>}
+                      {monitor.lastError && (
+                        <div className="text-destructive">Last error: {monitor.lastError}</div>
+                      )}
+                      {monitor.pendingMessageId && (
+                        <div>Delivery: {monitor.deliveryStatus ?? "Pending"}</div>
+                      )}
+                    </div>
+                  </details>
+                )}
+              </>
             )}
             <details className="mt-2.5 border-t border-border pt-2 text-2xs">
               <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
